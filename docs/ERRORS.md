@@ -36,6 +36,7 @@ Catch the typed errors by `code` (see "`instanceof` or `code`?" below); everythi
 | `AsterUrlError` (`ASTER_URL_DENIED`) | the URL policy refused a URL (protocol, credentials, non-public host, relative URL, the `allow` hook), or `urlData: 'refuse'` refused a url dataset | fix the URL, or widen the policy deliberately; a refused url dataset is the host's rule, so give the spec inline rows ([URL errors](#url-errors)) |
 | `AsterStreamBackpressureError` (`ASTER_STREAM_BACKPRESSURE`) | a `push` would overflow the queue under `policy: 'error'` | flush before pushing, slow the producer, or choose another policy ([Stream errors](#stream-errors)) |
 | `AsterStreamClosedError` (`ASTER_STREAM_CLOSED`) | `stream.session()` was called after `close()` | stop using the stream after closing it |
+| `AsterWorkerTimeoutError` (`ASTER_WORKER_TIMEOUT`) | a worker hook's request was not answered within `timeoutMs` (default 30 s): the worker was terminated | show an error state; a worker from `workerFactory` is already replaced, a supplied `worker` must be replaced by you ([Worker errors](#worker-errors)) |
 | `SpecParseError` | the spec was refused when it was compiled, as `vega.parse` refuses it | fix the spec; the message is vega's ([Expressions are refused when the spec is compiled](#expressions-are-refused-when-the-spec-is-compiled)) |
 | `ExpressionParseError` | an expression does not parse, or a function was removed after the compile | fix the expression or the registration |
 | `VLCompileError` (`[aster/vl] <path>: <message>`) | the Vega-Lite spec has an unknown key or a feature `@aster-charts/vl` does not implement | fix the spec at `<path>` ([Deliberate differences from Vega](#deliberate-differences-from-vega)) |
@@ -51,6 +52,7 @@ Catch the typed errors by `code` (see "`instanceof` or `code`?" below); everythi
 | `AsterUrlError` | `@aster-charts/core`, `@aster-charts/core/load` | `AsterUrlError` | `ASTER_URL_DENIED` | `url`, `reason` |
 | `AsterStreamBackpressureError` | `@aster-charts/core` | `AsterStreamBackpressureError` | `ASTER_STREAM_BACKPRESSURE` | `bound` (`'batches'` or `'rows'`), `limit` |
 | `AsterStreamClosedError` | `@aster-charts/core` | `AsterStreamClosedError` | `ASTER_STREAM_CLOSED` | none |
+| `AsterWorkerTimeoutError` | `@aster-charts/react`, `@aster-charts/react/worker` | `AsterWorkerTimeoutError` | `ASTER_WORKER_TIMEOUT` | `timeoutMs` |
 | `ExpressionParseError` | `@aster-charts/core` | `ExpressionParseError` | none | `expression`, `cause` |
 | `SpecParseError` | `@aster-charts/core` | `SpecParseError` | none | `cause` |
 | `VLCompileError` | `@aster-charts/vl` | `VLCompileError` | none | none |
@@ -425,9 +427,20 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
 `failure: { batches, queuedRows, discarded }`. The hooks rehydrate it with `errorFromWire` (see
 [`instanceof` or `code`?](#instanceof-or-code) for what survives). In addition:
 
-- A Worker `error` event ends the pending request with `Error('[aster] worker error: <message>')`, and a
-  `messageerror` event with `Error('[aster] worker message could not be deserialized (messageerror)')`; a failing
+- **The deadline** (`timeoutMs`, default 30 000 ms, DECISIONS Q4). A request (a one-shot render, a stream's start or flush) not
+  answered in time terminates the worker and fails with `AsterWorkerTimeoutError` (`[aster] the worker did not answer within
+  <n> ms and was terminated`, `code: 'ASTER_WORKER_TIMEOUT'`, `timeoutMs`); `pending` becomes `false`. A worker the hook made
+  with `workerFactory` is replaced at once; the request that ran away is not sent again by itself (a new input sends one). A
+  stream whose flush ran away reports it with `failure` (the flush's batches as `discarded`) and starts afresh on the new
+  worker with what is still queued; one whose start ran away stays in the error until an input changes. A supplied `worker`
+  cannot be replaced by the hook: later requests to it fail at once with the same error until a new `worker` is given. Every
+  other hook using the terminated worker ends its own request in flight with the error.
+- A Worker `error` event (it names no request) ends the request IN FLIGHT of each hook listening, if any, with
+  `Error('[aster] worker error: <message>')`, and a `messageerror` event with `Error('[aster] worker message could not be
+  deserialized (messageerror)')`; a hook whose answer already came is not affected, and a late answer still applies. A failing
   `postMessage` surfaces its own error. The hook's `error` is set and `pending` becomes `false`.
+- A response the worker cannot post (it cannot be structured-cloned: a host-registered expression function or provider that
+  returned a function) answers that request with the error instead; the worker keeps answering the messages after it.
 - A `textMetrics` object (or a `urlPolicy` with `allow`/`onDeny` functions) cannot be posted to a Worker: the hook
   fails with `[aster] a textMetrics provider object cannot be sent to a worker; register it in the worker with
   registerWorkerTextMetrics and pass its name` (respectively `... registerWorkerUrlPolicy ...`). An unregistered name

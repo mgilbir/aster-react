@@ -14,7 +14,8 @@ the browser).
   the new immutable data array.
 - Transforms with no fast path (the global fitters `kde`, `regression`, `loess`, `quantile`, `contour`,
   `wordcloud`, ...) re-derive on an append; the downstream change result is still correct.
-- Huge or untrusted specs: combine `limits` with `useChartWorker`.
+- Huge or untrusted specs: combine `limits` with `useChartWorker` and its `workerFactory`: `limits` gives the typed errors, and the
+  hook's deadline (`timeoutMs`) terminates and replaces a worker that runs away.
 - Dense marks: canvas avoids SVG node cost; hit testing uses a uniform grid above 400 items.
 - Accessibility tree: set `a11y={{ summaryThreshold: N }}` (default 150) to collapse very dense marks into one
   summary node.

@@ -283,7 +283,23 @@ flushes are no-ops. The React bindings are:
 - `useChartStream(spec, options)` — local stream, `push`/`flush`/`pause`/`resume`/`close`,
   stats and pulse; `options` are the stream options plus `serialize`, `autoFlush` and `flushPolicy`.
 - `useChartWorkerStream(spec, options)` — worker-owned stream, local fallback, plus
-  `accepted()`/`rejected()`/`depth()` backpressure counters.
+  `accepted()` / `rejected()` (batches `push` accepted, and batches that will not be delivered -- refused, or displaced by
+  `drop-oldest` -- since the hook mounted) and `depth()` (batches queued on this side, waiting for the next flush).
+
+In both hooks `limits` is compared by content and `textMetrics` by identity; a change reaches the live stream from the next
+flush (a `limits` change schedules one; a stream cannot go back to no text metrics, so removing them keeps the last).
+`pause()` is the hook's and survives a new stream; `close()` is the stream's: it drops the queue and refuses pushes until a
+new stream starts (a new spec), and does not pause. A stream that is replaced, and the stream of an unmounted hook, is
+closed: a push through it answers `false`. `flush()` with nothing queued returns the last frame without re-rendering.
+
+`useChartWorkerStream` keeps ONE ordered queue on the main thread, under the stream's own `capacity` / `maxQueuedRows` /
+`policy`, whatever the stream is: a Worker, the in-realm fallback, or nothing yet (before the start effect, while the
+fallback's add-ons load, between a restart's render and its effect). So `push` answers truthfully, and `true` means the batch
+will be delivered, in order (DECISIONS Q19): a push made before the stream starts is its first input, and what is queued when
+the stream restarts (a new spec) goes to the new stream; only `drop-oldest` may later displace an accepted batch, as in the
+stream. At most ONE flush is in flight to the worker: while it is unanswered, pushes keep queueing under the policy, so a
+slow or silent worker holds at most one flush (itself within the bounds) and the queue at most `capacity` batches /
+`maxQueuedRows` rows.
 - `<ChartStream spec={...}>` / `<ChartWorkerStream spec={...}>` — render the streamed
   scene through the same DOM patcher, canvas renderer, interaction and a11y tree as
   `<Chart>` (no per-flush SVG serialization). See "Streaming components" below.
@@ -318,7 +334,8 @@ When a push would exceed a bound: `drop-newest` and `coalesce` reject it (`push`
 `AsterStreamBackpressureError` (`code: 'ASTER_STREAM_BACKPRESSURE'`, `bound:
 'batches' | 'rows'`, `limit`). `canAccept()` is `true` only while both bounds have room
 (always `true` for `drop-oldest`). A paused or slow consumer therefore cannot grow the
-queue past `capacity` batches or `maxQueuedRows` rows. Rows already flushed belong to
+queue past `capacity` batches or `maxQueuedRows` rows (with `useChartWorkerStream`, plus the one flush the worker is
+applying: see above). Rows already flushed belong to
 the stream's base snapshot and are the host's data, not queue memory.
 
 **Atomic flush.** `flush()` commits nothing until the evaluation succeeds. If it throws
@@ -1091,7 +1108,11 @@ batch (what `containerSize()` reads), and, in the dimensions given as `'containe
 sized by `<Chart>`'s rule.
 `panZoom`/`pan`/`zoom`/`view`/`onViewChange` and `signals` are routed into the stream as `domainRaw` and `signals`
 batches, so scales, marks and guides recompute inside the stream; `limits`, `textMetrics`, `urlPolicy` and `urlData` configure
-the stream's evaluation (a change of `urlData` starts a new stream); rendering, selection, tooltip, a11y and event props go to the underlying `<Chart>`.
+the stream's evaluation (a change of `limits` or `textMetrics` reaches the live stream, a change of `urlData` starts a new stream);
+rendering, selection, tooltip, a11y and event props go to the underlying `<Chart>`. The props that are about evaluating mean
+what they mean on `<Chart>`, for the stream: `random` is the stream's source of random numbers (with a Worker it cannot be
+sent, and `<ChartWorkerStream>` refuses it with an error), `logger` hears what the stream's evaluations log (relayed from the
+worker with each answer), and `onError` hears a stream failure once, as `onStreamError` does (with the chart's own reports).
 The ref (`ChartStreamHandle`) has `push`, `flush`, `pending`, `pulse`, `stats`, `scene` and `close`.
 The hook form is `useChartStream(spec, options)` (and `useChartWorkerStream` for a worker), described under
 [Streaming and pulses](#streaming-and-pulses).
@@ -1149,10 +1170,17 @@ export function Offloaded(): React.ReactElement {
   in use fails the hook with an error that says so; without a Worker an object works as is. An unregistered name fails
   with `[aster] unknown text-metrics provider "<name>" ...`. For streams the same applies to `textMetrics`,
   `initial.textMetrics`, `initial.urlPolicy` and a batch's `textMetrics` (`ChartWorkerBatch`).
-- **Failures.** A worker `error` or `messageerror` event ends the pending request or stream with an `Error`
-  (`[aster] worker error: ...`, `[aster] worker message could not be deserialized (messageerror)`); the hook's `error`
-  is set and `pending` is `false`. Worker errors arrive as `{ name, message, code? }` and are rebuilt into `Error`s; see
-  `docs/ERRORS.md` for which class survives.
+- **The deadline** (`timeoutMs`, default `DEFAULT_WORKER_TIMEOUT_MS`, 30 000; DECISIONS Q4). A request the worker does not
+  answer in time terminates it; `error` is an `AsterWorkerTimeoutError` (`code: 'ASTER_WORKER_TIMEOUT'`, `timeoutMs`) and
+  `pending` is `false`. A worker made by `workerFactory` is replaced at once (the request that ran away is not sent again by
+  itself; a stream whose flush ran away starts afresh on the new worker with what is still queued, one whose start ran away
+  waits for an input change). A supplied `worker` is terminated and cannot be replaced by the hook: give a new one. Every hook
+  sharing the terminated worker ends its own request in flight with the same error.
+- **Failures.** A worker `error` or `messageerror` event names no request: it ends the request in flight of each hook using
+  the worker (`[aster] worker error: ...`, `[aster] worker message could not be deserialized (messageerror)`); a hook with
+  nothing in flight (an idle stream, an answered render) is not affected. The hook's `error` is set and `pending` is `false`.
+  Worker errors arrive as `{ name, message, code? }` and are rebuilt into `Error`s; see `docs/ERRORS.md` for which class
+  survives.
 - **`serialize`.** The streaming hooks take `serialize` (default `true`): `false` skips building the SVG string per
   scene (the components set it, since they render the scene themselves). `useChart` takes it too.
 - **Protocol.** `handleChartWorkerRequest(request)` and `handleChartWorkerStreamRequest(request, streams)` are the pure
@@ -1169,8 +1197,12 @@ export function Offloaded(): React.ReactElement {
   (an `AsterLimitError` for `code: 'ASTER_LIMIT'`).
 - **Host plumbing (`@internal`).** The hooks are built on helpers that the entry also exports and that are not a stable surface:
   `useWorkerInstance(worker, workerFactory)` owns the `Worker` of a hook (the supplied one, else the factory's, terminated on unmount) and
-  returns a ref to it; `listenToWorker(worker, onMessage, onFailure)` attaches the message, `error` and `messageerror` listeners and returns the
-  cleanup; `wireTextMetrics(textMetrics, viaWorker)` and `wireUrlPolicy(policy, viaWorker)` throw the errors that refuse a provider object or
+  returns `{ ref, epoch, expire }` (`expire(error)` terminates it after a deadline and makes a new one from the factory);
+  `listenToWorker(worker, onMessage, onFailure)` attaches the message, `error` and `messageerror` listeners and returns the
+  cleanup (`onFailure` also hears the worker's termination by a deadline); `terminateWorker(worker, error)` terminates a worker and
+  ends every listening hook's request with `error`, and `terminatedError(worker)` is that error afterwards (or `null`);
+  `workerTimeout(timeoutMs)` checks a deadline (the default when `undefined`); `replayWorkerLogs(entries, logger)` hands the log
+  entries a stream response relays to a logger; `wireTextMetrics(textMetrics, viaWorker)` and `wireUrlPolicy(policy, viaWorker)` throw the errors that refuse a provider object or
   a policy with functions when a Worker is in use; `resolveWorkerTextMetrics(textMetrics)` and `resolveWorkerUrlPolicy(policy)` are the
   worker-side lookups of a registered name (they throw for an unknown one).
 

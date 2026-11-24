@@ -473,6 +473,20 @@ with a bad axis (`view`, `brush`, an interval) and a rejected `dataChanges` chan
 the chart: the bad part is left out. A missing capability on `<SvgChart>` is reported through `onError` (else the logger) and
 the chart draws what it can. `Chart.error-channel.test.tsx` runs every way in on every shell.
 
+**Where a resource lives across renders.** React keeps no state for a component that suspended before it committed, so a
+Suspense resource must be found again from what the render passes. `useSpecData`'s cache (specData.ts) is keyed by the same
+rule: spec and data options by content, `signal` by identity, `fetch` / `allow` through a latest-ref (their code is part of the key
+as a guard; a host `cacheKey` separates closures of the same code). A rejected load stays the answer until an input changes or
+the error boundary's reset calls `resetSpecDataErrors()` (DECISIONS Q19): the cache cannot see a reset, and React can retry a
+failed render in a later task than the throw, so dropping a rejection by time refetches inside React's own retry.
+
+**The worker stream is a state machine around one queue.** `useChartWorkerStream` keeps one ordered producer queue
+(producerQueue.ts) under the stream's own policy, whatever the stream is (a Worker, the in-realm fallback, or none yet), so
+`push` answers truthfully and what it accepts is delivered in order (Q19). At most one request is in flight to the worker;
+each has a hard deadline after which the worker is terminated and, if the hook made it, replaced (Q4). A worker event that
+names no request ends only requests in flight. `useChartWorkerStream.model.test.tsx` checks the hook
+against a reference model over generated operation sequences.
+
 ### Render lifecycle
 
 ```mermaid
