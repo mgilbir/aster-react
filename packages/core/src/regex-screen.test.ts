@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest'
-import { regexHazard, regexModel } from './regex-screen.js'
+import { SCREEN_STEPS, regexAnalysisSteps, regexHazard, regexModel } from './regex-screen.js'
 import { compileExpr } from './expression.js'
 import { withLimits, AsterLimitError, REGEX_MAX_INPUT, REGEX_RUN_BUDGET_MS } from './limits.js'
 import { attack, expectLimit, expectReturned, SLACK_MS } from './attack.testkit.js'
@@ -155,15 +155,53 @@ describe('the real attack (child process, hard kill)', () => {
   }, 30_000)
 })
 
+describe('a repetition-free run is analysed in steps proportional to its length', () => {
+  const letters = (n: number): string => 'a'.repeat(n)
+  it('1024 letters cost a few steps per letter, and double the length doubles them', () => {
+    const [a, b, c] = [256, 512, 1024].map((n) => regexAnalysisSteps(letters(n)).steps)
+    expect(c).toBeLessThanOrEqual(4 * 1024)
+    expect(b / a).toBeLessThan(2.5)
+    expect(c / b).toBeLessThan(2.5)
+    // (the general analysis follows every live prefix: its steps grow with the square, which is what the fast path avoids)
+    const [g1, g2] = [256, 512].map((n) => regexAnalysisSteps(letters(n), '', false).steps)
+    expect(g2 / g1).toBeGreaterThan(3)
+  })
+  it('a 1024-letter literal is accepted under limits, and spends under a hundredth of the evaluation\'s step budget', () => {
+    withLimits({}, () => {
+      expect(regexModel(letters(1024))).toEqual({ degree: 1, work: 1025 })
+      expect(regexHazard(letters(1024))).toBeNull()
+    })
+    expect(regexAnalysisSteps(letters(1024)).steps).toBeLessThan(SCREEN_STEPS / 100)
+  })
+  it('its cost is never below what the general analysis finds (same degree, work at least as large), for generated runs', () => {
+    let s = 0x2545f491
+    const rand = (): number => { s = (Math.imul(s, 1103515245) + 12345) >>> 0; return s / 4294967296 }
+    const atoms = ['a', 'b', 'a', '.', '\\d', '[ab]', '[^b]', '\\w', 'x', '(?:ab)', '(a)']
+    for (let i = 0; i < 300; i++) {
+      const n = 1 + Math.floor(rand() * 24)
+      let p = ''
+      for (let k = 0; k < n; k++) p += atoms[Math.floor(rand() * atoms.length)]
+      const fast = regexAnalysisSteps(p).model, general = regexAnalysisSteps(p, '', false).model
+      if (typeof general === 'string' || typeof fast === 'string') { expect(typeof fast, p).toBe(typeof general); continue }
+      expect(fast.degree, p).toBe(general.degree)
+      expect(fast.work, p).toBeGreaterThanOrEqual(general.work)
+    }
+    // the repeated letter, where every prefix is live, is exact
+    for (const n of [1, 2, 3, 10, 40]) expect(regexAnalysisSteps(letters(n)).model).toEqual(regexAnalysisSteps(letters(n), '', false).model)
+  })
+})
+
 describe('the screen\'s own analysis is bounded by the evaluation (child process, hard kill)', () => {
   // a pattern whose analysis takes the screen 120 to 220 ms, made distinct by a suffix: a spec can hold many of them
   const heavy = (i: number): string => '\\\\w{1,3}((\\\\d|[ab]+[^b]{0,70}.)([ab]\\\\d*?[^b]?)?b)a{1,3}x' + 'c'.repeat(i) + '$'
   const spec = (n: number, rows = 1): string => `{ width: 10, height: 10, data: [{ name: 't', values: Array.from({ length: ${rows} }, () => ({ s: 'ab' })),
     transform: [${Array.from({ length: n }, (_, i) => `{ type: 'formula', as: 'f${i}', expr: ${JSON.stringify(`test(regexp('${heavy(i)}'), datum.s)`)} }`).join(', ')}] }],
     marks: [{ type: 'rect', from: { data: 't' } }] }`
-  it('forty distinct heavy patterns under maxTimeMs 200 stop at the clock, not after 40 analyses', async () => {
+  it('forty distinct heavy patterns under maxTimeMs 200 stop within the budget, not after 40 analyses', async () => {
+    // (two bounds apply under maxTimeMs and the first to run out stops it: the clock, or the evaluation's step budget; which of the
+    // two it is depends on how fast the machine runs the analysis, so the test holds the guarantee, not the bound)
     const r = await attack(`core.renderSpec(${spec(40)}, { limits: { maxTimeMs: 200 } })`)
-    expectLimit(r, /maxTimeMs exceeded during regular expression screening/)
+    expectLimit(r, /maxTimeMs exceeded during regular expression screening|regexSafety: the screen's analysis of this evaluation's patterns passed \d+ steps/)
     expect(r.cpuMs).toBeLessThan(200 + SLACK_MS)
   }, 30_000)
   it('without maxTimeMs, the analysis of all the patterns of an evaluation is bounded by SCREEN_STEPS', async () => {

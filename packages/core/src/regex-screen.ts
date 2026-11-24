@@ -905,8 +905,47 @@ function budgetUnder(meter: LimitMeter | null): Budget {
   return budget
 }
 
+/**
+ * How many positions a repetition-free run has: a sequence (groups allowed) of single character sets, the literal text of most
+ * patterns. -1 for anything else (a quantifier, an alternation, an assertion, a lookaround, a backreference), and for an empty one.
+ */
+function plainRun(n: RNode): number {
+  switch (n.t) {
+    case 'set': return 1
+    case 'group': return plainRun(n.n)
+    case 'alt': return n.alts.length === 1 ? plainRun(n.alts[0]!) : -1
+    case 'seq': {
+      let total = 0
+      for (const it of n.items) {
+        const k = plainRun(it)
+        if (k < 0) return -1
+        total += k
+      }
+      return total > 0 ? total : -1
+    }
+    default: return -1
+  }
+}
+
+/** Switches off the fast path of {@link plainRun} (the differential test of it, and its step count): never set by the engine. */
+let plainRunsOff = false
+const plainsOff = (): boolean => plainRunsOff
+
 function analyse(tree: RNode, unanchored: boolean, budget: Budget, searched = true): string | RegexCost {
   if (backrefInRepeat(tree, false)) return 'a backreference inside a repeated group'
+  const run = plainsOff() ? -1 : plainRun(tree)
+  if (run > 0) {
+    // A run of `run` single-character positions has no loop of its own and no choice: the only loop is the search's, in front of it
+    // when the match is searched from every position. At any moment every position can be live at once, each trying the one way on
+    // (the search's loop two), so the work of one character is at most run + 1: the figure the general analysis finds for a run of
+    // one repeated letter (the case where every prefix of the run is live), and never less than it finds for any other. Its steps are
+    // the run's length, not the square of it that following every live prefix costs.
+    if (run > MAX_POSITIONS) throw new TooComplex('too many positions')
+    budget.steps -= run
+    if (budget.steps < 0) throw new TooComplex('analysis budget')
+    if ((budget.since += run) >= CLOCK_EVERY) budget.tick()
+    return searched ? { degree: 1, work: run + 1 } : { degree: 0, work: 1 }
+  }
   const A = new Automaton()
   let body = A.build(tree)
   if (searched && (unanchored || !startAnchored(tree))) {
@@ -1130,6 +1169,22 @@ export function regexModel(source: string, flags = ''): string | RegexCost | nul
   }
   CACHE.set(key, verdict)
   return verdict
+}
+
+/**
+ * Test hooks (never called by the engine): the steps the analysis of a pattern takes, and its model with or without the fast path of
+ * a repetition-free run, so a test can hold the one to the other and the steps to the length.
+ * @internal
+ */
+export function regexAnalysisSteps(source: string, flags = '', plain = true): { steps: number; model: string | RegexCost } {
+  const budget: Budget = { steps: MAX_STEPS, since: 0, tick: () => {} }
+  plainRunsOff = !plain
+  try {
+    const model = analyse(readPattern(source, flags), flags.includes('m'), budget)
+    return { steps: MAX_STEPS - budget.steps, model }
+  } finally {
+    plainRunsOff = false
+  }
 }
 
 /** The time a run of a pattern of cost `c` may take on `n` characters (ms), by {@link REGEX_NS_PER_UNIT}. */
