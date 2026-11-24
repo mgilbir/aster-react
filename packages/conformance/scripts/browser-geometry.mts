@@ -32,11 +32,12 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { GATE_FLAGS, intOption, runGate } from '../../../scripts/lib/run-gate.mjs'
 import { KNOWN_DIFFERENCES } from '../src/geometry-differences.ts'
 import { within as deadline } from '../src/deadline.ts'
 
-cli({ url: import.meta.url, flags: { seeds: 'eq' } })
-const SEEDS = Number(process.argv.find((a) => a.startsWith('--seeds='))?.slice('--seeds='.length) ?? 160)
+cli({ url: import.meta.url, flags: { seeds: 'eq', ...GATE_FLAGS } })
+const SEEDS = intOption(process.argv.find((a) => a.startsWith('--seeds='))?.slice('--seeds='.length), '--seeds', 160)
 
 const CONF_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
 const OUT_DIR = join(CONF_DIR, '.tmp-browser-geometry')
@@ -93,7 +94,7 @@ function rejectedAttributes(el) {
 
 const silent = (errors) => ({ level() { return this }, error(...a) { errors.push(a.map(String).join(' ')); return this }, warn() { return this }, info() { return this }, debug() { return this } })
 
-window.__run = async (seed, renderer) => {
+window.__run = async (seed, renderer, plant) => {
   const { spec } = genGeometrySpec(seed)
   const out = { seed, renderer, skipped: null, points: 0, decisive: 0, hits: 0, ambiguous: 0, differ: 0, classes: {}, unknown: [], boxes: 0, boxHits: 0, boxDiffer: [], refused: 0 }
   const holder = document.createElement('div')
@@ -206,7 +207,7 @@ window.__run = async (seed, renderer) => {
     out.decisive++
     if (want !== 'nothing') out.hits++
     const h = index.pick(x, y)
-    const got = h ? anameIndex(h.item) : 'nothing'
+    const got = plant ? '(planted)' : h ? anameIndex(h.item) : 'nothing'
     const alt = canvasAt ? canvasAt(x, y) : want
     if (alt !== want) out.ambiguous++
     if (got !== want && got !== alt) {
@@ -230,7 +231,8 @@ window.__run = async (seed, renderer) => {
       let want, got
       // Aster first: where its work ceiling refuses the box, vega's walk of the same lattice (one isPointInPath per pixel of an
       // item's bounds, which a path of 1e15 pixels makes endless) is not run at all: it has no answer to compare with
-      try { got = sceneIntersect(scene, box, opt, undefined).map(anameOf).join(' ') } catch (e) {
+      if (plant) got = '(planted)'
+      else try { got = sceneIntersect(scene, box, opt, undefined).map(anameOf).join(' ') } catch (e) {
         if (e.name === 'AsterLimitError' && /intersect\\(\\) lattice tests/.test(e.message)) { out.refused++; continue }
         got = 'throws ' + e.message
       }
@@ -253,21 +255,12 @@ await build({
 })
 writeFileSync(join(OUT_DIR, 'index.html'), '<!doctype html><html><body style="margin:0"><script src="./page.js"></script></body></html>')
 
-const playwright = await import('playwright')
-const browser = await playwright.chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] })
-const page = await browser.newPage({ deviceScaleFactor: 1, viewport: { width: 1400, height: 1000 } })
-page.on('pageerror', (e) => console.error('[page]', e.message.slice(0, 300)))
-await page.goto(`file://${join(OUT_DIR, 'index.html')}`)
-await page.waitForFunction(() => '__run' in window, null, { timeout: 30_000 })
-
 /** One seed takes a few milliseconds; a page still busy (or waiting) after this is hung, and the gate fails naming the seed. */
 const SEED_DEADLINE_MS = 60_000
 async function within<T>(ms: number, what: string, work: Promise<T>): Promise<T> {
-  try { return await deadline(ms, what, work) } catch (e) {
-    // (a hung page cannot be asked to close: leave, and the browser with its parent)
-    console.error(`[browser-geometry] FAIL: ${(e as Error).message}`)
-    process.exit(1)
-  }
+  // (a page that does not answer in time is a crash of the gate, which runGate reports and fails on; a hung page cannot be asked to
+  // close, so the process leaves with its browser when runGate exits)
+  return deadline(ms, what, work)
 }
 
 type Result = {
@@ -275,44 +268,60 @@ type Result = {
   differ: number; classes: Record<string, number>; unknown: Array<Record<string, unknown> | null>
   boxes: number; boxHits: number; boxDiffer: Array<Record<string, unknown>>; refused: number
 }
-const t0 = Date.now()
 /** A run without `--seeds` is the full one: only it can say that a class of known differences has no difference left in it. */
 const FULL = !process.argv.some((a) => a.startsWith('--seeds='))
-let failed = false
-const seen: Record<string, Record<string, number>> = { svg: {}, canvas: {} }
-for (const renderer of ['svg', 'canvas'] as const) {
-  const total = { specs: 0, skipped: 0, points: 0, decisive: 0, hits: 0, ambiguous: 0, differ: 0, known: 0, unknown: 0, boxes: 0, boxHits: 0, boxDiffer: 0, refused: 0 }
-  const shown: string[] = []
-  for (let seed = 1; seed <= SEEDS; seed++) {
-    const r = await within(SEED_DEADLINE_MS, `${renderer} seed ${seed}`, page.evaluate(([s, rd]) => (window as unknown as { __run: (s: number, r: string) => Promise<Result> }).__run(s, rd), [seed, renderer] as const))
-    if (r.skipped) { total.skipped++; continue }
-    total.specs++
-    total.points += r.points; total.decisive += r.decisive; total.hits += r.hits; total.ambiguous += r.ambiguous; total.differ += r.differ
-    for (const [id, n] of Object.entries(r.classes)) { total.known += n; seen[renderer]![id] = (seen[renderer]![id] ?? 0) + n }
-    total.unknown += r.unknown.length
-    total.boxes += r.boxes; total.boxHits += r.boxHits; total.boxDiffer += r.boxDiffer.length; total.refused += r.refused
-    for (const d of r.unknown) if (d && shown.length < 16) shown.push(`  PICK seed ${seed} (${(d.x as number).toFixed(2)}, ${(d.y as number).toFixed(2)}): vega ${d.vega} aster ${d.aster}`)
-    for (const d of r.boxDiffer) if (shown.length < 24) shown.push(`  INTERSECT seed ${seed} ${JSON.stringify(d.box)} ${JSON.stringify(d.opt)}: vega [${d.vega}] aster [${d.aster}]`)
-  }
-  console.log(`[browser-geometry] ${renderer}: ${total.specs} specs (${total.skipped} vega or Aster could not run), ${total.decisive}/${total.points} decisive points, ${total.hits} on an item, ${total.ambiguous} where vega's renderers disagree, ${total.differ} differ (${total.known} known: ${JSON.stringify(seen[renderer])}, ${total.unknown} not); ${total.boxes} intersect boxes, ${total.boxHits} meet something, ${total.boxDiffer} differ, ${total.refused} refused by the work ceiling (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
-  for (const s of shown) console.log(s)
-  if (total.unknown || total.boxDiffer) failed = true
-  // what was compared: most specs run, most points decide, and many of them are on an item; boxes meet something (measured: 28 and 16 a seed)
-  if (total.specs < 0.9 * SEEDS || total.decisive < 0.6 * total.points || total.hits < 20 * SEEDS || total.boxHits < 12 * SEEDS) {
-    console.log(`[browser-geometry] FLOOR (${renderer}): ${JSON.stringify(total)}`)
-    failed = true
-  }
-}
-// the known differences must still differ (a fixed one is removed from src/geometry-differences.ts)
-if (FULL) {
-  for (const k of KNOWN_DIFFERENCES) {
-    const n = (k.renderer === 'both' ? ['svg', 'canvas'] : [k.renderer]).reduce((a, r) => a + (seen[r]![k.id] ?? 0), 0)
-    if (n === 0) {
-      console.log(`[browser-geometry] FIXED-GAP ${k.id}: listed in src/geometry-differences.ts but no difference falls into it any more; remove the entry`)
-      failed = true
+
+await runGate({
+  name: 'geometry-browser',
+  counters: {
+    points: { floor: 56000, what: 'decisive pointer positions whose pick Aster answered as vega does (or as a known difference)' },
+    boxes: { floor: 17500, what: 'intersect() boxes (by filter) compared with vega' },
+  },
+  // (a narrowed run, `--seeds=N`, cannot say a known class has no difference left)
+  partial: !FULL,
+  reads: ['core'],
+  run: async (gate) => {
+    const t0 = Date.now()
+    const playwright = await import('playwright')
+    const browser = await playwright.chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] })
+    const page = await browser.newPage({ deviceScaleFactor: 1, viewport: { width: 1400, height: 1000 } })
+    page.on('pageerror', (e) => console.error('[page]', e.message.slice(0, 300)))
+    await page.goto(`file://${join(OUT_DIR, 'index.html')}`)
+    await page.waitForFunction(() => '__run' in window, null, { timeout: 30_000 })
+    const seen: Record<string, Record<string, number>> = { svg: {}, canvas: {} }
+    for (const renderer of ['svg', 'canvas'] as const) {
+      const total = { specs: 0, skipped: 0, points: 0, decisive: 0, hits: 0, ambiguous: 0, differ: 0, known: 0, unknown: 0, boxes: 0, boxHits: 0, boxDiffer: 0, refused: 0 }
+      for (let seed = 1; seed <= SEEDS; seed++) {
+        const r = await within(SEED_DEADLINE_MS, `${renderer} seed ${seed}`, page.evaluate(([s, rd, plant]) => (window as unknown as { __run: (s: number, r: string, p: boolean) => Promise<Result> }).__run(s, rd, plant), [seed, renderer, gate.plant] as const))
+        if (r.skipped) { total.skipped++; continue }
+        total.specs++
+        total.points += r.points; total.decisive += r.decisive; total.hits += r.hits; total.ambiguous += r.ambiguous; total.differ += r.differ
+        for (const [id, n] of Object.entries(r.classes)) { total.known += n; seen[renderer]![id] = (seen[renderer]![id] ?? 0) + n }
+        total.unknown += r.unknown.length
+        total.boxes += r.boxes; total.boxHits += r.boxHits; total.boxDiffer += r.boxDiffer.length; total.refused += r.refused
+        gate.count('points', r.decisive)
+        gate.count('boxes', r.boxes - r.refused)
+        // every difference no class names is a case that differs (the first few of a seed say where; the rest are counted in the last)
+        r.unknown.forEach((d, i) => {
+          if (d) gate.differ(`pick ${renderer} seed ${seed} (${(d.x as number).toFixed(2)}, ${(d.y as number).toFixed(2)})`, `vega ${d.vega}, aster ${d.aster}`, null)
+          else gate.differ(`pick ${renderer} seed ${seed} (more ${i})`, 'a pick that differs, past the six a seed shows', null)
+        })
+        r.boxDiffer.forEach((d, i) => gate.differ(`intersect ${renderer} seed ${seed} box ${i}`, `${JSON.stringify(d.box)} ${JSON.stringify(d.opt)}: vega [${d.vega}] aster [${d.aster}]`, null))
+      }
+      console.log(`[geometry-browser] ${renderer}: ${total.specs} specs (${total.skipped} vega or Aster could not run), ${total.decisive}/${total.points} decisive points, ${total.hits} on an item, ${total.ambiguous} where vega's renderers disagree, ${total.differ} differ (${total.known} known: ${JSON.stringify(seen[renderer])}, ${total.unknown} not); ${total.boxes} intersect boxes, ${total.boxHits} meet something, ${total.boxDiffer} differ, ${total.refused} refused by the work ceiling (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
+      // what was compared: most specs run, most points decide, and many of them are on an item; boxes meet something (measured: 28 and 16 a seed)
+      if (FULL && (total.specs < 0.9 * SEEDS || total.decisive < 0.6 * total.points || total.hits < 20 * SEEDS || total.boxHits < 12 * SEEDS)) {
+        gate.problem(`FLOOR (${renderer}): too little was compared to say anything: ${JSON.stringify(total)}`)
+      }
     }
-  }
-}
-await within(30_000, 'closing the browser', browser.close())
-rmSync(OUT_DIR, { recursive: true, force: true })
-process.exit(failed ? 1 : 0)
+    // the known differences are cases of the expected-differences table (scripts/lib/expected-differences.mjs): each class that has
+    // differences differs, and (on a full run) one with none is a case that agrees, which the harness fails as FIXED-GAP
+    for (const k of KNOWN_DIFFERENCES) {
+      const n = (k.renderer === 'both' ? ['svg', 'canvas'] : [k.renderer]).reduce((a, r) => a + (seen[r]![k.id] ?? 0), 0)
+      if (n > 0) gate.differ(k.id, `${n} decisive points`, null)
+      else if (FULL) gate.agree(k.id, null)
+    }
+    await within(30_000, 'closing the browser', browser.close())
+    rmSync(OUT_DIR, { recursive: true, force: true })
+  },
+})
