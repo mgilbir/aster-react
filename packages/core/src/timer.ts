@@ -8,8 +8,9 @@
  *   - a timer is due at `time + delay`, and the elapsed time its callback gets is measured from `time`; an interval is
  *     scheduled against its start (`start + k * delay`), so a late tick does not push the next one back;
  *   - time is read once per frame, so every callback of a frame sees the same instant;
- *   - while a frame loop runs, a 1 s poll notices a clock that jumped (a suspended laptop) and shifts the schedule by the
- *     jump instead of firing a burst.
+ *   - a clock that jumped (a suspended laptop) is caught up at frame rate, one tick per frame, as d3-timer does; only when
+ *     the 1 s poll that runs alongside a frame loop fires BEFORE the frame that would read the new time (a background tab,
+ *     whose frames stop while its intervals run) does it shift the schedule by the jump instead.
  * Everything else is free: the clock is a value (`TimerClock`), a scheduler is an object, and the shared one reads the
  * host's globals at call time, so a test can install a controlled clock after the module loaded.
  */
