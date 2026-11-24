@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * Values the Vega-Lite schema forbids are refused by their path; what Aster lets through draws vega-lite's chart (C245).
+ * Values the Vega-Lite schema forbids are refused by their path; what Aster lets through draws vega-lite's chart (C245, C442).
  *
  * Every position of nine base specs (a bar with every block, a layer, selections, a facet, a concat of compositions, every
  * transform, a map, a boxplot, an errorbar) is given each of a set of wrong-typed values, and the result is held three ways:
@@ -8,6 +8,7 @@
  *    generated table, by vl/test/schema-oracle.ts - forbids that spec;
  *  - a spec the schema forbids that Aster still compiles (a form vega-lite reads beyond its schema: scripts/schema-table.mjs
  *    EXTENSIONS, or a property the definition does not have, which vega-lite ignores) draws what vega-lite draws, in real Vega;
+ *  - an `{"expr"}` at a position the schema types as any value is the literal object, as vega-lite emits it.
  * Before the schema check, about 180 such mutations (audit vl-rest1 mutate2.mjs) drew a chart other than vega-lite's.
  */
 import { describe, expect, it } from 'vitest'
@@ -99,5 +100,26 @@ describe('a value the schema forbids is refused by its path; one Aster lets thro
       expect(refusedBySchema, 'the schema check refuses something here').toBeGreaterThanOrEqual(3)
       expect(drawnOtherwise.join('\n')).toBe('')
     }, 300_000)
+  }
+})
+
+describe('an {"expr"} where the schema takes any value is the literal object vega-lite emits (C442)', () => {
+  const quiet = { level: () => quiet, warn: () => quiet, info: () => quiet, debug: () => quiet, error: () => quiet }
+  const transformsOf = (vg: unknown): Spec[] => ((vg as { data?: Spec[] }).data ?? []).flatMap((d) => (d.transform as Spec[] | undefined) ?? [])
+  const CASES: Array<[string, Spec, string, string]> = [
+    ['lookup default', { data: { values: V }, transform: [{ lookup: 'a', from: { data: { values: [{ a: 'A', w: 1 }] }, key: 'a', fields: ['w'] }, default: { expr: 'x' } }], mark: 'point', encoding: { x: { field: 'b', type: 'quantitative' } } }, 'lookup', 'default'],
+    ['impute value', { data: { values: V }, transform: [{ impute: 'b', key: 'a', groupby: ['c'], value: { expr: 'x' } }], mark: 'point', encoding: { x: { field: 'b', type: 'quantitative' } } }, 'impute', 'value'],
+    ['impute keyvals', { data: { values: V }, transform: [{ impute: 'b', key: 'a', keyvals: [{ expr: 'x' }, 'B'], value: 0 }], mark: 'point', encoding: { x: { field: 'b', type: 'quantitative' } } }, 'impute', 'keyvals'],
+    ['a nested {expr} in a lookup default', { data: { values: V }, transform: [{ lookup: 'a', from: { data: { values: [{ a: 'A', w: 1 }] }, key: 'a', fields: ['w'] }, default: { v: { expr: 'x' } } }], mark: 'point', encoding: { x: { field: 'b', type: 'quantitative' } } }, 'lookup', 'default'],
+  ]
+  for (const [what, spec, type, key] of CASES) {
+    it(what, async () => {
+      const theirs = transformsOf((vl as any).compile(structuredClone(spec), { logger: quiet }).spec).find((t) => t.type === type)
+      const ours = transformsOf(compile(structuredClone(spec) as never)).find((t) => t.type === type)
+      expect(theirs?.[key]).toBeDefined()
+      expect(ours?.[key]).toEqual(theirs?.[key])
+      expect(ours).not.toHaveProperty('signal')
+      await drawsLikeVegaLite(spec)
+    })
   }
 })
