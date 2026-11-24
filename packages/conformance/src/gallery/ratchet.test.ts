@@ -118,9 +118,11 @@ function baseRevision(): string | null {
 
 function snapshotAt(rev: string | null): RatchetSnapshot {
   const read = (file: string): string => (rev === null ? readFileSync(join(GALLERY_DIR, file), 'utf8') : git('show', `${rev}:packages/conformance/gallery/${file}`))
+  const readIfAny = (file: string): string => { try { return read(file) } catch { return '' } }
   return {
     floors: JSON.parse(read('floors.json')) as RatchetSnapshot['floors'],
-    passing: { static: parseLines(read('passing-static.txt')), react: parseLines(read('passing-react.txt')) },
+    // (the seeded path's list is newer than the base: a base without it holds no spec to keep)
+    passing: { static: parseLines(read('passing-static.txt')), react: parseLines(read('passing-react.txt')), seeded: parseLines(readIfAny('passing-seeded.txt')) },
     swapPairs: parseLines(read('swap-pairs.txt')),
     manifest: JSON.parse(read('manifest.json')) as RatchetSnapshot['manifest'],
   }

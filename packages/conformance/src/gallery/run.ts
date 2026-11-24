@@ -6,6 +6,7 @@
  *   react   real vega vs <Chart> mounted as an app would (loadSpecData, add-ons, no size props: the spec's own size, as vega's),
  *           in headless Chromium
  *   swap    one mounted <Chart> that goes from spec A to spec B (the pairs in gallery/swap-pairs.txt), in headless Chromium
+ *   seeded  the Vega-Lite specs with a selection, their stores holding one tuple, drawn by both engines from scratch, in Node (stores.ts)
  *
  * Every outcome is one of pass / fail / error / unverifiable. `unverifiable` is the only non-failure that is not a pass: the
  * ORACLE is not a function of its inputs (random(), timers) or fails itself, so there is nothing to compare against; each one
@@ -21,7 +22,7 @@
  * When the numbers improve it fails and says so: raise the floors and add the names (`--print-passing`), never lower them. The files
  * themselves are held against their history by ratchet.test.ts (the part of the ratchet that runs on every PR).
  *
- * Usage: tsx src/gallery/run.ts [--path=static|react|swap|all] [--filter=substr] [--json=file] [--print-passing] [--regenerate-swap-pairs]
+ * Usage: tsx src/gallery/run.ts [--path=static|react|swap|seeded|all] [--filter=substr] [--json=file] [--print-passing] [--regenerate-swap-pairs]
  */
 import { spawn } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -38,15 +39,15 @@ cli({ url: import.meta.url, flags: { path: 'eq', filter: 'eq', json: 'eq', 'prin
 const REPO_ROOT = join(GALLERY_DIR, '..', '..', '..')
 const argv = process.argv.slice(2)
 const arg = (n: string): string | undefined => argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3)
-const PATHS = (arg('path') ?? 'all') === 'all' ? (['static', 'react', 'swap'] as const) : ([arg('path')] as ('static' | 'react' | 'swap')[])
+const PATHS = (arg('path') ?? 'all') === 'all' ? (['static', 'react', 'swap', 'seeded'] as const) : ([arg('path')] as ('static' | 'react' | 'swap' | 'seeded')[])
 const FILTER = arg('filter')
 const JSON_OUT = arg('json')
 const PRINT_PASSING = argv.includes('--print-passing')
 const REGENERATE_SWAP = argv.includes('--regenerate-swap-pairs')
 
 interface Floors {
-  pass: Record<'static' | 'react', Record<Kind, number>>
-  maxUnverifiable: Record<'static' | 'react', Record<Kind, number>>
+  pass: Record<'static' | 'react' | 'seeded', Record<Kind, number>>
+  maxUnverifiable: Record<'static' | 'react' | 'seeded', Record<Kind, number>>
   /** the spec-swap path (one mounted <Chart>, spec A then B) over the committed gallery/swap-pairs.txt: every runnable pair must pass; at least minRunnable must be runnable (a pair whose B no longer passes fresh is skipped, visibly) */
   swap: { minRunnable: number; maxUnverifiable: number }
 }
@@ -102,8 +103,13 @@ const t0 = Date.now()
 const results: Record<string, Outcome[]> = {}
 const swapResults: SwapOutcome[] = []
 let swapPlan: SwapPlan<GallerySpec> = { runnable: [], skipped: [] }
-const runPath = async (p: 'static' | 'react' | 'swap'): Promise<void> => {
-  if (p === 'static') {
+const runPath = async (p: 'static' | 'react' | 'swap' | 'seeded'): Promise<void> => {
+  if (p === 'seeded') {
+    const { runSeeded, hasSelection } = await import('./stores.js')
+    const out: Outcome[] = []
+    for (const g of specs.filter(hasSelection)) out.push(await runSeeded(g))
+    results.seeded = out
+  } else if (p === 'static') {
     const { runStatic } = await import('./static.js')
     const out: Outcome[] = []
     for (const g of specs) out.push(await runStatic(g))

@@ -107,6 +107,15 @@ A spec that draws random numbers or reads the time is compared exactly, not skip
   oracle that differs between two such renders is `oracle-nondeterministic`). Waits on real I/O (vega's image-ready poll) stay on the
   real clock.
 
+* **Selections, seeded path.** The other paths draw the first frame, where every selection's store is empty and every datum passes its
+  predicate, so the grey a `{condition: {param}, value}` encoding paints for what is NOT selected, and the place of a filter against
+  the bins it reads, were never drawn by the gate (audit C264). `--path=seeded` (`src/gallery/stores.ts`) takes each Vega-Lite spec whose
+  compiled Vega has a `<param>_store`, writes one tuple into every store of both engines' Vega (from rows the oracle itself holds: the
+  middle value of a point field, the quartile range of an interval), and compares what each draws from scratch. A spec whose seeding
+  leaves the oracle's picture as it was (`seeding-inert`) or whose tuple cannot be made from the oracle's rows is `unverifiable`. Failing
+  there today: `selection_type_point_zorder` and `selection_heatmap` (the draw order of the selected items: `zindex`, owned by the mark
+  lane). The path's floor, passing list and ceiling are in `floors.json` / `passing-seeded.txt` like the others.
+
 Nothing is tolerated silently: all `fail` and `error` lines are printed. The runs are deterministic (four consecutive runs gave
 identical outcomes for all 720 specs on both paths).
 
@@ -116,7 +125,7 @@ identical outcomes for all 720 specs on both paths).
   exception so far: the React ceiling went from 7 / 10 to 11 / 12 when time-dependent oracles started to be measured
   (`vega/clock`, `pacman`, `watch`, `donut-chart-labelled`, `vl/animated_gapminder`, `animated_hop`: each was a fail or an error
   on that path, or hung; none was a pass). They are still checked on the static path, where the first frame is what is compared.
-* `passing-static.txt`, `passing-react.txt` - the specs that pass today; each must still pass (a count floor alone lets a fix hide
+* `passing-static.txt`, `passing-react.txt`, `passing-seeded.txt` - the specs that pass today; each must still pass (a count floor alone lets a fix hide
   a regression).
 * the number of specs read must equal the manifest.
 * the files against their own history: `src/gallery/ratchet.test.ts` runs in the default test run (every PR) and compares `floors.json`,
