@@ -9,12 +9,12 @@
  */
 import { describe, it, expect } from 'vitest'
 import * as vl from 'vega-lite'
-import { compile } from '@aster-charts/vl'
+import { compile, VLCompileError } from '@aster-charts/vl'
 import { renderWithVega, renderWithVegaChecked } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 import { expressionDiff } from './vl-expressions.js'
 import { withOracleRandom } from '../src/gallery/seeded.js'
-import { GROUPS } from './vl-selection-matrix-cases.js'
+import { GROUPS, SCALES } from './vl-selection-matrix-cases.js'
 
 const plain = (v: unknown) => JSON.parse(JSON.stringify(v))
 
@@ -52,7 +52,7 @@ async function compare(spec: Record<string, any>): Promise<void> {
   try { oracle = (vl as any).compile(plain(spec)).spec } catch (e) { refusal = e }
   if (oracle === undefined) {
     expect(refusal).toBeInstanceOf(Error)
-    expect(() => compile(plain(spec) as never), 'vega-lite refuses this spec').toThrow()
+    expect(() => compile(plain(spec) as never), 'vega-lite refuses this spec').toThrow(VLCompileError)
     return
   }
   const ours = compile(plain(spec) as never) as Record<string, any>
@@ -80,3 +80,17 @@ for (const [title, cases] of GROUPS) {
     for (const [name, spec] of cases) it(name, () => compare(spec), 30_000)
   })
 }
+
+// A case named for an x scale must hold that scale on its x channel, in every composition (the hconcat and facet composers once dropped it).
+describe('the cases that name an x scale hold it', () => {
+  const named = GROUPS.flatMap(([, cases]) => cases).filter(([name]) => /, x scale [a-z]+, in a /.test(name))
+  it('there are cases', () => expect(named.length).toBeGreaterThan(50))
+  for (const [name, spec] of named) {
+    it(name, () => {
+      const wanted = SCALES.find(([scale]) => name.includes(`, x scale ${scale},`))
+      expect(wanted, name).toBeDefined()
+      const text = JSON.stringify(spec)
+      expect(text, 'the scale of the name is in the spec').toContain(`"x":{"field":"x","type":"quantitative","scale":${JSON.stringify(wanted![1])}}`)
+    })
+  }
+})
