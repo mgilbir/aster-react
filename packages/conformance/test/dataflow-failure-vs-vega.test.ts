@@ -71,7 +71,10 @@ describe('a throwing expression is contained like vega contains it', () => {
       edit(spec)
       const vega = await renderWithVegaChecked(JSON.parse(JSON.stringify(spec)))
       expect(vega.errors.length, 'the case must make vega log an error').toBeGreaterThan(0)
-      const mine = renderSpec(JSON.parse(JSON.stringify(spec))) as string
+      const errors: unknown[] = []
+      const mine = renderSpec(JSON.parse(JSON.stringify(spec)), { logger: { error: (e: unknown) => { errors.push(e) }, warn: () => {} } } as never) as string
+      // (the failure is reported, not swallowed: ERRORS.md "Nothing is swallowed without a report")
+      expect(errors.length, 'the engine logs the failure').toBeGreaterThan(0)
       expect(diffCanonical(canonicalizeSvg(vega.svg), canonicalizeSvg(mine)).slice(0, 3)).toEqual([])
       // what each dataset ended with: the render cannot tell a dataset that ran from one that did not (every mark is ranked after every dataset)
       expect(asterDatasets(spec)).toEqual(vega.datasets)
@@ -211,10 +214,11 @@ describe('a mark encode that throws where a scale is ranked late', () => {
 })
 
 // A dataset that vega re-ranked past the scales and marks (it reads a signal a later dataset writes) throws after the marks that
-// read nothing late ran, and vega draws them. Aster stops all of them (a known gap, see datasetRanksOf), so only the datasets are
-// compared here: they are what the rank decides.
-describe('a throw in a dataset re-ranked past the scales and marks: the datasets', () => {
-  it('the datasets declared before it, after it and the writer it waits for', async () => {
+// read nothing late ran, and vega draws them. The render is compared like every other case of this file: Aster stops all of them
+// (see datasetRanksOf), so the render assertion FAILS today (C211, REVEALED to the lane that owns the runtime's pass order); it is
+// not dropped, and it is not a probe, because the gap is Aster's, not the oracle's.
+describe('a throw in a dataset re-ranked past the scales and marks', () => {
+  it('the marks that read nothing re-ranked are drawn, and the datasets declared before it, after it and the writer it waits for', async () => {
     const spec = {
       $schema: 'https://vega.github.io/schema/vega/v5.json', width: 300, height: 120,
       data: [
@@ -229,5 +233,9 @@ describe('a throw in a dataset re-ranked past the scales and marks: the datasets
     expect(vega.datasets.plain).not.toBeNull()
     expect(vega.datasets.seq).toBeNull()
     expect(asterDatasets(spec)).toEqual(vega.datasets)
+    const errors: unknown[] = []
+    const mine = renderSpec(JSON.parse(JSON.stringify(spec)), { logger: { error: (e: unknown) => { errors.push(e) }, warn: () => {} } } as never) as string
+    expect(errors.length, 'the engine logs the failure').toBeGreaterThan(0)
+    expect(diffCanonical(canonicalizeSvg(vega.svg), canonicalizeSvg(mine)).slice(0, 3)).toEqual([])
   }, 30_000)
 })
