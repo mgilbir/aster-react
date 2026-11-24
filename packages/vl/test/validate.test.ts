@@ -40,7 +40,7 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['a sequence with another source', { data: { sequence: { start: 0, stop: 3 }, values: [] }, mark: 'point' }, /cannot be combined/],
   ['an unknown invalid mode', unit({ mark: { type: 'point', invalid: 'drop' } }), /unknown invalid-value mode/],
   ['a bad scale invalid value', unit({ config: { scale: { invalid: { x: 'nope' } } } }), /zero-or-min/],
-  ['the time channel', unit({ encoding: { x: xq, y: yq, time: { field: 'x', type: 'quantitative' } } }), /time/],
+  ['the time channel', unit({ encoding: { x: xq, y: yq, time: { field: 'x', type: 'quantitative' } } }), /encoding\.time: the time channel needs exactly one timer selection param/],
   // --- composition nesting
   ['a facet inside a layer', { data: DATA, layer: [{ facet: { field: 'c', type: 'nominal' }, spec: unit() }] }, /not allowed inside `layer`/],
   ['an empty layer', { data: DATA, layer: [] }, /non-empty array/],
@@ -88,7 +88,7 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['a parameter with neither value nor expr', unit({ params: [{ name: 'p' }] }), /needs `value`, `expr` or `bind`/],
   ['an unknown bind input', unit({ params: [{ name: 'p', value: 1, bind: { input: 'dial' } }] }), /input type/],
   // --- conditions
-  ['a param condition', unit({ encoding: { x: xq, y: yq, color: { condition: { param: 'brush', value: 'red' }, value: 'grey' } } }), /param/],
+  ['a param condition', unit({ encoding: { x: xq, y: yq, color: { condition: { param: 'brush', value: 'red' }, value: 'grey' } } }), /encoding\.color\.condition\.param: parameter "brush" is not declared in `params`/],
   ['a condition without a test', unit({ encoding: { x: xq, y: yq, color: { condition: { value: 'red' }, value: 'grey' } } }), /needs `test`/],
   ['an empty condition array', unit({ encoding: { x: xq, y: yq, color: { condition: [], value: 'grey' } } }), /must not be empty/],
   ['a field condition in an array', unit({ encoding: { x: xq, y: yq, color: { condition: [{ test: 'true', field: 'c', type: 'nominal' }], value: 'g' } } }), /value conditions/],
