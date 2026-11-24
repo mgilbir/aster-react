@@ -228,10 +228,10 @@ export interface EntryHost {
    * left so (vega's encoders of a guide's marks listen to the encoder of the guide's group). Absent when nothing is left unrun.
    */
   unrun?: (code: string) => boolean
-  /** a scale by name as an entry calls it (the engine's coercions around the call, its bandwidth), for the entries that read one */
   /** what this evaluation made of the steps' entries (closures over its scales) and of the per-run ones: it, not the steps, keeps them */
   fastCache: Map<object, unknown>
   runCache: Map<object, unknown>
+  /** a scale by name as an entry calls it (the engine's coercions around the call, its bandwidth), for the entries that read one */
   entryScale?(name: string): { call(raw: unknown): unknown; bandwidth(): number; /** the scale itself */ fn: (v: unknown) => unknown } | undefined
 }
 
@@ -372,15 +372,16 @@ interface Step {
   entry?: EncodeValue | EncodeValue[]
   /** the plain value of a constant channel */
   v?: unknown
-  /** 0 constant, 1 function, 2 encode entry, 3 an entry that does not depend on the datum (evaluated once) */
+  /**
+   * 0 constant, 1 function, 2 encode entry, 3 an entry that does not depend on the datum (evaluated once), 4 a per-run entry (evaluated
+   * once per run, its value kept in the evaluation's `runCache`)
+   */
   kind: 0 | 1 | 2 | 3 | 4
   cached?: boolean
   /** an entry of the accessibility channels of a guide's group (`format`): one that throws is logged, and the channel left unset */
   soft?: boolean
-  /** the evaluation `fast` was made for (it holds that evaluation's scale) */
   /** the entry's shape, analysed once (`null`: it has none of the written-out shapes) */
   binder?: Binder | null
-  /** a per-run entry: its value, and the evaluation it was made in */
 }
 
 /** An encode entry that is only numbers and words through `mult` / `offset` / `round` / `exponent`: the same for every datum. */

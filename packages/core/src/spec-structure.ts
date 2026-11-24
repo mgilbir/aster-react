@@ -16,6 +16,7 @@
  */
 import { SpecParseError } from './parse-error.js'
 import { MARK_TYPES } from './event-selector.js'
+import { LEGEND_SCALES } from './legend-scales.js'
 
 /**
  * The mark types vega draws (the ones an event selector can name, but `*`). Any other `type` -- an unknown name, Vega-Lite's
@@ -279,17 +280,20 @@ export function parseAxisNames(a: unknown, names: Names, cfg: () => Record<strin
 }
 
 /** The channels a legend can have a scale for, in the order the first of them gives the legend its canonical scale (vega-parser `LegendScales`). */
-export const LEGEND_CHANNELS = ['size', 'shape', 'fill', 'stroke', 'strokeWidth', 'strokeDash', 'opacity'] as const
+export const LEGEND_CHANNELS = LEGEND_SCALES
 
-/** vega-parser `legendType`: a symbol legend, a gradient, or a gradient in steps; the type given, else by the kind of its one scale. */
-export function legendType(l: Record<string, unknown>, scaleType: string | undefined): 'symbol' | 'gradient' | 'discrete' {
+/**
+ * vega-parser `legendType`: the type given (`spec.type || 'symbol'`, whatever it is), else by the kind of the legend's one color scale --
+ * a gradient on a continuous scale, bands (`discrete`) on a discretizing one, symbols otherwise; a gradient on a discretizing scale is
+ * bands. The one definition: the compile check, the runtime and the legend builder read it.
+ */
+export function legendType(l: Record<string, unknown>, scaleType: string | undefined): string {
   const present = LEGEND_CHANNELS.filter((c) => !!l[c]).length
-  let type = typeof l.type === 'string' && l.type ? l.type : 'symbol'
+  let type = (l.type as string) || 'symbol'
   if (!l.type && present === 1 && (l.fill || l.stroke)) {
     type = scaleType && CONTINUOUS_SCALE_TYPES.has(scaleType) ? 'gradient' : scaleType && DISCRETIZING_SCALE_TYPES.has(scaleType) ? 'discrete' : 'symbol'
   }
-  if (type === 'gradient' && scaleType && DISCRETIZING_SCALE_TYPES.has(scaleType)) type = 'discrete'
-  return type as 'symbol' | 'gradient' | 'discrete'
+  return type === 'gradient' && scaleType && DISCRETIZING_SCALE_TYPES.has(scaleType) ? 'discrete' : type
 }
 
 /** vega-parser `parseLegend`: which marks a legend is made of depends on its type, and a symbol legend nests two scopes. */

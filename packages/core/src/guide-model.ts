@@ -158,11 +158,11 @@ function legendReading(l: Rec, env: GuideEnv): (key: string) => Reading {
 
 // -- the title -----------------------------------------------------------------------------------------------------------------
 
-/** How the title's properties are read. */
 /** Every property of the title vega-parser can read as an expression (its `name`, `style` and `interactive` are taken as they are). */
 const TITLE_KEYS = new Set(('align anchor angle aria baseline color description dx dy font fontSize fontStyle fontWeight frame limit lineHeight offset orient '
   + 'subtitle subtitleColor subtitleFont subtitleFontSize subtitleFontStyle subtitleFontWeight subtitleLineHeight subtitlePadding text zindex').split(' '))
 
+/** How the title's properties are read. */
 function titleReading(t: Rec): (key: string) => Reading {
   return (key) => (!TITLE_KEYS.has(key) || /^(aria|description|zindex)$/.test(key) || (/^subtitle/.test(key) && key !== 'subtitlePadding' && !t.subtitle) ? 'never' : 'entry')
 }
