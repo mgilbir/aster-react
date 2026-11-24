@@ -11,6 +11,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { GATES } from './gates.mjs'
+import { ENTRIES as BUDGET_ENTRIES } from '../packages/benchmarks/scripts/budget-rows.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const read = (rel) => readFileSync(join(root, rel), 'utf8')
@@ -91,6 +92,12 @@ describe('docs/TESTING.md reference results', () => {
     expect(r).toContain(`--floor ${signals.floor} --min-ok ${signals.ok} --max-node-error ${signals.nodeError} --max-retained ${signals.retained}`)
     expect(cells(r)[3]).toContain(`${signals.ok} ok, ${signals.retained} retained`)
     expect(cells(r)[3]).toMatch(new RegExp(`/ ${signals.floor}\\s*$`))
+  })
+
+  it('the bundle budget row counts the import-pattern rows of the budget', () => {
+    const m = /all (\d+) import-pattern rows pass/.exec(result('pnpm --filter @aster-charts/benchmarks run budget'))
+    expect(m, 'docs/TESTING.md bundle budget row').not.toBeNull()
+    expect(Number(m[1])).toBe(BUDGET_ENTRIES.length)
   })
 
   it('names no other corpus size in prose', () => {

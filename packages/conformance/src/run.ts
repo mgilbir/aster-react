@@ -9,7 +9,7 @@
  *
  * Environment: ASTER_CORPUS_DIR picks another corpus directory, relative to the package (default `corpus`; the time-zone matrix uses
  * `corpus-tz`); ASTER_CORPUS_FILTER keeps the entries whose name matches the regular expression.
- * Exit codes: 0 every entry matches the oracle (and, over the whole default corpus, no two entries render alike beyond corpus-distinct.json), 1 a difference (or a missing corpus directory), 2 bad usage (an unknown option).
+ * Exit codes: 0 every entry matches the oracle (and, over the whole default corpus, no two entries render alike beyond corpus-identical.json), 1 a difference (or a missing corpus directory), 2 bad usage (an unknown option).
  *
  * Convention: most entries set explicit numeric width/height and `autosize: 'none'` so
  * layout is deterministic and comparable. Nothing enforces it, and not every entry
