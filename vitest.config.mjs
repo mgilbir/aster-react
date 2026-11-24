@@ -24,7 +24,8 @@ export default defineConfig({
     // See scripts/vitest-yield.setup.mjs: keeps a worker's event loop turning between tests.
     // See scripts/vitest-engine.setup.mjs: pins the engine's sort so the in-process oracle (real Vega) is deterministic.
     // See scripts/vitest-core-parts.setup.mjs: core's own unit tests get the parts of the engine the public entries carry.
-    setupFiles: ['./scripts/vitest-yield.setup.mjs', './scripts/vitest-engine.setup.mjs', './scripts/vitest-core-parts.setup.mjs'],
+    // See packages/conformance/scripts/engine-sharing.setup.mjs: a conformance test that hands one object to vega and to Aster fails.
+    setupFiles: ['./scripts/vitest-yield.setup.mjs', './scripts/vitest-engine.setup.mjs', './scripts/vitest-core-parts.setup.mjs', './packages/conformance/scripts/engine-sharing.setup.mjs'],
     // `*.gallery.test.ts` needs the fetched gallery cache: it runs in `pnpm conformance:gallery` (vitest.gallery.config.mjs), not here.
     exclude: [...configDefaults.exclude, '**/*.gallery.test.ts'],
     env: {

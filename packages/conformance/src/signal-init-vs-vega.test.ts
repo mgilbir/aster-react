@@ -12,7 +12,7 @@ type Spec = Record<string, unknown>
 const VALUES: unknown[] = [15, 0, -3, 2.5, 1e21, true, false, null, '', 'sqrt(16)', '3 + 4', 'width * 2', [1, 2, 3], [], [[1, 2], [3]], { a: 1 }, { a: [1, { b: 2 }] }, 'datum', 'width / 0']
 
 async function vegaSignals(signals: Spec[]): Promise<Record<string, unknown>> {
-  const view = new vega.View(vega.parse({ width: 40, height: 30, signals, marks: [] } as never), { renderer: 'none' })
+  const view = new vega.View(vega.parse(structuredClone({ width: 40, height: 30, signals, marks: [] }) as never), { renderer: 'none' })
   try {
     await view.runAsync()
     return Object.fromEntries(signals.map((s) => [s.name as string, view.signal(s.name as string)]))

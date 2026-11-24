@@ -32,7 +32,7 @@ const FLAG = { customFormatTypes: true }
 async function svgOf(vg: unknown): Promise<string> {
   const log = console.error
   console.error = () => {}
-  const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(vega.parse(vg as never), { renderer: 'none' })
+  const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(vega.parse(structuredClone(vg) as never), { renderer: 'none' })
   try { await view.runAsync(); return await view.toSVG() } finally { console.error = log; view.finalize() }
 }
 

@@ -25,7 +25,7 @@ async function oracle(spec: Spec): Promise<Outcome> {
   const log = console.error
   console.error = () => {}
   try {
-    const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(vega.parse(spec as never), { renderer: 'none' })
+    const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(vega.parse(structuredClone(spec) as never), { renderer: 'none' })
     try {
       await view.runAsync()
       return { svg: await view.toSVG() }
