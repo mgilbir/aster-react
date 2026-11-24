@@ -46,7 +46,6 @@
    "height": 100,
    "layer": [
     {
-     "height": 100,
      "mark": "point",
      "encoding": {
       "x": {
@@ -61,7 +60,17 @@
      "params": [
       {
        "name": "brush",
-       "select": "interval"
+       "select": "interval",
+       "value": {
+        "x": [
+         2,
+         5
+        ],
+        "y": [
+         3,
+         6
+        ]
+       }
       }
      ]
     },

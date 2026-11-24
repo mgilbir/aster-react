@@ -47,8 +47,19 @@
    "name": "pick",
    "select": {
     "type": "point",
-    "toggle": false
-   }
+    "toggle": false,
+    "fields": [
+     "a"
+    ]
+   },
+   "value": [
+    {
+     "a": 1
+    },
+    {
+     "a": 6
+    }
+   ]
   }
  ],
  "mark": "point",

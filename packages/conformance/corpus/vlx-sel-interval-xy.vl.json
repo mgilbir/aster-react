@@ -45,7 +45,17 @@
  "params": [
   {
    "name": "brush",
-   "select": "interval"
+   "select": "interval",
+   "value": {
+    "x": [
+     4,
+     6
+    ],
+    "y": [
+     4,
+     7
+    ]
+   }
   }
  ],
  "mark": "point",

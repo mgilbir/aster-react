@@ -53,7 +53,12 @@
    },
    "bind": {
     "input": "checkbox"
-   }
+   },
+   "value": [
+    {
+     "a": 3
+    }
+   ]
   }
  ],
  "mark": "point",
