@@ -285,6 +285,10 @@ cli({ url: import.meta.url })
 // Chart + VL 301.5 (+11.0 over origin/main's ceiling 290.5). @aster-charts/vl alone bundles 108.8 -> 120.6: the layer resolution at
 // every level (C79), the consumption check (T3) and its `ignore` rules, the facet / header / title / size fixes, the name and
 // value-type refusals (C182, C245, C442), the validation messages with paths and suggestions (C637). The other rows did not move.
+// The schema check generated from vega-lite's JSON schema (fix/audit-a06d-vl-schema, C245 / C442), measured 2026-11-24 on a clean build
+// (kB gzip): Chart + VL 301.5 -> 314.2 (+12.7): src/schema-table.ts, every position's type of the vega-lite 6.4.3 schema in a compact
+// form (merged types and shapes, near-identical shapes as deltas: 11.3 kB gzip alone), and its walk (schema.ts). The other rows did
+// not move.
 const BUDGETS = {
   // stack layer 2 (perf/vl-compile-data-independent on fix/hover-correctness: rows.ts, the row watch, signal-valued values, findSource): measured 2026-11-14 on a clean build at 161.5 kB gzip (ceiling was 161.4); ceiling is the measured value + 0.5.
   // stack layer 3 (perf/expr-encode: direct built-in calls, the shared function table, the format fast path): measured 2026-11-14 on a clean build at 162.4 kB gzip (ceiling was 162.0); ceiling is the measured value + 0.5.
@@ -413,7 +417,7 @@ const BUDGETS = {
   // escaped quotes and spaces inside url() (fix/178-paint-url-escape: paint-url.ts maps them to U+FFFD): measured 2026-11-21 on a clean build, base origin/main d30ead9 -> branch (kB gzip): 288.2 -> 288.2 (the ceiling was 288.3: #174's regex refusal and the limits in the event loop had grown the base to within 0.1 of it without moving it); ceiling is the measured value + 0.5.
   // view properties as signals (fix/view-signal-refs: view-props.ts, the view layout read from the view signals before and after the pass): measured 2026-11-22 on a clean build, base fix/178-paint-url-escape -> branch (kB gzip): 288.2 -> 289.5; ceiling is the measured value + 0.5.
   // the tooltip in a fixed box portalled to the body (feat/152-tooltip-portal: placement, flip at the viewport edge, tooltipContainer): measured 2026-11-22 on a clean build, base fix/view-signal-refs -> branch (kB gzip): 289.5 -> 290.0; ceiling is the measured value + 0.5.
-  '@aster-charts/react Chart + VL': 302.0 * 1024,
+  '@aster-charts/react Chart + VL': 314.7 * 1024,
   // The opt-in import of every part of the engine up front (`import '@aster-charts/react/all'`): what an app that prefers no first-render
   // wait pays. Measured 2026-11-16 on a clean build at 246.4 kB gzip (`<Chart>` alone: 180.5); ceiling is the measured value + 0.5.
   // paint never references another document (fix/paint-url: paint-url.ts, the CSS-escape decoder and the url() check on every fill, stroke and background; with #170's blend keywords): measured 2026-11-18 on a clean build, base origin/main 1345ae9 -> branch (kB gzip): 246.8 -> 247.2; ceiling is the measured value + 0.5.
