@@ -6,8 +6,9 @@
  * must resolve to nothing. The painted geometry is taken from the canvas
  * renderer itself (a recording context that flattens each fill/stroke path), not
  * from the hit index: arcs, paths, shapes, geoshapes, areas, lines, trails,
- * rounded rects, every symbol shape, rotated symbols. Text is checked against
- * the layout's text box, rotated.
+ * rounded rects, every symbol shape, rotated symbols, projected shapes (a shape mark under the geoshape transform: what vega makes
+ * of GeoJSON). Text is checked against the layout's text box, rotated. An image paints a bitmap the recorder does not record: it is
+ * checked against its box below.
  *
  * There is no pointing slack (vega's pick has none): a point more than a hair (MARGIN) inside what is painted must find
  * the item, and one more than a hair outside everything painted must find nothing. A stroke is painted as the canvas
@@ -20,6 +21,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildSync } from 'esbuild'
 import { compileChart, evaluateChart } from './index.js'
+import './addon-geo.js'
 import { renderSceneToCanvas } from './canvas.js'
 import { buildHitIndex } from './hit.js'
 import { makeRecorder, type PaintRecord } from './canvas-record.testlib.js'
@@ -198,6 +200,20 @@ const SPECS: Record<string, Record<string, unknown>> = {
   'shape marks': base([
     mk('shape', { path: { field: 'p' }, fill: { value: '#e45756' } }),
   ], { data: dataset([{ p: 'M10,10C60,10 60,60 10,60Z' }, { p: 'M120,20Q170,20 170,70L120,70Z' }, { p: 'M190,100A25,25 0,1,1 190,101Z' }]) }),
+  // (vega's geoshape: a `shape` mark whose rows are GeoJSON, the `geoshape` transform projecting them; a polygon with a hole, a line and a
+  // multipolygon, so the fill's winding, the stroke and several rings are all in it)
+  'projected shapes (shape + geoshape transform)': {
+    ...base([
+      { type: 'shape', from: { data: 'g' }, transform: [{ type: 'geoshape', projection: 'p' }], encode: { update: { fill: { value: '#4c78a8' }, stroke: { value: '#222' }, strokeWidth: { value: 2 } } } },
+    ], {
+      projections: [{ name: 'p', type: 'equirectangular', scale: 600, translate: [120, 80], center: [10, 5] }],
+    }),
+    data: [{ name: 'g', values: [
+      { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[[-8, -6], [-8, 6], [8, 6], [8, -6], [-8, -6]], [[-3, -2], [3, -2], [3, 2], [-3, 2], [-3, -2]]] } },
+      { type: 'Feature', geometry: { type: 'LineString', coordinates: [[12, -8], [16, 0], [20, 8]] } },
+      { type: 'Feature', geometry: { type: 'MultiPolygon', coordinates: [[[[22, -6], [22, 0], [28, 0], [28, -6], [22, -6]]], [[[22, 3], [22, 8], [27, 8], [27, 3], [22, 3]]]] } },
+    ] }],
+  },
   'scaled paths': base([
     mk('path', { x: { field: 'x' }, y: { value: 30 }, scaleX: { value: 2 }, scaleY: { value: 1.5 }, path: { value: 'M0,0L20,0L20,30L0,30Z' }, fill: { value: '#4c78a8' } }),
   ], { data: dataset(rowsOf(2, (i) => ({ x: 20 + i * 100 }))) }),
@@ -217,7 +233,7 @@ function recordsOf(scene: SceneRoot, group: SceneGroup, items: SceneItem[]): Pai
   return records.filter((r) => r.op !== 'text')
 }
 
-const perItem = new Set(['symbol', 'circle', 'rect', 'rule', 'arc', 'path', 'shape', 'geoshape', 'image'])
+const perItem = new Set(['symbol', 'circle', 'rect', 'rule', 'arc', 'path', 'shape'])
 
 describe('hit index finds what is painted, and only that', () => {
   for (const { name, scene } of scenes) {
@@ -256,6 +272,23 @@ describe('hit index finds what is painted, and only that', () => {
       expect(bad.join('\n')).toBe('')
     })
   }
+
+  it('an image is found over its box (it paints a bitmap, which the recording context does not record), and only there', () => {
+    const scene = evaluateChart(compileChart(base([
+      mk('image', { x: { field: 'x' }, y: { value: 30 }, width: { value: 40 }, height: { value: 30 }, url: { value: 'a.png' }, align: { field: 'align' } }),
+    ], { data: dataset([{ x: 20, align: 'left' }, { x: 130, align: 'center' }]) }) as never))
+    const index = buildHitIndex(scene)
+    const items = (markGroups(scene)[0]!.items ?? []) as SceneItem[]
+    expect(items).toHaveLength(2)
+    // left-aligned at x 20: [20, 60] x [30, 60]; centred at x 130: [110, 150] x [30, 60]; the view's padding (7) moves them
+    const box = (it: SceneItem, i: number): [number, number, number, number] => (i === 0 ? [27, 37, 67, 67] : [117, 37, 157, 67])
+    items.forEach((it, i) => {
+      const [x1, y1, x2, y2] = box(it, i)
+      expect(index.query((x1 + x2) / 2, (y1 + y2) / 2)?.item, `centre ${i}`).toBe(it)
+      for (const [x, y] of [[x1 + 1, y1 + 1], [x2 - 1, y2 - 1]]) expect(index.query(x!, y!)?.item, `inside ${i} ${x},${y}`).toBe(it)
+      for (const [x, y] of [[x1 - 2, (y1 + y2) / 2], [x2 + 2, (y1 + y2) / 2], [(x1 + x2) / 2, y1 - 2], [(x1 + x2) / 2, y2 + 2]]) expect(index.query(x!, y!), `outside ${i} ${x},${y}`).toBeNull()
+    })
+  })
 
   it('hollow (transparent-fill) symbols are found from their centre, like vega', () => {
     const scene = evaluateChart(compileChart(base([
