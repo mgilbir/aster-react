@@ -399,11 +399,6 @@ export function geoPointRadius(param: unknown): unknown {
   return (feature: unknown): number => +((param as (d: unknown) => unknown)(feature) as number)
 }
 
-export function compileExprTransform(expr: string, ctx: TransformContext) {
-  const fn = ctx.runtime.expr(expr)
-  return (datum: Row): unknown => fn(datum, ctx.signals)
-}
-
 /**
  * An expression evaluated over a transform's rows in one loop that the caller runs now, in which nothing writes a signal (the
  * loop only evaluates, and what the expression calls is checked: see `exprRows`). What every row reads alike is read once. Not
