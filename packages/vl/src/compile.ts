@@ -13,7 +13,7 @@ import { tokenize } from './expr-tokens.js'
 import { VLCompileError, pushAll, flatField, datumRef as dref, genName, safeKey, splitAccessPath, dict, own, setOwn } from './names.js'
 import { validateGeoUnit, validateSpec } from './validate.js'
 import { cloneSpecStructure, detachRows, isRows, jsonWithRows, sameJson, stringifyWithoutRows, withRows, type RowPayloads } from './rows.js'
-import { arm, consumeAll, consuming, derive, deriveDeep, deriveWithout, ignore, ignoreUnread, peek, pick, refuseUnconsumed, transfer, withConsumption } from './consume.js'
+import { ARMING, consumeAll, consuming, derive, deriveDeep, deriveWithout, ignore, ignoreUnread, peek, pick, refuseUnconsumed, transfer, withConsumption } from './consume.js'
 import { markChannelCompatible } from './channels.js'
 import { predicateExpr, domainValueExpr, dateTimeToExpr, isDateTime as isDateTimeValue } from './predicate.js'
 import {
@@ -183,16 +183,18 @@ function refuseDuplicateNames(out: VLSpec): void {
   scope(out, 'spec')
 }
 
+/** The root properties of a spec the consumption check does not hold the compiler to (compileOnce). */
+const PLAIN_AT_ROOT: ReadonlySet<string> = new Set(['config'])
+
 function compileOnce(input: VLSpec, payloads: RowPayloads, forward?: ReadonlyMap<string, SelCmpt>, forwardLookups?: ReadonlyMap<string, { name: string }>): { out: VLSpec; misses: ReadonlySet<string>; selections: ReadonlyMap<string, SelCmpt>; lookups: ReadonlyMap<string, { name: string }> } {
   return withConsumption(() => {
-    const spec = cloneSpecStructure(input, payloads)
-    validateSpec(spec)
-    // (from here on, every property of the spec has to be read by the compile, or it is refused at the end: consume.ts. The config is
-    // defaults: a block applies where the spec has something it configures, and validate.ts checks its keys; what the check holds the
-    // compiler to is the spec, so the config is not armed)
-    const config = spec.config
-    const armed = arm(spec, (v) => isRows(v) || v === config)
-    const result = compileValidated(armed, forward, forwardLookups)
+    // (the copy is armed while it is made: every property of the spec has to be read by the compile, or it is refused at the end
+    // (consume.ts). The config is defaults: a block applies where the spec has something it configures, and validate.ts checks its
+    // keys; what the check holds the compiler to is the spec, so the config is copied plain. Validating reads every property, so it
+    // runs under `peek`)
+    const spec = cloneSpecStructure(input, payloads, ARMING, PLAIN_AT_ROOT)
+    peek(() => validateSpec(spec))
+    const result = compileValidated(spec, forward, forwardLookups)
     refuseUnconsumed()
     return result
   })
