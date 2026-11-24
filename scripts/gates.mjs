@@ -63,8 +63,8 @@ export const GATES = [
     why: 'the intersect() expression function (vega-lite geo interval selections) over every mark type, boxes and filters vs real vega in Chromium (arc and path outlines need a canvas context), directly and through the event loop on each renderer',
   },
   {
-    name: 'geometry-browser', args: ['conformance:geometry'], tags: ['browser'], blocking: false,
-    why: 'generated geometry specs (every mark type, nested groups, the value classes no scale writes): the pick on each renderer and intersect() vs real vega in Chromium; non-blocking until its open pick differences are fixed (see the script header)',
+    name: 'geometry-browser', args: ['conformance:geometry'], tags: ['browser'],
+    why: 'generated geometry specs (every mark type, nested groups, the value classes no scale writes): the pick on each renderer and intersect() vs real vega in Chromium, under a deadline; the differences that remain are named by what the oracle does there (src/geometry-differences.ts) and must still differ',
   },
   {
     name: 'react-browser', args: ['--filter', '@aster-charts/react', 'run', 'test:browser'], tags: ['browser'],
