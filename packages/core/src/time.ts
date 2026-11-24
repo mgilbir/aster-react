@@ -110,8 +110,8 @@ function makeInterval(unit: Unit): TimeInterval {
     const stride = step == null ? 1 : Math.floor(step)
     if (!(cursor < (stop as Date)) || !(stride > 0)) return out
     // the dates are counted while the range is generated, with or without limits: a 1 ms interval over decades would otherwise
-    // allocate until the process dies (the built-in ceiling on items a spec's count sizes, time ticks among them, or the limit that
-    // replaces it; under limits the clock too)
+    // allocate until the process dies (the built-in ceiling on the entries one generator makes, as `sequence`'s, or the limits that
+    // replace it; under limits the item budget and the clock too)
     const meter = activeMeter()
     let previous: Date
     do {
@@ -119,7 +119,7 @@ function makeInterval(unit: Unit): TimeInterval {
       unit.shift(cursor, stride)
       unit.floor(cursor)
       if ((out.length & 1023) === 0) {
-        ceiling('items', out.length, 'time range')
+        ceiling('rows', out.length, 'time range')
         if (meter) meter.items(out.length, 'time ticks')
       }
     } while (previous < cursor && cursor < (stop as Date))
