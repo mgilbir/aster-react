@@ -360,7 +360,8 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       // non-empty source keeps the source rows first).
       return rows.length ? [...rows, ...part('reshape').sequenceRows(t)] : part('reshape').sequenceRows(t)
     case 'graticule':
-      return graticuleRows(t as Record<string, unknown>)
+      // A generating transform appends its tuples to the pulse it is given, as `sequence` above does.
+      return rows.length ? [...rows, ...graticuleRows(t as Record<string, unknown>)] : graticuleRows(t as Record<string, unknown>)
     case 'contour':
       return contourRows(rows, t as Record<string, unknown>, ctx)
     case 'kde2d':
