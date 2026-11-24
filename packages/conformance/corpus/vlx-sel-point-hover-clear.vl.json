@@ -48,8 +48,16 @@
    "select": {
     "type": "point",
     "on": "pointerover",
-    "clear": "pointerout"
-   }
+    "clear": "pointerout",
+    "fields": [
+     "c"
+    ]
+   },
+   "value": [
+    {
+     "c": "y"
+    }
+   ]
   }
  ],
  "mark": "point",

@@ -42,26 +42,63 @@
  },
  "width": 300,
  "height": 200,
- "params": [
+ "layer": [
   {
-   "name": "brush",
-   "select": {
-    "type": "interval",
-    "encodings": [
-     "x"
-    ]
+   "params": [
+    {
+     "name": "brush",
+     "select": {
+      "type": "interval",
+      "encodings": [
+       "x"
+      ]
+     },
+     "value": {
+      "x": [
+       2,
+       5
+      ]
+     }
+    }
+   ],
+   "mark": "point",
+   "encoding": {
+    "x": {
+     "field": "a",
+     "type": "quantitative"
+    },
+    "y": {
+     "field": "b",
+     "type": "quantitative"
+    }
+   }
+  },
+  {
+   "transform": [
+    {
+     "filter": {
+      "param": "brush"
+     }
+    }
+   ],
+   "mark": {
+    "type": "text",
+    "dy": -8
+   },
+   "encoding": {
+    "x": {
+     "field": "a",
+     "type": "quantitative"
+    },
+    "y": {
+     "field": "b",
+     "type": "quantitative"
+    },
+    "text": {
+     "field": "c",
+     "type": "nominal"
+    }
    }
   }
- ],
- "mark": "point",
- "encoding": {
-  "x": {
-   "field": "a",
-   "type": "quantitative"
-  },
-  "y": {
-   "field": "b",
-   "type": "quantitative"
-  }
- }
+ ]
 }
