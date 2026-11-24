@@ -858,13 +858,14 @@ function syncAttrsFromDom(el: Element, desc: DomDesc): void {
   const keep = new Set<string>()
   for (const [k, v] of desc.attrs) {
     keep.add(k)
-    const cur = k === 'xlink:href' ? el.getAttributeNS(XLINK_NS, 'xlink:href') : el.getAttribute(k)
+    // (the namespaced accessors take the LOCAL name: 'href', not the qualified 'xlink:href', which no attribute has)
+    const cur = k === 'xlink:href' ? el.getAttributeNS(XLINK_NS, 'href') : el.getAttribute(k)
     if (cur !== v) writeAttr(el, k, v)
   }
   for (let i = el.attributes.length - 1; i >= 0; i--) {
     const a = el.attributes.item(i)!
     if (keep.has(a.name) || a.name === 'xmlns' || a.name === 'xmlns:xlink') continue
-    if (a.name === 'xlink:href') el.removeAttributeNS(XLINK_NS, 'xlink:href')
+    if (a.name === 'xlink:href') el.removeAttributeNS(XLINK_NS, 'href')
     else el.removeAttribute(a.name)
   }
 }

@@ -88,42 +88,79 @@ describe('patchSceneDom', () => {
     }
   })
 
-  it('writes zero attributes when the scene is unchanged (and nonzero when it changes)', () => {
-    const container = document.createElement('div')
-    container.innerHTML = renderSceneToSvg(evalScene(0))
-    const svg = container.firstElementChild!
+  /**
+   * A scene with what the bar spec has not: text (axis labels, a title), a link (`xlink:href` is written through setAttributeNS)
+   * and a hidden mark, so the patcher's other writers (textContent, setAttributeNS, removeAttribute, replaceChildren) have work.
+   */
+  const richSpec = (n: number) => ({
+    ...barSpec(n),
+    title: { text: `Title ${n}` },
+    axes: [{ scale: 'x', orient: 'bottom', title: 'category' }, { scale: 'y', orient: 'left' }],
+    marks: [
+      ...barSpec(n).marks,
+      { type: 'text', from: { data: 'table' }, encode: { update: { x: { scale: 'x', field: 'cat' }, y: { value: 20 }, text: { signal: `datum.cat + '${n}'` }, href: { value: `https://example.com/${n}` } } } },
+    ],
+  })
+  const richScene = (n: number): SceneRoot => evaluateChart(compileChart(richSpec(n) as never))
 
-    const ElementProto = Object.getPrototypeOf(
-      Object.getPrototypeOf(container.querySelector('path')!),
-    ) as { setAttribute: (...a: unknown[]) => void }
-    // Patch the shared Element prototype so every element write is counted.
-    const proto = container.ownerDocument.defaultView!.Element.prototype as unknown as {
-      setAttribute: (...a: unknown[]) => void
-    }
-    const original = proto.setAttribute
-    let writes: string[] = []
-    proto.setAttribute = function (this: unknown, ...args: unknown[]) {
-      writes.push(String(args[0]))
-      return original.apply(this, args)
-    } as (...a: unknown[]) => void
-    try {
-      void ElementProto
-      patchSceneDom(svg, evalScene(0))
-      expect(writes).toEqual([])
-      // control: the spy works — a real change must produce writes
-      patchSceneDom(svg, evalScene(2))
-      expect(writes.length).toBeGreaterThan(0)
-    } finally {
-      proto.setAttribute = original
+  /** Every write the patcher makes to the live subtree, by the DOM's own record of it (attributes, text, children). */
+  const writesOf = (svg: Element, patch: () => void): MutationRecord[] => {
+    const observer = new MutationObserver(() => {})
+    observer.observe(svg, { subtree: true, attributes: true, attributeOldValue: true, childList: true, characterData: true, characterDataOldValue: true })
+    patch()
+    const records = observer.takeRecords()
+    observer.disconnect()
+    return records
+  }
+
+  it('writes nothing when the scene is unchanged (no attribute, text or child), and something when it changes', () => {
+    for (const [name, scene] of [['bars', evalScene], ['bars with text, links and guides', richScene]] as const) {
+      const container = document.createElement('div')
+      container.innerHTML = renderSceneToSvg(scene(0))
+      const svg = container.firstElementChild!
+      expect(writesOf(svg, () => patchSceneDom(svg, scene(0))), name).toEqual([])
+      // control: the observer sees every kind of write, so a patch that changes the scene shows up in it
+      const changed = writesOf(svg, () => patchSceneDom(svg, scene(2)))
+      expect(changed.length, name).toBeGreaterThan(0)
     }
   })
 
-  it('updates only changed values on a data change', () => {
+  it('the observer used above sees each kind of write the patcher can make (attribute, namespaced attribute, text, children)', () => {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    const kinds = new Set(writesOf(svg, () => {
+      const t = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+      svg.appendChild(t)
+      t.setAttribute('x', '1')
+      t.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', 'a')
+      t.removeAttribute('x')
+      t.textContent = 'hi'
+      svg.replaceChildren()
+    }).map((r) => (r.type === 'attributes' ? `attributes:${r.attributeName}` : r.type)))
+    expect([...kinds].sort()).toEqual(['attributes:href', 'attributes:x', 'childList'].sort())
+  })
+
+  it('updates only changed values on a data change: no attribute is written with the value it holds, and the result is the fresh render', () => {
     const container = document.createElement('div')
     container.innerHTML = renderSceneToSvg(evalScene(0))
     const svg = container.firstElementChild!
-    patchSceneDom(svg, evalScene(2))
-    // bars grew => d attributes changed
+    const records = writesOf(svg, () => patchSceneDom(svg, evalScene(2)))
+    // the bars grew: the `d` of the rect paths changed, and that is all that was written (no other attribute, text or child)
+    expect(records.filter((r) => r.type !== 'attributes')).toEqual([])
+    const written = new Map<Node, Map<string, MutationRecord[]>>()
+    for (const r of records) {
+      const byName = written.get(r.target) ?? new Map<string, MutationRecord[]>()
+      byName.set(r.attributeName!, [...(byName.get(r.attributeName!) ?? []), r])
+      written.set(r.target, byName)
+    }
+    expect(written.size).toBeGreaterThan(0)
+    for (const [target, byName] of written) {
+      expect((target as Element).closest('g.mark-rect'), 'a write outside the rect mark').not.toBeNull()
+      expect([...byName.keys()]).toEqual(['d'])
+      // written once, with a value other than the one it held
+      const [r] = byName.get('d')!
+      expect(byName.get('d')).toHaveLength(1)
+      expect((target as Element).getAttribute('d')).not.toBe(r!.oldValue)
+    }
     const ds = [...container.querySelectorAll('g.mark-rect path')].map((p) => p.getAttribute('d'))
     const reference = document.createElement('div')
     reference.innerHTML = renderSceneToSvg(evalScene(2))
