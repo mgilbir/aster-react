@@ -11,7 +11,7 @@ import { canonicalizeSvg, diffCanonical } from './normalize.js'
 
 type Spec = Record<string, unknown>
 async function oracleSvg(spec: Spec): Promise<string> {
-  const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(vega.parse(spec as never), { renderer: 'none' })
+  const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(vega.parse(structuredClone(spec) as never), { renderer: 'none' })
   try { await view.runAsync(); return await view.toSVG() } finally { view.finalize() }
 }
 const compare = async (spec: Spec): Promise<string[]> => diffCanonical(canonicalizeSvg(await oracleSvg(spec)), canonicalizeSvg(renderSpec(spec as never)))

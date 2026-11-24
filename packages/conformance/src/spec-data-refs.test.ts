@@ -20,7 +20,7 @@ type Spec = Record<string, unknown>
 async function oracle(spec: Spec): Promise<{ svg: string } | { error: string }> {
   try {
     const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(
-      vega.parse(spec as never), { renderer: 'none', logLevel: 0 })
+      vega.parse(structuredClone(spec) as never), { renderer: 'none', logLevel: 0 })
     try {
       await view.runAsync()
       return { svg: await view.toSVG() }

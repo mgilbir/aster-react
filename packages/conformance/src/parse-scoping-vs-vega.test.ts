@@ -109,7 +109,7 @@ async function oracle(spec: Spec): Promise<{ error: string } | { svg: string }> 
   const log = console.error
   console.error = () => {}
   try {
-    const rt = vega.parse(spec as never)
+    const rt = vega.parse(structuredClone(spec) as never)
     const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(rt, { renderer: 'none', logLevel: 0 })
     try { await view.runAsync(); return { svg: await view.toSVG() } } finally { view.finalize() }
   } catch (e) {
@@ -126,7 +126,7 @@ function engine(spec: Spec): { error: string; name: string } | { svg: string } {
 
 /** `vega.parse` alone: the parser's refusals (the whole matrix is about those; drawing is compared by `agree`). */
 function parses(spec: Spec): { error: string } | { ok: true } {
-  try { vega.parse(spec as never); return { ok: true } } catch (e) { return { error: (e as Error).message } }
+  try { vega.parse(structuredClone(spec) as never); return { ok: true } } catch (e) { return { error: (e as Error).message } }
 }
 function agreeOnParsing(spec: Spec, what: string): 'refused' | 'accepted' {
   const want = parses(spec)
