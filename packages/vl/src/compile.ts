@@ -2697,7 +2697,9 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
   }
 
   // child marks read the per-cell datasets
-  const remapFrom = (m: Record<string, unknown>): Record<string, unknown> => {
+  // (a mark with no `from` that sits inside a group that has one is instanced by that group's items - the inner group of a rounded
+  // stack - and reads no dataset of its own: only a mark outside any such group reads the cell's)
+  const remapFrom = (m: Record<string, unknown>, inFromGroup = false): Record<string, unknown> => {
     const c = { ...m }
     const from = c.from as { data?: string; facet?: { name?: string; data?: string } } | undefined
     if (isSelectionMark(m)) return c // (the selections' marks read no data of the cell)
@@ -2707,9 +2709,13 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
       const newName = typeof oldName === 'string' ? oldName.replace(/^faceted_path_/, `faceted_path_${CH}_`) : oldName
       if (typeof oldName === 'string' && typeof newName === 'string') cellMap.set(oldName, newName)
       c.from = { ...from, facet: { ...from.facet, ...(typeof newName === 'string' ? { name: newName } : {}), data: from.facet.data !== undefined && cellMap.has(from.facet.data) ? cellMap.get(from.facet.data) : innerOwnData && from.facet.data !== undefined ? from.facet.data : FACET } }
-    } else if (from === undefined || from.data == null) c.from = { ...(from ?? {}), data: FACET }
-    else if (cellMap.has(from.data)) c.from = { ...from, data: cellMap.get(from.data) }
-    if (Array.isArray(c.marks)) c.marks = (c.marks as Record<string, unknown>[]).map(remapFrom)
+    } else if (from === undefined || from.data == null) {
+      if (!(from === undefined && inFromGroup)) c.from = { ...(from ?? {}), data: FACET }
+    } else if (cellMap.has(from.data)) c.from = { ...from, data: cellMap.get(from.data) }
+    if (Array.isArray(c.marks)) {
+      const below = inFromGroup || (c.from !== undefined && m.type === 'group')
+      c.marks = (c.marks as Record<string, unknown>[]).map((k) => remapFrom(k, below))
+    }
     return c
   }
   // the facet child's marks carry the "child_" name prefix (vega-lite names a facet's child model that way)
@@ -2718,7 +2724,7 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
     ...(typeof m.name === 'string' && /^(marks|pathgroup|layer_\d+_.+)$/.test(m.name) ? { name: `${CH}_${m.name}` } : {}),
     ...(Array.isArray(m.marks) ? { marks: (m.marks as Record<string, unknown>[]).map(prefixNames) } : {}),
   })
-  const childMarks = innerIsFacet ? (inner.marks as Record<string, unknown>[]) : (inner.marks as Record<string, unknown>[]).map(remapFrom).map(prefixNames)
+  const childMarks = innerIsFacet ? (inner.marks as Record<string, unknown>[]) : (inner.marks as Record<string, unknown>[]).map((k) => remapFrom(k)).map(prefixNames)
   // resolve.ts defaultScaleResolve: a facet shares every scale but theta, which each cell owns (`child_theta`, over the cell's data)
   const cellScales: Record<string, unknown>[] = []
   // the data of a scale's domain is the cell's: the facet's partition, or the dataset the cell derives from it
