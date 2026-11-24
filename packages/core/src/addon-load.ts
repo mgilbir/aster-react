@@ -11,6 +11,8 @@
  * (vega-loader-identical semantics ship in the core); csv/tsv/dsv/topojson
  * strings and URL datasets need it.
  */
+import { parsesDates } from './parses-dates.js'
+import { installPart, partLoaded } from './engine-parts.js'
 import { dsvFormat } from './dsv.js'
 import { feature as topoFeature, mesh as topoMesh } from './topojson.js'
 import { dataFormatRegistry } from './registry.js'
@@ -516,8 +518,13 @@ export async function loadSpecData<T extends VgSpec>(spec: T, opts: LoadOptions 
     // (a dataset read with a date pattern in its `parse` is read with the engine's time part, which a shell that loads parts on demand
     // does not have yet: reading the data asks for it here, where the data is read, not of whoever called)
     if (tasks.some((t) => t.format?.parse != null)) {
-      const { loadParts, parsesDates } = await import('./addons.js')
-      if (tasks.some((t) => parsesDates(t.format?.parse))) await loadParts(['time'])
+      if (tasks.some((t) => parsesDates(t.format?.parse)) && !partLoaded('time')) {
+        // (the time part alone, not the on-demand loader of every part: that would put the whole engine's code in this entry's static chunks)
+        const { part } = await import('./part-time.js').catch((cause: unknown) => {
+          throw new Error(`[aster] could not load the "time" part of the engine: ${cause instanceof Error ? cause.message : String(cause)}`, { cause })
+        })
+        if (!partLoaded('time')) installPart('time', part) // (the module fills its slot when it first runs; filled again for a slot emptied since)
+      }
     }
     await Promise.all(
       tasks.map(async (task) => {
