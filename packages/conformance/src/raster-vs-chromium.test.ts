@@ -9,18 +9,23 @@
  */
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { AlphaCanvas } from '../../core/src/raster.js'
 import { GENERATED_SHAPES, SHAPES, type RasterShape } from './raster-shapes.js'
+import { drawShape as draw, measure, type Disagreement } from './raster-measure.js'
 
-const FIXTURES = JSON.parse(readFileSync(new URL('./raster-fixtures.json', import.meta.url), 'utf8')) as { browser: string; alpha: Record<string, number[]>; baseline: Record<string, { mask: number; abs: number }> }
+const FIXTURES = JSON.parse(readFileSync(new URL('./raster-fixtures.json', import.meta.url), 'utf8')) as { browser: string; alpha: Record<string, number[]>; baseline: Record<string, Disagreement> }
 
-function draw(s: RasterShape): Uint8Array {
-  const c = new AlphaCanvas(s.w, s.h) as unknown as Record<string, unknown> & { alpha: Uint8Array }
-  for (const cmd of s.cmds) {
-    if (Array.isArray(cmd)) (c[cmd[0]] as (...a: unknown[]) => void).apply(c, cmd.slice(1))
-    else c[cmd.set] = cmd.value
-  }
-  return c.alpha
+/**
+ * A drawing may not be further from the browser's than when it was recorded: no more pixels the browser inks and the engine leaves empty
+ * (`missing`: a label may land on ink), no more the other way (`extra`: a halo), and the summed alpha difference may not grow. The two
+ * pixel counts are held apart, so a change that removes halo pixels and drops faint ink in the same measure does not pass.
+ */
+function expectNoWorse(s: RasterShape): void {
+  const base = FIXTURES.baseline[s.name]
+  expect(base, `${s.name} has no recorded baseline: node scripts/raster-fixtures.mts --rebaseline`).toBeDefined()
+  const now = measure(FIXTURES.alpha[s.name]!, draw(s))
+  expect(now.missing, 'pixels the browser inks and the engine leaves empty').toBeLessThanOrEqual(base!.missing)
+  expect(now.extra, 'pixels the engine inks and the browser leaves empty').toBeLessThanOrEqual(base!.extra)
+  expect(now.abs, 'summed alpha difference from the browser').toBeLessThanOrEqual(base!.abs)
 }
 
 describe(`raster.ts against ${FIXTURES.browser}'s canvas`, () => {
@@ -45,6 +50,8 @@ describe(`raster.ts against ${FIXTURES.browser}'s canvas`, () => {
       expect(sumGot / sumWant).toBeLessThan(1.03)
       expect(nonzeroDiffs).toBeLessThanOrEqual(Math.max(8, Math.ceil(on * 0.05)))
       expect(maxDiff).toBeLessThanOrEqual(55)
+      // (the tolerances above are loose: the recorded disagreement of THIS drawing is what it may not exceed)
+      expectNoWorse(s)
     })
   }
 
@@ -74,24 +81,20 @@ describe(`raster.ts against ${FIXTURES.browser}'s canvas`, () => {
   })
 
   // The generated drawings (curves of every size, arcs of every sweep, transformed circles, every cap and join, dashes) hold the
-  // engine to a ratchet: no more pixels may disagree with the browser on "has any alpha", and the summed alpha difference may not
-  // grow, than when the baseline was recorded (`scripts/raster-fixtures.mts`). A change to how curves are cut, how vertices snap
-  // or how coverage is summed moves these numbers.
+  // engine to the same ratchet as the hand ones, with no tolerance of their own: a change to how curves are cut, how vertices snap
+  // or how coverage is summed moves these numbers. Where the browser spreads a sub-pixel stroke over two or three columns the engine
+  // draws one (`missing` of the thin cubics): a documented deviation (docs/ARCHITECTURE.md "Deviations from Vega"), pinned here.
   describe('generated drawings (ratchet against the recorded disagreement)', () => {
     for (const s of GENERATED_SHAPES) {
-      it(s.name, () => {
-        const want = FIXTURES.alpha[s.name]!
-        const base = FIXTURES.baseline[s.name]!
-        const got = draw(s)
-        let mask = 0
-        let abs = 0
-        for (let i = 0; i < want.length; i++) {
-          if ((want[i] !== 0) !== (got[i] !== 0)) mask++
-          abs += Math.abs(want[i]! - got[i]!)
-        }
-        expect(mask, 'pixels whose "has any alpha" differs from the browser').toBeLessThanOrEqual(base.mask)
-        expect(abs, 'summed alpha difference from the browser').toBeLessThanOrEqual(base.abs)
-      })
+      it(s.name, () => { expectNoWorse(s) })
     }
+  })
+
+  it('every drawing has a recorded baseline and an alpha of its own size', () => {
+    for (const s of [...SHAPES, ...GENERATED_SHAPES]) {
+      expect(FIXTURES.alpha[s.name]?.length, s.name).toBe(s.w * s.h)
+      expect(FIXTURES.baseline[s.name], s.name).toBeDefined()
+    }
+    expect(Object.keys(FIXTURES.baseline).length).toBe(SHAPES.length + GENERATED_SHAPES.length)
   })
 })
