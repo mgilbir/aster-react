@@ -180,7 +180,7 @@ The list below is the features refused by name, each checked by `test/readme-ref
 - Animation outside the shapes vega-lite 6.4.3 compiles to working output: a `time` channel needs a unit at the root, or in the
   layers of the root, with a timer selection and the `{filter: {param}}` transform (without them vega-lite emits marks that
   read a dataset it never defines); concats, facets, repeats, composite marks (boxplot / errorbar / errorband) and point / line
-  overlays are refused, and so is a timer selection with neither `fields` nor `encodings`.
+  overlays are refused, and so are a timer selection with neither `fields` nor `encodings` and a `nearest` selection in a unit that has a time channel.
 - Bins and time units: `timeUnit.maxbins` and errorbar / errorband over a binned channel. (The `timeUnitBandPosition` /
   `timeUnitBandSize` mark keys are accepted and ignored: vega-lite 6.4.3 reads them from `config` only.)
 - Channel definitions vega-lite 6.4.3 compiles that are not implemented yet: a `datum`

@@ -81,11 +81,11 @@ type Refusal = [string, Record<string, unknown>, RegExp]
 
 describe('animation: refusals of what vega-lite compiles to a chart that vega cannot run (a dataset it never defines, an unknown or duplicate signal) or that it throws on', () => {
   const cases: Refusal[] = [
-    ['a time channel without a timer selection', anim({ params: undefined, transform: undefined }), /needs a timer selection param/],
-    ['a timer selection without the filter', anim({ transform: [] }), /needs the transform/],
-    ['a selection by row id (no fields, no encodings)', anim({ params: [{ name: 'anim', select: { type: 'point', on: 'timer' } }] }), /needs `fields` or `encodings`/],
+    ['a time channel without a timer selection', anim({ params: undefined, transform: undefined }), /needs a timer selection and its frame filter/],
+    ['a timer selection without the filter', anim({ transform: [] }), /needs a timer selection and its frame filter/],
+    ['a selection by row id (no fields, no encodings): its filter is not one vega-lite moves out of the main dataset', anim({ params: [{ name: 'anim', select: { type: 'point', on: 'timer' } }] }), /needs a timer selection and its frame filter/],
     ['a reserved signal name', anim({ params: [timer({}, 'anim_clock')], transform: [{ filter: { param: 'anim_clock' } }] }), /signal an animation defines/],
-    ['a non-timer point selection', anim({ params: [{ name: 'anim', select: { type: 'point', on: 'click', fields: ['year'] } }] }), /needs a timer selection param/],
+    ['a non-timer point selection', anim({ params: [{ name: 'anim', select: { type: 'point', on: 'click', fields: ['year'] } }] }), /needs a timer selection and its frame filter/],
     ['a param predicate on a non-timer parameter', anim({ transform: [{ filter: { param: 'nope' } }, { filter: { param: 'anim' } }] }), /is not declared in `params`/],
     ['a time channel with a sort', anim({ encoding: { x: { field: 'x', type: 'quantitative' }, time: { field: 'year', type: 'ordinal', sort: 'descending' } } }), /time\.sort/],
     ['an animated concat child', { hconcat: [anim()] }, /(single top-level unit|selection\/param predicates)/],
@@ -104,6 +104,7 @@ describe('animation: refusals of what vega-lite compiles to a chart that vega ca
 describe('animation: what vega-lite compiles and vega runs compiles here (conformance/test/vl-anim-forms.test.ts runs each against vega-lite)', () => {
   const cases: Array<[string, Record<string, unknown>]> = [
     ['a timer selection without a time channel', anim({ encoding: { x: { field: 'x', type: 'quantitative' } } })],
+    ['a selection by row id (no fields, no encodings) with no time channel', anim({ params: [{ name: 'anim', select: { type: 'point', on: 'timer' } }], transform: [], encoding: { x: { field: 'x', type: 'quantitative' } } })],
     ['fields and encodings together', anim({ params: [timer({ encodings: ['time'] })] })],
     ['encodings other than time', anim({ params: [{ name: 'anim', select: { type: 'point', on: 'timer', encodings: ['x'] } }] })],
     ['a time unit projected through encodings', anim({ params: [{ name: 'anim', select: { type: 'point', on: 'timer', encodings: ['time'] } }], encoding: { x: { field: 'x', type: 'quantitative' }, time: { field: 'year', type: 'temporal', timeUnit: 'year' } } })],

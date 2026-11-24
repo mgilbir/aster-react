@@ -44,13 +44,11 @@ async function outcome(spec: Record<string, unknown>): Promise<'broken' | 'runs'
 }
 
 describe('the animation refusals are in the group their title says', () => {
-  it('reads two groups of refusals out of the test', () => {
-    expect(tables).toHaveLength(2)
-    expect(tables.map((t) => t.length)).toEqual([11, 9])
+  it('reads the group of refusals out of the test', () => {
+    expect(tables).toHaveLength(1)
+    expect(tables.map((t) => t.length)).toEqual([11])
   })
-  for (const [i, want] of ['broken', 'runs'].entries()) {
-    it.each(tables[i] ?? [])(`${want === 'broken' ? 'vega-lite breaks on' : 'vega-lite compiles and vega runs'}: %s`, async (_name, spec) => {
-      expect(await outcome(spec)).toBe(want)
-    })
-  }
+  it.each(tables[0] ?? [])('vega-lite breaks on: %s', async (_name, spec) => {
+    expect(await outcome(spec)).toBe('broken')
+  })
 })

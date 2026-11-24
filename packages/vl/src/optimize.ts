@@ -200,8 +200,15 @@ export function mergeChainedBins(ts: Obj[]): (k: number) => number {
     after.set(first.at, [...(after.get(first.at) ?? []), ...copies])
     drop.add(k)
     const own = isObj(t.extent) ? ts.findLastIndex((x, i) => i < k && x.type === 'extent' && x.signal === (t.extent as Obj).signal) : -1
-    // (an extent signal another bin reads stays: only the one this bin declared by itself, with the same signal as the first's, goes)
-    if (own >= 0 && (t.extent as Obj).signal === first.extent && own > first.at) drop.add(own)
+    // (the extent this bin declared by itself, after the first bin, goes with it, unless another bin reads that signal)
+    if (own > first.at && !ts.some((x, i) => i > own && i !== k && !drop.has(i) && x.type === 'bin' && isObj(x.extent) && (x.extent as Obj).signal === (t.extent as Obj).signal)) drop.add(own)
+  })
+  // (two bins that stay, with one signal: vega-lite writes them both, and vega refuses "Duplicate signal name"; they bin different rows)
+  const seen = new Set<string>()
+  ts.forEach((t, k) => {
+    if (drop.has(k) || typeof t.signal !== 'string' || (t.type !== 'bin' && t.type !== 'extent')) return
+    if (seen.has(t.signal)) throw new VLCompileError(`transform: the field "${String(t.field)}" is binned (or its extent taken) twice over rows that differ - a filter or another transform between them - and both would publish the signal "${t.signal}", which vega refuses (vega-lite 6.4.3 writes it twice)`)
+    seen.add(t.signal)
   })
   if (drop.size === 0) return (k) => k
   const out: Obj[] = []
