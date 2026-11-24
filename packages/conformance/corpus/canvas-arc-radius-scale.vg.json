@@ -49,6 +49,18 @@
     "field": "i"
    },
    "range": "category"
+  },
+  {
+   "name": "r",
+   "type": "sqrt",
+   "domain": [
+    0,
+    100
+   ],
+   "range": [
+    0,
+    120
+   ]
   }
  ],
  "marks": [
@@ -72,9 +84,11 @@
       "field": "a1"
      },
      "innerRadius": {
+      "scale": "r",
       "field": "ir"
      },
      "outerRadius": {
+      "scale": "r",
       "field": "or"
      },
      "fill": {

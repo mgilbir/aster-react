@@ -143,10 +143,7 @@
    "size": {
     "signal": "[width, height]"
    },
-   "fit": {
-    "signal": "data('data_0')"
-   },
-   "type": "equalEarth"
+   "type": "mercator"
   }
  ],
  "marks": [
