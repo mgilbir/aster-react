@@ -33,15 +33,25 @@ const AUTOSIZES: Array<[string, unknown]> = [
   ['object fit', { type: 'fit', contains: 'padding' }], ['object pad', { type: 'pad', contains: 'padding' }],
 ]
 
-async function viewOf(spec: Spec): Promise<{ width: number; height: number; padding: Record<string, number>; range: (n: string) => number[] }> {
+/**
+ * What vega says of a run. `getChartInfo(...).padding` is the offset of the plot inside the drawn view (the fitted one: the origin
+ * plus the room the guides take on the right and at the bottom), which vega's `view.padding()` -- the spec's padding -- is not:
+ * the offset is read from the translation of the root group of the SVG vega draws (the origin of the plot in it) and from the size of that SVG.
+ */
+async function viewOf(spec: Spec): Promise<{ width: number; height: number; origin: number[]; svg: { width: number; height: number }; range: (n: string) => number[] }> {
   const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => any }).View(vega.parse(structuredClone(spec) as never), { renderer: 'none' })
   await view.runAsync()
-  const out = { width: view.width(), height: view.height(), padding: view.padding(), range: (n: string) => view.scale(n).range() as number[] }
+  const svg = await view.toSVG() as string
+  const root = /^<svg[^>]*? width="([^"]+)" height="([^"]+)"/.exec(svg)
+  expect(root, 'the root <svg> of vega\'s document').not.toBeNull()
+  const shift = /^<svg[^>]*><g[^>]* transform="translate\(([^,)]+),([^)]+)\)"/.exec(svg)
+  expect(shift, 'the translation of the root group of vega\'s document').not.toBeNull()
+  const out = { width: view.width(), height: view.height(), origin: [Number(shift![1]), Number(shift![2])],  svg: { width: Number(root![1]), height: Number(root![2]) }, range: (n: string) => view.scale(n).range() as number[] }
   return out
 }
 
 describe('getChartInfo describes the chart that is drawn', () => {
-  it.each(AUTOSIZES)('autosize %s: size, padding and scale ranges equal vega\'s', async (_n, autosize) => {
+  it.each(AUTOSIZES)('autosize %s: size, padding (the offset of the plot in the view) and scale ranges equal vega\'s', async (_n, autosize) => {
     const spec = specOf(autosize)
     const want = await viewOf(spec)
     const info = getChartInfo(spec as never)
@@ -55,6 +65,11 @@ describe('getChartInfo describes the chart that is drawn', () => {
     expect(yr[1]).toBeCloseTo(want.range('y')[1]!, 6)
     // the scales are the fitted ones: their range ends at the plot size, not the spec's
     expect(xr[1]).toBeCloseTo(info.width, 6)
+    // the padding is the plot's offset in the drawn view: vega's origin, and what is left of its SVG on the right and at the bottom
+    expect(info.padding.left).toBeCloseTo(want.origin[0]!, 6)
+    expect(info.padding.top).toBeCloseTo(want.origin[1]!, 6)
+    expect(info.padding.right).toBeCloseTo(want.svg.width - want.width - want.origin[0]!, 6)
+    expect(info.padding.bottom).toBeCloseTo(want.svg.height - want.height - want.origin[1]!, 6)
   })
 
   it.each(AUTOSIZES)('autosize %s: it is exactly what the evaluated scene says (one evaluation)', (_n, autosize) => {
