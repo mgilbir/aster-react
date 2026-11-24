@@ -934,39 +934,17 @@ function paintedBox(el: XmlEl, a: Record<string, string>, m: Mat, eff: Record<st
     }
     case 'path': {
       // geom is `path|<absolute commands>[|lin=..]`: every coordinate is already absolute.
-      const d = geom.slice(5).split('|')[0]!
-      const pts: Array<[number, number]> = []
-      const segRe = /([MLCSQTAZ])([^MLCSQTAZ]*)/g
-      let hit: RegExpExecArray | null
-      while ((hit = segRe.exec(d))) {
-        const nums = hit[2]!.split(',').filter((v) => v !== '').map(Number)
-        if (hit[1] === 'A') {
-          if (nums.length < 7) return null
-          const r = Math.max(Math.abs(nums[0]!), Math.abs(nums[1]!))
-          pts.push([nums[5]! - r, nums[6]! - r], [nums[5]! + r, nums[6]! + r])
-        } else {
-          for (let i = 0; i + 1 < nums.length; i += 2) pts.push([nums[i]!, nums[i + 1]!])
-        }
-      }
+      const pts = pathHull(geom.slice(5).split('|')[0]!)
+      if (pts === null) return null
       box = boxOfPoints(pts)
       break
     }
     case 'text': {
       const fs = fontSizePx(eff)
       if (fs == null || eff['dominant-baseline'] !== undefined || eff['letter-spacing'] !== undefined || eff['word-spacing'] !== undefined) return null
-      const content = textContent(el, fs)
-      const lines = content.split(/<\/?tspan[^>]*>/).filter((l) => l.trim() !== '')
-      const chars = lines.reduce((m, l) => Math.max(m, l.length), 1)
-      // Glyph extents of any font stay inside 1.5 em per character horizontally
-      // and [-1.3, 0.5] em (+ 1.6 em per extra line) vertically of the baseline.
-      const w = chars * fs * 1.5
-      const anchor = eff['text-anchor'] ?? 'start'
-      const x0 = anchor === 'middle' ? -w / 2 : anchor === 'end' ? -w : 0
-      const x = numAttr(a['x']) + lengthAttr(a['dx'], fs, 'dx')
-      const y = numAttr(a['y']) + lengthAttr(a['dy'], fs, 'dy')
-      const top = y - 1.3 * fs
-      const bottom = y + 0.5 * fs + Math.max(0, lines.length - 1) * 1.6 * fs
-      box = boxOfPoints([corner(x + x0, top), corner(x + x0 + w, top), corner(x + x0, bottom), corner(x + x0 + w, bottom)])
+      const local = textBox(el, a, fs)
+      if (local === null) return null
+      box = boxOfPoints([corner(local[0], local[1]), corner(local[2], local[1]), corner(local[0], local[3]), corner(local[2], local[3])])
       break
     }
     default:
@@ -986,6 +964,141 @@ function paintedBox(el: XmlEl, a: Record<string, string>, m: Mat, eff: Record<st
     inflate += (sw * linScale(m) * k) / 2
   }
   return [box[0] - inflate, box[1] - inflate, box[2] + inflate, box[3] + inflate]
+}
+
+/**
+ * A box (in the text's own coordinates) that contains every glyph a `<text>` can paint, or null when it cannot be bounded.
+ * Glyph extents of any font stay inside 1.5 em per character horizontally and [-1.3, 0.5] em vertically of their baseline. The
+ * pen is followed through the text's runs: a tspan's `x` / `y` set it, its `dx` / `dy` move it, and a run of n characters moves
+ * it right by between 0 and 1.5 em per character (so the pen is an interval). Whatever the text-anchor, a chunk is shifted by at
+ * most the width of all the text, either way.
+ */
+function textBox(el: XmlEl, a: Record<string, string>, fs: number): Box | null {
+  let total = 0
+  const countChars = (e: XmlEl): void => {
+    for (const c of e.children) {
+      if (typeof c === 'string') total += decodeEntities(c).length
+      else countChars(c)
+    }
+  }
+  countChars(el)
+  const slack = Math.max(1, total) * fs * 1.5
+  const pen = { x0: numAttr(a['x']), x1: numAttr(a['x']), y0: numAttr(a['y']), y1: numAttr(a['y']) }
+  const shift = (dx: number, dy: number): void => { pen.x0 += dx; pen.x1 += dx; pen.y0 += dy; pen.y1 += dy }
+  shift(lengthAttr(a['dx'], fs, 'dx'), lengthAttr(a['dy'], fs, 'dy'))
+  let box: Box | null = null
+  const run = (chars: number): void => {
+    const b: Box = [pen.x0 - slack, pen.y0 - 1.3 * fs, pen.x1 + slack, pen.y1 + 0.5 * fs]
+    box = box === null ? b : [Math.min(box[0], b[0]), Math.min(box[1], b[1]), Math.max(box[2], b[2]), Math.max(box[3], b[3])]
+    pen.x1 += chars * fs * 1.5
+  }
+  const walk = (e: XmlEl): boolean => {
+    for (const c of e.children) {
+      if (typeof c === 'string') {
+        const t = decodeEntities(c)
+        if (t.trim() !== '') run(t.length)
+        continue
+      }
+      if (c.tag !== 'tspan') return false
+      const ta = attrsOf(c)
+      // (an attribute that moves or sizes glyphs in a way this does not follow: the text cannot be bounded)
+      if (Object.keys(ta).some((k) => !isNonVisualAttr(k) && !['x', 'y', 'dx', 'dy', 'fill', 'fill-opacity', 'stroke', 'stroke-opacity', 'font-weight', 'font-style', 'font-family', 'class'].includes(k))) return false
+      if (ta['x'] !== undefined) { pen.x0 = numAttr(ta['x']); pen.x1 = pen.x0 }
+      if (ta['y'] !== undefined) { pen.y0 = numAttr(ta['y']); pen.y1 = pen.y0 }
+      shift(lengthAttr(ta['dx'], fs, 'tspan dx'), lengthAttr(ta['dy'], fs, 'tspan dy'))
+      if (!walk(c)) return false
+    }
+    return true
+  }
+  if (!walk(el)) return null
+  return box ?? [pen.x0 - slack, pen.y0 - 1.3 * fs, pen.x1 + slack, pen.y1 + 0.5 * fs]
+}
+
+/**
+ * Points whose bounding box contains everything an absolute path (canonPath's output: M L C S Q T A Z) can paint, or null when
+ * it cannot be read. A Bézier segment lies inside the hull of its control points, and the implicit first control point of an
+ * `S` / `T` is the reflection of the previous segment's last one. An arc lies on its ellipse, which passes through both ends:
+ * every point of it is within the ellipse's diameter, 2 max(rx, ry) -- after the radii are scaled up to reach the end point
+ * when they are too small (SVG's out-of-range radii correction) -- of the end point.
+ */
+function pathHull(d: string): Array<[number, number]> | null {
+  const pts: Array<[number, number]> = []
+  const segRe = /([MLCSQTAZ])([^MLCSQTAZ]*)/g
+  let cx = 0, cy = 0, sx = 0, sy = 0
+  // the last control point of the previous C / S (for an S) or Q / T (for a T), else the current point
+  let lastCubic: [number, number] | null = null
+  let lastQuad: [number, number] | null = null
+  let hit: RegExpExecArray | null
+  while ((hit = segRe.exec(d))) {
+    const cmd = hit[1]!
+    const n = hit[2]!.split(',').filter((v) => v !== '').map(Number)
+    let cubic: [number, number] | null = null
+    let quad: [number, number] | null = null
+    switch (cmd) {
+      case 'M':
+      case 'L':
+        if (n.length < 2) return null
+        pts.push([n[0]!, n[1]!])
+        cx = n[0]!; cy = n[1]!
+        if (cmd === 'M') { sx = cx; sy = cy }
+        break
+      case 'C':
+        if (n.length < 6) return null
+        pts.push([n[0]!, n[1]!], [n[2]!, n[3]!], [n[4]!, n[5]!])
+        cubic = [n[2]!, n[3]!]
+        cx = n[4]!; cy = n[5]!
+        break
+      case 'S': {
+        if (n.length < 4) return null
+        const c1: [number, number] = lastCubic ? [2 * cx - lastCubic[0], 2 * cy - lastCubic[1]] : [cx, cy]
+        pts.push(c1, [n[0]!, n[1]!], [n[2]!, n[3]!])
+        cubic = [n[0]!, n[1]!]
+        cx = n[2]!; cy = n[3]!
+        break
+      }
+      case 'Q':
+        if (n.length < 4) return null
+        pts.push([n[0]!, n[1]!], [n[2]!, n[3]!])
+        quad = [n[0]!, n[1]!]
+        cx = n[2]!; cy = n[3]!
+        break
+      case 'T': {
+        if (n.length < 2) return null
+        const c: [number, number] = lastQuad ? [2 * cx - lastQuad[0], 2 * cy - lastQuad[1]] : [cx, cy]
+        pts.push(c, [n[0]!, n[1]!])
+        quad = c
+        cx = n[0]!; cy = n[1]!
+        break
+      }
+      case 'A': {
+        if (n.length < 7) return null
+        let rx = Math.abs(n[0]!), ry = Math.abs(n[1]!)
+        const ex = n[5]!, ey = n[6]!
+        if (rx > 0 && ry > 0) {
+          const phi = (n[2]! * Math.PI) / 180
+          const dx = (cx - ex) / 2, dy = (cy - ey) / 2
+          const x1 = Math.cos(phi) * dx + Math.sin(phi) * dy
+          const y1 = -Math.sin(phi) * dx + Math.cos(phi) * dy
+          const lambda = (x1 * x1) / (rx * rx) + (y1 * y1) / (ry * ry)
+          if (lambda > 1) { rx *= Math.sqrt(lambda); ry *= Math.sqrt(lambda) }
+          const reach = 2 * Math.max(rx, ry)
+          pts.push([ex - reach, ey - reach], [ex + reach, ey + reach])
+        }
+        // (a zero radius draws the straight line between the ends)
+        pts.push([cx, cy], [ex, ey])
+        cx = ex; cy = ey
+        break
+      }
+      case 'Z':
+        cx = sx; cy = sy
+        break
+      default:
+        return null
+    }
+    lastCubic = cubic
+    lastQuad = quad
+  }
+  return pts
 }
 
 function boxesOverlap(a: Box, b: Box): boolean {

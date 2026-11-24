@@ -90,6 +90,14 @@ const PLANTED: Array<[string, string, string]> = [
   ['a shape\'s ARIA vs none', wrap(RECT.replace('<rect', '<rect role="graphics-symbol" aria-label="a: 1"')), wrap(RECT)],
   ['background path of a group item', wrap(`<g><path class="background" aria-hidden="true" d="M0,0h0v0h0Z"/>${RECT}</g>`), wrap(`<g>${RECT}</g>`)],
   ['foreground path of a group item', wrap(`<g>${RECT}<path class="foreground" aria-hidden="true" d="" display="none"/></g>`), wrap(`<g>${RECT}</g>`)],
+  // (C192: the painted boxes are conservative -- an arc reaches up to its ellipse's diameter from its end point, an S / T curve's
+  // implicit control point bulges it, a tspan's own offsets place its line)
+  ['a 270-degree wedge over a rect, swapped', wrap('<path d="M150,100A50,50,0,1,1,100,50L100,100Z" fill="red"/><rect x="60" y="120" width="20" height="20" fill="blue"/>', 200, 200), wrap('<rect x="60" y="120" width="20" height="20" fill="blue"/><path d="M150,100A50,50,0,1,1,100,50L100,100Z" fill="red"/>', 200, 200)],
+  ['an arc whose radii are too small to reach its end (scaled up), swapped', wrap('<path d="M0,100A10,10,0,0,1,100,100Z" fill="red"/><rect x="45" y="55" width="10" height="10" fill="blue"/>', 200, 200), wrap('<rect x="45" y="55" width="10" height="10" fill="blue"/><path d="M0,100A10,10,0,0,1,100,100Z" fill="red"/>', 200, 200)],
+  ['an S curve bulging over a rect, swapped', wrap('<path d="M0,100C0,0,100,0,100,100S200,300,200,100Z" fill="red"/><rect x="140" y="170" width="10" height="10" fill="blue"/>', 200, 200), wrap('<rect x="140" y="170" width="10" height="10" fill="blue"/><path d="M0,100C0,0,100,0,100,100S200,300,200,100Z" fill="red"/>', 200, 200)],
+  ['a T curve bulging over a rect, swapped', wrap('<path d="M0,100Q50,0,100,100T200,100Z" fill="red"/><rect x="140" y="140" width="10" height="10" fill="blue"/>', 200, 200), wrap('<rect x="140" y="140" width="10" height="10" fill="blue"/><path d="M0,100Q50,0,100,100T200,100Z" fill="red"/>', 200, 200)],
+  ['a second line (tspan dy=60) over a rect, swapped', wrap('<text x="20" y="20" fill="#000" font-size="10px" font-family="sans-serif">a<tspan x="20" dy="60">MMMMMMMMMM</tspan></text><rect x="20" y="70" width="60" height="12" fill="blue"/>', 200, 200), wrap('<rect x="20" y="70" width="60" height="12" fill="blue"/><text x="20" y="20" fill="#000" font-size="10px" font-family="sans-serif">a<tspan x="20" dy="60">MMMMMMMMMM</tspan></text>', 200, 200)],
+  ['a tspan placed by its own y over a rect, swapped', wrap('<text x="20" y="20" fill="#000" font-size="10px" font-family="sans-serif">a<tspan x="20" y="150">b</tspan></text><rect x="10" y="140" width="30" height="12" fill="blue"/>', 200, 200), wrap('<rect x="10" y="140" width="30" height="12" fill="blue"/><text x="20" y="20" fill="#000" font-size="10px" font-family="sans-serif">a<tspan x="20" y="150">b</tspan></text>', 200, 200)],
 ]
 
 describe('canonicalizeSvg bites: every planted difference is reported', () => {
@@ -140,6 +148,9 @@ const EQUIVALENT: Array<[string, string, string]> = [
   ['swapped disjoint rects (paint order cannot matter)', wrap('<rect x="0" y="0" width="10" height="10" fill="red"/><rect x="50" y="0" width="10" height="10" fill="blue"/>'), wrap('<rect x="50" y="0" width="10" height="10" fill="blue"/><rect x="0" y="0" width="10" height="10" fill="red"/>')],
   ['text and a far-away line swap', wrap(`${TEXT}<line x1="0" y1="70" x2="90" y2="70" stroke="#888"/>`), wrap(`<line x1="0" y1="70" x2="90" y2="70" stroke="#888"/>${TEXT}`)],
   ['zero-size butt path', wrap(`<path d="M0,0h0v0h0Z" fill="red"/>${RECT}`), wrap(RECT)],
+  // (the boxes stay tight enough that what cannot overlap still swaps: a small arc and a multi-line text far from a rect)
+  ['a small wedge and a far rect swap', wrap('<path d="M20,20A5,5,0,1,1,15,15L15,20Z" fill="red"/><rect x="80" y="60" width="10" height="10" fill="blue"/>'), wrap('<rect x="80" y="60" width="10" height="10" fill="blue"/><path d="M20,20A5,5,0,1,1,15,15L15,20Z" fill="red"/>')],
+  ['a two-line text and a far rect swap', wrap('<text x="5" y="10" fill="#000" font-size="5px" font-family="sans-serif">a<tspan x="5" dy="6">b</tspan></text><rect x="80" y="60" width="10" height="10" fill="blue"/>'), wrap('<rect x="80" y="60" width="10" height="10" fill="blue"/><text x="5" y="10" fill="#000" font-size="5px" font-family="sans-serif">a<tspan x="5" dy="6">b</tspan></text>')],
 ]
 
 describe('canonicalizeSvg ignores representation-only differences', () => {
