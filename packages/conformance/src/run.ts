@@ -31,6 +31,7 @@ import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
 import { renderWithVega } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 import { plantSvg } from './gate-plant.js'
+import { deepFreeze, forEngines } from './engines.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
 import { GATE_FLAGS, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
 
@@ -49,10 +50,11 @@ function loadCorpus(dir: string): CorpusEntry[] {
   const out: CorpusEntry[] = []
   for (const f of readdirSync(dir).sort()) {
     if (f.endsWith('.vl.json')) {
-      const spec = JSON.parse(readFileSync(join(dir, f), 'utf8'))
+      const spec = deepFreeze(JSON.parse(readFileSync(join(dir, f), 'utf8')))
       out.push({ name: f.replace(/\.vl\.json$/, ''), kind: 'vl', spec })
     } else if (f.endsWith('.vg.json')) {
-      const spec = JSON.parse(readFileSync(join(dir, f), 'utf8'))
+      // (frozen: the source each engine copies from; a path that handed it to vega itself would fail at vega's first write)
+      const spec = deepFreeze(JSON.parse(readFileSync(join(dir, f), 'utf8')))
       out.push({ name: f.replace(/\.vg\.json$/, ''), kind: 'vg', spec })
     }
   }
@@ -61,19 +63,19 @@ function loadCorpus(dir: string): CorpusEntry[] {
 
 function vegaSpecFor(entry: CorpusEntry): { spec: Record<string, unknown>; viaLite: boolean } {
   if (entry.kind === 'vg') return { spec: entry.spec, viaLite: false }
-  const compiled = vl.compile(entry.spec as any).spec as unknown as Record<string, unknown>
+  const compiled = vl.compile(structuredClone(entry.spec) as any).spec as unknown as Record<string, unknown>
   return { spec: compiled, viaLite: true }
 }
 
 async function runOne(entry: CorpusEntry, plant: boolean): Promise<{ pass: boolean; diffs: string[]; error?: string }> {
   try {
     const { spec } = vegaSpecFor(entry)
-    const [oracleSvg, ourSvg] = await Promise.all([
-      // (vega changes the rows of an inline dataset in place -- a force layout rewrites its link rows -- so it gets a copy)
-      renderWithVega(structuredClone(spec)),
+    // (each engine its own copy: vega writes onto the rows it ingests -- a stack's y0/y1, a force layout's link rows)
+    const [oracleSvg, ourSvg] = await forEngines(spec, (oracle, aster) => Promise.all([
+      renderWithVega(oracle),
       // url datasets resolve through the load addon, exactly what a real host does
-      loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS).then((loaded) => renderSpec(loaded as never)),
-    ])
+      loadSpecData(aster as never, TRUSTED_LOAD_OPTIONS).then((loaded) => renderSpec(loaded as never)),
+    ]))
     const ours = canonicalizeSvg(plant ? plantSvg(ourSvg) : ourSvg)
     const oracle = canonicalizeSvg(oracleSvg)
     const diffs = diffCanonical(oracle, ours)

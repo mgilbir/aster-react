@@ -1,6 +1,7 @@
 import * as vega from 'vega'
 import { renderSpec } from '@aster-charts/core'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
+import { forEngines } from './engines.js'
 
 type Spec = Record<string, unknown>
 type ViewLike = { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void }
@@ -27,9 +28,14 @@ export interface Outcome { diffs: string[]; refused?: string; svg?: string }
 
 /** The differences between vega and Aster for `spec` ([] when they agree); `refused` when vega itself cannot take the spec. */
 export async function compareToVega(spec: Spec): Promise<Outcome> {
+  // (each engine its own copy: vega writes onto the rows it ingests)
+  return forEngines(spec, (oracle, aster) => compareCopies(oracle, aster))
+}
+
+async function compareCopies(oracle: Spec, aster: Spec): Promise<Outcome> {
   let want: string
   try {
-    want = await vegaSvg(spec)
+    want = await vegaSvg(oracle)
   } catch (e) {
     return { diffs: [], refused: (e as Error).message.split('\n')[0] }
   }
@@ -39,7 +45,7 @@ export async function compareToVega(spec: Spec): Promise<Outcome> {
   console.error = () => {}
   console.warn = () => {}
   try {
-    got = renderSpec(spec as never)
+    got = renderSpec(aster as never)
   } catch (e) {
     return { diffs: [`aster threw: ${(e as Error).message.split('\n')[0]}`] }
   } finally {

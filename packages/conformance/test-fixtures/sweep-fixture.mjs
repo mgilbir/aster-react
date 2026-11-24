@@ -69,6 +69,28 @@ const angled = (angle) => ({
 FIXTURES['oracle-unjudgeable'] = [c('plain-a', chart()), c('sideways', angled('sideways'))]
 FIXTURES['ours-unjudgeable'] = [{ ...c('sideways', angled(0)), ourSpec: angled('sideways') }]
 
+// C61: the engine's side has its transform removed, and both specs share ONE rows table (as a generator's module-level table
+// does). The oracle's `stack` writes y0/y1 onto those rows; a runner that hands Aster rows the oracle has run on hands it the
+// oracle's answers, and an Aster with no stack "agrees". Each engine must get its own copy, taken before either runs: this
+// case must differ.
+const stackRows = [{ k: 'a', v: 1 }, { k: 'a', v: 2 }, { k: 'b', v: 3 }]
+const stacked = (transform) => ({
+  width: 60, height: 40, padding: 2, autosize: 'none', background: 'white',
+  data: [{ name: 't', values: stackRows, transform }],
+  scales: [{ name: 'y', type: 'linear', domain: [0, 6], range: 'height' }],
+  marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { value: 5 }, width: { value: 10 }, y: { scale: 'y', field: 'y1' }, y2: { scale: 'y', field: 'y0' }, fill: { value: 'steelblue' } } } }],
+})
+FIXTURES['transform-removed'] = [{ ...c('stacked', stacked([{ type: 'stack', groupby: ['k'], field: 'v' }])), ourSpec: stacked([]) }]
+// the same table read by two cases: the second case's oracle has no stack, its engine has one. Neither may read what the first
+// case's oracle wrote onto the table (with y0/y1 left on the rows, the second oracle would draw the stack it does not run)
+FIXTURES['shared-table'] = [
+  c('a-stacked', stacked([{ type: 'stack', groupby: ['k'], field: 'v' }])),
+  { ...c('b-unstacked', stacked([])), ourSpec: stacked([{ type: 'stack', groupby: ['k'], field: 'v' }]) },
+]
+// the same through the Vega-Lite path: both compilers read one input spec
+const vlStacked = { data: { values: stackRows }, mark: 'bar', encoding: { x: { field: 'k', type: 'nominal' }, y: { field: 'v', type: 'quantitative', aggregate: 'sum' } }, width: 40, height: 40 }
+FIXTURES['vl-transform-removed'] = [{ ...c('vl-stacked', vlStacked), lite: true, ourSpec: { ...vlStacked, encoding: { ...vlStacked.encoding, y: { field: 'v', type: 'quantitative' } } } }]
+
 export function generate() {
   const name = process.env.FIXTURE ?? 'good'
   const cases = FIXTURES[name]

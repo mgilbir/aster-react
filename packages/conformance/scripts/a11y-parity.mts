@@ -19,6 +19,7 @@ import '@aster-charts/core/transforms'
 import { buildA11yTree, compileChart, evaluateChart, getChartInfo } from '@aster-charts/core'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
 import { renderWithVega } from '../src/render-vega.js'
+import { forEngines } from '../src/engines.js'
 import { parseSvg, type XmlEl } from '../src/svg-parse.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
 import { GATE_FLAGS, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
@@ -69,7 +70,8 @@ async function main(gate: Gate): Promise<void> {
         ? (vl.compile(raw as never).spec as unknown as Record<string, unknown>)
         : raw
       const loaded = await loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS) as Record<string, unknown>
-      const [svg, scene] = await Promise.all([renderWithVega(loaded as never), Promise.resolve(evaluateChart(compileChart(loaded as never)))])
+      // (each engine its own copy: vega writes onto the rows it ingests)
+      const [svg, scene] = await forEngines(loaded, (oracle, aster) => Promise.all([renderWithVega(oracle as never), Promise.resolve(evaluateChart(compileChart(aster as never)))]))
       const real = realCaptions(svg)
       const info = getChartInfo(loaded as never)
       const tree = buildA11yTree(scene, info.scales)
