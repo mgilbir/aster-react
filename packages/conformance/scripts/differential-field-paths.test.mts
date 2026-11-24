@@ -97,7 +97,7 @@ function rowOf(r: Rng, i: number): Record<string, unknown> {
 // the transform sweep
 // ---------------------------------------------------------------------------
 
-type Pick = { pick: <T>(items: readonly T[]) => T; keys: (n: number) => string[]; key: () => string; num: () => string; arr: () => string; any: () => string }
+type Pick = { pick: <T>(items: readonly T[]) => T; keys: (n: number) => string[]; key: () => string; num: () => string; arr: () => string }
 
 /** `n` different paths (a group-by that names one field twice is a different question). */
 function distinct(r: Rng, n: number): string[] {
@@ -187,7 +187,6 @@ describe('transforms read field paths as vega does', () => {
         key: () => (r.chance(0.07) ? r.pick(ABSENT) : r.pick(KEYS)),
         num: () => (r.chance(0.07) ? r.pick(ABSENT) : r.pick(NUMS)),
         arr: () => r.pick(ARRS),
-        any: () => r.pick([...KEYS, ...NUMS]),
         keys: (n) => distinct(r, n),
         pick: (items) => r.pick(items),
       }
@@ -226,7 +225,8 @@ describe('transforms read field paths as vega does', () => {
     // not vacuous: most cases ran to a result on both sides, and every path style was drawn
     expect(compared).toBeGreaterThan(scaled(600) * 0.6)
     expect(refused).toBeLessThan(scaled(600) * 0.4)
-    for (const k of [...KEYS, ...NUMS]) expect(used.has(k)).toBe(true)
+    // every path style was drawn: the keys, the numeric paths, the list paths and the absent ones
+    for (const k of [...KEYS, ...NUMS, ...ARRS, ...ABSENT]) expect(used.has(k), `the path ${k} was never drawn`).toBe(true)
   })
 })
 
@@ -310,7 +310,6 @@ describe('specs read field paths as vega does', () => {
         key: () => (r.chance(0.05) ? r.pick(ABSENT) : r.pick(KEYS)),
         num: () => (r.chance(0.05) ? r.pick(ABSENT) : r.pick(NUMS)),
         arr: () => r.pick(ARRS),
-        any: () => r.pick([...KEYS, ...NUMS]),
         keys: (n) => distinct(r, n),
         pick: (items) => r.pick(items),
       }
@@ -343,7 +342,8 @@ describe('specs read field paths as vega does', () => {
     expect(bad.slice(0, 5)).toEqual([])
     expect(compared).toBeGreaterThan(scaled(400) * 0.9)
     expect(logged).toBeLessThan(scaled(400) * 0.3)
-    for (const k of [...KEYS, ...NUMS]) expect(used.has(k)).toBe(true)
+    // every path style was drawn: the keys, the numeric paths, the list paths and the absent ones
+    for (const k of [...KEYS, ...NUMS, ...ARRS, ...ABSENT]) expect(used.has(k), `the path ${k} was never drawn`).toBe(true)
   })
 })
 
@@ -368,6 +368,10 @@ describe('data formats read field paths as vega does', () => {
     const r = makeRng(99)
     const bad: string[] = []
     const kinds: string[] = ['number', 'string', 'boolean', 'date']
+    let compared = 0
+    let refused = 0
+    /** An error as its words, without the `Error: ` and `[aster] ` tags of either side. */
+    const words = (e: unknown): string => String((e as Error)?.message ?? e).replace(/^Error: /, '').replace(/^\[aster\] /, '')
     const wrappers: Array<[string, (rows: unknown[]) => unknown]> = [
       ['rows', (rows) => rows],
       ['w.rows', (rows) => ({ w: { rows } })],
@@ -387,13 +391,26 @@ describe('data formats read field paths as vega does', () => {
       const want = await onVega(spec, 'out')
       let got: ReturnType<typeof onAster>
       try { got = onAster(spec, 'out') } catch (e) {
+        // an Aster throw is a refusal, and counts as one only if vega refused, with vega's words
         if (!want.errors.length) bad.push(`${label}: aster threw ${(e as Error).message}`)
+        else if (words(e) !== words(want.errors[0])) bad.push(`${label}: vega logged "${words(want.errors[0])}", aster threw "${words(e)}"`)
+        else refused++
         continue
       }
-      if (want.errors.length) { if (!got.errors.length) bad.push(`${label}: vega logged "${want.errors[0]}", aster nothing`); continue }
+      if (want.errors.length) {
+        if (!got.errors.length) bad.push(`${label}: vega logged "${want.errors[0]}", aster nothing`)
+        else if (words(got.errors[0]) !== words(want.errors[0])) bad.push(`${label}: vega logged "${words(want.errors[0])}", aster logged "${words(got.errors[0])}"`)
+        else refused++
+        continue
+      }
       if (got.errors.length) bad.push(`${label}: aster logged ${String(got.errors[0])}`)
       else if (!rowsAreEqual(got.rows, want.rows)) bad.push(`${label}: rows differ`)
+      else compared++
     }
     expect(bad.slice(0, 5)).toEqual([])
+    // every case is compared, whichever way: rows read equal, or a refusal in vega's words (none is skipped: the draw makes none that
+    // vega refuses today, so `refused` is 0 and the refusal branches above are the guard if one starts to)
+    expect(compared + refused, 'formats compared').toBe(scaled(150))
+    expect(compared, 'formats that read to equal rows').toBeGreaterThan(scaled(150) * 0.9)
   })
 })
