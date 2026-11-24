@@ -6,8 +6,8 @@
  *  - equal rows compile the same whether they are one object or two (for vega-lite as for Aster);
  *  - in a view, the marks that read one inline dataset are the ones vega-lite has read one (layers of one view share a source);
  *  - the SVG is vega-lite's.
- * (Views of a concat / repeat / facet: vega-lite gives views with equal rows one source, Aster one per view. That is a difference
- * in the compiled spec only, not in what renders, and predates this test, which leaves it alone.)
+ *  - across the views of a concat / repeat / facet, views with equal rows read one source in vega-lite and in Aster, and there are as
+ *    many sources (`global` and `sources` below).
  */
 import { describe, it, expect } from 'vitest'
 import * as vl from 'vega-lite'

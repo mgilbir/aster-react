@@ -5,7 +5,7 @@
  * change is compared, and not the scale, so that the rest of the scale (its range, its name, its default zero) does not have to be
  * the same for the property to be forwarded the same. Only the scale types vega-lite keeps on the channel are asked.
  *
- * (Aster refuses a fillOpacity or strokeOpacity driven by data, which is why they are not asked.)
+ * (fillOpacity and strokeOpacity driven by data compile and are asked in vl-scale-forwarding-more.test.ts, as are scheme and interpolate on every colour scale type.)
  *
  * It covers the continuous colour scales (round, clamp, nice, padding, ...), `zero` on a log scale (dropped) and `nice` on a time scale
  * (kept).
