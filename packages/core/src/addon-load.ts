@@ -14,9 +14,10 @@
 import { dsvFormat } from './dsv.js'
 import { feature as topoFeature, mesh as topoMesh } from './topojson.js'
 import { dataFormatRegistry } from './registry.js'
-import { readData, type DataFormatSpec, type inferTypes as _inferTypes } from './data-format.js'
+import { parsesDates, readData, type DataFormatSpec, type inferTypes as _inferTypes } from './data-format.js'
 import type { VgSpec } from './types.js'
 import { chartLocale, type LocaleDefinition } from './locale.js'
+import { partLoaded } from './engine-parts.js'
 import { dataInputOf, specList } from './spec-structure.js'
 import { compileExpr, type ExpressionRuntime } from './expression.js'
 import { AsterLimitError, checkRowCount, withLimits, type SpecLimits } from './limits.js'
@@ -516,6 +517,12 @@ export async function loadSpecData<T extends VgSpec>(spec: T, opts: LoadOptions 
   const config = (spec as { config?: unknown }).config as { locale?: unknown } | undefined
   const specLocale = config?.locale != null && typeof config.locale === 'object' ? chartLocale(config.locale as LocaleDefinition) : undefined
   try {
+    // A date pattern is read with the calendar (the `time` part of the engine, engine-parts.ts). `<Chart>` asks `specNeeds` for parts only
+    // for the spec this returns, so the loader loads what its own parsing reads, whatever the page has loaded before it. (Imported when
+    // needed: the add-on does not carry the add-on loader.)
+    if (!partLoaded('time') && tasks.some((t) => parsesDates(t.format?.parse))) {
+      await (await import('./addons.js')).loadParts(['time'])
+    }
     await Promise.all(
       tasks.map(async (task) => {
         const { text, finalUrl } = await fetchText(task.url, o)
