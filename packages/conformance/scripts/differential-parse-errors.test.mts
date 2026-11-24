@@ -18,8 +18,17 @@
 import { describe, expect, it } from 'vitest'
 import { seeded } from './upstream.mts'
 import { referenceSpec } from './parse-refusal-gen.mts'
-import { WRAPPED } from '../../core/src/guide-model.ts'
 import { asterOutcome, BAD, GOOD, GUIDE_CASES, HANDLER_SHAPES, HANDLER_SITES, randomGuide, SEMANTIC, SITES, UNBOUND_HANDLER_SITES, vegaOutcome, vegaViewOutcome } from './expression-sites.mts'
+
+/**
+ * The guide properties whose expression vega quotes inside a longer text (docs/ERRORS.md: they are read, and their syntax errors quoted
+ * by themselves). The list is this test's own, copied from the audited behaviour, and not imported from the code under test: widening
+ * the product's list must not widen what is exempt here. The refusals it excuses are COUNTED, and Aster's text on them is held.
+ */
+const WRAPPED = /^(bandPosition|tickBand|tickOffset|tickSize|gridScale|labelFlush|labelFlushOffset|labelOffset|labelPadding|symbolOffset|columns|gradientLength)$/
+const wrapped = { compared: 0 }
+/** Aster quotes the expression itself, parenthesised, where vega quotes the longer text it built. */
+const quotedAlone = (got: string, e: string): boolean => got === `Expression parse error: (${e})` || got === `Expression parse error: ${e}`
 
 const POOL = [...BAD, ...GOOD, ...SEMANTIC]
 /** vega's parser crashing on a site (a TypeError of its own), not refusing the spec. */
@@ -71,7 +80,11 @@ describe('an expression a spec holds is refused as vega refuses it (Aster vs rea
         const spec = make(e)
         const want = vegaOutcome(spec)
         const got = asterOutcome(spec)
-        if (WRAPPED.test(property) && want.startsWith('Expression parse error') && got.startsWith('Expression parse error')) continue
+        if (WRAPPED.test(property) && want.startsWith('Expression parse error') && got.startsWith('Expression parse error')) {
+          wrapped.compared++
+          expect(quotedAlone(got, e), `${name}: ${JSON.stringify(e)} quoted by itself, got ${got} (vega: ${want})`).toBe(true)
+          continue
+        }
         expect(got, `${name}: ${JSON.stringify(e)}`).toBe(want)
       }
     })
@@ -87,11 +100,20 @@ describe('an expression a spec holds is refused as vega refuses it (Aster vs rea
       const want = vegaOutcome(spec)
       const got = asterOutcome(spec)
       if (want === 'ok') accepted++; else refused++
-      if (WRAPPED.test(property) && want.startsWith('Expression parse error') && got.startsWith('Expression parse error')) continue
+      if (WRAPPED.test(property) && want.startsWith('Expression parse error') && got.startsWith('Expression parse error')) {
+        wrapped.compared++
+        expect(quotedAlone(got, e), `${property}: ${JSON.stringify(e)} quoted by itself, got ${got} (vega: ${want})`).toBe(true)
+        continue
+      }
       expect(got, `${property}: ${JSON.stringify(e)} in ${JSON.stringify(spec.axes ?? spec.legends)}`).toBe(want)
     }
     expect(refused).toBeGreaterThan(300)
     expect(accepted).toBeGreaterThan(300)
+  })
+
+  it('the refusals the wrapped properties excuse are counted: as many as there are, not more', () => {
+    // (the fixed series and the random one: measured 375 + 42; a wider exemption, or a list that no longer reaches them, moves the count)
+    expect(wrapped.compared).toBe(417)
   })
 
   it('the sites refuse many things', () => {
