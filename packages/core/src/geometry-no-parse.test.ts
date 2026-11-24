@@ -6,9 +6,7 @@
  * every string it is given, and each must be a `path` or `clipPathD` of the scene drawn.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { readdirSync, readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { readFileSync } from 'node:fs'
 
 const parsed: string[] = []
 vi.mock('./path-data.js', async (importOriginal) => {
@@ -19,6 +17,10 @@ vi.mock('./path-data.js', async (importOriginal) => {
 // (the parts of the engine the public entries carry, imported after the mock: see scripts/vitest-core-parts.setup.mjs)
 await import('./parts-all.js')
 await import('./part-canvas.js')
+// (the add-ons too: the projected shapes, labels and forced layouts of the corpus are consumers' input as well)
+await import('./addon-transforms.js')
+await import('./addon-geo.js')
+const { CORPUS_UNLOADABLE, isDataNotLoaded, vegaCorpusFiles } = await import('./corpus.testlib.js')
 const { compileChart } = await import('./compiler.js')
 const { evaluateChart } = await import('./evaluate.js')
 const { renderSceneToCanvas } = await import('./canvas.js')
@@ -59,22 +61,31 @@ function consumeAll(scene: SceneRoot): void {
 
 describe('no consumer parses generated path text', () => {
   it('across the vega corpus', () => {
-    const here = dirname(fileURLToPath(import.meta.url))
-    const dirs = ['../../conformance/corpus', '../../conformance/corpus-vega-only'].map((d) => join(here, d))
-    const names = dirs.flatMap((d) => readdirSync(d).filter((f) => f.endsWith('.vg.json')).map((f) => join(d, f)))
+    const names = vegaCorpusFiles()
     const offenders: string[] = []
+    const failed: string[] = []
     let checked = 0
+    let parsedAny = 0
     for (const file of names) {
       const doc = JSON.parse(readFileSync(file, 'utf8'))
       let scene: SceneRoot
-      try { scene = evaluateChart(compileChart(doc.spec ?? doc), {}) } catch { continue }
+      try { scene = evaluateChart(compileChart(doc.spec ?? doc), {}) } catch (e) {
+        if (!isDataNotLoaded(e)) throw e
+        continue
+      }
       parsed.length = 0
-      try { consumeAll(scene) } catch { continue }
+      // (a consumer that throws on a scene of the corpus is a failure, not a scene to leave out)
+      try { consumeAll(scene) } catch (e) { failed.push(`${file.split('/').pop()}: ${(e as Error).message}`); continue }
       checked++
       const allowed = carried(scene)
+      if (allowed.size > 0 && parsed.length > 0) parsedAny++
       for (const d of parsed) if (!allowed.has(d) && offenders.length < 10) offenders.push(`${file.split('/').pop()}: ${d.slice(0, 80)}`)
     }
-    expect(checked).toBeGreaterThan(300)
+    expect(failed).toEqual([])
+    // every spec but the ones without data is consumed (a count, not a floor on a file count)
+    expect(checked).toBe(names.length - CORPUS_UNLOADABLE.length)
+    // the scenes that carry path text do reach the wrapped parser (the guard watches something)
+    expect(parsedAny).toBeGreaterThan(10)
     expect(offenders).toEqual([])
   }, 300_000)
 })
