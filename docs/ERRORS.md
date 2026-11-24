@@ -355,6 +355,9 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
   feature it does not implement (`` a wrapped facet (a single `facet` field) around or inside another facet is not
   supported yet ``) and an unknown mark.
   vega-lite itself compiles the first three (it ignores the key or property) and crashes on the unknown mark.
+- **A trail with a negative `size` throws.** A trail's size is a radius, and a negative one is `negative radius: <n>` (a plain
+  `Error`, no `[aster]` prefix, no `code`), thrown out of `renderSpec`, every renderer and `buildHitIndex`; nothing is logged. d3-path
+  and `vega.toSVG` throw the same message, so the chart is not drawn at all, as in Vega (pinned by `geometry-differential.test.ts`).
 - **Safety refusals.** Limits, the regular-expression screen, the URL policy, the hard spec-depth ceiling and the
   `bin`/`stratify` refusals are Aster additions; see `docs/LIMITS.md`.
 
