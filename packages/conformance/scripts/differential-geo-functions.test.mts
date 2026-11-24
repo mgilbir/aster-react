@@ -19,7 +19,7 @@ const PROJECTIONS = [
   { name: 'eq', type: 'equalEarth', scale: 80, translate: [100, 80], center: [10, 20] },
 ]
 const projections = new Map<string, unknown>()
-for (const p of PROJECTIONS) projections.set(p.name, geoRegistry.buildProjection!({ ...p } as never, 0, 0))
+for (const p of PROJECTIONS) projections.set(p.name, geoRegistry.buildProjection!({ ...p } as never))
 const runtime: ExpressionRuntime = {
   scale: () => undefined,
   data: () => [],

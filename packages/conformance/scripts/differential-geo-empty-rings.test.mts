@@ -48,7 +48,7 @@ function ringsOf(g: Geometry): Ring[] {
 
 /** The geometry with its empty rings taken out (a polygon left with none taken out with them). */
 function withoutEmpty(g: Geometry): Geometry {
-  if (g.type === 'FeatureCollection') return { ...g, features: (g as { features: Array<{ type: 'Feature'; geometry: Geometry }> }).features.map((f) => ({ ...f, geometry: withoutEmpty(f.geometry) })) }
+  if (g.type === 'FeatureCollection') return { ...g, features: (g as { features: Array<{ type: 'Feature'; geometry: Geometry }> }).features.map((f) => ({ ...f, geometry: withoutEmpty(f.geometry) })) } as unknown as Geometry
   if (g.type === 'GeometryCollection') return { ...g, geometries: (g as { geometries: Geometry[] }).geometries.map(withoutEmpty) }
   if (g.type === 'Polygon') {
     const kept = (g as { coordinates: Ring[] }).coordinates.filter((x) => x.length)
