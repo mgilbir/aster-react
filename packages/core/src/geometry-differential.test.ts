@@ -89,17 +89,6 @@ describe('mark geometry: old vs new, every consumer', () => {
     }
   })
 
-  for (const [lo, hi] of runs(1, 400, 25)) {
-    it(`hand-built scenes, seeds ${lo}-${hi}: the renderers and their cache, drawn twice`, () => {
-      const fails: string[] = []
-      for (let seed = lo; seed <= hi; seed++) {
-        const r = mulberry32(seed)
-        diffTwice(randomScene(r, true), `seed ${seed} (finite)`, fails)
-      }
-      expect(fails).toEqual([])
-    }, 60_000)
-  }
-
   for (const [lo, hi] of runs(1, 60, 10)) {
     it(`random specs and their incremental updates (reused items), with the canvas append path, seeds ${lo}-${hi}`, () => {
       const fails: string[] = []

@@ -262,10 +262,10 @@ describe('loadSpecData asks for the engine part its own reading needs', () => {
     const restore = withdrawParts(['time'])
     try {
       const fetchCsv = (async () => new Response('[{"d":"2020-03-01","n":"4"}]', { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch
-      const plain = await loadSpecData({ data: [{ name: 't', url: 'https://example.test/t.json', format: { type: 'json', parse: { n: 'number' } } }] } as never, { fetch: fetchCsv, allow: () => true })
+      const plain = await loadSpecData({ data: [{ name: 't', url: 'https://example.com/t.json', format: { type: 'json', parse: { n: 'number' } } }] } as never, { fetch: fetchCsv, allow: () => true })
       expect(partLoaded('time')).toBe(false)
       expect(JSON.stringify(plain)).toContain('"n":4')
-      const dated = await loadSpecData({ data: [{ name: 't', url: 'https://example.test/t.json', format: { type: 'json', parse: { d: 'date:%Y-%m-%d' } } }] } as never, { fetch: fetchCsv, allow: () => true })
+      const dated = await loadSpecData({ data: [{ name: 't', url: 'https://example.com/t.json', format: { type: 'json', parse: { d: 'date:%Y-%m-%d' } } }] } as never, { fetch: fetchCsv, allow: () => true })
       expect(partLoaded('time')).toBe(true)
       expect(JSON.stringify(dated)).toContain('2020-03-01T')
     } finally { restore() }
