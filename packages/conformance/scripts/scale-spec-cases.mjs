@@ -9,8 +9,8 @@
  * only exercises the scale classes themselves.
  *
  * Every case is `{ name, spec, probes? }`; `probes` defaults to values derived
- * from the oracle scale's domain (recorded in the vector so the replay feeds the
- * same inputs).
+ * from the oracle scale's domain (read from the oracle scale on every run, as nothing
+ * is recorded: differential-scale-spec.test.mts).
  */
 
 const W = 300
