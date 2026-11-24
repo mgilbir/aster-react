@@ -12,51 +12,7 @@ import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
 import { compileChart, evaluateChart } from '@aster-charts/core'
 import { renderSceneToCanvas } from '@aster-charts/core/canvas'
-
-type M = [number, number, number, number, number, number]
-interface Painted { op: 'fill' | 'stroke'; style: string; path: string }
-
-/** A recording 2D context: the transform, the current path in device space (to 1e-6), and each paint with the style it used. */
-function recorder(): { ctx: never; painted: Painted[] } {
-  const painted: Painted[] = []
-  let m: M = [1, 0, 0, 1, 0, 0]
-  const stack: Array<{ m: M; fillStyle: unknown; strokeStyle: unknown }> = []
-  let path: string[] = []
-  const state: Record<string, unknown> = { fillStyle: '#000', strokeStyle: '#000' }
-  const n = (v: number): string => String(Math.round(v * 1e6) / 1e6)
-  const dev = (x: number, y: number): string => `${n(m[0] * x + m[2] * y + m[4])},${n(m[1] * x + m[3] * y + m[5])}`
-  const mul = (b: M): void => {
-    m = [m[0] * b[0] + m[2] * b[1], m[1] * b[0] + m[3] * b[1], m[0] * b[2] + m[2] * b[3], m[1] * b[2] + m[3] * b[3], m[0] * b[4] + m[2] * b[5] + m[4], m[1] * b[4] + m[3] * b[5] + m[5]]
-  }
-  // (a gradient as its kind, its coordinates in device space and its stops)
-  const gradient = (kind: string) => (...a: number[]): object => {
-    const stops: string[] = []
-    const at = kind === 'linear' ? `${dev(a[0]!, a[1]!)} ${dev(a[2]!, a[3]!)}` : `${dev(a[0]!, a[1]!)} ${n(a[2]!)} ${dev(a[3]!, a[4]!)} ${n(a[5]!)}`
-    return { addColorStop: (o: number, c: string) => { stops.push(`${o}:${c}`) }, toString: () => `${kind}(${at}; ${stops.join(' ')})` }
-  }
-  const own: Record<string, (...a: number[]) => unknown> = {
-    save: () => { stack.push({ m: [...m] as M, fillStyle: state.fillStyle, strokeStyle: state.strokeStyle }) },
-    restore: () => { const s = stack.pop(); if (s) { m = s.m; state.fillStyle = s.fillStyle; state.strokeStyle = s.strokeStyle } },
-    translate: (x, y) => mul([1, 0, 0, 1, x!, y!]),
-    scale: (x, y) => mul([x!, 0, 0, y!, 0, 0]),
-    setTransform: (a, b, c, d, e, f) => { m = [a!, b!, c!, d!, e!, f!] },
-    beginPath: () => { path = [] },
-    closePath: () => { path.push('Z') },
-    moveTo: (x, y) => { path.push(`M${dev(x!, y!)}`) },
-    lineTo: (x, y) => { path.push(`L${dev(x!, y!)}`) },
-    rect: (x, y, w, h) => { path.push(`M${dev(x!, y!)}`, `L${dev(x! + w!, y!)}`, `L${dev(x! + w!, y! + h!)}`, `L${dev(x!, y! + h!)}`, 'Z') },
-    createLinearGradient: gradient('linear') as never,
-    createRadialGradient: gradient('radial') as never,
-    createPattern: () => ({ setTransform: () => undefined, toString: () => 'pattern' }),
-    fill: () => { painted.push({ op: 'fill', style: String(state.fillStyle), path: path.join(' ') }) },
-    stroke: () => { painted.push({ op: 'stroke', style: String(state.strokeStyle), path: path.join(' ') }) },
-  }
-  const ctx = new Proxy(state, {
-    get: (t, k: string) => (k in own ? own[k] : k in t ? t[k] : () => undefined),
-    set: (t, k: string, v) => { t[k] = v; return true },
-  })
-  return { ctx: ctx as never, painted }
-}
+import { recorder, type Painted } from './canvas-recorder.js'
 
 const lin = { gradient: 'linear', stops: [{ offset: 0, color: 'white' }, { offset: 1, color: 'darkred' }] }
 const SCALES = [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'c', type: 'ordinal', domain: ['a', 'b'], range: ['red', 'blue'] }]

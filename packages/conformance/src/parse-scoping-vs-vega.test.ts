@@ -152,7 +152,7 @@ async function agree(spec: Spec, what: string, drawing = true): Promise<'refused
     return 'refused'
   }
   expect(got, `${what}: vega accepts it`).toHaveProperty('svg')
-  if (drawing) expect(diffCanonical(canonicalizeSvg((got as { svg: string }).svg), canonicalizeSvg(want.svg)), what).toEqual([])
+  if (drawing) expect(diffCanonical(canonicalizeSvg(want.svg), canonicalizeSvg((got as { svg: string }).svg)), what).toEqual([])
   return 'accepted'
 }
 
