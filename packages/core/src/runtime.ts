@@ -1990,7 +1990,10 @@ function describedLegend(group: SceneGroup | null, legend: CompiledLegend, ctx: 
   if (zindex) (group as unknown as { zindex?: number }).zindex = zindex
   // `aria: false` removes the legend from the accessibility tree (and marks it aria-hidden)
   ;(group as unknown as { aria?: boolean }).aria = (legend as { aria?: boolean }).aria
-  const lt = guideTitle(ctx, legend.title)
+  // (vega's caption asks whether the legend's OWN spec has a title -- `datum.title` is `spec.title != null` -- so a
+  // `config.legend.title` is no title to it)
+  const ownSpec = (legend as { own?: { title?: unknown } }).own ?? legend
+  const lt = guideTitle(ctx, ownSpec.title)
   if (lt) (group as unknown as { title?: string }).title = lt
   const ldesc = (legend as { description?: unknown }).description
   if (ldesc) group.description = ldesc as string
@@ -6332,6 +6335,8 @@ function groupBackground(geo: SceneItem, w: number, h: number): { background: Sc
   for (const k of GROUP_PAINT_KEYS) if (rec[k] != null) paint[k] = rec[k]
   const own: Record<string, unknown> = {}
   for (const k of GROUP_PAINT_KEYS) if (rec[k] != null && !(fore && k === 'stroke')) own[k] = rec[k]
+  // (vega-scenegraph group.js blends the group item's background, not its content or its foreground)
+  if (rec.blend != null) own.blend = rec.blend
   const background = { path, x: 0, y: 0, _bg: true, ...own } as unknown as SceneItem
   if (!fore || !rec.stroke) return { background, path, paint, corners }
   // A box stroked in front: vega's SVG document writes the background as the box of an unstroked item (no half-pixel inset), while
@@ -7518,6 +7523,8 @@ function makeLegend(legend: CompiledLegend, ctx: EvalContext, index: number): Sc
     ...(cursorOf(g) !== undefined ? { cursor: cursorOf(g) } : {}),
     ...(g.tooltip !== undefined ? { tooltip: g.tooltip } : {}),
     ...(g.href != null ? { href: g.href } : {}),
+    // (a group item's `clip` clips what it holds to its box, a guide's as any group's: the legend's box is its laid-out size)
+    ...(g.clip ? { contentClipBox: { w: built.width, h: built.height } } : {}),
     ...(built.madeMarks !== undefined ? { madeMarks: built.madeMarks, _entriesPending: true } : {}),
   } as unknown as SceneGroup
   vetGuideLinks(group, ctx)
@@ -8025,6 +8032,7 @@ function makeAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGro
   // (the axis's marks are in the view's frame, the group's own position baked in: so is its box)
   const gx = +(g.x as number) || 0
   const gy = +(g.y as number) || 0
+  const axisTranslate = ctx.rawGuides ? 0 : (typeof g.translate === 'number' ? g.translate : 0.5)
   gb.background.x = gx
   gb.background.y = gy
   if (gb.foreground) { gb.foreground.x = gx; gb.foreground.y = gy }
@@ -8051,8 +8059,11 @@ function makeAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGro
     ...(itemAriaOf(built.group) ? { itemAria: itemAriaOf(built.group) } : {}),
     ...(cursorOf(built.group) !== undefined ? { cursor: cursorOf(built.group) } : {}),
     ...(built.group.tooltip !== undefined ? { tooltip: built.group.tooltip } : {}),
+    // (a group item's `clip` clips what it holds to its box, a guide's as any group's: the axis's marks are in the view's frame, its
+    // box at its position)
+    ...(g.clip ? { contentClipBox: { x: gx, y: gy, w: +(g.width as number) || 0, h: +(g.height as number) || 0 } } : {}),
     // (a group item whose encode never ran has no orient: the caption calls it an X-axis, and reads no format off it)
-    axis: { orient, itemOrient: isUnencoded(g) ? '' : typeof g.orient === 'string' ? g.orient : orient, format: g.format, formatType: g.formatType, ...(isUnencoded(g) ? { unencoded: true } : {}), range: axisRangeSpan, baseline: 0, translate: ctx.rawGuides ? 0 : (typeof g.translate === 'number' ? g.translate : 0.5), position, bounds: built.bounds, ...(knownOrient ? {} : { noLayout: true }) },
+    axis: { orient, itemOrient: isUnencoded(g) ? '' : typeof g.orient === 'string' ? g.orient : orient, format: g.format, formatType: g.formatType, ...(isUnencoded(g) ? { unencoded: true } : {}), range: axisRangeSpan, baseline: 0, translate: axisTranslate, position, bounds: built.bounds, ...(knownOrient ? {} : { noLayout: true }) },
     ...(href != null ? { href } : {}),
   } as unknown as SceneGroup
   vetGuideLinks(out, ctx)

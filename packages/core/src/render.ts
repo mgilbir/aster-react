@@ -5,7 +5,7 @@
  */
 import { SYMBOL_DEFAULT_SIZE } from './util.js'
 import type { SceneDef, SceneGroup, SceneItem, SceneRoot } from './types.js'
-import { baselineOffset, fontSize as vegaFontSize } from './bounds.js'
+import { baselineOffset, fontSize as vegaFontSize, textLines } from './bounds.js'
 import { checkPathLength, metering } from './limits.js'
 export { baselineOffset }
 import { textAnchor, truncateToLimit } from './text-metrics.js'
@@ -567,16 +567,13 @@ function textElement(it: SceneItem): string {
   return `<text${w.s}>${inner}</text>`
 }
 
-/** Split a text item into lines the way vega-scenegraph's `textLines` does. */
+/**
+ * The lines of a text item, as vega-scenegraph draws them: its `textLines` (bounds.ts, the one the extent is measured with), each
+ * line through `textValue` -- a null or undefined line is an empty one, anything else its text, trimmed.
+ */
 function textLinesOf(it: SceneItem): string[] {
-  const raw = it.text as unknown
-  const lineBreak = (it as Record<string, unknown>).lineBreak as string | undefined
-  if (Array.isArray(raw)) {
-    return raw.length > 1 ? raw.map((l) => String(l).trim()) : [String(raw[0] ?? '').trim()]
-  }
-  const text = raw == null ? '' : String(raw)
-  if (lineBreak && text) return text.split(lineBreak).map((l) => l.trim())
-  return [text.trim()]
+  const tl = textLines(it) as unknown
+  return (Array.isArray(tl) ? tl : [tl]).map((l) => (l == null ? '' : String(l).trim()))
 }
 
 /** vega-scenegraph `textAlign`: left/center/right -> start/middle/end; anything else is `start`. */
@@ -1785,7 +1782,7 @@ function groupContainer(run: SceneGroup[], frameW: number, frameH: number, scope
 
 function groupItem(g: SceneGroup, frameW: number, frameH: number, scope: GuideScope, clips: ClipCollector): SvgEl {
   if (!flag(g, '_scope')) {
-    if (g.role === 'axis') return axisItem(g)
+    if (g.role === 'axis') return axisItem(g, clips)
     if (g.role === 'legend') return legendItem(g, clips)
     if (g.role === 'title') return titleItem(g, frameW, frameH, scope)
   }
@@ -1818,10 +1815,10 @@ function groupItem(g: SceneGroup, frameW: number, frameH: number, scope: GuideSc
 }
 
 /** The item `<g>` of a guide: its position, an unpainted box, the guide's marks, an empty foreground. */
-function guideItem(x: number, y: number, bg: SceneItem | null, marks: SvgEl[], box: GeneratedPath = EMPTY_BOX, loose: readonly SceneItem[] = [], inert = true, aria?: SceneGroup['itemAria'], link?: SceneItem, fg: SceneItem | null = null): SvgEl {
+function guideItem(x: number, y: number, bg: SceneItem | null, marks: SvgEl[], box: GeneratedPath = EMPTY_BOX, loose: readonly SceneItem[] = [], inert = true, aria?: SceneGroup['itemAria'], link?: SceneItem, fg: SceneItem | null = null, clip?: { id: () => string }): SvgEl {
   return el('g', (w) => groupItemAttrs(x, y, w, aria), [
     el('path', (w) => groupBackgroundAttrs(bg, box, inert, w)),
-    el('g', noAttrs, loose.length ? [...marks, ...loose.map((leaf): SvgLeaf => ({ leaf, wrapClip: true }))] : marks),
+    el('g', clip ? (w) => clipRefAttrs(clip.id(), w) : noAttrs, loose.length ? [...marks, ...loose.map((leaf): SvgLeaf => ({ leaf, wrapClip: true }))] : marks),
     el('path', (w) => groupForegroundAttrs(fg, inert, w)),
   ], link)
 }
@@ -1844,12 +1841,18 @@ function unwrapAxis(outer: SceneGroup): { g: SceneGroup; dx: number; dy: number;
   return { g, dx, dy, leaves, parts }
 }
 
-function axisItem(outer: SceneGroup): SvgEl {
+/** The clip of a guide group item that clips its content (its `clip`), to its own box. */
+function guideClip(g: SceneGroup, clips: ClipCollector): { id: () => string } | undefined {
+  const box = (g as unknown as { contentClipBox?: { x?: number; y?: number; w: number; h: number } }).contentClipBox
+  return box ? { id: () => clips.id({ x: box.x ?? 0, y: box.y ?? 0, w: box.w, h: box.h }) } : undefined
+}
+
+function axisItem(outer: SceneGroup, clips: ClipCollector): SvgEl {
   const { g, dx, dy, leaves, parts } = unwrapAxis(outer)
   const marks = parts.map((part) => el('g', (w) => guidePartAttrs('axis', part, null, w, outer.partMeta ?? g.partMeta), leaves.filter((l) => l._part === part).map((leaf) => ({ leaf, wrapClip: true }))))
   // (leaves of a hand-built scene carry no part: they are drawn all the same, in the item's content)
   const loose = leaves.filter((l) => l._part === undefined || !parts.includes(l._part))
-  return guideItem(dx, dy, outer.box ?? g.box ?? null, marks, EMPTY_BOX, loose, !(outer.partMeta ?? g.partMeta)?.axis?.interactive, outer.itemAria ?? g.itemAria, outer.href !== undefined || g.href !== undefined ? (outer.href !== undefined ? outer : g) : undefined, outer.boxFg ?? g.boxFg ?? null)
+  return guideItem(dx, dy, outer.box ?? g.box ?? null, marks, EMPTY_BOX, loose, !(outer.partMeta ?? g.partMeta)?.axis?.interactive, outer.itemAria ?? g.itemAria, outer.href !== undefined || g.href !== undefined ? (outer.href !== undefined ? outer : g) : undefined, outer.boxFg ?? g.boxFg ?? null, guideClip(outer, clips))
 }
 
 function legendItem(g: SceneGroup, clips: ClipCollector): SvgEl {
@@ -1912,7 +1915,7 @@ function legendItem(g: SceneGroup, clips: ClipCollector): SvgEl {
   }
   const marks: SvgEl[] = made('entry') ? [col(entryMarks)] : []
   if (titles.length) marks.push(el('g', (w) => guidePartAttrs('legend', 'title', null, w, meta), titles.map((t) => leaf(t))))
-  return guideItem(g.x ?? 0, g.y ?? 0, bg, marks, boxPath(g.width ?? 0, g.height ?? 0), loose, !meta?.legend?.interactive, g.itemAria, g.href !== undefined ? g : undefined, fg)
+  return guideItem(g.x ?? 0, g.y ?? 0, bg, marks, boxPath(g.width ?? 0, g.height ?? 0), loose, !meta?.legend?.interactive, g.itemAria, g.href !== undefined ? g : undefined, fg, guideClip(g, clips))
 }
 
 function titleItem(g: SceneGroup, frameW: number, frameH: number, scope: GuideScope): SvgEl {

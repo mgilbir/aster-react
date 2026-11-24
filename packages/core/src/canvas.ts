@@ -578,13 +578,21 @@ function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW
     // (vega draws a group item's box in the frame of the group around it, which is where a gradient it paints as a pattern sits)
     const outer = { x: -(group.x ?? 0), y: -(group.y ?? 0) }
     if (box !== undefined) renderLeafItem(box, ctx, scene, guideBox, 0, outer)
+    // (a guide group item's `clip` clips what it holds -- not its box before it, nor its stroke in front after it -- to its box)
+    const clipBox = (group as unknown as { contentClipBox?: { x?: number; y?: number; w: number; h: number } }).contentClipBox
+    let clipped = false
     for (const item of group.items ?? []) {
+      const isBg = (item as { _bg?: boolean })._bg === true
+      if (clipBox !== undefined && !isBg && !clipped) {
+        ctx.save(); ctx.beginPath(); ctx.rect(clipBox.x ?? 0, clipBox.y ?? 0, clipBox.w, clipBox.h); ctx.clip(); clipped = true
+      } else if (clipped && isBg) { ctx.restore(); clipped = false }
       if (isGroup(item)) renderGroup(item, ctx, scene, gw, gh, opts)
       // (a leaf whose bounds the pass never measured: vega's canvas draws only what meets the view's bounds, see `_unmeasured`)
       else if ((item as { _unmeasured?: boolean })._unmeasured === true) continue
       else if ((item as { _bg?: boolean })._bg === true) renderLeafItem(item, ctx, scene, bgBox, bake, (item as { _frame?: Frame })._frame ?? (item === group.items![0] || item === group.items![group.items!.length - 1] ? outer : undefined))
       else renderLeafItem(item, ctx, scene, undefined, bake, (item as { _frame?: Frame })._frame ?? leafFrame)
     }
+    if (clipped) ctx.restore()
     if (boxFg !== undefined) renderLeafItem(boxFg, ctx, scene, guideBox, 0, outer)
     ctx.restore()
     return
