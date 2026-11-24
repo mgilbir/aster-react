@@ -62,10 +62,8 @@ export interface CanvasLike {
   stroke(path?: unknown): void
   fillRect(x: number, y: number, w: number, h: number): void
   setLineDash(dashes: number[]): void
-  // The renderer never passes a maxWidth (the DOM overload is unused). The
-  // optional fourth argument remains for recording mocks that flag multi-line
-  // text; a real CanvasRenderingContext2D would coerce a boolean to 0.
-  fillText(text: string, x: number, y: number, maxWidthOrMulti?: number | boolean): void
+  // (no fourth, maxWidth, argument: the renderer never passes one, and a real context would read anything else in that slot as a width)
+  fillText(text: string, x: number, y: number): void
   drawImage?(image: unknown, dx: number, dy: number, dw?: number, dh?: number): void
   createLinearGradient(x0: number, y0: number, x1: number, y1: number): GradientLike
   /** (absent on a minimal context: a radial gradient paint is then not drawn) */
