@@ -100,8 +100,10 @@ function arcSlot(index: unknown, count: number): number {
  * ({@link position}): a second pass over the arc would cost as much as decoding it.
  */
 function arcReader(arcs: readonly unknown[], minLength = 0): (index: unknown) => Position[] {
+  const count = arcs.length
   return (index) => {
-    const slot = arcSlot(index, arcs.length)
+    // (arcSlot, with the common case inline: this is read once per arc a geometry refers to)
+    const slot = typeof index === 'number' && index >= 0 && index < count && (index | 0) === index ? index : arcSlot(index, count)
     const arc = arcs[slot]
     if (!Array.isArray(arc) || arc.length < minLength) {
       throw malformed(minLength ? `arc ${slot} must be a list of at least ${minLength} positions` : `arc ${slot} must be a list`)
@@ -164,7 +166,8 @@ function appendTransformed(out: Position[], raw: readonly Position[], transform:
   let x = 0
   let y = 0
   for (let i = 0; i < raw.length; i++) {
-    const p = position(raw[i])
+    const p = raw[i]!
+    if (p == null) position(p)
     const q = [(x += p[0]!) * kx + dx, (y += p[1]!) * ky + dy]
     for (let j = 2; j < p.length; j++) q.push(p[j]!)
     out.push(q)
