@@ -223,7 +223,7 @@ describe('autosize pad vs none', () => {
         },
       ],
       marks: [
-        { type: 'point', name: 'pts', from: { data: 'table' } as const } as never,
+        { type: 'symbol', name: 'pts', from: { data: 'table' } as const } as never,
       ],
     }
 
@@ -262,7 +262,7 @@ describe('autosize pad vs none', () => {
         },
       ],
       marks: [
-        { type: 'point', name: 'pts', from: { data: 'table' } as const } as never,
+        { type: 'symbol', name: 'pts', from: { data: 'table' } as const } as never,
       ],
     }
     const info = getChartInfo(spec, { width: 400, height: 300 })
