@@ -140,8 +140,16 @@ an expression or a generated dataset/signal/scale name.
 ## Throws (not supported)
 
 Everything below throws a `VLCompileError` naming the feature and its path; nothing is silently
-ignored. Two refusals are general, and name what they refuse by path rather than by feature:
+ignored. Three refusals are general, and name what they refuse by path rather than by feature:
 
+- **A value the Vega-Lite schema does not allow where it stands** (a wrong type, `null` where vega-lite reads "unset",
+  a name that is not one of the schema's, a missing required property, an unknown property in the `config`): it is
+  refused as `<path>: must be ... (Vega-Lite 6.4.3 schema)`, checked against a table generated from vega-lite 6.4.3's
+  JSON schema at build time. vega-lite reads such a spec in ways its schema does not describe, so there is no contract to
+  match. The few forms vega-lite reads beyond its schema that Aster draws as vega-lite does (a facet over a repeat or a
+  concat, `stack: "wiggle"`, a Vega `{"signal"}` in a scale domain ...) are listed, each with the test that pins it, in
+  `scripts/schema-table.mjs` (`EXTENSIONS`). An `{"expr"}` object is an expression only where the schema takes an
+  ExprRef; anywhere else (a lookup `default`, an impute `value`, a parameter `value`) it is the literal object it is.
 - **A property the compiler does not read.** Every property of the spec has to be read by the compile, or be one
   vega-lite itself ignores (each such rule is pinned against vega-lite by a test); any other is refused at the end of
   the compile as `<path>: is valid Vega-Lite but @aster-charts/vl does not implement it here, so it would be ignored`.
@@ -175,8 +183,7 @@ The list below is the features refused by name, each checked by `test/readme-ref
 - Bins and time units: `timeUnit.maxbins`, errorbar / errorband over a binned channel, and the
   `timeUnitBandPosition` / `timeUnitBandSize` mark keys.
 - Channel definitions vega-lite 6.4.3 compiles that are not implemented yet: a `datum`
-  condition on fillOpacity, strokeOpacity, angle, text or tooltip; a field condition that reads a field other than the
-  channel's own; an array of conditions that holds a field condition; `impute` or
+  condition on fillOpacity, strokeOpacity, angle, text or tooltip; an array of conditions that holds a field condition; `impute` or
   pre-binned data (`binned`) on a channel other than x and y (and longitude / latitude, where vega-lite ignores
   them); the `geojson` type on a channel other than shape, and
   a GeoJSON shape on any other mark.

@@ -187,9 +187,12 @@ group('@aster-charts/vl == vega-lite: a datum colour in a composite mark, a datu
   add('a layer of boxplots with datum colours', { data: DATA, layer: [{ mark: 'boxplot', encoding: { x: n('c'), y: q('v'), color: { datum: 'one', type: 'nominal' } } }, { mark: 'boxplot', encoding: { x: n('c'), y: q('w'), color: { datum: 'two', type: 'nominal' } } }] })
   add('a layer repeat of boxplots with the repeated field as the datum', { data: DATA, repeat: { layer: ['v', 'w'] }, spec: { mark: 'boxplot', encoding: { x: n('c'), y: q(ref('layer')), color: { datum: ref('layer'), type: 'nominal' } } } })
   add('a datum condition on shape of a point', { data: DATA, mark: 'point', encoding: { x: n('c'), y: q('v'), shape: { condition: { test: 'datum.v > 4', datum: 'square', type: 'nominal' }, value: 'circle' } } })
+  // (the otherwise-value is one the channel takes: a colour, a dash array, a number; `value: 1` on colour or strokeDash is not a
+  // value the schema allows there, and is refused by its path (C245))
+  const OTHERWISE: Record<string, unknown> = { color: 'grey', strokeDash: [4, 2] }
   for (const channel of ['color', 'size', 'opacity', 'strokeWidth', 'strokeDash']) {
     for (const mark of channel === 'size' ? ['point'] : ['point', 'bar']) {
-      add(`a datum condition on ${channel} of a ${mark}`, { data: DATA, mark, encoding: { x: n('c'), y: q('v'), [channel]: { condition: { test: 'datum.v > 4', datum: 'hi', type: 'nominal' }, value: 1 } } })
+      add(`a datum condition on ${channel} of a ${mark}`, { data: DATA, mark, encoding: { x: n('c'), y: q('v'), [channel]: { condition: { test: 'datum.v > 4', datum: 'hi', type: 'nominal' }, value: OTHERWISE[channel] ?? 1 } } })
     }
   }
 })

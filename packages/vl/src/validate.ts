@@ -22,6 +22,8 @@ import { isTimerSelect, validateTimerSelection } from './animation.js'
 import { parseEventSelectorString } from './event-selector.js'
 import { dateTimePartProblem } from './predicate.js'
 import { CALENDAR_PARTS } from './calendar.js'
+import { suggest } from './suggest.js'
+import { checkSchema, schemaProperties } from './schema.js'
 
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -49,50 +51,11 @@ function mustBe(path: string, what: string): never {
   return fail(path, `must be ${what}`)
 }
 const OBJECT = 'an object'
-/** A number, or an {"expr"} / {"signal"} reference (ExprRef / SignalRef). */
-const isNumOrRef = (v: unknown): boolean => (typeof v === 'number' && Number.isFinite(v)) || (isObj(v) && Object.keys(v).length === 1 && (typeof v.expr === 'string' || typeof v.signal === 'string'))
-const isPadding = (v: unknown): boolean => isNumOrRef(v) || (isObj(v) && Object.entries(v).every(([k, x]) => ['top', 'bottom', 'left', 'right'].includes(k) && typeof x === 'number'))
 
 function keysOf(o: Obj, allowed: ReadonlySet<string>, path: string, what: string): void {
   for (const k of Object.keys(o)) {
     if (!allowed.has(k)) fail(path, `unknown ${what} property "${k}"${suggest(k, allowed)}`)
   }
-}
-
-/** Optimal string alignment distance (insertions, deletions, substitutions, adjacent transpositions), capped at `max + 1`. */
-function editDistance(a: string, b: string, max: number): number {
-  if (Math.abs(a.length - b.length) > max) return max + 1
-  const d: number[][] = Array.from({ length: a.length + 1 }, (_, i) => [i, ...new Array<number>(b.length).fill(0)])
-  for (let j = 1; j <= b.length; j++) d[0]![j] = j
-  for (let i = 1; i <= a.length; i++) {
-    for (let j = 1; j <= b.length; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1
-      let v = Math.min(d[i - 1]![j]! + 1, d[i]![j - 1]! + 1, d[i - 1]![j - 1]! + cost)
-      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) v = Math.min(v, d[i - 2]![j - 2]! + 1)
-      d[i]![j] = v
-    }
-  }
-  return d[a.length]![b.length]!
-}
-
-/**
- * ` (did you mean "x"?)` for a value close to one of `candidates` (case aside, or a few edits away), else ` (expected one of ...)` when
- * the candidates are few enough to list, else nothing.
- */
-function suggest(value: unknown, candidates: Iterable<string>): string {
-  const list = [...candidates]
-  if (typeof value === 'string' && value !== '') {
-    const lower = value.toLowerCase()
-    const max = Math.max(1, Math.floor(value.length / 3))
-    let best: string | undefined
-    let bestD = max + 1
-    for (const c of list) {
-      const dist = c.toLowerCase() === lower ? 0 : editDistance(lower, c.toLowerCase(), max)
-      if (dist < bestD) { best = c; bestD = dist }
-    }
-    if (best !== undefined) return ` (did you mean "${best}"?)`
-  }
-  return list.length <= 12 ? ` (expected one of ${list.join(', ')})` : ''
 }
 
 /** `<path>: unknown <what> <value>`, with the nearest of `candidates` as a suggestion. */
@@ -316,6 +279,8 @@ export function validateSpec(spec: unknown): void {
     collectParams(spec, state.declaredParams, state.timerNames)
     validateView(spec, '', true, undefined, true)
     refusePrototypeNames(spec)
+    // (and what the schema forbids, by path, wherever the checks above did not already refuse it)
+    checkSchema(spec)
   } finally {
     state = saved
   }
@@ -484,11 +449,6 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
     if (!NESTING[parent as Exclude<Kind, 'unit'>].has(kind)) fail(path, `a ${kind} spec is not allowed inside \`${parent}\` (vega-lite schema)`)
   }
   if (spec.$schema !== undefined && typeof spec.$schema !== 'string') mustBe(at('$schema'), 'a string')
-  // (C245: the value types the gate reads past; a wrong type, or a null vega-lite reads as unset, drew a different chart)
-  if (spec.name !== undefined && typeof spec.name !== 'string') mustBe(at('name'), 'a string')
-  if (spec.description !== undefined && typeof spec.description !== 'string') mustBe(at('description'), 'a string')
-  if (top && spec.padding !== undefined && !isPadding(spec.padding)) mustBe(at('padding'), 'a number, a {top, bottom, left, right} object of numbers or an {"expr"} / {"signal"} reference')
-  if (spec.spacing !== undefined && !isNumOrRef(spec.spacing) && !(isObj(spec.spacing) && Object.entries(spec.spacing).every(([k, v]) => (k === 'row' || k === 'column') && typeof v === 'number'))) mustBe(at('spacing'), 'a number or a {row, column} object of numbers')
 
   st().validatingTopUnit = top && kind === 'unit'
   st().timerParams = st().validatingTopUnit && Array.isArray(spec.params)
@@ -660,24 +620,10 @@ const CONFIG_SCALE_KEYS = set(
   'bandPaddingInner bandPaddingOuter barBandPaddingInner tickBandPaddingInner rectBandPaddingInner bandWithNestedOffsetPaddingInner bandWithNestedOffsetPaddingOuter offsetBandPaddingInner offsetBandPaddingOuter pointPadding continuousPadding round nice zero xReverse clamp useUnaggregatedDomain invalid minBandSize maxBandSize minFontSize maxFontSize minOpacity maxOpacity minSize maxSize minStrokeWidth maxStrokeWidth quantileCount quantizeCount framesPerSecond animationDuration',
 )
 
-/** Every property of vega-lite 6.4.3's `Config` (its JSON schema; test/validate.test.ts holds this list to the schema). */
-export const VEGA_LITE_CONFIG_KEYS = set(
-  'arc area aria autosize axis axisBand axisBottom axisDiscrete axisLeft axisPoint axisQuantitative axisRight axisTemporal axisTop axisX ' +
-    'axisXBand axisXDiscrete axisXPoint axisXQuantitative axisXTemporal axisY axisYBand axisYDiscrete axisYPoint axisYQuantitative ' +
-    'axisYTemporal background bar boxplot circle concat countTitle customFormatTypes errorband errorbar facet fieldTitle font geoshape ' +
-    'header headerColumn headerFacet headerRow image legend line lineBreak locale mark normalizedNumberFormat normalizedNumberFormatType ' +
-    'numberFormat numberFormatType padding params point projection range rect rule scale selection square style text tick timeFormat ' +
-    'timeFormatType title tooltipFormat trail view',
-)
+/** Every property of vega-lite's `Config` (the generated schema table). */
+export const VEGA_LITE_CONFIG_KEYS = schemaProperties('Config')
 
 function validateConfig(cfg: Obj, path: string): void {
-  for (const k of ['font', 'numberFormat', 'timeFormat', 'numberFormatType', 'timeFormatType', 'normalizedNumberFormat', 'lineBreak'] as const) {
-    if (cfg[k] !== undefined && typeof cfg[k] !== 'string' && !(k === 'lineBreak' && isNumOrRef(cfg[k]))) mustBe(`${path}.${k}`, 'a string')
-  }
-  if (cfg.view !== undefined && !isObj(cfg.view)) mustBe(`${path}.view`, OBJECT)
-  for (const block of ['axis', 'axisX', 'axisY', 'axisBand', 'axisLeft', 'axisRight', 'axisTop', 'axisBottom'] as const) {
-    if (isObj(cfg[block])) validateAxisValues(cfg[block] as Obj, `${path}.${block}`)
-  }
   for (const k of Object.keys(cfg)) {
     if (CONFIG_KEYS.has(k)) continue
     if (VEGA_LITE_CONFIG_KEYS.has(k)) fail(`${path}.${k}`, 'this config property is valid Vega-Lite but is not supported by @aster-charts/vl (it would be silently ignored)')
@@ -1230,20 +1176,6 @@ function validateEncoding(enc: unknown, path: string, where: 'unit' | 'layer', m
   }
 }
 
-/** The channels whose constant is a number (an opacity, a size, a width, an angle). */
-const NUMERIC_VALUE_CHANNELS: ReadonlySet<string> = new Set(['opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth', 'size', 'angle'])
-
-/** The value types of an axis (or an axis config) that a wrong type turns into a different chart (C245). */
-function validateAxisValues(axis: Obj, at: string): void {
-  if (axis.format !== undefined && typeof axis.format !== 'string' && !isObj(axis.format)) mustBe(`${at}.format`, 'a string or an object')
-  for (const k of ['labelAngle', 'titleAngle', 'tickCount', 'labelPadding', 'titlePadding', 'offset'] as const) {
-    if (axis[k] !== undefined && !isNumOrRef(axis[k]) && !(k === 'tickCount' && (typeof axis[k] === 'string' || isObj(axis[k])))) mustBe(`${at}.${k}`, 'a number or an {"expr"} reference')
-  }
-  for (const k of ['grid', 'labels', 'ticks', 'domain'] as const) {
-    if (axis[k] !== undefined && typeof axis[k] !== 'boolean') mustBe(`${at}.${k}`, 'a boolean (vega-lite reads null as unset)')
-  }
-}
-
 function validateChannelDef(ch: string, def: unknown, at: string, shared = false): void {
   if (!isObj(def)) fail(at, 'a channel definition must be an object')
   keysOf(def, ch === 'row' || ch === 'column' || ch === 'facet' ? FACET_CHANNEL_DEF_KEYS : FIELD_DEF_KEYS, at, 'channel definition')
@@ -1319,9 +1251,6 @@ function validateChannelDef(ch: string, def: unknown, at: string, shared = false
     if (def[k] !== undefined && def[k] !== null && !isObj(def[k])) mustBe(`${at}.${k}`, 'an object or null')
   }
   if (isObj(def.scale)) validateScaleDef(def.scale, `${at}.scale`)
-  if (isObj(def.axis)) validateAxisValues(def.axis, `${at}.axis`)
-  if (isObj(def.scale)) for (const k of ['padding', 'paddingInner', 'paddingOuter'] as const) if ((def.scale as Obj)[k] === null) mustBe(`${at}.scale.${k}`, 'a number or an {"expr"} reference (vega-lite reads null as unset)')
-  if (NUMERIC_VALUE_CHANNELS.has(ch) && def.value !== undefined && def.value !== null && !isNumOrRef(def.value)) mustBe(`${at}.value`, 'a number or an {"expr"} reference')
 }
 
 const SCALE_KEYS_OK = set(
