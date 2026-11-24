@@ -22,10 +22,20 @@ export class BoundsPen {
   private lx = 0
   private ly = 0
 
-  constructor(private readonly bounds: Bounds, degrees = 0) {
-    this.turn = degrees ? degrees * (Math.PI / 180) : 0
-    this.cos = this.turn ? Math.cos(this.turn) : 1
-    this.sin = this.turn ? Math.sin(this.turn) : 0
+  /**
+   * `degrees` is the item's angle as it is on the item: a truthy one turns the pen, and one that is not a number (NaN, a string
+   * such as "12px") turns every point it draws to NaN, which adds nothing -- vega's bound context does the same.
+   */
+  constructor(private readonly bounds: Bounds, degrees?: number) {
+    if (degrees) {
+      this.turn = degrees * (Math.PI / 180)
+      this.cos = Math.cos(this.turn)
+      this.sin = Math.sin(this.turn)
+    } else {
+      this.turn = 0
+      this.cos = 1
+      this.sin = 0
+    }
   }
 
   private px(x: number, y: number): number {
@@ -52,19 +62,30 @@ export class BoundsPen {
 
   closePath(): void {}
 
-  quadraticCurveTo(cx: number, cy: number, x: number, y: number): void {
-    const [c0, c1, e0, e1] = [this.px(cx, cy), this.py(cx, cy), this.px(x, y), this.py(x, y)]
-    const sx = this.lx
-    const sy = this.ly
-    // a quadratic is extreme where its derivative, linear in t, is zero
-    const tx = (sx - c0) / (sx + e0 - 2 * c0)
-    const ty = (sy - c1) / (sy + e1 - 2 * c1)
-    for (const t of [tx, ty]) {
-      if (t > 0 && t < 1) {
-        const s = 1 - t
-        this.bounds.add(s * s * sx + 2 * s * t * c0 + t * t * e0, s * s * sy + 2 * s * t * c1 + t * t * e1)
-      }
+  /** A rectangle from (x, y) by w, h: its four corners when the pen is turned, else its two opposite corners (the far one first). */
+  rect(x: number, y: number, w: number, h: number): void {
+    if (this.turn) {
+      this.visit(this.px(x + w, y), this.py(x + w, y))
+      this.visit(this.px(x + w, y + h), this.py(x + w, y + h))
+      this.visit(this.px(x, y + h), this.py(x, y + h))
+      this.visit(this.px(x, y), this.py(x, y))
+    } else {
+      this.bounds.add(x + w, y + h)
+      this.visit(x, y)
     }
+  }
+
+  quadraticCurveTo(cx: number, cy: number, x: number, y: number): void {
+    const c0 = this.px(cx, cy)
+    const c1 = this.py(cx, cy)
+    const e0 = this.px(x, y)
+    const e1 = this.py(x, y)
+    // where the derivative, linear in t, is zero, the curve's value along that axis alone widens the box along it (paired with the
+    // box's other edge, as vega's bound context does: so the arithmetic, and what an empty box does with it, is the same)
+    const tx = (this.lx - c0) / (this.lx + e0 - 2 * c0)
+    if (0 < tx && tx < 1) this.bounds.add(this.lx + (c0 - this.lx) * tx, this.bounds.y1)
+    const ty = (this.ly - c1) / (this.ly + e1 - 2 * c1)
+    if (0 < ty && ty < 1) this.bounds.add(this.bounds.x1, this.ly + (c1 - this.ly) * ty)
     this.visit(e0, e1)
   }
 
@@ -72,8 +93,11 @@ export class BoundsPen {
     const [a0, a1, b0, b1, e0, e1] = [this.px(x1, y1), this.py(x1, y1), this.px(x2, y2), this.py(x2, y2), this.px(x, y), this.py(x, y)]
     const sx = this.lx
     const sy = this.ly
-    // the curve is extreme in x or in y at the roots of either derivative: the points of the curve there
-    for (const t of [...cubicTurns(sx, a0, b0, e0), ...cubicTurns(sy, a1, b1, e1)]) this.bounds.add(cubicAt(t, sx, a0, b0, e0), cubicAt(t, sy, a1, b1, e1))
+    // the curve is extreme in x at the roots of its x derivative, and in y at those of its y derivative: its value along that axis
+    // alone widens the box along it (paired with the box's other edge, as vega's bound context does; the point of the curve there
+    // would add the other coordinate as computed at that t, which can differ from the box's in the last digit)
+    for (const t of cubicTurns(sx, a0, b0, e0)) this.bounds.add(cubicAt(t, sx, a0, b0, e0), this.bounds.y1)
+    for (const t of cubicTurns(sy, a1, b1, e1)) this.bounds.add(this.bounds.x1, cubicAt(t, sy, a1, b1, e1))
     this.visit(e0, e1)
   }
 

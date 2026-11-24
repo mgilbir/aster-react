@@ -770,3 +770,26 @@ export const PRIMITIVE_TUPLE: unique symbol = Symbol('aster.primitiveTuple')
 export function tupleDatum(t: unknown): unknown {
   return t !== null && typeof t === 'object' && PRIMITIVE_TUPLE in t ? (t as { [PRIMITIVE_TUPLE]: unknown })[PRIMITIVE_TUPLE] : t
 }
+
+/**
+ * Where a group item's content is drawn, relative to the frame around it: vega's renderers translate by `x || 0`, `y || 0` as the
+ * item holds them -- the SVG's `translate(x,y)`, the canvas's `translate(x, y)` -- and both drop a translate that is not two finite
+ * numbers (an SVG transform that does not parse is no transform; a canvas ignores a non-finite translate). So a group whose x is an
+ * infinity, or a string that is not a number, draws its content at the origin of the frame around it, whatever its y.
+ */
+export function drawnOffset(g: { x?: unknown; y?: unknown }): [number, number] {
+  const x = +((g.x || 0) as number)
+  const y = +((g.y || 0) as number)
+  return Number.isFinite(x) && Number.isFinite(y) ? [x, y] : [0, 0]
+}
+
+/**
+ * A group's width or height as vega's renderers read it for the frame of what it holds (a clip, the frame a mark's `clip` cuts to):
+ * `width || 0` as a number -- a missing or NaN size is 0, a numeric string its number, a negative or infinite size stays one (a
+ * canvas clips to a negative box; an SVG `rect` of negative or infinite size draws nothing, so its clip holds nothing). A group that
+ * is not an item of a group mark (a guide's, which has no size of its own) is the frame around it: `fallback`.
+ */
+export function frameSize(g: { width?: unknown; height?: unknown; _scope?: unknown; contentClip?: unknown }, side: 'width' | 'height', fallback: number): number {
+  const v = g[side]
+  return v === undefined && g._scope !== true && g.contentClip !== true ? fallback : +((v || 0) as number)
+}

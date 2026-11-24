@@ -51,14 +51,17 @@ function clientAffine(el: Element): [number, number, number, number, number, num
   return [1 / sx, 0, 0, 1 / sy, -rect.left / sx - (el.clientLeft || 0), -rect.top / sy - (el.clientTop || 0)]
 }
 
-/** `getEl` names the element to map into (the chart's svg or canvas); none yet: the point is returned as it is. */
+/**
+ * `getEl` names the element to map into (the chart's svg or canvas). With none yet there is no frame to map into: the point is
+ * (NaN, NaN), which is over nothing -- a client coordinate taken for a view coordinate would pick what happens to lie there.
+ */
 export function createPointMapper(getEl: () => HostElement | null): PointMapper {
   let m: [number, number, number, number, number, number] | null = null
   return {
     map(clientX, clientY) {
       if (m == null) {
         const el = getEl()
-        if (el == null) return [clientX, clientY]
+        if (el == null) return [NaN, NaN]
         m = clientAffine(el)
       }
       return [m[0] * clientX + m[2] * clientY + m[4], m[1] * clientX + m[3] * clientY + m[5]]
