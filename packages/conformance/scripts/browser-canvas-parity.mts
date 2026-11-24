@@ -73,11 +73,10 @@ function loadCorpus(): Entry[] {
 }
 
 // Entries the pixel gate cannot judge because the ORACLE's own output is undefined, with the
-// evidence. There is no other exclusion: every corpus entry (including URL data and images)
+// evidence (none today: `area-gradient` was one while its fill was the string 'gradient'; it now holds a real gradient object).
+// There is no other exclusion: every corpus entry (including URL data and images)
 // is compared.
-const SKIP = new Map<string, string>([
-  ['area-gradient', "the spec's fill is the string 'gradient' (not a colour, not a gradient object): vega's canvas assigns fillStyle='gradient', which a canvas ignores (invalid colour strings leave the previous value), so the pixels vega paints depend on whatever fillStyle earlier items left behind, not on the spec. Evidence: view.scenegraph() item.fill === 'gradient'; vega's canvas shows no area at all while aster shows a white one. The SVG gate compares this entry's markup strictly."],
-])
+const SKIP = new Map<string, string>([])
 const synthetic: Entry[] = [
   {
     name: 'canvas-custom-font',
