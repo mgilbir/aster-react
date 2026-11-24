@@ -1799,8 +1799,9 @@ function ChartView({
       {!failed && bindDefs.length > 0 && (
         <SignalBinds
           // (React keeps the server's attributes where a hydrated element's differ, and does not patch them: the parts drawn
-          // from the scene are made anew once hydration is over, from the client's scene; see the svg's patch, C45)
-          key={hydrating ? 'server' : 'client'}
+          // from the scene are made anew once hydration is over, from the client's scene; see the svg's patch, C45. Each sibling
+          // has keys of its own: two siblings with one key are elements React cannot tell apart, and it adds one on every render)
+          key={hydrating ? 'binds-server' : 'binds-client'}
           idPrefix={chartId}
           signals={bindDefs}
           values={boundValues}
@@ -1809,7 +1810,7 @@ function ChartView({
         />
       )}
       {!failed && a11yTree != null && (
-        <A11yOverlay key={hydrating ? 'server' : 'client'} tree={a11yTree} tabStopId={tabStopId} onNodeKeyDown={handleA11yKeyDown} onNodeFocus={handleA11yFocus} onNodeBlur={handleA11yBlur} />
+        <A11yOverlay key={hydrating ? 'a11y-server' : 'a11y-client'} tree={a11yTree} tabStopId={tabStopId} onNodeKeyDown={handleA11yKeyDown} onNodeFocus={handleA11yFocus} onNodeBlur={handleA11yBlur} />
       )}
       {tooltipEnabled && <ChartTooltip store={tooltipStore} renderTooltip={renderTooltip} interaction={interaction} container={tooltipContainer} />}
     </div>

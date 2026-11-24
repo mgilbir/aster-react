@@ -1016,25 +1016,41 @@ const MODULES: Record<VariantName, Array<[RegExp, boolean, string]>> = {
 }
 
 /**
- * Issue #128: a chart without size props fills its container with its whole box (padding, guides and the bound inputs
- * under it included), so a container whose height is the chart's own (a block <div>) keeps it instead of growing on
- * every measurement, and a container of fixed size is filled exactly.
+ * Issue #128 and DECISIONS Q11: a chart is the size its spec makes it, in any container, and `width` / `height` `"container"`
+ * fill the element in that dimension with the chart's whole box (padding, guides; the bound inputs under it are not the
+ * chart's). Nothing the chart draws feeds back into what it measures: a container whose size is the chart's own (a block
+ * <div> with no height, a shrink-to-fit inline-block or float) keeps it on every measurement, on every shell and renderer,
+ * in each dimension, and a container of fixed size is filled exactly.
  */
-async function sizingSuite(page: Page): Promise<void> {
-  const heights = async (frames: number): Promise<number[]> => {
-    const out: number[] = []
+async function sizingSuite(page: Page, renderers: readonly Renderer[]): Promise<void> {
+  const mountIn = async (s: Record<string, unknown>, props: Record<string, unknown>, css: string): Promise<void> => {
+    await page.evaluate(([sp, pr, hc]) => (window as never as { __mount: (...a: unknown[]) => void }).__mount(sp, pr, [], [], hc), [s, props, css] as const)
+    await page.waitForSelector(props.renderer === 'canvas' ? '#chart-host canvas' : 'svg .mark-symbol path')
+  }
+  // the container's box after each of `frames` frames (two animation frames each: a measurement and the render it causes)
+  const boxes = async (frames: number): Promise<string[]> => {
+    const out: string[] = []
     for (let i = 0; i < frames; i++) {
-      out.push(await page.evaluate(() => new Promise<number>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(document.getElementById('chart-host')!.getBoundingClientRect().height))))))
+      out.push(await page.evaluate(() => new Promise<string>((done) => requestAnimationFrame(() => requestAnimationFrame(() => {
+        const r = document.getElementById('chart-host')!.getBoundingClientRect()
+        done(`${r.width}x${r.height}`)
+      })))))
     }
     return out
   }
+  // the chart's own box (its svg or canvas) and the bound inputs' height under it
+  const chartBox = (): Promise<{ w: number; h: number; binds: number; rows: number }> => page.evaluate(() => {
+    const el = document.querySelector('#chart-host svg, #chart-host canvas')!.getBoundingClientRect()
+    const binds = document.querySelectorAll('#chart-host [data-aster-binds]')
+    return { w: el.width, h: el.height, binds: binds[0]?.getBoundingClientRect().height ?? 0, rows: binds.length }
+  })
+  const steady = (xs: string[]): boolean => xs.length > 0 && !xs[0]!.endsWith('x0') && xs.every((x) => x === xs[0])
   const pad = spec({ autosize: 'pad' })
   const unsized = { ariaLabel: 'unsized' }
   // a block container with no height: its height is the chart's
-  await page.evaluate(([sp, pr]) => (window as never as { __mount: (...a: unknown[]) => void }).__mount(sp, pr, [], [], 'width:520px'), [pad, unsized] as const)
-  await page.waitForSelector('svg .mark-symbol path')
-  const block = await heights(12)
-  check(block[0]! > 0 && block.every((h) => h === block[0]), `a block container with no height keeps the chart's height (${JSON.stringify(block)})`)
+  await mountIn(pad, unsized, 'width:520px')
+  const block = await boxes(12)
+  check(steady(block), `a block container with no height keeps the chart's height (${JSON.stringify(block)})`)
   // a spec that sizes its height from the container (vega-lite's height: "container"), in the same block container
   // (as vega-lite compiles it: no top-level height, a `height` signal that reads the container)
   const fromContainer = spec({
@@ -1042,29 +1058,42 @@ async function sizingSuite(page: Page): Promise<void> {
     autosize: { type: 'fit-y', contains: 'padding' },
     signals: [...(pad.signals as unknown[]), { name: 'height', init: 'isFinite(containerSize()[1]) ? containerSize()[1] : 300' }],
   })
-  await page.evaluate(([sp, pr]) => (window as never as { __mount: (...a: unknown[]) => void }).__mount(sp, pr, [], [], 'width:520px'), [fromContainer, unsized] as const)
-  await page.waitForSelector('svg .mark-symbol path')
-  const fit = await heights(12)
-  check(fit[0]! > 0 && fit.every((h) => h === fit[0]), `a container-sized height in a block container does not creep (${JSON.stringify(fit)})`)
-  // a container of fixed size: the chart's box is the container's, less the bound inputs under it
-  await page.evaluate(([sp, pr]) => (window as never as { __mount: (...a: unknown[]) => void }).__mount(sp, pr, [], [], 'position:relative;width:520px;height:340px'), [pad, unsized] as const)
-  await page.waitForSelector('svg .mark-symbol path')
-  await heights(4)
-  const box = await page.evaluate(() => {
-    const svg = document.querySelector('#chart-host svg')!.getBoundingClientRect()
-    const binds = document.querySelector('#chart-host [data-aster-binds]')?.getBoundingClientRect().height ?? 0
-    return { w: svg.width, h: svg.height, binds }
-  })
-  check(box.w === 520 && Math.abs(box.h + box.binds - 340) < 1, `a 520x340 container is filled exactly: svg ${box.w}x${box.h} + bound inputs ${box.binds}`)
+  await mountIn(fromContainer, unsized, 'width:520px')
+  const fit = await boxes(12)
+  check(steady(fit), `a container-sized height in a block container does not creep (${JSON.stringify(fit)})`)
+  // a chart that fills a dimension of an element whose size in it is the chart's own: a block <div> with no height (its height),
+  // an inline-block or a float (both dimensions); one row of bound inputs throughout
+  for (const renderer of renderers) {
+    for (const fill of [{ height: 'container' }, { width: 'container' }, { width: 'container', height: 'container' }]) {
+      for (const css of ['width:520px', 'display:inline-block', 'float:left']) {
+        await mountIn(pad, { ...unsized, ...fill, renderer }, css)
+        const seen = await boxes(12)
+        const { rows } = await chartBox()
+        check(steady(seen) && rows === 1, `${renderer}: ${JSON.stringify(fill)} in a container sized by the chart (${css}) does not creep (${JSON.stringify(seen)}, ${rows} row(s) of inputs)`)
+      }
+    }
+    // a container of fixed size: without size props the chart is the spec's own size whatever the container (Q11), with
+    // width and height "container" it fills it exactly, less the bound inputs under it
+    await mountIn(pad, { ...unsized, renderer }, 'position:relative;width:520px;height:340px')
+    await boxes(4)
+    const own = await chartBox()
+    await mountIn(pad, { ...unsized, renderer }, 'position:relative;width:700px;height:500px')
+    await boxes(4)
+    const ownLarger = await chartBox()
+    check(own.w === ownLarger.w && own.h === ownLarger.h && own.w < 520 && own.h !== 340 - own.binds, `${renderer}: without size props a literal size draws at that size in any container (${own.w}x${own.h} in 520x340 and ${ownLarger.w}x${ownLarger.h} in 700x500)`)
+    await mountIn(pad, { ...unsized, renderer, width: 'container', height: 'container' }, 'position:relative;width:520px;height:340px')
+    await boxes(4)
+    const box = await chartBox()
+    check(box.w === 520 && Math.abs(box.h + box.binds - 340) < 1 && box.rows === 1, `${renderer}: width and height "container" fill a 520x340 container exactly: ${box.w}x${box.h} + bound inputs ${box.binds}`)
+  }
   // a spec whose autosize is `none` fixes its size (the chart-bench frame: a 824 x 536 view and padding that make a 900 x 600 box):
   // in a measured container larger than the box, without size props, it is drawn at its own size and origin, as vega-embed draws
   // it, not refitted to the container (#hover-correctness: the plot used to shrink to 786 x 499 at 92,25)
   const frame = {
     ...spec({ autosize: 'none' }), width: 824, height: 536, padding: { top: 20, right: 20, bottom: 44, left: 56 },
   }
-  await page.evaluate(([sp, pr]) => (window as never as { __mount: (...a: unknown[]) => void }).__mount(sp, pr, [], [], 'position:relative;width:1000px;height:700px'), [frame, unsized] as const)
-  await page.waitForSelector('svg .mark-symbol path')
-  await heights(4)
+  await mountIn(frame, unsized, 'position:relative;width:1000px;height:700px')
+  await boxes(4)
   const fixedBox = await page.evaluate(() => {
     const svg = document.querySelector('#chart-host svg')!
     return { w: svg.getAttribute('width'), h: svg.getAttribute('height'), origin: svg.querySelector(':scope > g')?.getAttribute('transform') }
@@ -1237,7 +1266,7 @@ try {
     page.on('pageerror', (e) => { failures++; console.log(`  FAIL page error: ${e.message}`) })
     await page.setContent('<!doctype html><html><body style="margin:0;font:12px sans-serif"><div id="root"></div></body></html>')
     await page.addScriptTag({ content: code })
-    await sizingSuite(page)
+    await sizingSuite(page, variant === 'Chart' ? ['svg', 'canvas'] : ['svg'])
     if (variant === 'SvgChart') await plainSuite(page)
     else {
       // (the canvas renderer is <Chart>'s: every interaction check runs on it too)
