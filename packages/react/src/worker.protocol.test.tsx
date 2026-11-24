@@ -7,9 +7,10 @@ import { AsterLimitError, createChartStream, renderSceneToSvg, type ChartStream 
 import {
   cloneableScene, handleChartWorkerRequest, handleChartWorkerStreamRequest, handleWorkerMessage,
   registerWorkerTextMetrics, useChartWorker,
-  type ChartWorkerRequest, type ChartWorkerResponse, type ChartWorkerStreamRequest, type ChartWorkerStreamResponse,
+  type ChartWorkerResponse, type ChartWorkerStreamResponse,
 } from './worker'
 import { useChartWorkerStream } from './useChartWorkerStream'
+import { FakeWorker } from './testing/fake-worker'
 
 const specOf = (n: number, extra: Record<string, unknown> = {}): never => ({
   $schema: 'https://vega.github.io/schema/vega/v6.json',
@@ -22,34 +23,6 @@ const specOf = (n: number, extra: Record<string, unknown> = {}): never => ({
   marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, size: { value: 20 } } } }],
   ...extra,
 }) as never
-
-/** A worker that answers both protocols, crossing a real structured-clone boundary. */
-class FakeWorker {
-  listeners = new Map<string, Set<(event: unknown) => void>>()
-  streams = new Map<number, ChartStream>()
-  posted: Array<{ id: number; kind?: string; op?: string; streamId?: number } & Record<string, unknown>> = []
-  held: Array<() => void> = []
-  hold = false
-  terminated = false
-  addEventListener(type: string, fn: (event: unknown) => void): void {
-    if (!this.listeners.has(type)) this.listeners.set(type, new Set())
-    this.listeners.get(type)!.add(fn)
-  }
-  removeEventListener(type: string, fn: (event: unknown) => void): void { this.listeners.get(type)?.delete(fn) }
-  emit(type: string, event: unknown): void { for (const fn of this.listeners.get(type) ?? []) fn(event) }
-  postMessage(request: ChartWorkerRequest | ChartWorkerStreamRequest): void {
-    const wire = structuredClone(request) as typeof request & { kind?: string }
-    this.posted.push(wire as never)
-    const respond = (): void => {
-      const response = handleWorkerMessage(wire, this.streams)
-      if (response) queueMicrotask(() => this.emit('message', { data: structuredClone(response) }))
-    }
-    if (this.hold) this.held.push(respond)
-    else respond()
-  }
-  release(): void { for (const r of this.held.splice(0)) r() }
-  terminate(): void { this.terminated = true }
-}
 
 registerWorkerTextMetrics('huge', { measure: () => 500 })
 
@@ -229,6 +202,56 @@ describe('worker hook lifecycle', () => {
       expect(m.result().error).toBeInstanceOf(Error)
       document.body.innerHTML = ''
     }
+  })
+
+  it('answers that arrive out of order: the latest request\'s answer is the one shown', async () => {
+    const fake = new FakeWorker()
+    fake.hold = true
+    let width = 200
+    const m = mountProbe(() => useChartWorker(specOf(3), { worker: fake as unknown as Worker, width }))
+    await act(async () => { await wait() })
+    width = 250
+    await m.rerender()
+    expect(fake.held).toHaveLength(2)
+    // the second request is answered first, the first (stale) one after it
+    await act(async () => { fake.hold = false; fake.release('reverse'); await wait() })
+    expect(m.result().pending).toBe(false)
+    expect(m.result().svg).toContain('width="250"')
+    expect(m.result().svg).not.toContain('width="200"')
+  })
+
+  it('a stream flush the worker holds is delivered when it answers, in the order the pushes were made', async () => {
+    const fake = new FakeWorker()
+    const m = mountProbe(() => useChartWorkerStream(specOf(2), { worker: fake as unknown as Worker, autoFlush: false }))
+    await act(async () => { await wait() })
+    fake.hold = true
+    let accepted = false
+    await act(async () => {
+      accepted = m.result().push({ append: { t: [{ x: 5, y: 5 }] } })
+      m.result().flush()
+      await wait()
+    })
+    // the worker has the flush and has not answered: the chart still shows the rows it had, and the push said "delivered"
+    expect(accepted).toBe(true)
+    expect(fake.posted.filter((p) => p.op === 'flush')).toHaveLength(1)
+    expect((m.result().scene!.items[0] as { items: unknown[] }).items).toHaveLength(2)
+    await act(async () => { fake.hold = false; fake.release(); await wait() })
+    expect((m.result().scene!.items[0] as { items: unknown[] }).items).toHaveLength(3)
+  })
+
+  it('a silent worker leaves the request pending; unmounting while it is silent, and a late answer after, update nothing', async () => {
+    const fake = new FakeWorker()
+    fake.silent = true
+    const m = mountProbe(() => useChartWorker(specOf(3), { worker: fake as unknown as Worker }))
+    await act(async () => { await wait() })
+    expect(fake.posted).toHaveLength(1)
+    expect(m.result().pending).toBe(true)
+    act(() => { m.root.unmount() })
+    // (the act-environment setup fails this test if the late answer sets state on the unmounted hook)
+    const request = fake.posted[0]!
+    fake.silent = false
+    await act(async () => { fake.emit('message', { data: { id: request.id, error: { name: 'Error', message: 'late' } } }); await wait() })
+    expect(m.result().pending).toBe(true)
   })
 
   it('a worker crash fails the stream hook too', async () => {
