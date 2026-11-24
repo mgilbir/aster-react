@@ -398,12 +398,18 @@ describe('per-datum differential update', () => {
     expect(after[0]).not.toBe(before[0])
   })
 
-  it('answers as a fresh chart does when a changed index is out of range, negative or not an index', () => {
+  it('answers as a fresh chart does when a changed index is out of range or negative; one that is no whole number is refused (C232)', () => {
     const rows = [{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }]
     const next = [{ x: 1, y: 1 }, { x: 5, y: 2 }, { x: 3, y: 3 }]
-    // the data are the same length, and the hint names the row that changed (1) and others that are not there (or not rows at
-    // all): the row that did change must still be drawn as it is, and nothing thrown
-    for (const changed of [[1, 7], [-1, 1], [1, 1.5], [Number.NaN, 1], [1, 3], [7, 1, 1]]) {
+    // the data are the same length, and the hint names the row that changed (1) and others that are not there: the row that did
+    // change must still be drawn as it is, and nothing thrown. An index that is no whole number (1.5, NaN) is a malformed hint:
+    // refused before anything runs, naming the dataset
+    for (const bad of [[1, 1.5], [Number.NaN, 1]]) {
+      const chart = compile(spec)
+      evaluateChart(chart, { data: { t: rows } })
+      expect(() => evaluateChart(chart, { data: { t: next }, dataChanges: { t: bad } }), JSON.stringify(bad)).toThrow(/dataChanges names dataset "t".*not a row index/)
+    }
+    for (const changed of [[1, 7], [-1, 1], [1, 3], [7, 1, 1]]) {
       const chart = compile(spec)
       evaluateChart(chart, { data: { t: rows } })
       const inc = evaluateChart(chart, { data: { t: next }, dataChanges: { t: changed } })
