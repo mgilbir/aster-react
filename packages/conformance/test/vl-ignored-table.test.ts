@@ -80,6 +80,9 @@ describe('@aster-charts/vl does with each mark-definition property what vega-lit
         const ours = aster(c.spec)
         if ('refused' in ours) {
           if (!(ours.refused instanceof VLCompileError)) failures.push(`${where}: threw ${String(ours.refused)}`)
+          // (a value the Vega-Lite JSON schema excludes - the probe tries numbers beyond a property's range - is refused by the schema check, which
+          // runs before any mark is read; vega-lite does not validate, so what it does with the value says nothing about this table)
+          else if (/\(Vega-Lite [\d.]+ schema\)$/.test((ours.refused as Error).message)) continue
           else if (CONTEXTUAL.has(c.prop) && c.mark in { bar: 1, rect: 1, tick: 1 } && c.effect === 'ignored' && !/places no (horizontal|vertical) position/.test((ours.refused as Error).message)) failures.push(`${where}: refused, but vega-lite reads it only where the chart bins or sizes a band, and ignores it here: ${(ours.refused as Error).message}`)
           // (a value outside vega-lite's JSON schema, `opacity: 8`, is refused by the schema check a06d added, whichever mark it is on: that is not the mark-definition table's refusal)
           else if (listed.has(`${c.mark} ${c.prop}`) && !/\(Vega-Lite [\d.]+ schema\)$/.test((ours.refused as Error).message)) failures.push(`${where}: refused, but vega-lite ${c.effect === 'used' ? 'uses' : 'ignores or forwards'} it here and the table lists it: ${(ours.refused as Error).message}`)
