@@ -977,8 +977,9 @@ export function placeLegendStack(
     : orient === 'top-right' ? { x: width - offset, y: offset, column: 'end' }
     : orient === 'bottom-left' ? { x: offset, y: height - offset, row: 'end' }
     : orient === 'bottom-right' ? { x: width - offset, y: height - offset, column: 'end', row: 'end' }
-    // right, and any orient not named
-    : { x: Math.ceil(sideBounds.x2) + offset, y: alongY, row: anchor }
+    : orient === 'right' ? { x: Math.ceil(sideBounds.x2) + offset, y: alongY, row: anchor }
+    // (an orient vega does not know has no anchor: the block is laid out at the origin, as vega-view-transforms' legendParams leaves it)
+    : {}
 
   // a legend is as big as its frame (flush) or as everything it draws (full), measured from its own origin
   const whole = setting('bounds', 'flush') !== 'flush'
