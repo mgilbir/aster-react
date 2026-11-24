@@ -7,6 +7,10 @@
     "react": {
       "vega": 93,
       "vl": 627
+    },
+    "seeded": {
+      "vega": 0,
+      "vl": 92
     }
   },
   "maxUnverifiable": {
@@ -17,6 +21,10 @@
     "react": {
       "vega": 0,
       "vl": 0
+    },
+    "seeded": {
+      "vega": 0,
+      "vl": 9
     }
   },
   "swap": {

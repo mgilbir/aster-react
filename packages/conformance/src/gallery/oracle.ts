@@ -25,7 +25,8 @@ const collector = {
 export const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 
 
-export async function vegaSvg(spec: Record<string, unknown>): Promise<string> {
+/** `inspect` reads the view once it has run (its datasets), before it is finalized. */
+export async function vegaSvg(spec: Record<string, unknown>, inspect?: (view: vega.View) => void): Promise<string> {
   // vega-loader's Node build requests through the GLOBAL fetch (the network), whatever options say; serve the gallery from disk instead
   // (mode 'http': with a baseURL a relative uri would otherwise still be read as a FILE on Node)
   const loader = vega.loader({ baseURL: BASE_URL, mode: 'http' })
@@ -39,6 +40,7 @@ export async function vegaSvg(spec: Record<string, unknown>): Promise<string> {
   view.logger(collector as never)
   try {
     await settleWithin(view.runAsync(), 'the oracle (vega runAsync)')
+    inspect?.(view)
     view.finalize() // the first frame: no timer tick between the run and the serialisation
     return await settleWithin(view.toSVG(), 'the oracle (vega toSVG)')
   } finally {
