@@ -147,7 +147,7 @@ const fns: Record<string, (...args: any[]) => any> = {
   dsvParseRows: (text: string) => dsvFormat(',').parseRows(text),
   dsvFormat: (rows: ArrayLike<Record<string, unknown>>) => dsvFormat(',').format(rows),
   dsvFormatRow: (row: readonly unknown[]) => dsvFormat(',').formatRow(row),
-  topoFeatureCollection: (topology: never, name: string) => topoFeature(topology, (topology as { objects: Record<string, never> }).objects[name]),
+  topoFeatureCollection: (topology: never, name: string) => topoFeature(topology, (topology as { objects: Record<string, never> }).objects[name]!),
   topoFeatureNamed: (topology: never, name: string) => topoFeature(topology, name),
   topoMesh: (topology: never) => topoMesh(topology),
 }
