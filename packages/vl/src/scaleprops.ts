@@ -40,6 +40,10 @@ const ROWS = new Map<string, Row>([
   // the range
   ['round', { types: only(...CONTINUOUS, ...BANDED) }],
   ['padding', { types: only(...CONTINUOUS, ...BANDED) }],
+  // (scale/properties.ts scaleTypeSupportProperty: the ends of a range are for a scale whose range is a pair of positions; a
+  // discretizing or ordinal scale takes its range whole)
+  ['rangeMin', { types: only(...CONTINUOUS, ...BANDED) }],
+  ['rangeMax', { types: only(...CONTINUOUS, ...BANDED) }],
   ['paddingInner', { types: only('band') }],
   ['paddingOuter', { types: only(...BANDED) }],
   ['align', { types: only(...BANDED) }],

@@ -116,6 +116,17 @@ function operand(v: unknown, unit: string | undefined, temporal: boolean): { exp
   return { expr: partOfDate ? dateTimeToExpr({ [unit]: v }) : `datetime(${JSON.stringify(v)})`, time }
 }
 
+/**
+ * valueArray (channeldef.ts): the values of an axis or a legend, each as the signal that makes it where the field is a time (a date, a
+ * DateTime, or a part of one for a time unit) and as it is anywhere else.
+ */
+export function valueArray(values: readonly unknown[], type: string | undefined, unit: string | undefined): unknown[] {
+  return values.map((v) => {
+    const { expr } = operand(v, unit, type === 'temporal')
+    return expr === undefined ? v : { signal: expr }
+  })
+}
+
 /** A value of a scale's domain: a time as a `datetime(...)`, a signal or an expression as itself, anything else as JSON. */
 export function domainValueExpr(v: unknown, type: string | undefined, unit: string | undefined): string {
   return operand(v, unit, type === 'temporal').expr ?? JSON.stringify(v)

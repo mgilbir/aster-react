@@ -40,8 +40,8 @@ const PINNED: Record<string, Record<string, string>> = {
   paddingInner: { linear: '-', log: '-', pow: '-', sqrt: '-', symlog: '-', identity: '-', sequential: '-', time: '-', utc: '-', quantile: '-', quantize: '-', threshold: '-', 'bin-ordinal': '-', ordinal: '-', point: '-', band: '*' },
   paddingOuter: { linear: '-', log: '-', pow: '-', sqrt: '-', symlog: '-', identity: '-', sequential: '-', time: '-', utc: '-', quantile: '-', quantize: '-', threshold: '-', 'bin-ordinal': '-', ordinal: '-', point: '*', band: '*' },
   range: { linear: '*', log: '*', pow: '*', sqrt: '*', symlog: '*', identity: '*', sequential: '*', time: '*', utc: '*', quantile: '*', quantize: '*', threshold: '*', 'bin-ordinal': '*', ordinal: '*', point: '*', band: '*' },
-  rangeMax: { linear: '*', log: '*', pow: '*', sqrt: '*', symlog: '*', identity: '*', sequential: '*', time: '*', utc: '*', quantile: '*', quantize: '*', threshold: '*', 'bin-ordinal': '*', ordinal: '*', point: '*', band: '*' },
-  rangeMin: { linear: '*', log: '*', pow: '*', sqrt: '*', symlog: '*', identity: '*', sequential: '*', time: '*', utc: '*', quantile: '*', quantize: '*', threshold: '*', 'bin-ordinal': '*', ordinal: '*', point: '*', band: '*' },
+  rangeMax: { linear: '*', log: '*', pow: '*', sqrt: '*', symlog: '*', identity: '-', sequential: '-', time: '*', utc: '*', quantile: '-', quantize: '-', threshold: '-', 'bin-ordinal': '-', ordinal: '-', point: '*', band: '*' },
+  rangeMin: { linear: '*', log: '*', pow: '*', sqrt: '*', symlog: '*', identity: '-', sequential: '-', time: '*', utc: '*', quantile: '-', quantize: '-', threshold: '-', 'bin-ordinal': '-', ordinal: '-', point: '*', band: '*' },
   reverse: { linear: '*', log: '*', pow: '*', sqrt: '*', symlog: '*', identity: '*', sequential: '*', time: '*', utc: '*', quantile: '*', quantize: '*', threshold: '*', 'bin-ordinal': '*', ordinal: '*', point: '*', band: '*' },
   round: { linear: '*', log: '*', pow: '*', sqrt: '*', symlog: '*', identity: '-', sequential: '-', time: '*', utc: '*', quantile: '-', quantize: '-', threshold: '-', 'bin-ordinal': '-', ordinal: '-', point: '*', band: '*' },
   scheme: { linear: 'color,fill,stroke', log: 'color,fill,stroke', pow: 'color,fill,stroke', sqrt: 'color,fill,stroke', symlog: 'color,fill,stroke', identity: '-', sequential: 'color,fill,stroke', time: 'color,fill,stroke', utc: 'color,fill,stroke', quantile: 'color,fill,stroke', quantize: 'color,fill,stroke', threshold: 'color,fill,stroke', 'bin-ordinal': 'color,fill,stroke', ordinal: 'color,fill,stroke', point: '-', band: '-' },
@@ -76,6 +76,7 @@ const FIELD: Record<string, string> = { quantitative: 'q', temporal: 't', nomina
 const ASK: Record<string, unknown[]> = {
   domainMax: [20], domainMin: [0], domainMid: [5], reverse: [true], round: [true], clamp: [true], nice: [5, false], zero: [true, false],
   exponent: [2], base: [10], constant: [1], padding: [0.2], paddingInner: [0.3], paddingOuter: [0.1], align: [0.7], bins: [[0, 5, 10, 15]], scheme: ['blues'], interpolate: ['rgb', 'hcl'],
+  rangeMin: [3], rangeMax: [50],
 }
 
 function spec(channel: string, type: string, scale: Record<string, unknown>): Record<string, unknown> {
@@ -102,11 +103,13 @@ describe('scalePropApplies is what vega-lite does', () => {
       if (!base || base.type !== type) continue
       it(`${type} on ${channel}`, () => {
         for (const [prop, values] of Object.entries(ASK)) {
+          // (the ends of a range are for a band or a point scale too, but its range is a step, and a colour scale's range is a scheme: nothing of them can be seen in the scale; the forwarding differential asks them in a colour of their own)
+          if ((prop === 'rangeMin' || prop === 'rangeMax') && (type === 'band' || type === 'point' || channel === 'color' || channel === 'fill' || channel === 'stroke')) continue
           let applied = false
           for (const value of values) {
             const got = compileScale(channel, type, { type, [prop]: value })
             if (!got) continue
-            const read = (s: any): unknown => (prop === 'scheme' ? s.range?.scheme : s[prop])
+            const read = (s: any): unknown => (prop === 'scheme' ? s.range?.scheme : prop === 'rangeMin' ? (Array.isArray(s.range) && s.range.length === 2 ? s.range[0] : undefined) : prop === 'rangeMax' ? (Array.isArray(s.range) && s.range.length === 2 ? s.range[1] : undefined) : s[prop])
             if (JSON.stringify(read(got)) !== JSON.stringify(read(base)) && read(got) !== undefined) applied = true
           }
           expect(scalePropApplies(channel, type, prop), `${prop} on ${type} of ${channel}`).toBe(applied)

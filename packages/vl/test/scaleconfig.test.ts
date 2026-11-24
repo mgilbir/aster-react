@@ -8,7 +8,8 @@ const marksUpdate = (vg: any): any => {
   const walk = (m: any): any => (m.marks ? walk(m.marks[m.marks.length - 1]) : m)
   return walk(vg.marks[vg.marks.length - 1]).encode.update
 }
-const transforms = (vg: any): any[] => vg.data.find((d: any) => d.name === 'data_0').transform
+// (a dataset with nothing to do - no cast, no filter - is the source itself, as vega-lite makes it: the transforms are then none)
+const transforms = (vg: any): any[] => vg.data.find((d: any) => d.name === 'data_0')?.transform ?? []
 
 describe('config.scale (vega-lite scale/range.ts and properties.ts)', () => {
   const pt = (scaleCfg: unknown, encoding: unknown = {}, mark: unknown = 'point') =>
@@ -103,7 +104,7 @@ describe('invalid values (mark.invalid)', () => {
     const y = marksUpdate(vg).y
     expect(y[0].test).toBe('!isValid(datum["y"]) || !isFinite(+datum["y"])')
     expect(y[1]).toEqual({ scale: 'y', field: 'y' })
-    expect(compileFrozen(spec('point', null)).data[1].transform.some((t: any) => t.type === 'filter')).toBe(false)
+    expect(transforms(compileFrozen(spec('point', null))).some((t: any) => t.type === 'filter')).toBe(false)
   })
 
   it('config.scale.invalid gives a channel its own value for invalid data', () => {
