@@ -7,7 +7,7 @@
  * transform that throws publishes no rows (its marks are never built), a sort that throws
  * leaves data order. The engine used to swallow the first, throw on the second and swallow
  * the third. Each case is rendered by real vega (its logger captured) and by the engine
- * (RuntimeInput.logger captured): the SVG must be identical and BOTH must have reported the error.
+ * (RuntimeInput.logger captured): the SVG must be identical and BOTH must have reported the same errors (number and message).
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
@@ -81,7 +81,7 @@ describe('items left unencoded by an aborted run draw what vega draws', () => {
     const want = await oracle(spec)
     expect(want.errors.length).toBeGreaterThan(0)
     const got = engine(spec)
-    expect(got.errors.length).toBeGreaterThan(0)
+    expect(got.errors.map(String)).toEqual(want.errors)
     expect(diffCanonical(canonicalizeSvg(want.svg), canonicalizeSvg(got.svg))).toEqual([])
   })
 })
@@ -93,6 +93,8 @@ describe('recovered errors are logged and the render carries on, like vega', () 
     const got = engine(spec) // must not throw
     expect(got.errors.length, 'the engine must report it too').toBeGreaterThan(0)
     expect(got.errors[0]).toBeInstanceOf(Error)
+    // the same errors, in the same number and words (not only "some error was reported")
+    expect(got.errors.map(String)).toEqual(want.errors)
     expect(diffCanonical(canonicalizeSvg(want.svg), canonicalizeSvg(got.svg))).toEqual([])
   })
 

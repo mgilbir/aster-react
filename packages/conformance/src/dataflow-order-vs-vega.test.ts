@@ -16,7 +16,7 @@ async function vegaSvg(spec: Spec): Promise<{ svg: string; errors: unknown[] }> 
   const errors: unknown[] = []
   const logger = { level: () => logger, error: (...a: unknown[]) => { errors.push(a); return logger }, warn: () => logger, info: () => logger, debug: () => logger }
   const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(
-    vega.parse(spec as never), { renderer: 'none', logger })
+    vega.parse(structuredClone(spec) as never), { renderer: 'none', logger })
   try {
     await view.runAsync()
     return { svg: await view.toSVG(), errors }
