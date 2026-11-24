@@ -401,8 +401,11 @@ supply (`test`, `regexp`, `replace`/`split` with a RegExp or a `/literal/`,
    10 000 and of 1 000 characters, either ran within the 100 ms or was refused before it ran; the patterns the screen refused
    before by shape are refused here by cost on the subjects that made them hang (`\s*.*x` ran 14 s on 4 000 spaces,
    `.*foo.*bar` 16 s on 6 000 characters, the trim idiom 19.7 s on 4 000 spaces before `x\n\nx`, `a*[ab]{0,20}x` 11 s and
-   `a+a{30}x` 14.6 s on 10 000 characters). The screen's own analysis of a pattern happens once per pattern (cached) and is
-   bounded by its step budget, not by the run's: the slowest generated pattern took 272 ms to analyse.
+   `a+a{30}x` 14.6 s on 10 000 characters). The screen's own analysis of a pattern is cached by its text (a bounded table of
+   256 patterns), and counts against the evaluation: it samples the clock every 4 096 steps (`maxTimeMs`), and without
+   `maxTimeMs` all the patterns of one evaluation share 1 000 000 steps (`SCREEN_STEPS`, about 0.35 s); past either the
+   evaluation fails with the limit error and the pattern is refused (fail closed), so a spec's many patterns cannot add up.
+   The slowest generated pattern took 0.27 s to analyse; forty distinct ones like it stop at a 200 ms `maxTimeMs`.
    A lookaround body is screened as a pattern of its own for its hazards, and adds its cost to every step of the match that
    reaches it. A Unicode property is read as "any character", a
    case-insensitive set is closed under every case mapping V8 applies (derived from V8's own `iu` matching, about 0.15 s
