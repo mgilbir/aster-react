@@ -1,7 +1,8 @@
 /**
  * Scales as the chart engine uses them: the registry of scale types (name, kind, inverse members), the choice of ticks and
  * labels for an axis or legend, interpolators by name, colour schemes and gradient stops. The constructors live in
- * `scale-continuous.ts` (including time and UTC) and `scale-discrete.ts`.
+ * `scale-continuous.ts` (linear), `scale-warped.ts` (identity, pow, sqrt, log, symlog, sequential, diverging), `scale-calendar.ts`
+ * (time, UTC), `scale-discrete.ts` (ordinal, band, point) and `scale-classes.ts` (bin-ordinal, quantize, threshold, quantile).
  *
  * What callers observe, and so what is fixed here:
  * - a constructed scale has its `type` set to the registered name (`sequential` keeps that name), carries a mark that says the

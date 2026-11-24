@@ -1,7 +1,8 @@
 /**
- * The continuous scales: identity, linear, power, square root, logarithmic and symlog scales that map a numeric domain
- * onto a range of numbers, colours, arrays or anything an interpolator can blend; the sequential and diverging colour
- * scales, which map a domain of two or three stops onto a single interpolator; and the calendar scales over time.
+ * The model of the continuous scales and the linear scale built on it: a numeric domain mapped onto a range of numbers, colours,
+ * arrays or anything an interpolator can blend. The warped kinds (identity, power, square root, logarithmic, symlog) and the
+ * sequential and diverging colour scales are scale-warped.ts', the calendar scales scale-calendar.ts'; they share this model and
+ * the axis members here, and what they show is listed here.
  *
  * Aster builds each as a callable `ScaleObject` over a small model:
  *
