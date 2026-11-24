@@ -19,6 +19,7 @@ import { summarizeDiffs } from './diffs.js'
 import { logged, settle, stray, vegaSvg } from './oracle.js'
 import { seededRandom, withFrozenClock, withOracleRandom } from './seeded.js'
 import { BASE_URL, fileFetch, needsCanvas, readSpec, trunc, type GallerySpec, type Outcome } from './lib.js'
+import { forEngines } from '../engines.js'
 
 /** Static hints for WHY an oracle is not deterministic (the decision itself is made by rendering twice). */
 function nondeterminismHint(spec: Record<string, unknown>): string {
@@ -32,14 +33,16 @@ function nondeterminismHint(spec: Record<string, unknown>): string {
 export async function runStatic(g: GallerySpec): Promise<Outcome> {
   const t0 = Date.now()
   const done = (o: Omit<Outcome, 'id' | 'ms'>): Outcome => ({ id: g.id, ms: Date.now() - t0, ...o })
-  const src = readSpec(g)
+  // each engine its own copy of the spec, taken before either runs (vega writes onto the rows it ingests), and every oracle render
+  // its own copy of the oracle's Vega (the second render, which checks the oracle is deterministic, must not read the first's writes)
+  const [oracleSrc, asterSrc] = forEngines(readSpec(g), (oracle, aster) => [oracle, aster] as const)
   let oracleSpec: Record<string, unknown>
   let oracleSvg: string
   stray.length = 0
   logged.length = 0
   try {
-    oracleSpec = g.kind === 'vl' ? (vl.compile(src as never).spec as unknown as Record<string, unknown>) : src
-    oracleSvg = await withFrozenClock(() => withOracleRandom(() => vegaSvg(oracleSpec)))
+    oracleSpec = g.kind === 'vl' ? (vl.compile(oracleSrc as never).spec as unknown as Record<string, unknown>) : oracleSrc
+    oracleSvg = await withFrozenClock(() => withOracleRandom(() => vegaSvg(structuredClone(oracleSpec))))
     await settle()
     if (stray.length) throw new Error(stray[0])
     // a transform that draws into a canvas (heatmap, label, wordcloud) fails in Node, which has none: vega logs the error and carries
@@ -58,18 +61,18 @@ export async function runStatic(g: GallerySpec): Promise<Outcome> {
   try {
     oracle = canonicalizeSvg(oracleSvg)
     // an oracle that is not a pure function of its inputs cannot be compared exactly
-    const again = canonicalizeSvg(await withFrozenClock(() => withOracleRandom(() => vegaSvg(oracleSpec))))
+    const again = canonicalizeSvg(await withFrozenClock(() => withOracleRandom(() => vegaSvg(structuredClone(oracleSpec)))))
     await settle()
     if (stray.length) throw new Error(stray[0])
     const self = diffCanonical(oracle, again)
-    if (self.length) return done({ status: 'unverifiable', reason: `oracle-nondeterministic (${nondeterminismHint(src)})`, first: trunc(self[0]!) })
+    if (self.length) return done({ status: 'unverifiable', reason: `oracle-nondeterministic (${nondeterminismHint(asterSrc)})`, first: trunc(self[0]!) })
   } catch (e) {
     return done({ status: 'unverifiable', reason: 'oracle-canonicalize-error', first: trunc(e instanceof Error ? e.message : String(e)) })
   }
   let ourSvg: string
   try {
-    const ourVg = g.kind === 'vl' ? (compileOurs(JSON.parse(JSON.stringify(src))) as Record<string, unknown>) : src
-    const loaded = await loadSpecData(JSON.parse(JSON.stringify(ourVg)) as never, { ...TRUSTED_LOAD_OPTIONS, fetch: fileFetch, baseURL: BASE_URL })
+    const ourVg = g.kind === 'vl' ? (compileOurs(asterSrc as never) as Record<string, unknown>) : asterSrc
+    const loaded = await loadSpecData(ourVg as never, { ...TRUSTED_LOAD_OPTIONS, fetch: fileFetch, baseURL: BASE_URL })
     // (the host's counterpart of the oracle loader's baseURL: relative image urls resolve against it)
     ourSvg = withFrozenClock(() => renderSpec(loaded as never, { urlPolicy: { baseURL: BASE_URL }, random: seededRandom() })) as string
     await settle()
