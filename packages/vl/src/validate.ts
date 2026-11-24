@@ -667,6 +667,10 @@ function validateConfig(cfg: Obj, path: string): void {
     const ext = cfg.boxplot.extent
     if (ext !== undefined && ext !== 'min-max' && !(typeof ext === 'number' && Number.isFinite(ext) && ext >= 0)) mustBe(`${path}.boxplot.extent`, '"min-max" or a non-negative number')
   }
+  for (const k of ['errorbar', 'errorband'] as const) {
+    const c = cfg[k]
+    if (isObj(c) && c.center !== undefined && c.center !== 'mean' && c.center !== 'median') mustBe(`${path}.${k}.center`, '"mean" or "median"')
+  }
   if (cfg.projection !== undefined) validateProjection(cfg.projection, `${path}.projection`)
   if (cfg.selection !== undefined) {
     if (!isObj(cfg.selection)) mustBe(`${path}.selection`, OBJECT)
@@ -1048,6 +1052,9 @@ function validateMark(mark: unknown, at: string): string {
       if (k === 'order' && def.order !== false && def.order !== null && def.order !== true) fail(`${at}.order`, 'only order: false/null/true is supported')
     }
     if (def.orient !== undefined && def.orient !== 'horizontal' && def.orient !== 'vertical') mustBe(`${at}.orient`, '"horizontal" or "vertical"')
+    // (the centre of an error mark is the mean or the median: vega-lite takes any other word for the median's interquartile range, and draws
+    // an interval that is not the one the spec names)
+    if (def.center !== undefined && (type === 'errorbar' || type === 'errorband') && def.center !== 'mean' && def.center !== 'median') mustBe(`${at}.center`, '"mean" or "median"')
     validateInvalidMode(def.invalid, `${at}.invalid`)
   }
   return type

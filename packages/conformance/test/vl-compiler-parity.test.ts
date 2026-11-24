@@ -1215,7 +1215,8 @@ describe('@aster-charts/vl == vega-lite: the guarded flatten expression of a nes
       const oracle = (vl as any).compile(plain(spec)).spec
       const ours = compile(deepFreeze(plain(spec)) as never) as Record<string, any>
       expect(flattenExprs(oracle).length).toBeGreaterThan(0)
-      expect(flattenExprs(ours)).toEqual(flattenExprs(oracle))
+      // (the guarded read is written twice here: to the safe key the compiler reads, and to the joined path vega-lite names, which expressions read)
+      expect([...new Set(flattenExprs(ours))]).toEqual([...new Set(flattenExprs(oracle))])
     })
   }
 })

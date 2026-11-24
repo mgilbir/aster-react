@@ -24,12 +24,16 @@ const GLOBAL_NAMES: ReadonlySet<string> = new Set([
 function readNames(expr: string): string[] {
   const names: string[] = []
   const tokens = tokenize(expr)
+  // (text with a stray backslash is no expression vega can read: it says so itself, when it parses it)
+  if (tokens.some((t) => t.kind === 'punct' && t.raw === '\\')) return names
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i]!
     if (t.kind !== 'name') continue
     const before = tokens[prevSolid(tokens, i)]?.raw
     const after = tokens[nextSolid(tokens, i)]?.raw
     if (before === '.' || after === '(' || (after === ':' && (before === '{' || before === ','))) continue
+    // (a parenthesised callee, `(test)(x)`)
+    if (after === ')' && tokens[nextSolid(tokens, nextSolid(tokens, i))]?.raw === '(' && before === '(') continue
     names.push(t.value!)
   }
   return names
@@ -73,6 +77,8 @@ export function refuseUndeclaredNames(out: Obj): void {
       } else if (k === 'filter' && Array.isArray(v) && typeof node.type === 'string') {
         // (the filters of an event stream)
         for (const f of v) if (typeof f === 'string') check(f, at)
+      } else if (k === 'value' || k === 'default' || k === 'keyvals') {
+        // (a literal: `{expr: ...}` here is data a transform or a signal holds, as vega-lite writes it)
       } else if (v !== null && typeof v === 'object' && !isRows(v)) walk(v, at, k === 'transform')
     }
   }

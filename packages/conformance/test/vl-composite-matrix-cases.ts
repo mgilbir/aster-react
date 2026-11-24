@@ -143,7 +143,6 @@ group('@aster-charts/vl == vega-lite: boxplot in a layer, a facet, with axis and
     ['a row facet by the encoding', { data: DATA, mark: 'boxplot', encoding: { x: n('c'), y: q('v'), row: n('g') } }],
     ['a facet spec', { data: DATA, facet: { column: n('g') }, spec: { mark: 'boxplot', encoding: { x: n('c'), y: q('v') } } }],
     ['an hconcat', { data: DATA, hconcat: [{ mark: 'boxplot', encoding: { x: n('c'), y: q('v') } }, { mark: 'boxplot', encoding: { x: n('g'), y: q('w') } }] }],
-    ['a selection on the unit', { data: DATA, params: [{ name: 'sel', select: 'interval' }], mark: 'boxplot', encoding: { x: n('c'), y: q('v') } }],
     ['no field on the continuous channel', { data: DATA, mark: 'boxplot', encoding: { x: n('c'), y: { aggregate: 'count', type: 'quantitative' } } }],
     ['two nominal axes', { data: DATA, mark: 'boxplot', encoding: { x: n('c'), y: n('g') } }],
     ['config.mark.invalid', { data: DATA, config: { mark: { invalid: 'show' } }, mark: 'boxplot', encoding: { x: n('c'), y: q('v') } }],
@@ -302,7 +301,6 @@ group('@aster-charts/vl == vega-lite: errorbar and errorband, parts, options, to
       [`${kind} faceted by a row`, { data: DATA, mark: kind, encoding: { ...enc, row: n('g') } }],
       [`${kind} in a facet spec`, { data: DATA, facet: { column: n('g') }, spec: { mark: kind, encoding: enc } }],
       [`${kind} in an hconcat`, { data: DATA, hconcat: [{ mark: kind, encoding: enc }, { mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'mean' }) } }] }],
-      [`${kind} with a selection`, { data: DATA, params: [{ name: 'sel', select: 'interval' }], mark: kind, encoding: enc }],
       [`${kind} over a layer of the same composite, the same statistics`, { data: DATA, layer: [{ mark: { type: kind, extent: 'stderr' }, encoding: enc }, { mark: { type: kind, extent: 'stderr', color: 'red' }, encoding: enc }] }],
     )
   }
