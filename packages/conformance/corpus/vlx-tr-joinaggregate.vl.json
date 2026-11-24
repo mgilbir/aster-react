@@ -149,6 +149,10 @@
     "color": {
       "field": "g",
       "type": "nominal"
+    },
+    "size": {
+      "field": "max_y",
+      "type": "quantitative"
     }
   }
 }
