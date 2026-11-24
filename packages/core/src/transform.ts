@@ -622,7 +622,8 @@ export function contourQuantize(levels: number, nice: boolean, zero: boolean): (
   return (values) => {
     let lowest: number | undefined
     let highest: number | undefined
-    for (let i = 0; i < values.length; i++) {
+    // (a grid with no `values` has no cells: its size is what the contour scan refuses, as vega's extent of nothing leads to)
+    for (let i = 0, n = values == null ? 0 : values.length; i < n; i++) {
       const v = values[i] as number
       if (v == null || v !== v) continue
       if (lowest === undefined) { lowest = highest = v; continue }

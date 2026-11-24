@@ -18,12 +18,36 @@
  * crashes with an incidental TypeError are not comparable (a Vega bug, not
  * semantics); the count of those is pinned below so the exclusion cannot grow.
  */
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
 import { applyTransforms, compileExpr, type Row } from '@aster-charts/core'
 import '@aster-charts/core/transforms'
+import '@aster-charts/core/geo'
 import { CASES, SEED } from './transform-cases.mjs'
 import { expectEveryKnownDifferenceCompared, expectKnownDifference } from './known-differences.mts'
+
+/** The transforms the case list does not hold, and the suites that compare each with Vega (a name that appears in the file). */
+const COMPARED_ELSEWHERE: Record<string, string[]> = {
+  linkpath: ['differential-transform-field-forms.test.mts'],
+  contour: ['differential-raster.test.mts'],
+  geopath: ['differential-scoped-projection.test.mts'],
+  geopoint: ['differential-geo-pipeline.test.mts', 'differential-scoped-projection.test.mts'],
+  geoshape: ['differential-geoshape.test.mts'],
+  heatmap: ['differential-raster.test.mts'],
+  kde2d: ['differential-raster.test.mts'],
+  force: ['differential-force.test.mts'],
+  label: ['label-vs-vega.test.ts'].map((f) => `../src/${f}`).concat(['differential-field-paths.test.mts']),
+  nest: ['differential-nest.test.mts'],
+  tree: ['differential-nest.test.mts'],
+  treelinks: ['differential-nest.test.mts'],
+  voronoi: ['differential-voronoi.test.mts'],
+  wordcloud: ['../src/wordcloud-cases.ts'],
+  crossfilter: ['differential-transform-field-forms.test.mts'],
+  resolvefilter: ['differential-transform-names.test.mts'],
+}
 
 /** Real Vega crashes (incidental TypeErrors) on exactly this many cases; see header. */
 const VEGA_CRASH_EXCLUDED = 40
@@ -130,7 +154,7 @@ function runAster(c: Case, freeze: boolean): { rows: Row[]; signals: Record<stri
 }
 
 /** Cases on which Aster answers differently from Vega on purpose: scripts/lib/expected-differences.mjs, `test` gate, `differential-transforms: <suite>: <case>`. */
-const KNOWN = new Set(['dotbin: empty'])
+const KNOWN = new Set(['dotbin: empty', 'bin: extent omitted', 'countpattern: tokens named like Object.prototype members'])
 const FILE = 'differential-transforms'
 
 let excluded = 0
@@ -147,7 +171,7 @@ describe('transform differential vs real Vega (live, same engine)', { timeout: 6
           try {
             const oracle = await runVega(c)
             if (KNOWN.has(`${c.suite}: ${c.name}`)) {
-              // Vega throws an incidental TypeError (null.map); Aster answers. Still compared, and must still differ.
+              // Still computed on both sides, and must still differ (the reasons are in the table).
               let got: unknown
               try { got = { out: runAster(c, false).rows } } catch (e) { got = { throw: e instanceof Error ? e.message : String(e) } }
               const want = 'throw' in oracle ? { throw: String(oracle.throw.message ?? oracle.throw) } : { out: oracle.out }
@@ -194,6 +218,25 @@ describe('transform differential vs real Vega (live, same engine)', { timeout: 6
   })
 
   it('covers the whole case list', () => {
-    expect(CASES.length).toBeGreaterThanOrEqual(3028)
+    expect(CASES.length).toBeGreaterThanOrEqual(3039)
+  })
+
+  // The list says which transforms it holds; the others are compared with Vega in a suite of their own, named here and checked
+  // to exist and to name the transform (a transform in neither place fails, as does a name that no longer has a case missing).
+  it('every transform Vega can parse is in the case list or named with the suite that compares it', () => {
+    const registry = (vega as unknown as { transforms: Record<string, { Definition?: unknown }> }).transforms
+    const types = Object.keys(registry).filter((k) => registry[k]!.Definition)
+    const inList = new Set(CASES.flatMap((c) => c.t.map((t) => (t as { type: string }).type)))
+    const without = types.filter((t) => !inList.has(t)).sort()
+    expect(without).toEqual(Object.keys(COMPARED_ELSEWHERE).sort())
+    const here = dirname(fileURLToPath(import.meta.url))
+    for (const [type, files] of Object.entries(COMPARED_ELSEWHERE)) {
+      for (const f of files) {
+        const text = readFileSync(join(here, f), 'utf8')
+        // (differential-transform-names takes every transform of Vega's registry, so it names none: bare, in four spellings)
+        const names = f === 'differential-transform-names.test.mts'
+        expect(text, `${f} compares ${type}`).toMatch(names ? /Object\.keys\(registry\)/ : new RegExp(`\\b${type}\\b`))
+      }
+    }
   })
 })
