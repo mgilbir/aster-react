@@ -17,6 +17,7 @@ type Obj = Record<string, unknown>
 const price = (v: unknown, fmt?: string): string => `[${fmt ?? ''}:${v}]`
 const when = (v: unknown, fmt?: string): string => `<${fmt ?? ''}|${new Date(v as number).getUTCFullYear()}>`
 const offs: Array<() => void> = []
+// (vega has no way to unregister an expression function; the registration lives in this file's module instance, which vitest gives to no other test file)
 beforeAll(() => {
   const ef = (vega as unknown as { expressionFunction: (n: string, f: unknown) => void }).expressionFunction
   ef('asterPrice', price)

@@ -33,15 +33,38 @@ async function oracleSvg(spec: Spec): Promise<string> {
 const domSvg = (spec: Spec): string => new XMLSerializer().serializeToString(renderSceneToDomElement(evaluateChart(compileChart(spec as never)), document) as unknown as Node)
   .replace(/ xmlns:ns\d+="http:\/\/www\.w3\.org\/1999\/xlink"/g, '').replace(/ ns\d+:href=/g, ' xlink:href=')
 
-async function differences(spec: Spec): Promise<string[]> {
-  const want = canonicalizeSvg(await oracleSvg(spec))
-  const out = diffCanonical(want, canonicalizeSvg(renderSpec(spec as never)))
+/** The canonical document, or `null` when it holds a number the canonicalizer cannot read (a non-finite one); any other failure is thrown. */
+function canonical(svg: string): ReturnType<typeof canonicalizeSvg> | null {
+  try {
+    return canonicalizeSvg(svg)
+  } catch (e) {
+    if (!/^canonicalizeSvg: non-finite/.test((e as Error).message)) throw e
+    return null
+  }
+}
+
+/**
+ * The differences between vega and the string and DOM renderers for `spec`. A document with a non-finite number in it (vega draws an
+ * Infinity for a legend over a degenerate domain with explicit values) cannot be read by the canonicalizer: that is a difference
+ * unless BOTH sides are unreadable (named by the caller, who pins which cases they are), and then the two renderers of Aster must
+ * still write the same markup.
+ */
+async function differences(spec: Spec, unreadable: string[], what: string): Promise<string[]> {
+  const svg = await oracleSvg(spec)
+  const ours = renderSpec(spec as never)
+  const want = canonical(svg)
+  const got = canonical(ours)
+  if (want === null || got === null) {
+    if (want !== null) return [`only Aster's document is unreadable (a non-finite number): ${ours.match(/[^ ]*Infinity[^ ]*/)?.[0]}`]
+    if (got !== null) return ["only vega's document is unreadable (a non-finite number)"]
+    unreadable.push(what)
+    // (neither can be canonicalized: the DOM renderer must still write what the string renderer writes)
+    return domSvg(spec).replace(/( xmlns="http:\/\/www\.w3\.org\/2000\/svg")\1/, '$1') === new XMLSerializer().serializeToString(new DOMParser().parseFromString(ours, 'image/svg+xml').documentElement) ? [] : ['dom: the DOM renderer differs from the string renderer on a document with a non-finite number']
+  }
+  const out = diffCanonical(want, got)
   if (out.length) return out
   return diffCanonical(want, canonicalizeSvg(domSvg(spec))).map((d) => `dom: ${d}`)
 }
-
-/** the cases whose document the canonicalizer cannot read */
-const unreadable: string[] = []
 
 const DATA = (values: number[]): Spec => ({ name: 't', values: values.map((v, i) => ({ v, i })) })
 const frame = (extra: Spec): Spec => ({ width: 160, height: 100, padding: 5, autosize: 'none', ...extra })
@@ -113,33 +136,24 @@ const LEGENDS: Array<[string, Spec]> = [
 ]
 
 describe('discretizing legends against vega', () => {
+  // The cases whose two documents hold a non-finite number (a degenerate domain with explicit values: vega writes `h-82vInfinity`, Aster a
+  // `translate(0,-Infinity)`), named per kind: a third one, or one side alone, fails the walk that meets it.
+  const UNREADABLE: Record<string, string[]> = { quantize: ['a degenerate domain / auto, explicit values'] }
   for (const [kind, scales] of SCALES) {
     it(`${kind}: ${scales.length} scales x ${LEGENDS.length} legends`, async () => {
       const bad: string[] = []
+      const unreadable: string[] = []
       for (const [sname, scale, data] of scales) {
         for (const [lname, legend] of LEGENDS) {
           const spec = frame({ data, scales: [{ name: 'c', ...scale }], legends: [{ fill: 'c', ...legend }], marks: [] })
-          let d: string[]
-          try {
-            d = await differences(spec)
-          } catch (e) {
-            // a document the canonicalizer cannot read (vega draws an Infinity transform for a legend over a degenerate
-            // domain with explicit values): nothing to compare, counted
-            if (!/^canonicalizeSvg: non-finite/.test((e as Error).message)) throw e
-            unreadable.push(`${sname} / ${lname}`)
-            d = []
-          }
+          const d = await differences(spec, unreadable, `${sname} / ${lname}`)
           if (d.length) bad.push(`${sname} / ${lname}: ${d[0]}`)
         }
       }
       expect(bad).toEqual([])
+      expect(unreadable, 'the cases both documents of which hold a non-finite number').toEqual(UNREADABLE[kind] ?? [])
     }, 300_000)
   }
-
-  it('the documents the canonicalizer cannot read are a couple of degenerate-domain cases', () => {
-    // (runs after the matrices, in file order)
-    expect(unreadable.length).toBeLessThanOrEqual(3)
-  })
 
   it('the labels are the ones the issue showed: "3.0" for a quantize breakpoint, and the box is as wide as they make it', async () => {
     const spec = frame({ scales: [{ name: 'q', type: 'quantize', domain: [0, 9], range: ['#eee', '#9bd', '#06c'] }], legends: [{ fill: 'q', title: 'Bands' }], marks: [] })
@@ -149,8 +163,9 @@ describe('discretizing legends against vega', () => {
     expect(ours).toContain('>3.0</text>')
     expect(ours).toContain('>6.0</text>')
     // the legend box: as wide as the gradient and the widest label
-    expect(want.match(/<path class="background"[^>]*d="M0,0h(\d+)v(\d+)h-\1Z"[^>]*pointer-events="none"\/><g><g class="mark-group role-legend-entry/)?.[1])
-      .toBe(ours.match(/<path class="background"[^>]*d="M0,0h(\d+)v(\d+)h-\1Z"[^>]*pointer-events="none"\/><g><g class="mark-group role-legend-entry/)?.[1])
+    const boxWidth = (svg: string): string | undefined => svg.match(/<path class="background"[^>]*d="M0,0h(\d+)v(\d+)h-\1Z"[^>]*pointer-events="none"\/><g><g class="mark-group role-legend-entry/)?.[1]
+    expect(boxWidth(want), 'the pattern finds the legend box in vega\'s document (undefined === undefined would pass)').toMatch(/^\d+$/)
+    expect(boxWidth(ours)).toBe(boxWidth(want))
   })
 
   it('the scale snapshot gives the accessible tree the same words as the SVG caption', () => {
