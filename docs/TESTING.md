@@ -120,9 +120,14 @@ Chromium with live text metrics. `pnpm conformance:batch` rasterizes the normal 
 `denseMarks` SVG DOMs of the same scene and diffs the pixels, so the batched path
 (which intentionally stops mirroring Vega's per-item DOM) cannot drift. `pnpm a11y-parity` checks every corpus guide caption
 against Vega's own `aria-label`; `pnpm transform-matrix` covers bin/window/stack/
-joinaggregate/impute/sequence/identifier/fold/flatten/pivot/lookup combinations. The scene differential compares the resolved scenes
-before serialization: scale domains/ranges/bandwidth per scope (including nested scopes),
-group/item multisets, and paint order wherever painted extents overlap.
+joinaggregate/impute/sequence/identifier/fold/flatten/pivot/lookup combinations. The scene differential (`pnpm scene-diff`)
+compares the resolved scenes before serialization, as one tree on each side, at every depth (inside group marks and facets):
+the root's and every group item's scales by name (a scale only one side has is a difference), each scope's marks as a sequence
+in paint order (vega's `zindex` applied to the oracle's list), each mark's items as a multiset of records holding every encode
+channel of the pinned Vega schema's `encodeEntry` that either side carries (a shape-drawn item's path through vega's own shape
+generator), paint order wherever painted extents overlap, and group items one by one. Axes, legends and titles are left to the
+SVG gates and the guide differentials. A spec whose oracle drew items of which none was compared fails; items, channel values,
+marks, group items and scales compared each have a floor.
 
 ## Differential fuzzing
 
@@ -168,7 +173,7 @@ such gate narrowed, with `--plant-difference` and narrowed to nothing ([scripts/
 | Time-zone matrix | `pnpm test:tz` | `[tz] all zones passed` (zone-sensitive vitest suites under America/New_York, Asia/Kolkata and Australia/Lord_Howe; `corpus-tz` under UTC and those three) |
 | SVG corpus vs real Vega | `pnpm conformance` | 1063/1063 passed |
 | Vega-Lite corpus through `@aster-charts/vl` | `pnpm conformance-vl` | 672 passed, 0 failed, 0 errored / 672 |
-| Scene differential | `pnpm scene-diff` | 1063/1063 scenes match |
+| Scene differential | `pnpm scene-diff` | 1063/1063 scenes match; 8211 items (61584 channel values, 1978 marks, 667 group items) and 2164 scales compared, 11 specs whose oracle drew no item |
 | Incremental vs fresh evaluation (no oracle) | `pnpm conformance:diff` | 0 differential mismatches, 0 skipped |
 | Guide captions vs Vega `aria-label` | `pnpm a11y-parity` | 1063/1063 caption sets match |
 | Transform option combinations | `pnpm transform-matrix` | 76/76 match (75 in Node; the wordcloud, whose oracle needs a real canvas, in Chromium) |
