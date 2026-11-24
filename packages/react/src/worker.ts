@@ -169,30 +169,6 @@ export function errorFromWire(wire: WireError): Error {
 // ---------------------------------------------------------------------------
 
 /**
- * Copy of `node` without non-cloneable DOM-patcher caches; returns the SAME
- * object when nothing had to be removed, so a live scene is never mutated.
- */
-function stripNode(node: unknown): unknown {
-  if (!node || typeof node !== 'object') return node
-  const n = node as { items?: unknown[]; __domDesc?: unknown }
-  let items = n.items
-  if (Array.isArray(n.items)) {
-    let changed = false
-    const mapped = n.items.map((child) => {
-      const next = stripNode(child)
-      if (next !== child) changed = true
-      return next
-    })
-    if (changed) items = mapped
-  }
-  if (n.__domDesc === undefined && items === n.items) return node
-  const copy = { ...(node as Record<string, unknown>) }
-  delete copy.__domDesc
-  if (items !== n.items) copy.items = items
-  return copy
-}
-
-/**
  * Strip non-cloneable runtime/compiled handles from a scene. The live scene is
  * never mutated (a stream keeps it for the next incremental update).
  *
@@ -207,7 +183,8 @@ export function cloneableScene(scene: SceneRoot): SceneRoot {
   delete clone.signalParams
   delete clone.__scaleMap
   clone[SCALE_INFO_KEY] = serializeScales(scene.__scaleMap)
-  clone.items = scene.items.map((item) => stripNode(item)) as SceneRoot['items']
+  // (the nodes are plain data and shared with the live scene: the DOM patcher keeps its per-node caches in WeakMaps beside the scene, not on it)
+  clone.items = scene.items.slice()
   return clone
 }
 

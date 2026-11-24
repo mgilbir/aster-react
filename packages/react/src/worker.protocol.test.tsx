@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, afterEach } from 'vitest'
 import { AsterLimitError, createChartStream, renderSceneToSvg, type ChartStream } from '@aster-charts/core'
+import { patchSceneDom, renderSceneToDomElement } from '@aster-charts/core/lean'
 import {
   cloneableScene, handleChartWorkerRequest, handleChartWorkerStreamRequest, handleWorkerMessage,
   registerWorkerTextMetrics, useChartWorker,
@@ -301,21 +302,34 @@ describe('worker stream payloads and queue', () => {
     expect(m.result().svg).toBeNull()
   })
 
-  it('cloneableScene never mutates the live scene and keeps __scales snapshots', () => {
+  it('cloneableScene never mutates the live scene and keeps __scales snapshots; the DOM patcher leaves nothing on the nodes to strip', () => {
     const stream = createChartStream(specOf(3))
     stream.flush()
+    // a scene the DOM patcher has really worked on, mounted and then patched after an append: its per-node caches (the descriptors)
+    // live in WeakMaps beside the scene (core's dom.ts), so no node carries a property the worker boundary would have to remove
+    const svg = renderSceneToDomElement(stream.scene()!, document)
+    stream.push({ append: { t: [{ x: 5, y: 5 }] } })
+    stream.flush()
     const live = stream.scene()!
-    const first = (live.items[0] as unknown as { items: Array<Record<string, unknown>>; __scales?: unknown })
-    first.items[0]!.__domDesc = { el: 'patched' }
-    ;(live.items[0] as unknown as Record<string, unknown>).__domDesc = { el: 'group' }
+    patchSceneDom(svg, live)
+    const nodes: Array<Record<string, unknown>> = []
+    const walk = (n: unknown): void => {
+      if (n == null || typeof n !== 'object') return
+      nodes.push(n as Record<string, unknown>)
+      for (const c of (n as { items?: unknown[] }).items ?? []) walk(c)
+    }
+    for (const item of live.items) walk(item)
+    expect(nodes.length).toBeGreaterThan(3)
+    expect(nodes.flatMap((n) => Object.keys(n).filter((k) => k.startsWith('__dom') || k === '__desc'))).toEqual([])
+    const keysBefore = nodes.map((n) => Object.keys(n).join())
     const clone = cloneableScene(live)
-    expect((first.items[0] as Record<string, unknown>).__domDesc).toEqual({ el: 'patched' })
-    expect((live.items[0] as unknown as Record<string, unknown>).__domDesc).toEqual({ el: 'group' })
+    expect(nodes.map((n) => Object.keys(n).join())).toEqual(keysBefore)
+    expect(clone.items).not.toBe(live.items)
+    expect(clone.items).toEqual(live.items)
     expect(live.__scaleMap).toBeDefined()
     expect(live.runtime).toBeDefined()
     expect(live.compiled).toBeDefined()
     expect(clone.__scales?.length).toBeGreaterThan(0)
-    expect(JSON.stringify(clone.items)).not.toContain('patched')
     expect(() => structuredClone(clone)).not.toThrow()
     expect(renderSceneToSvg(live)).toContain('<svg')
   })
