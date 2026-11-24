@@ -1189,7 +1189,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     const d = buildData(p.l, p.fields, p.mark, p.orient, g.castDone, ctx)
     // (an animation: the unit's frame filter leaves the main dataset, and the marks of a unit with a time channel read the frame)
     const timerSel = Object.values(layerSel[i]?.cmpts ?? {}).find(isTimerSelection)
-    if (timerSel) p.frame = extractFrameFilter(d, timerSel.name, p.fields.some((f) => f.channel === 'time'))
+    if (timerSel) p.frame = extractFrameFilter(d, timerSel.name)
     g.casts.push(...d.casts)
     p.pipeline = d.pipeline
     p.seriesFields = d.seriesFields
@@ -1262,10 +1262,9 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
       if (lookup) data.push({ name: lookup.name, source: p.dataName, transform: [{ type: 'filter', expr: ctx.selectionTest!({ param: c.name }) }] })
     }
     const builtMarks = buildMarks(p.l, p.fields, p.mark, p.orient, p.dataName, p.markSize)
-    if (p.frame) {
-      data.push({ name: `${p.dataName}_curr`, source: p.dataName, transform: [p.frame.filter] })
-      if (p.fields.some((f) => f.channel === 'time')) animateMarks(builtMarks, p.dataName)
-    }
+    if (p.frame) data.push({ name: `${p.dataName}_curr`, source: p.dataName, transform: [p.frame.filter] })
+    // (the voronoi marks of a layer's selections are the layer's, which nothing renames: only a unit alone is refused, refuseAnimatedVoronoi)
+    if (p.fields.some((f) => f.channel === 'time')) animateMarks(builtMarks, p.dataName, p.frame !== undefined)
     // (a layer the user named is named so: `outer_marks`, whichever layers it is in)
     const leafName = typeof p.l.name === 'string' && p.l.name !== '' ? varName(p.l.name) : undefined
     if (leafName !== undefined) ctx.namedPrefixes.push(`${leafName}_`)
@@ -9836,13 +9835,13 @@ export function compileUnit(input: VLSpec): VLSpec {
  * the main dataset's own transform list: a pipeline that split before it (an aggregate with a sort over the raw
  * table) has the filter in an earlier dataset, which vega-lite does not search.
  */
-function extractFrameFilter(data: DataPipeline, selection: string, required: boolean): { filter: Record<string, unknown> } | undefined {
+function extractFrameFilter(data: DataPipeline, selection: string): { filter: Record<string, unknown> } | undefined {
   // vega-lite: the first filter of the main dataset that tests a selection (`expr.includes('vlSelectionTest')`)
   const isFrameFilter = (t: Record<string, unknown>): boolean => t.type === 'filter' && typeof t.expr === 'string' && t.expr.includes('vlSelectionTest')
   const at = data.pipeline.findIndex(isFrameFilter)
-  // (a timer selection of a unit that has no time channel, and no filter of the selection either, has no frame to cut)
-  if (at < 0 && !required) return undefined
-  if (at < 0) throw new VLCompileError(`transform: the {"filter": {"param": ${JSON.stringify(selection)}}} is not in the unit's data pipeline`)
+  // (a timer selection with no filter of any selection has no frame to cut: vega-lite makes no frame dataset, and the marks that
+  // read it are the compile's to refuse, animateMarks)
+  if (at < 0) return undefined
   if (data.usesRawDomain && data.pipeline.length > data.rawLen && at < data.rawLen) {
     throw new VLCompileError(`transform: the {"filter": {"param": ${JSON.stringify(selection)}}} lands in the pre-aggregation table, not the main dataset; vega-lite 6.4.3 then emits marks that read a frame dataset it never defines`)
   }
@@ -9855,18 +9854,29 @@ function extractFrameFilter(data: DataPipeline, selection: string, required: boo
 
 /**
  * The marks of an animated unit read the frame dataset (the facet of a path group keeps the whole main dataset: vega-lite's
- * `correctDataNames`), and a unit with a point selection is interactive with a pointer cursor.
+ * `correctDataNames`), and they are interactive (a point selection picks them).
  */
-function animateMarks(marks: Record<string, unknown>[], dataName: string): void {
+function refuseAnimatedVoronoi(cmpts: Record<string, Selection> | undefined): void {
+  for (const c of Object.values(cmpts ?? {})) {
+    if (c.type === 'point' && c.nearest) {
+      throw new VLCompileError(`params: the selection "${c.name}" is \`nearest\` in a unit with a time channel: vega-lite 6.4.3 points the cells of its voronoi mark at a frame dataset of the name of the mark (\`marks_curr\`), which it never defines`)
+    }
+  }
+}
+
+function animateMarks(marks: Record<string, unknown>[], dataName: string, hasFrame: boolean): void {
   for (const m of marks) {
-    if (isObject(m.from) && m.from.data === dataName) m.from = { ...m.from, data: `${dataName}_curr` }
+    if (isObject(m.from) && m.from.data === dataName) {
+      // (vega-lite writes the frame dataset's name whether or not the unit makes it: marks that read a dataset nothing defines)
+      if (!hasFrame) throw new VLCompileError(`transform: the time channel needs a timer selection and its frame filter {"filter": {"param": ...}}: without them vega-lite 6.4.3 emits marks that read the frame dataset "${dataName}_curr", which it never defines`)
+      m.from = { ...m.from, data: `${dataName}_curr` }
+    }
     if (m.type === 'group') {
-      animateMarks((m.marks as Record<string, unknown>[] | undefined) ?? [], dataName)
+      animateMarks((m.marks as Record<string, unknown>[] | undefined) ?? [], dataName, hasFrame)
       continue
     }
-    m.interactive = true
-    const update = (isObject(m.encode) ? (m.encode as { update?: Record<string, unknown> }).update : undefined)
-    if (update && update.cursor === undefined) update.cursor = { value: 'pointer' }
+    // (the pointer cursor is the unit's own: a selection a widget is bound to has none)
+    if (hasFrame) m.interactive = true
   }
 }
 
@@ -9917,7 +9927,7 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   // animation: the selection's frame filter leaves the main dataset for the `_curr` dataset the marks read
   const timerSel = unitSel ? Object.values(unitSel.cmpts).find(isTimerSelection) : undefined
   const hasTimeChannel = fields.some((f) => f.channel === 'time')
-  const animation = timerSel ? extractFrameFilter(data, timerSel.name, hasTimeChannel) : undefined
+  const animation = timerSel ? extractFrameFilter(data, timerSel.name) : undefined
   // vega-lite's default sizing: continuous dimensions get 300, discrete
   // dimensions size from the band step (bandspace(domain length) * step)
   // (a position without a scale sizes its view as one with no position does)
@@ -9992,7 +10002,10 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
     FRAG_PROJECTION.set(out, unitProj)
   }
   const builtMarks = buildMarks(spec, fields, mark, orient, dataName, markSize)
-  if (animation && hasTimeChannel) animateMarks(builtMarks, dataName)
+  if (hasTimeChannel) {
+    refuseAnimatedVoronoi(unitSel?.cmpts)
+    animateMarks(builtMarks, dataName, animation !== undefined)
+  }
   out.marks = builtMarks
   out.scales = buildScales(spec, fields, mark, orient, scaleDataName, wSpec, hSpec, data.seriesFields, pd.rawName)
   applyScaleConfig(out.scales as ScaleSpec[], isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined)

@@ -1083,10 +1083,8 @@ function validateAnimation(spec: Obj, enc: unknown, at: (k: string) => string, m
   if (!hasTime) return
   const timeAt = at('encoding.time')
   if (!st().animatable) fail(timeAt, 'the time channel is supported on a single top-level unit spec, or a unit of a layer, only (not inside concat / facet / repeat)')
-  if (st().timerParams.size < 1) fail(timeAt, 'the time channel needs a timer selection param ({"name": "anim", "select": {"type": "point", "on": "timer", "fields": [...]}}): without it vega-lite 6.4.3 emits marks that read a dataset it never defines')
-  const [name] = [...st().timerParams]
-  const filters = (Array.isArray(spec.transform) ? spec.transform : []).filter((t): t is Obj => isObj(t) && isObj(t.filter) && t.filter.param === name)
-  if (filters.length !== 1) fail(at('transform'), `the time channel needs the transform {"filter": {"param": ${JSON.stringify(name)}}} (once): it is the predicate that picks the current frame`)
+  // (what the marks read when there is no timer selection, or no filter of it, is decided by the compile: a mark that reads the frame
+  // dataset of a unit that has none is refused there, and a mark of a path that reads its facet's own dataset is not)
   const markDef = isObj(spec.mark) ? spec.mark : { type: spec.mark }
   if (['boxplot', 'errorbar', 'errorband'].includes(markDef.type as string)) fail(at('mark'), `a "${String(markDef.type)}" is a layered composite mark: animating it is not supported`)
   if (markDef.point !== undefined || markDef.line !== undefined) fail(at('mark'), 'a point / line overlay makes the unit a layer: animating it is not supported')

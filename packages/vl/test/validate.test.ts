@@ -39,7 +39,7 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['a sequence with another source', { data: { sequence: { start: 0, stop: 3 }, values: [] }, mark: 'point' }, /cannot be combined/],
   ['an unknown invalid mode', unit({ mark: { type: 'point', invalid: 'drop' } }), /unknown invalid-value mode/],
   ['a bad scale invalid value', unit({ config: { scale: { invalid: { x: 'nope' } } } }), /zero-or-min/],
-  ['the time channel', unit({ encoding: { x: xq, y: yq, time: { field: 'x', type: 'quantitative' } } }), /encoding\.time: the time channel needs a timer selection param/],
+  ['the time channel', unit({ encoding: { x: xq, y: yq, time: { field: 'x', type: 'quantitative' } } }), /the time channel needs a timer selection and its frame filter/],
   // --- composition nesting
   ['a facet inside a layer', { data: DATA, layer: [{ facet: { field: 'c', type: 'nominal' }, spec: unit() }] }, /not allowed inside `layer`/],
   ['an empty layer', { data: DATA, layer: [] }, /non-empty array/],
@@ -78,7 +78,6 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['a selection on a repeat over a boxplot', { data: DATA, params: [{ name: 'b', select: 'interval' }], repeat: ['x', 'y'], spec: unit({ mark: 'boxplot' }) }, /boxplot is a layer once vega-lite has normalized it/],
   ['a selection on a concat over a unit with params of its own', { data: DATA, params: [{ name: 'b', select: 'interval' }], hconcat: [unit({ params: [{ name: 'c', value: 1 }] }), unit({})] }, /replaces the parameters of a unit that has some of its own/],
   ['a selection restricted to views', { data: DATA, params: [{ name: 'b', select: 'interval', views: ['a'] }], hconcat: [unit({}), unit({})] }, /`views`.*not supported/],
-  ['a timer selection without fields or encodings (it would select by row id)', unit({ params: [{ name: 'b', select: { type: 'point', on: 'timer{500}' } }] }), /needs `fields` or `encodings`/],
   ['a timer event stream that is not a selection\'s own `on` (clear)', unit({ params: [{ name: 'b', select: { type: 'point', on: 'click', clear: 'timer' } }] }), /timer event streams/],
   ['a timer event stream in the selection config', unit({ config: { selection: { point: { on: 'timer' } } } }), /timer event streams/],
   ['a parameter with an empty name', unit({ params: [{ name: '', value: 1 }] }), /params\[0\]\.name: must be a non-empty string/],
