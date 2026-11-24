@@ -11,7 +11,8 @@
  *  2. The emitted Vega is rendered through REAL vega; any vega error or
  *     warning fails the entry (Aster's own runtime is lenient, so rendering it
  *     only through Aster hid invalid Vega). Messages that vega-lite's
- *     own output also triggers (data-dependent noise) are not counted.
+ *     own output also triggers (data-dependent noise) are not counted, but are printed as a `note:` under the entry (an entry that draws
+ *     from no data is also refused by `pnpm conformance`, which holds the entries drawing no item to corpus-no-items.json).
  *  3. Real vega's rendering of OUR Vega must equal its rendering of
  *     vega-lite's output (canonicalized SVG): the emitted spec means the same
  *     thing as the reference in the engine that defines the semantics.
@@ -52,8 +53,11 @@ const DIRS: Array<{ dir: string; aster: boolean }> = [
 ]
 
 /** `vega` is the verdict of checks 1-3; `aster` that of check 4 (null: not reached, because checks 1-3 failed). */
-type Outcome = { kind: 'pass' } | { kind: 'fail' | 'error'; lines: string[] }
+type Outcome = { kind: 'pass'; notes?: string[] } | { kind: 'fail' | 'error'; lines: string[] }
 interface CaseResult { vega: Outcome; aster: Outcome | null }
+
+/** The warnings real vega raises on vega-lite's own output that say something about the data (a headless run cannot resolve `window` event sources: that one is noise). */
+const dataNotes = (warnings: readonly string[]): string[] => [...new Set(warnings.filter((w) => !/^Can not resolve event source/.test(w)))].map((w) => w.slice(0, 160))
 
 /** The multiset diff of two canonical SVGs, as printable lines. */
 function multisetLines(o: { records: string[] }, u: { records: string[] }, diffs: unknown[]): string[] {
@@ -119,10 +123,11 @@ async function runCase(spec: Record<string, unknown>, plant: boolean): Promise<C
     const tipDiff = firstDifference(oracleChecked.tooltips, checked.tooltips)
     if (tipDiff) return { vega: { kind: 'fail', lines: [`real vega on our Vega gives different tooltips than on vega-lite's: ${tipDiff}`] }, aster: null }
     vegaOk = true
+    const notes = dataNotes(oracleChecked.warnings)
     const ourSvg = renderSpec((await loadSpecData(ourPlain() as never, TRUSTED_LOAD_OPTIONS)) as never) as string
     const u = canonicalizeSvg(plant ? plantSvg(ourSvg) : ourSvg)
     const diffs = diffCanonical(o, u)
-    return { vega: { kind: 'pass' }, aster: diffs.length === 0 ? { kind: 'pass' } : { kind: 'fail', lines: multisetLines(o, u, diffs) } }
+    return { vega: { kind: 'pass', notes }, aster: diffs.length === 0 ? { kind: 'pass' } : { kind: 'fail', lines: multisetLines(o, u, diffs) } }
   } catch (err) {
     const failed: Outcome = { kind: 'error', lines: [`${err instanceof Error ? err.message.split('\n')[0] : String(err)}`.slice(0, 220)] }
     return vegaOk ? { vega: { kind: 'pass' }, aster: failed } : { vega: failed, aster: null }
@@ -156,6 +161,8 @@ async function main(gate: Gate, filter: string | undefined): Promise<void> {
       if (ok) {
         passed++
         console.log(`PASS  ${name}${tag}`)
+        // (a warning the oracle itself raises is subtracted from the check above: it is printed so that an entry that draws from no data is seen)
+        for (const n of (r.vega.kind === 'pass' ? r.vega.notes ?? [] : [])) console.log(`      note: the oracle warns: ${n}`)
       } else {
         const bad = r.vega.kind !== 'pass' ? r.vega : r.aster!
         if (bad.kind === 'fail') failed++

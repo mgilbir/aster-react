@@ -30,19 +30,11 @@
   },
   {
    "name": "vlx-geo-geoshape-empty-data",
-   "why": "lane a28 (ranges 4-6): the oracle draws no mark item in the headless run; give it data that draws, or state why none is the point"
+   "why": "by design: the spec is an empty FeatureCollection (the empty-data case); real vega draws no shape either, so the guides and the root are what is compared"
   },
   {
-   "name": "vlx-geo-repeat-map-color-fields",
-   "why": "lane a28 (ranges 4-6): the oracle draws no mark item in the headless run; give it data that draws, or state why none is the point"
-  },
-  {
-   "name": "vlx-image-value-url",
-   "why": "lane a28 (ranges 4-6): the oracle draws no mark item in the headless run; give it data that draws, or state why none is the point"
-  },
-  {
-   "name": "wordcloud",
-   "why": "lane a28 (ranges 4-6): the oracle draws no mark item in the headless run; give it data that draws, or state why none is the point"
+   "name": "wordcloud-empty-data",
+   "why": "by design: an empty-data wordcloud; real vega's wordcloud transform needs a canvas that the Node oracle lacks, so the words of a cloud are compared in Chromium by wordcloud-vs-vega.test.ts and this entry pins that no words means no marks"
   }
  ]
 }

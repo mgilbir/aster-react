@@ -713,6 +713,7 @@ Aster matches Vega's output wherever the oracle can be run; where it deliberatel
 | Generated bound inputs: `name` | a radio group is named with the chart's React id; other inputs have no name | every input is named after its signal | two charts on a page do not share a radio group, and a spec does not choose the field names a host `<form>` submits |
 | `bind.element` (an input placed in, or bound to, an element of the page by CSS selector) | not honoured; reported through the logger; an input with a type is drawn under the chart | honoured | event sources and controls are confined to the chart (DECISIONS Q1); see LIMITS.md |
 | A bound input whose signal value is `undefined` | a text field shows empty | a text field shows `undefined` | a value the signal does not have is no text |
+| Two clipped groups with the same clip rectangle (Vega-Lite's `b1_brush_bg` and `b1_brush`) | one `<clipPath>` (clip ids are content-addressed), and a transparent mark carries `pointer-events="visible"` | one `<clipPath>` per clipped group (`clip1`, `clip2`), and the string renderer writes no `pointer-events` on a transparent item | the clipped output is the same, and equal clip rectangles need one definition; the canonicalizer resolves clip paths to their content, so the comparison passes (found by `vlx-sel-config-selection`) |
 
 ## Known Limitations / Roadmap
 
