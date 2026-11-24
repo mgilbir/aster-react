@@ -201,12 +201,11 @@ describe('hierarchy layouts write only their own output fields', () => {
     expect(JSON.stringify(nodes)).toBe(before)
   })
 
-  it('treemap padding offsets use the d3 sign convention', () => {
+  it('treemap padding offsets use the d3 sign convention: the tiles are vega\'s (recorded from vega 6.3.1)', () => {
     const out = run(nodes, [st, { type: 'treemap', field: 's', size: [100, 100], paddingInner: 4, paddingOuter: 2 }])
-    const root = out[0]!
-    expect([root.x0, root.y0, root.x1, root.y1]).toEqual([0, 0, 100, 100])
-    // the children tile the root minus the 2px outer padding, then lose half the inner padding at each shared edge
-    expect(out[1]!.x0 as number).toBeGreaterThanOrEqual(2)
+    // [x0, y0, x1, y1] of the root, `a` (3) and `b` (1): the children tile the root minus the 2px outer padding, 4px apart
+    expect(out.map((r) => [r.x0, r.y0, r.x1, r.y1])).toEqual([[0, 0, 100, 100], [2, 2, 73, 98], [77, 2, 98, 98]])
+    expect(out.map((r) => [r.depth, r.children])).toEqual([[0, 2], [1, 0], [1, 0]])
   })
 })
 
