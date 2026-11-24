@@ -5,7 +5,8 @@
  * A vega view prevents the default action of every event of the `view` source that a stream listens to, unless the
  * event config says otherwise: `config.events.defaults` is `{allow: ['wheel']}` by default, a `prevent` / `allow` list or
  * boolean overrides it, and with neither `view.preventDefault()` (default false) decides. `consume` always prevents.
- * Window, selector and timer sources are never prevented by the config. The same spec, config and events go to a
+ * Window and selector sources are never prevented by the config. (A timer source is no DOM event: there is nothing to prevent,
+ * and no variant of this file listens to one.) The same spec, config and events go to a
  * vega View (renderer svg, hover) and to the Aster binding; the verdict (`defaultPrevented`) of each must agree.
  */
 import { afterEach, describe, expect, it } from 'vitest'
