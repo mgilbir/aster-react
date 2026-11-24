@@ -43,7 +43,7 @@ const plain = (v: unknown): string => JSON.stringify(v, (k, x: unknown) =>
 /** vega's LCG, the source both sides draw from (sample). */
 const lcg = (seed: number): (() => number) => () => (seed = (1103515245 * seed + 12345) % 2147483647) / 2147483647
 
-describe('a transform signal is what vega binds it to, or an opaque object for vega'"'"'s internal state', () => {
+describe("a transform signal is what vega binds it to, or an opaque object for vega's internal state", () => {
   it('every transform type is modelled or refused, and every modelled one has a case here', () => {
     const modelled = [...TRANSFORM_TYPES].filter((t) => signalValueOf(t) !== undefined)
     expect(modelled.filter((t) => !CASES[t]).sort()).toEqual([])
@@ -51,7 +51,7 @@ describe('a transform signal is what vega binds it to, or an opaque object for v
   for (const [type, transform] of Object.entries(CASES)) {
     it(type, async () => {
       const s = spec(transform)
-      vega.setRandom(lcg(5))
+      ;(vega as unknown as { setRandom(r: () => number): void }).setRandom(lcg(5))
       const view = new vega.View(vega.parse(structuredClone(s) as never), { renderer: 'none', logLevel: vega.None })
       await view.runAsync()
       const want = plain((view.data('o') as Obj[])[0]!.s)
