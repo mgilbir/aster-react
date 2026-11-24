@@ -518,10 +518,10 @@ export async function loadSpecData<T extends VgSpec>(spec: T, opts: LoadOptions 
   const specLocale = config?.locale != null && typeof config.locale === 'object' ? chartLocale(config.locale as LocaleDefinition) : undefined
   try {
     // A date pattern is read with the calendar (the `time` part of the engine, engine-parts.ts). `<Chart>` asks `specNeeds` for parts only
-    // for the spec this returns, so the loader loads what its own parsing reads, whatever the page has loaded before it. (Imported when
-    // needed: the add-on does not carry the add-on loader.)
+    // for the spec this returns, so the loader loads what its own parsing reads, whatever the page has loaded before it
+    // (the part module fills its slot when it runs, once however many loads ask for it).
     if (!partLoaded('time') && tasks.some((t) => parsesDates(t.format?.parse))) {
-      await (await import('./addons.js')).loadParts(['time'])
+      await import('./part-time.js')
     }
     await Promise.all(
       tasks.map(async (task) => {
