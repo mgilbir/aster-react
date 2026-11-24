@@ -1,12 +1,14 @@
 // One Vega-Lite specification per property value Vega-Lite's own schema
-// declares. The test compares the Vega the engine compiles each into with the
-// Vega upstream compiles it into.
+// declares. The runner (src/run-sweep.ts) compiles each with upstream vega-lite
+// and with @aster-charts/vl, renders upstream's Vega through real vega and ours
+// through Aster, and compares the pictures (canonical SVG with its ARIA
+// structure); with --vega-check it also renders the Vega ours emits through
+// real vega. src/diff-vl.ts is the by-hand comparison of the emitted specs.
 //
 // That is where a Vega-Lite defect lives. Vega-Lite's whole value is the
 // defaults it supplies (a scale type, a stack transform, a tick count, a label
 // angle, a band size) and every one of them is a property of the
-// specification it emits. Comparing the emitted Vega names the rule that
-// drifted; comparing the picture would say "some marks moved".
+// specification it emits, and shows in the picture it draws.
 //
 // The surface is much larger than Vega's: 458 definitions, a MarkDef of 88
 // properties, an Encoding of 38 channels, a Config of 72. The fixture corpus
@@ -39,8 +41,10 @@
 // One family per guide block a channel carries (axis, legend, header, scale),
 // and one per configuration block; see GUIDE_CHARTS and CONFIG_CHARTS.
 //
-// Values are chosen from the schema and nothing else: an enum's words, both
-// booleans, a small fixed set of numbers, one colour, one string. Anything the
+// Values are chosen from the schema and nothing else: an enum's words (every
+// enum of the property's branches), both booleans, a small fixed set of
+// numbers (all three where a property is several of them), one colour, one
+// string. Anything the
 // schema does not say enough about is skipped and counted, with its reason.
 //
 // A specification upstream refuses is still a case: "upstream will not compile
@@ -48,6 +52,7 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { enumerableUnion, uniqueName } from './vega-schema.mjs';
 
 /** The rows every chart here draws: a category, a number, a second number, and a date. */
 const ROWS = [
@@ -321,25 +326,11 @@ const SKIP = {
   point: 'a line or area overlay, which is a mark specification rather than a value',
   line: 'an area overlay, which is a mark specification rather than a value',
   style: 'names config blocks the base chart does not declare',
-  tooltip: 'a pointer affordance, and there is no pointer in a compiled specification',
   text: 'the text itself, which the encoding supplies',
   url: 'an image to fetch, and a comparison that fetched one would be measuring the network',
-  description: 'prose, emitted verbatim',
-  aria: 'an accessibility flag with no geometry',
-  ariaRole: 'prose, emitted verbatim',
-  ariaRoleDescription: 'prose, emitted verbatim',
-  href: 'a link, which draws nothing',
-  x: 'a position the encoding already supplies',
-  y: 'a position the encoding already supplies',
-  x2: 'a position the encoding already supplies',
-  y2: 'a position the encoding already supplies',
-  theta: 'a position the encoding already supplies',
-  theta2: 'a position the encoding already supplies',
-  radius: 'a position the encoding already supplies',
-  radius2: 'a position the encoding already supplies',
-  width: "the mark's own size, which the view already fixes",
-  height: "the mark's own size, which the view already fixes",
-  clip: 'clipping, which changes no property of the compiled specification',
+  // (swept, every one: the comparison is the rendered SVG with its ARIA structure, its links and its clip geometry, so
+  // `tooltip`, `description`, `aria`, `ariaRole*`, `href` and `clip` are observable, and a literal position or size on the
+  // mark is a value the compiled specification either keeps or lets the encoding override, as vega-lite decides)
   font: 'a font family, resolved by whatever engine measures the text',
   timeUnitBandSize: 'a band size in time units, which needs a time-unit encoding to mean anything',
   timeUnitBandPosition:
@@ -453,18 +444,10 @@ export function generate(ctx) {
   /** Collects the candidate values a schema fragment declares, or null where there are none. */
   function declaredValues(fragment, name) {
     const branches = branchesOf(fragment);
-    for (const branch of branches) {
-      if (branch.enum) {
-        const values = branch.enum.filter((v) => v !== null);
-        if (values.length) return { kind: 'enum', values };
-      }
-    }
-    for (const branch of branches) {
-      if (branch.type === 'boolean') return { kind: 'boolean', values: [true, false] };
-    }
-    for (const branch of branches) {
-      if (branch.type === 'number') return { kind: 'number', values: NUMBERS };
-    }
+    // every enumerable branch together (vega-schema.mjs `enumerableUnion`): `stack` is words AND booleans, `timeUnit` and `sort`
+    // several enums, `tickCount` and `nice` words AND numbers
+    const union = enumerableUnion(branches, NUMBERS);
+    if (union.values.length) return union;
     // A colour is named by the definition it references rather than by the property's name.
     if (JSON.stringify(fragment).includes('Color')) return { kind: 'colour', values: [COLOUR] };
     for (const branch of branches) {
@@ -572,9 +555,7 @@ export function generate(ctx) {
       for (const value of candidates.values) {
         const spec = baseSpec();
         apply(spec, property, value);
-        let name = `${family}-${property}-${slug(value)}`;
-        if (used.has(name)) name = `${name}-${used.get(name) + 1}`;
-        used.set(name, (used.get(name) || 0) + 1);
+        const name = uniqueName(used, `${family}-${property}-${slug(value)}`);
         cases.push({ name, family, property, lite: true, spec });
       }
     }
