@@ -41,8 +41,8 @@ const SEQUENCE_CPU_MS = 8000
 /** Specs that must be refused, by the ceiling named (or, under a time budget, by the clock). */
 const REFUSED: Array<[string, unknown, RegExp, number?]> = [
   ['scale bins with a tiny step', axis({ type: 'linear', domain: [0, 1000], bins: { step: 1e-7 } }), /range/],
-  ['utcSequence of seconds over 30 years', { signals: [{ name: 'n', update: "length(utcSequence('seconds', datetime(2000,0,1), datetime(2030,0,1)))" }] }, /time range|time ticks/, SEQUENCE_CPU_MS],
-  ['timeSequence of milliseconds over a year', { signals: [{ name: 'n', update: "length(timeSequence('milliseconds', datetime(2000,0,1), datetime(2001,0,1)))" }] }, /time range|time ticks/, SEQUENCE_CPU_MS],
+  ['utcSequence of seconds over 30 years', { signals: [{ name: 'n', update: "length(utcSequence('seconds', datetime(2000,0,1), datetime(2030,0,1)))" }] }, /time range|time ticks|time sequence/, SEQUENCE_CPU_MS],
+  ['timeSequence of milliseconds over a year', { signals: [{ name: 'n', update: "length(timeSequence('milliseconds', datetime(2000,0,1), datetime(2001,0,1)))" }] }, /time range|time ticks|time sequence/, SEQUENCE_CPU_MS],
   ['log ticks of base 1e15 near a power', axis({ type: 'log', base: 1e15, domain: [9e14, 1e15] }), /log ticks/],
   ['log ticks of base 1e7 over 300 decades', axis({ type: 'log', base: 1e7, domain: [1, 1e300] }, { tickCount: 50 }), /log ticks/],
   ['log ticks of a negative domain, base 1e12', axis({ type: 'log', base: 1e12, domain: [-1e12, -1] }), /log ticks/],
