@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest'
-import { compileChart, evaluateChart, renderSceneToSvg } from './index.js'
+import { compileChart, datasetsOfScene, evaluateChart, renderSceneToSvg } from './index.js'
 import { createChartSession } from './session.js'
 import { createChartStream, AsterStreamBackpressureError } from './stream.js'
 import { diffRows } from './pulse.js'
@@ -40,6 +40,9 @@ function evalFull(spec: VgSpec, values: unknown[]): string {
 }
 
 const svgOf = (scene: ReturnType<typeof evaluateChart>): string => renderSceneToSvg(scene)
+/** Every dataset of a scene, by name: the rows each transform wrote, drawn or not. */
+const rowsOf = (scene: ReturnType<typeof evaluateChart>): Record<string, unknown> =>
+  Object.fromEntries([...datasetsOfScene(scene)].map(([k, rows]) => [k, JSON.parse(JSON.stringify(rows))]))
 
 describe('length-changing pulses', () => {
   it('derives an append mapping and an insert/delete mapping', () => {
@@ -103,7 +106,8 @@ describe('length-changing pulses', () => {
       { name: 'flatten', transform: [{ type: 'formula', expr: '[datum.v, datum.x]', as: 'arr' }, { type: 'flatten', fields: ['arr'], as: ['v'] }], a: points(3), b: points(5) },
       { name: 'collect', transform: [{ type: 'collect', sort: { field: 'v', order: 'descending' } }], a: points(6), b: points(9) },
       { name: 'sample', transform: [{ type: 'sample', size: 3, sort: { field: 'v' } }], a: points(6), b: points(9) },
-      { name: 'impute', transform: [{ type: 'impute', field: 'v', key: 'g', method: 'value', value: 0 }], a: points(6), b: points(9) },
+      // (grouped by x, so every group lacks most keys and the transform adds rows)
+      { name: 'impute', transform: [{ type: 'impute', field: 'v', key: 'g', groupby: ['x'], method: 'value', value: 0 }], a: points(6), b: points(9) },
       { name: 'pivot', transform: [{ type: 'pivot', field: 'g', value: 'v', groupby: ['x'] }], a: points(6), b: points(9) },
     ]
     for (const c of cases) {
@@ -113,6 +117,11 @@ describe('length-changing pulses', () => {
       const inc = session.evaluate(spec, { data: { src: c.b } })
       const full = evaluateChart(compileChart(spec), { data: { src: c.b } })
       expect(svgOf(inc), c.name).toBe(svgOf(full))
+      // the mark reads only x and v: the rows themselves are what shows a wrong stack, pivot or impute result
+      const rows = rowsOf(inc)
+      expect(rows, c.name).toEqual(rowsOf(full))
+      // (and the transform does something on these rows: its output is not its input)
+      expect(rows.t, `${c.name} changes the rows`).not.toEqual(rows.src)
     }
   })
 
@@ -130,7 +139,7 @@ describe('length-changing pulses', () => {
     expect(itemsB[0]).toBe(itemsA[0])
   })
 
-  it('keeps geo and layout transforms on the mapping path', () => {
+  it('layout, geo and voronoi transforms over an appended source equal a fresh evaluation, and the session hands the append on as one', () => {
     const tree = [
       { id: 1, parent: null, v: 4 },
       { id: 2, parent: 1, v: 2 },
@@ -158,8 +167,32 @@ describe('length-changing pulses', () => {
       const inc = session.evaluate(spec, { data: { tree: next } })
       const full = evaluateChart(compileChart(spec), { data: { tree: next } })
       expect(svgOf(inc), type).toBe(svgOf(full))
+      // (partition and treemap write x0..y1, which the mark does not draw: the rows are compared)
+      expect(rowsOf(inc), type).toEqual(rowsOf(full))
+      expect((rowsOf(inc).t as Array<Record<string, unknown>>).every((row) => typeof row[type === 'pack' ? 'r' : 'x1'] === 'number'), type).toBe(true)
       expect(session.pulse()?.datasets.get('tree')?.addedRanges).toEqual([[3, 4]])
     }
+
+    // a geo transform: geopoint through a projection fitted to the appended data
+    const places = (n: number) => Array.from({ length: n }, (_, i) => ({ lon: -60 + i * 17, lat: -30 + ((i * 13) % 50) }))
+    const geo = {
+      width: 200, height: 120, padding: 0, autosize: 'none',
+      projections: [{ name: 'p', type: 'mercator', fit: { signal: "data('pts')" }, size: [{ signal: 'width' }, { signal: 'height' }] }],
+      data: [
+        { name: 'src', values: [] },
+        { name: 'pts', source: 'src', transform: [{ type: 'formula', expr: "{type: 'Feature', geometry: {type: 'Point', coordinates: [datum.lon, datum.lat]}}", as: 'f' }] },
+        { name: 't', source: 'src', transform: [{ type: 'geopoint', projection: 'p', fields: ['lon', 'lat'] }] },
+      ],
+      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { field: 'x' }, y: { field: 'y' } } } }],
+    } as unknown as VgSpec
+    const geoSession = createChartSession()
+    geoSession.evaluate(geo, { data: { src: places(4) } })
+    const geoInc = geoSession.evaluate(geo, { data: { src: places(6) } })
+    const geoFull = evaluateChart(compileChart(geo), { data: { src: places(6) } })
+    expect(svgOf(geoInc)).toBe(svgOf(geoFull))
+    expect(rowsOf(geoInc)).toEqual(rowsOf(geoFull))
+    expect((rowsOf(geoInc).t as unknown[]).length).toBe(6)
+    expect(geoSession.pulse()?.datasets.get('src')?.addedRanges).toEqual([[4, 6]])
 
     const voro = symbolSpec(points(5), [{ type: 'voronoi', x: 'x', y: 'v', size: [300, 180], as: 'path' }])
     const session = createChartSession()
@@ -167,6 +200,7 @@ describe('length-changing pulses', () => {
     const next = points(7)
     const inc = session.evaluate(voro, { data: { src: next } })
     expect(svgOf(inc)).toBe(evalFull(voro, next))
+    expect(rowsOf(inc)).toEqual(rowsOf(evaluateChart(compileChart(voro), { data: { src: next } })))
     expect(session.pulse()?.datasets.get('src')?.addedRanges).toEqual([[5, 7]])
   })
 
@@ -233,17 +267,19 @@ describe('streaming and backpressure', () => {
   })
 
   it('honors an explicit pulse without diffing the snapshot', () => {
+    // Two rows of equal content trade places: a diff of the snapshot sees the same rows (no change, no mapping), the host's pulse
+    // says the rows moved. The stream must deliver the host's pulse, not the diff.
     const spec = symbolSpec(points(4))
-    const stream = createChartStream(spec)
-    const append = points(2, 4)
-    stream.push({
-      append: { t: append },
-      pulse: { t: { changed: [], from: [0, 1, 2, 3, -1, -1], added: [[4, 6]], removed: [] } },
-    })
-    const pending = stream.pending()
-    expect(pending.datasets.get('t')?.from).toEqual([0, 1, 2, 3, -1, -1])
+    const rows = [{ x: 0.1, v: 1, g: 'g0', w: 1 }, { x: 0.1, v: 1, g: 'g0', w: 1 }, ...points(2, 7)]
+    const stream = createChartStream(spec, { initial: { data: { t: rows } } })
+    stream.flush()
+    const moved = [rows[1]!, rows[0]!, rows[2]!, rows[3]!]
+    expect(diffRows(rows, moved)).toMatchObject({ sameLength: true, changed: [] })
+    stream.push({ data: { t: moved }, pulse: { t: { changed: [], from: [1, 0, 2, 3] } } })
+    expect(stream.pending().datasets.get('t')?.from).toEqual([1, 0, 2, 3])
     const flush = stream.flush()!
-    expect(flush.pulse.datasets.get('t')?.addedRanges).toEqual([[4, 6]])
+    expect(flush.pulse.datasets.get('t')?.from).toEqual([1, 0, 2, 3])
+    expect(svgOf(flush.scene)).toBe(evalFull(spec, moved))
   })
 
   it('drops newest/oldest batches and reports typed backpressure', () => {
@@ -284,11 +320,20 @@ describe('streaming and backpressure', () => {
   })
 
   it('treats a signal-only batch as a normal re-evaluation', () => {
-    const spec = { ...symbolSpec(points(2)), signals: [{ name: 'pad', value: 1 }] } as VgSpec
-    const stream = createChartStream(spec)
-    stream.push({ width: 400 })
+    const base = symbolSpec(points(2))
+    const spec = {
+      ...base, signals: [{ name: 'pad', value: 1 }],
+      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'v' }, size: { signal: 'pad * 20' } } } }],
+    } as VgSpec
+    const stream = createChartStream(spec, { initial: { data: { t: points(2) } } })
+    const before = svgOf(stream.flush()!.scene)
+    stream.push({ signals: { pad: 7 }, width: 400 })
     const flush = stream.flush()!
-    expect(flush.scene).toBeTruthy()
+    // the signal and the size reach the scene, as a fresh evaluation of the same input draws it, and no dataset is pulsed
+    const fresh = evaluateChart(compileChart(spec), { data: { t: points(2) }, signals: { pad: 7 }, width: 400 })
+    expect(svgOf(flush.scene)).toBe(svgOf(fresh))
+    expect(svgOf(flush.scene)).not.toBe(before)
+    expect(flush.scene.width).toBe(400)
     expect(flush.pulse.datasets.size).toBe(0)
   })
 })
