@@ -33,14 +33,7 @@ const ownBackslash = (raw: string): boolean => raw.includes('\\\\')
 
 describe('field names reach expressions only through JSON-escaped datum[...] reads', () => {
   for (const n of NAMES) {
-    // (a text mark's description writes the field's title between quotes, unescaped, as vega-lite does: for a title with a quote and a
-    // backslash the expression does not parse in vega, and the compile says so instead of emitting it)
-    const brokenTitle = n.label === 'double quote + backslash (escaped)'
     it(`${n.label}: raw ${JSON.stringify(n.raw)} compiles with the key ${JSON.stringify(n.key)} read as ONE literal`, () => {
-      if (brokenTitle) {
-        expect(() => compileFrozen({ data: { name: 't', values: [n.row] }, mark: 'text', encoding: { text: { field: n.raw, type: 'nominal' }, tooltip: { field: n.raw, type: 'nominal' } } })).toThrowError(/reads "hi", which no parameter or signal declares/)
-        return
-      }
       const out = compileFrozen(ownBackslash(n.raw)
         ? { data: { name: 't', values: [n.row] }, mark: 'text', encoding: { text: { field: n.raw, type: 'nominal' }, tooltip: { field: n.raw, type: 'nominal' } } }
         : {
