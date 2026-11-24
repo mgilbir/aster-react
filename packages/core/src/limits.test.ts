@@ -2,7 +2,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import {
   AsterLimitError, checkSpecLimits, checkSceneLimits, renderSpec, compileChart, evaluateChart,
-  defaultLocale, resetDefaultLocale, locale, compileExpr,
+  defaultLocale, resetDefaultLocale, locale, compileExpr, applyTransforms,
 } from './index.js'
 import { createChartSession } from './addon-dom.js'
 import { withLimits, activeMeter, allot, checkRowCount, meterTick, unboundedForParity } from './limits.js'
@@ -150,6 +150,21 @@ describe('generated rows are budgeted cumulatively (maxGeneratedRows)', () => {
     ] } as unknown as VgSpec
     expect(() => renderSpec(spec, { limits: { maxRows: 1000 } })).not.toThrow()
     expect(lim(() => renderSpec(spec, { limits: { maxRows: 1000, maxGeneratedRows: 1000 } })).message).toMatch(/maxGeneratedRows/)
+  })
+
+  it('the rows a step makes are charged once, by that step, not again by every step after it (C405)', () => {
+    // 100 rows folded over 3 fields make 200 more; every later step keeps them: 200 generated, whatever follows
+    const rows = Array.from({ length: 100 }, (_, i) => ({ a: i, b: i, c: i }))
+    const runtime = { scale: () => undefined, data: () => [], expr: (e: string) => compileExpr(e, runtime as never) }
+    const ctx = { runtime, signals: Object.create(null) }
+    const after = [{ type: 'formula', expr: '1', as: 'f' }, { type: 'formula', expr: '2', as: 'g' }, { type: 'filter', expr: 'true' }]
+    for (const tail of [[], after]) {
+      const pipeline = [{ type: 'fold', fields: ['a', 'b', 'c'] }, ...tail] as never
+      expect(() => withLimits({ maxGeneratedRows: 200 }, () => applyTransforms(rows, pipeline, ctx as never))).not.toThrow()
+      const spent = withLimits({ maxGeneratedRows: 1e6 }, () => { applyTransforms(rows, pipeline, ctx as never); return activeMeter()!.generatedRows })
+      expect(spent, JSON.stringify(tail)).toBe(200)
+      expect(lim(() => withLimits({ maxGeneratedRows: 199 }, () => applyTransforms(rows, pipeline, ctx as never))).message).toMatch(/maxGeneratedRows/)
+    }
   })
 })
 
