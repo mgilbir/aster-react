@@ -121,8 +121,9 @@ describe('generated d3-shape arc differential', () => {
       for (const k of Object.keys(item)) if (r() < 0.25) item[k] = odd[Math.floor(r() * odd.length)]
       if (r() < 0.1) { item.radius = item.outerRadius; delete item.outerRadius }
       const f = (k: string) => (it: Record<string, unknown>) => (it[k] as number) || 0
-      // (the legacy `radius` stands in for a missing outer radius)
-      const outer = (it: Record<string, unknown>) => ((it.outerRadius ?? it.radius) as number) || 0
+      // (vega's arc accessor reads `outerRadius || 0` alone -- vega-scenegraph path/shapes.js -- so an item that holds only a
+      // `radius`, a text channel, is an arc of outer radius 0)
+      const outer = f('outerRadius')
       const want = () => d3Shape.arc<Record<string, unknown>>().startAngle(f('startAngle')).endAngle(f('endAngle')).padAngle(f('padAngle')).innerRadius(f('innerRadius')).outerRadius(outer)
         .cornerRadius(f('cornerRadius')).digits(3)(item) ?? ''
       compare('item d@3', i, want, () => itemArcPath(item as never))
