@@ -194,7 +194,17 @@ describe('the DOM descriptor and the string renderer take one attribute list', (
     const scene = sceneOf([mark('symbol', [{ x: 1, y: 2, fill: evil, stroke: evil, dataDatum: evil }]), mark('path', [{ path: evil, fill: evil }])])
     const doc = parseSvg(renderSceneToSvg(scene))
     expect(doc.querySelector('img')).toBeNull()
-    expect(sceneToDomDesc(scene).children!.length).toBeGreaterThan(0)
+    expect(doc.querySelector('[onerror]')).toBeNull()
+    // the text is carried, not dropped: it round-trips through the parser as the value of the attributes it was written to
+    const carrying = [...doc.querySelectorAll('*')].filter((el) => [...el.attributes].some((a) => a.value === evil))
+    expect(carrying.length).toBeGreaterThanOrEqual(2)
+    expect(carrying.some((el) => el.getAttribute('fill') === evil)).toBe(true)
+    // and the DOM writer's descriptors carry the very same values (one source of attribute text for both writers)
+    const descAttrs: string[] = []
+    const walk = (d: ReturnType<typeof sceneToDomDesc>): void => { for (const [, v] of d.attrs) descAttrs.push(v); for (const c of d.children ?? []) walk(c) }
+    walk(sceneToDomDesc(scene))
+    const parsedAttrs = carrying.reduce((n, el) => n + [...el.attributes].filter((a) => a.value === evil).length, 0)
+    expect(descAttrs.filter((v) => v === evil).length).toBe(parsedAttrs)
   })
 })
 

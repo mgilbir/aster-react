@@ -229,6 +229,8 @@ function chart(v: Variant): VgSpec {
 // ---------------------------------------------------------------------------------------------------------------------------------
 
 interface World { t: Row[]; u: Row[]; raw?: unknown[] }
+// (reset at the start of every walk: the rows a step appends carry the same `i` whichever walks ran before, so a failure of the full
+// file reproduces under `-t <one test>`)
 let serial = 1000
 const r = (g: unknown, v: unknown = 10, h: unknown = 'x'): Row => ({ i: serial++ % 100, g, v, h })
 const T0: Row[] = Array.from({ length: 24 }, (_, i) => ({ i, g: ['c', 'a', 'd', 'b'][i % 4], v: i % 7 === 3 ? null : 5 + i, h: i % 5 === 0 ? 'y' : 'x' }))
@@ -293,7 +295,8 @@ const input = (w: World): RuntimeInput => ({ data: { t: w.t, u: w.u }, ...(w.raw
  * Walk `steps` through a session (as `<Chart>` drives it: a new array per update, diffed by the session), checking each step against
  * a fresh evaluation, and the reuse rule. Returns how many steps kept the scale and how many made it again.
  */
-function walk(v: Variant, steps: Step[], start: World = { t: T0, u: U0 }, hinted = false): { kept: number; made: number } {
+function walk(v: Variant, steps: Step[], start: World = { t: T0, u: U0 }, hinted = false): { kept: number; made: number; partial: number } {
+  serial = 1000
   const spec = chart(v)
   const label = `${v.kind} / ${v.pipeline} / sort ${v.sort} / ${v.domain ?? 'field'}`
   const s = createChartSession()
@@ -303,6 +306,7 @@ function walk(v: Variant, steps: Step[], start: World = { t: T0, u: U0 }, hinted
   let prevT = w.t
   let kept = 0
   let made = 0
+  let partial = 0 // steps whose scale was made again and whose channel was evaluated again for fewer items than there are (`reencodeChannels`)
   for (const step of steps) {
     w = step.to(w)
     const what = `${label}: ${step.what}`
@@ -334,7 +338,10 @@ function walk(v: Variant, steps: Step[], start: World = { t: T0, u: U0 }, hinted
       // same row whose scale-reading channel (`shape`, `size`, `strokeDash`) is tied to no other has that channel evaluated again, its counting
       // `opacity` not evaluated, and is the item before when the channel came out as it was: see `reencodeChannels`. A paint (`fill`)
       // or a position (`x`, `width`) is encoded whole: every counter runs)
-      if (v.kind === 'shape' || v.kind === 'size' || v.kind === 'strokeDash') expect(e, `${what}: encoded`).toBeLessThanOrEqual(n)
+      if (v.kind === 'shape' || v.kind === 'size' || v.kind === 'strokeDash') {
+        expect(e, `${what}: encoded`).toBeLessThanOrEqual(n)
+        if (e < n) partial++
+      }
       else expect(e, `${what}: encoded`).toBe(n)
     } else if (PIPELINES[v.pipeline]!.rowWise && step.touches !== Infinity) {
       expect(e, `${what}: encoded`).toBeLessThanOrEqual(step.touches)
@@ -343,7 +350,7 @@ function walk(v: Variant, steps: Step[], start: World = { t: T0, u: U0 }, hinted
     prev = scene
     prevFresh = fresh
   }
-  return { kept, made }
+  return { kept, made, partial }
 }
 
 describe('a discrete scale over data is kept exactly when its result is unchanged', () => {
@@ -352,14 +359,20 @@ describe('a discrete scale over data is kept exactly when its result is unchange
       it(`${kind} over ${pipeline}: every sort`, () => {
         let kept = 0
         let made = 0
+        let partial = 0
         for (const sort of Object.keys(SORTS)) {
           // (a sort by an aggregate of `v` over the aggregate's output reads its `v`; by `i`, which it has not, the order of appearance)
           const out = walk({ kind, pipeline, sort }, STEPS)
           kept += out.kept
           made += out.made
+          partial += out.partial
         }
         // (both outcomes happen in every combination: the walk is not vacuous)
         expect(kept).toBeGreaterThan(0)
+        // (a channel that is tied to no other is evaluated again for fewer items than the scene has, in about half the steps -- 91 to 104 of
+        // the walk's steps, measured -- and a paint or a position never is; the bound `e <= n` above is hollow where nothing is partial)
+        if (kind === 'shape' || kind === 'size' || kind === 'strokeDash') expect(partial, 'steps that evaluated a channel for fewer items').toBeGreaterThanOrEqual(50)
+        else expect(partial).toBe(0)
         expect(made).toBeGreaterThan(0)
       })
     }
@@ -501,11 +514,14 @@ describe('what the census tells apart', () => {
     const s = createChartSession()
     let u: Row[] = [{ g: 'p' }, { g: 'q' }]
     const t: Row[] = [{ g: 'a' }, { g: 'b' }]
-    s.evaluate(spec, { data: { t, u } })
+    let prev = s.evaluate(spec, { data: { t, u } })
     for (const next of [[{ g: 'q' }], [{ g: 'r' }, { g: 'p' }], [{ g: 'p' }]]) {
       u = next
       const input: RuntimeInput = { data: { t: [...t], u } }
       const scene = s.evaluate(spec, input)
+      // never kept: each update makes the scale again, whatever its settings are (the one before is not this one)
+      expect(scaleOf(scene, 's'), JSON.stringify(next)).not.toBe(scaleOf(prev, 's'))
+      prev = scene
       const fresh = evaluateChart(compileChart(spec), input)
       expect(norm(scene)).toEqual(norm(fresh))
       expect(same(scaleView(scaleOf(scene, 's')), scaleView(scaleOf(fresh, 's')))).toBe(true)
