@@ -191,8 +191,7 @@
     "translate": [
       60,
       380
-    ],
-    "scale": 300
+    ]
   },
   "mark": "geoshape",
   "encoding": {

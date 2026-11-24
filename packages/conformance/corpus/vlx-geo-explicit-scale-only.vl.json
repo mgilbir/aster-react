@@ -188,7 +188,7 @@
   },
   "projection": {
     "type": "equirectangular",
-    "scale": 4
+    "scale": 120
   },
   "mark": {
     "type": "geoshape",

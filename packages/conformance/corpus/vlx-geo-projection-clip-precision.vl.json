@@ -188,7 +188,7 @@
   },
   "projection": {
     "type": "orthographic",
-    "clipAngle": 60,
+    "clipAngle": 12,
     "precision": 0.2,
     "rotate": [
       -20,

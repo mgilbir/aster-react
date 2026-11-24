@@ -189,7 +189,7 @@
   "projection": {
     "type": "mercator",
     "reflectX": true,
-    "reflectY": false
+    "reflectY": true
   },
   "mark": "geoshape"
 }
