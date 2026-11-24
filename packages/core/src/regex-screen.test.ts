@@ -158,12 +158,12 @@ describe('the real attack (child process, hard kill)', () => {
 describe('a repetition-free run is analysed in steps proportional to its length', () => {
   const letters = (n: number): string => 'a'.repeat(n)
   it('1024 letters cost a few steps per letter, and double the length doubles them', () => {
-    const [a, b, c] = [256, 512, 1024].map((n) => regexAnalysisSteps(letters(n)).steps)
+    const [a = 0, b = 0, c = 0] = [256, 512, 1024].map((n) => regexAnalysisSteps(letters(n)).steps)
     expect(c).toBeLessThanOrEqual(4 * 1024)
     expect(b / a).toBeLessThan(2.5)
     expect(c / b).toBeLessThan(2.5)
     // (the general analysis follows every live prefix: its steps grow with the square, which is what the fast path avoids)
-    const [g1, g2] = [256, 512].map((n) => regexAnalysisSteps(letters(n), '', false).steps)
+    const [g1 = 1, g2 = 0] = [256, 512].map((n) => regexAnalysisSteps(letters(n), '', false).steps)
     expect(g2 / g1).toBeGreaterThan(3)
   })
   it('a 1024-letter literal is accepted under limits, and spends under a hundredth of the evaluation\'s step budget', () => {
