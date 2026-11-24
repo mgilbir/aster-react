@@ -4,7 +4,7 @@
  * path, and the primitives that rewrite a spec keep what they move unconsumed until its new place is read.
  */
 import { describe, it, expect } from 'vitest'
-import { compile, VLCompileError } from '../src/index.js'
+import { compile } from '../src/index.js'
 import { arm, consumeAll, consuming, derive, deriveDeep, deriveWithout, ignore, merge, peek, pick, refuseUnconsumed, transfer, unconsumedPaths, withConsumption } from '../src/consume.js'
 import { dict } from '../src/names.js'
 
