@@ -383,7 +383,7 @@ source is gone) all fail. Measured 2026-11-23 with `pnpm --filter @aster-charts/
 | `@aster-charts/react Chart` | `import { Chart } from '@aster-charts/react'` | 190.6 | 327.9 |
 | `@aster-charts/react SvgChart` | `import { SvgChart } from '@aster-charts/react/lite'` | 179.0 | 297.2 |
 | `@aster-charts/react SvgChart + interaction` | `<SvgChart>` + `import { interaction } from '@aster-charts/react/interaction'` | 190.3 | 316.7 |
-| `@aster-charts/react Chart + VL` | `import '@aster-charts/react/vl'` + `<Chart>` | 296.9 | 434.2 |
+| `@aster-charts/react Chart + VL` | `import '@aster-charts/react/vl'` + `<Chart>` | 301.5 | 434.2 |
 | `@aster-charts/react Chart + all` | `import '@aster-charts/react/all'` + `<Chart>` | 261.6 | 329.1 |
 | `@aster-charts/react useChartWorker` | `import { useChartWorker } from '@aster-charts/react'` | 204.0 | 296.2 |
 | `@aster-charts/react hydrateChart` | `import { hydrateChart } from '@aster-charts/react'` | 219.0 | 295.9 |
