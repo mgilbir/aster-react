@@ -498,11 +498,16 @@ export function readSettings(spec: CompiledScale, ctx: ScaleContext): Settings {
     settings.bins = (isObject(bins) && bins.signal) || isArray(bins) ? plainList(bins, ctx) : plainRecord(bins as Record<string, unknown>, ctx)
   }
 
-  // every other key is an option, kept in the order the spec gave it
+  // every other key is an option, in the order the spec gave it -- except that vega's operator holds a literal from the start and a
+  // `{signal}` only once it has run, so its parameters list every literal first and every signal after them, and the options are
+  // applied in that order (`padding: {signal}` written first is applied after a literal `paddingInner`, and wins)
+  const signals: string[] = []
   for (const key of Object.keys(s)) {
     if (hasOwnProperty(settings, key) || key === 'name' || key === '__proto__') continue
     if (s[key] === undefined) continue
-    settings[key] = plain(s[key], ctx)
+    if (isObject(s[key]) && (s[key] as { signal?: unknown }).signal) signals.push(key)
+    else settings[key] = plain(s[key], ctx)
   }
+  for (const key of signals) settings[key] = plain(s[key], ctx)
   return settings
 }

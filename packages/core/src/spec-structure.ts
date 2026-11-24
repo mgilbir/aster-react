@@ -172,11 +172,20 @@ export function checkFrom(from: unknown, group: boolean, names: Names): void {
 
 const DISCRETE_SCALE_TYPES: ReadonlySet<string> = new Set(['ordinal', 'band', 'point', 'bin-ordinal'])
 
-/** vega-parser `parseSort`: a domain sorted by an aggregate op needs the field it aggregates (`count` counts the values themselves). */
-function checkSort(sort: unknown): void {
+/** The aggregates a sort over several fields can combine (vega-parser's `MULTIDOMAIN_SORT_OPS`). */
+const MULTIDOMAIN_SORT_OPS: ReadonlySet<string> = new Set(['min', 'max', 'count'])
+
+/**
+ * vega-parser `parseSort`: a domain sorted by an aggregate op needs the field it aggregates (`count` counts the values themselves),
+ * and a domain of several fields can only be sorted by an op that combines across them. Vega reads the sort when it parses the
+ * domain, before the domain's members and every other option of the scale.
+ */
+function checkSort(sort: unknown, severalFields = false): void {
   if (!sort || typeof sort !== 'object') return
   const o = sort as Record<string, unknown>
   if (!o.field && o.op && o.op !== 'count') throw new SpecParseError('No field provided for sort aggregate op: ' + String(o.op))
+  if (!o.field && !o.op) return
+  if (severalFields && o.field && o.op && !(typeof o.op === 'string' && MULTIDOMAIN_SORT_OPS.has(o.op))) throw new SpecParseError('Multiple domain scales can not be sorted using ' + String(o.op))
 }
 
 /** vega-scale's registered scale types (`isValidScaleType`): vega-parser refuses any other. */
@@ -207,7 +216,7 @@ export function checkScale(s: unknown, names: Names): void {
   if (d.signal) return
   const discrete = DISCRETE_SCALE_TYPES.has(String(s.type))
   if (d.fields) {
-    if (discrete) checkSort(d.sort)
+    if (discrete) checkSort(d.sort, true)
     for (const f of specList(d.fields)) {
       if (typeof f === 'string') need(names, d.data)
       else if (Array.isArray(f) || (f as Record<string, unknown>)?.signal) continue
