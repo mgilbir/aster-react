@@ -39,7 +39,8 @@ import { renderSpec, renderSceneToSvg } from '@aster-charts/core'
 import { createChartSession } from '@aster-charts/core/dom'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
 import { compile as compileVL } from '@aster-charts/vl'
-import { renderWithVega, renderWithVegaChecked } from './render-vega.js'
+import { renderWithVegaChecked, settleWithin, type CheckedRender } from './render-vega.js'
+import { withOracleRandom } from './gallery/seeded.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 import { deepFreeze, forEngines } from './engines.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
@@ -152,14 +153,14 @@ async function renderOracle(vgSpec: Record<string, unknown>, writes: SweepCase['
   const runtime = vega.parse(structuredClone(vgSpec) as never)
   const view = new (vega as any).View(runtime, { renderer: 'none' })
   try {
-    await view.runAsync()
-    let svg: string = await view.toSVG()
+    await settleWithin(view.runAsync(), 'the oracle (vega runAsync)')
+    let svg: string = await settleWithin(view.toSVG() as Promise<string>, 'the oracle (vega toSVG)')
     // signals sweep: write the requested signals and re-render
     for (const w of writes ?? []) {
       view.signal(w.name, w.value)
-      await view.runAsync()
+      await settleWithin(view.runAsync(), 'the oracle (vega runAsync after a signal write)')
     }
-    if (writes?.length) svg = await view.toSVG()
+    if (writes?.length) svg = await settleWithin(view.toSVG() as Promise<string>, 'the oracle (vega toSVG)')
     return svg
   } finally {
     view.finalize()
@@ -199,7 +200,11 @@ async function renderOracleFresh(vgSpec: Record<string, unknown>, writes: NonNul
 /** --vega-check: also render the Vega @aster-charts/vl EMITS through real vega (see the header). */
 let vegaCheck = false
 
-async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'retained' | 'both-refused' | 'node-error' | 'engine-error' | 'differ' | 'nondeterministic' | 'vega-differ'> {
+/**
+ * `serial`: the case runs alone (nothing else draws random numbers meanwhile), so the --vega-check renders of a bootstrap case
+ * can each draw from the same seeded stream and be compared exactly (see the pool in `main`).
+ */
+async function runOneCase(c: SweepCase, nodeModules: string, serial = false): Promise<'ok' | 'retained' | 'both-refused' | 'node-error' | 'engine-error' | 'differ' | 'nondeterministic' | 'vega-differ'> {
   // Each engine is handed a copy of its own, taken before either runs (engines.ts): vega writes its transforms' answers onto
   // the rows it ingests, and an Aster handed those rows would agree with the oracle without running a transform at all.
   // `vgSpec` is the oracle's source, never rendered itself (renderOracle copies it for every render).
@@ -239,7 +244,7 @@ async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 're
   let ourSvg: string | null = null
   let ourErr = ''
   try {
-    const loaded = await loadSpecData(ourVgSpec as never, TRUSTED_LOAD_OPTIONS)
+    const loaded = await settleWithin(loadSpecData(ourVgSpec as never, TRUSTED_LOAD_OPTIONS), "Aster's data load")
     if (c.writes?.length) {
       // signals sweep: the engine does what the oracle does -- draw, write the
       // signals into the running chart, draw again (an incremental session, so
@@ -284,13 +289,17 @@ async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 're
     console.error(`  [differ] ${c.name} (${c.family}.${c.property}): canonicalizer cannot judge: ${(e as Error).message}`)
     return 'differ'
   }
-  if (diffs.length === 0 && vegaCheck && c.lite && !isBootstrapCase(c)) {
+  if (diffs.length === 0 && vegaCheck && c.lite) {
     // Aster's runtime is lenient: an emitted spec real vega rejects, warns about (beyond what
     // vega-lite's own output raises) or renders differently must not count as ok.
-    const [checked, oracleChecked] = await Promise.all([
-      renderWithVegaChecked(structuredClone(ourVgSpec)),
-      renderWithVegaChecked(structuredClone(vgSpec)),
-    ])
+    // A bootstrap case (ci0/ci1 draw random numbers) runs alone, each render drawing from the same seeded stream: the two
+    // renders of real vega are then a function of their specs and compare exactly, as every other case's do.
+    const bootstrap = isBootstrapCase(c)
+    if (bootstrap && !serial) throw new Error(`${c.name}: a bootstrap case is --vega-checked only when it runs alone`)
+    const render = (spec: Record<string, unknown>): Promise<CheckedRender> => (bootstrap ? withOracleRandom(() => renderWithVegaChecked(spec)) : renderWithVegaChecked(spec))
+    const [checked, oracleChecked] = bootstrap
+      ? [await render(structuredClone(ourVgSpec)), await render(structuredClone(vgSpec))]
+      : await Promise.all([render(structuredClone(ourVgSpec)), render(structuredClone(vgSpec))])
     const inherited = new Set([...oracleChecked.errors, ...oracleChecked.warnings])
     const bad = [...checked.errors, ...checked.warnings].filter((m) => !inherited.has(m))
     if (bad.length) {
@@ -388,6 +397,16 @@ async function main(): Promise<void> {
 
     const status: Status = { ok: 0, retained: 0, bothRefused: 0, nodeError: 0, engineError: 0, differ: 0, nondeterministic: 0, vegaDiffer: 0, failNames: [] }
     const CONCURRENCY = 8
+    // (with --vega-check, the bootstrap cases run after the pool, one at a time: see runOneCase's `serial`)
+    const deferred = vegaCheck ? all.filter((c) => c.lite && isBootstrapCase(c)) : []
+    const pooled = deferred.length ? all.filter((c) => !deferred.includes(c)) : all
+    const tally = (c: SweepCase, r: Awaited<ReturnType<typeof runOneCase>>): void => {
+      if (r === 'ok') status.ok++
+      else if (r === 'retained') status.retained++
+      else if (r === 'both-refused') status.bothRefused++
+      else if (r === 'nondeterministic') status.nondeterministic++
+      else { status[r === 'vega-differ' ? 'vegaDiffer' : r === 'node-error' ? 'nodeError' : r === 'engine-error' ? 'engineError' : 'differ']++; status.failNames.push(c.name) }
+    }
     let idx = 0
     const workers: Promise<void>[] = []
     for (let w = 0; w < CONCURRENCY; w++) {
@@ -395,21 +414,14 @@ async function main(): Promise<void> {
         (async () => {
           while (true) {
             const i = idx++
-            if (i >= all.length) break
-            const r = await runOneCase(all[i]!, nodeModules)
-            if (r === 'ok') status.ok++
-            else if (r === 'retained') status.retained++
-            else if (r === 'both-refused') status.bothRefused++
-            else if (r === 'nondeterministic') status.nondeterministic++
-            else if (r === 'vega-differ') { status.vegaDiffer++; status.failNames.push(all[i]!.name) }
-            else if (r === 'node-error') { status.nodeError++; status.failNames.push(all[i]!.name) }
-            else if (r === 'engine-error') { status.engineError++; status.failNames.push(all[i]!.name) }
-            else { status.differ++; status.failNames.push(all[i]!.name) }
+            if (i >= pooled.length) break
+            tally(pooled[i]!, await runOneCase(pooled[i]!, nodeModules))
           }
         })(),
       )
     }
     await Promise.all(workers)
+    for (const c of deferred) tally(c, await runOneCase(c, nodeModules, true))
 
     const total = all.length
     console.log(`[${sweepName}] results: ${status.ok} ok, ${status.retained} retained, ${status.bothRefused} both-refused, ${status.nodeError} node-error, ${status.engineError} engine-error, ${status.differ} differ, ${status.nondeterministic} nondeterministic${vegaCheck ? `, ${status.vegaDiffer} vega-differ` : ''} / ${total}`)

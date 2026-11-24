@@ -28,7 +28,7 @@ import '@aster-charts/core/geo' // registers the geo projections and contours fo
 import '@aster-charts/core/transforms' // registers kde/regression/loess/pack/treemap/wordcloud/voronoi
 import { renderSpec } from '@aster-charts/core'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
-import { renderWithVega } from './render-vega.js'
+import { renderWithVega, settleWithin } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 import { plantSvg } from './gate-plant.js'
 import { deepFreeze, forEngines } from './engines.js'
@@ -74,7 +74,7 @@ async function runOne(entry: CorpusEntry, plant: boolean): Promise<{ pass: boole
     const [oracleSvg, ourSvg] = await forEngines(spec, (oracle, aster) => Promise.all([
       renderWithVega(oracle),
       // url datasets resolve through the load addon, exactly what a real host does
-      loadSpecData(aster as never, TRUSTED_LOAD_OPTIONS).then((loaded) => renderSpec(loaded as never)),
+      settleWithin(loadSpecData(aster as never, TRUSTED_LOAD_OPTIONS), "Aster's data load").then((loaded) => renderSpec(loaded as never)),
     ]))
     const ours = canonicalizeSvg(plant ? plantSvg(ourSvg) : ourSvg)
     const oracle = canonicalizeSvg(oracleSvg)

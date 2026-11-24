@@ -13,6 +13,8 @@ permissions:
 jobs:
   ci:
     runs-on: ubuntu-24.04
+    # (a bound on the whole job: a spec that hangs synchronously cannot be stopped from inside a gate's process, and GitHub's own
+    # default is 6 hours. `pnpm check` takes about 20 minutes on a workstation; this is a multiple of that, not a budget.)
     timeout-minutes: 90
     steps:
       - name: Checkout
@@ -64,6 +66,7 @@ jobs:
   unit:
     name: unit (node ${{ matrix.node }})
     runs-on: ubuntu-24.04
+    # (see the ci job: `pnpm test` takes about 7 minutes on a workstation)
     timeout-minutes: 60
     strategy:
       fail-fast: false
