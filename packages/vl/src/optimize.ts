@@ -420,6 +420,9 @@ function dedupeDomainRefs(node: unknown, merged: ReadonlySet<string>): void {
  */
 function removeUnusedDatasets(out: Obj, removable: (name: string) => boolean): void {
   let data = (out.data as Obj[] | undefined) ?? []
+  // (only a dataset this compiler made can go; with none of them, there is nothing to look for: the text of the whole spec and the
+  // tokens of all its expressions, below, are most of what this costs, and most specs have no such dataset)
+  if (!data.some((d) => typeof d.name === 'string' && removable(d.name))) return
   const rest = { ...out }
   delete rest.data
   // (the user's rows name no dataset: they are left out of the text)
