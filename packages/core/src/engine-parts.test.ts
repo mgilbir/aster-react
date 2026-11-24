@@ -75,19 +75,45 @@ describe('the regular-expression screen is never skipped', () => {
   const spec = (expr: string): VgSpec => ({ width: 10, height: 10, signals: [{ name: 's', update: expr }] } as VgSpec)
   const signal = (expr: string, limits?: object): unknown => evaluateChart(compileChart(spec(expr)), limits ? { limits } : {})
 
-  it('under limits, without the screen, a pattern is refused before it is compiled or run', () => {
+  it('under limits, without the screen, a pattern is refused before it is run (and one the expression computes before it is built)', () => {
     lean()
-    // (what runs a pattern: a test or exec of a regular expression whose source is the spec's)
+    // What compiles a pattern: the RegExp constructor (a literal in an expression is built through it); what runs one: `exec`, which
+    // `test`, `replace` and `split` all go through (spying `test` alone sees none of the last two). Both are recorded for the
+    // sources of the spec's patterns.
+    const sources = new Set(['^(a+)+$', 'a+', ','])
+    const made: string[] = []
     const ran: string[] = []
-    const test = vi.spyOn(RegExp.prototype, 'test').mockImplementation(function (this: RegExp, s: string) { ran.push(this.source); return RegExp.prototype.exec.call(this, s) !== null })
+    const RealRegExp = RegExp
+    const exec = RegExp.prototype.exec
+    const spy = vi.spyOn(RegExp.prototype, 'exec').mockImplementation(function (this: RegExp, s: string) { ran.push(this.source); return exec.call(this, s) })
+    vi.stubGlobal('RegExp', new Proxy(RealRegExp, {
+      construct(target, args, newTarget) {
+        const first = args[0] as unknown
+        made.push(first instanceof RealRegExp ? first.source : String(first))
+        return Reflect.construct(target, args, newTarget)
+      },
+    }))
     try {
-      for (const [expr, source] of [["test('^(a+)+$', 'aaaa')", '^(a+)+$'], ['test(/^(a+)+$/, "aaaa")', '^(a+)+$'], ["replace('aaaa', /a+/, 'b')", 'a+'], ["split('a,b', regexp(','))", ',']] as const) {
+      // (a literal is built when the expression is compiled, from the spec's own text: building never runs it, and the screen refuses
+    // it before its first run. A pattern the expression computes -- a string, `regexp()` -- is built only after the screen, so it
+    // is never built: that is what `compiled` asserts)
+    for (const [expr, literal] of [["test('^(a+)+$', 'aaaa')", false], ['test(/^(a+)+$/, "aaaa")', true], ["replace('aaaa', /a+/, 'b')", true], ["split('a,b', regexp(','))", false]] as const) {
+        made.length = 0
         ran.length = 0
         expect(() => withLimits({ maxTimeMs: 10_000 }, () => evaluateChart(compileChart(spec(expr)), { limits: { maxTimeMs: 10_000 } })), expr).toThrow(MISSING)
-        expect(ran.filter((s) => s === source), expr).toEqual([])
+        if (!literal) expect(made.filter((s) => sources.has(s)), `${expr}: compiled`).toEqual([])
+        expect(ran.filter((s) => sources.has(s)), `${expr}: run`).toEqual([])
       }
+      // the recorders see what they record: an unlimited evaluation of the same expressions compiles and runs them
+      made.length = 0
+      ran.length = 0
+      evaluateChart(compileChart(spec("replace('zzzz', /z+/, 'b')")))
+      evaluateChart(compileChart(spec("split('a;b', regexp(';'))")))
+      expect(made).toEqual(expect.arrayContaining(['z+', ';']))
+      expect(ran).toEqual(expect.arrayContaining(['z+', ';']))
     } finally {
-      test.mockRestore()
+      vi.unstubAllGlobals()
+      spy.mockRestore()
     }
   })
   it('with the screen loaded it refuses a dangerous pattern as the full engine does, and lets a safe one run', async () => {
@@ -96,6 +122,11 @@ describe('the regular-expression screen is never skipped', () => {
     await loadParts(['regex'])
     expect(() => signal("test('^(a+)+$', 'aaaa')", { maxTimeMs: 10_000 })).toThrow(AsterLimitError)
     expect(() => signal("test('^(a+)+$', 'aaaa')", { maxTimeMs: 10_000 })).toThrow(/regexSafety/)
+    // ... and lets a safe one run: the same call with a pattern that cannot blow up answers, under the same limits
+    expect(signal("test('^a+$', 'aaaa')", { maxTimeMs: 10_000 })).toBeDefined()
+    expect(() => signal("test('^a+$', 'aaaa')", { maxTimeMs: 10_000 })).not.toThrow()
+    expect(() => signal("replace('aaaa', /a+/, 'b')", { maxTimeMs: 10_000 })).not.toThrow()
+    expect(() => signal("split('a,b', regexp(','))", { maxTimeMs: 10_000 })).not.toThrow()
   })
   it('without limits no pattern is screened, so none needs the screen', () => {
     lean()
