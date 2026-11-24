@@ -83,7 +83,7 @@ describe('a filter is what vega-lite makes', () => {
     it(name, async () => {
       const both = bothCompile({ data: { values: DATA }, transform: [{ filter: predicate }], mark: 'point', encoding: { x: { field: 'q', type: 'quantitative' }, y: { field: 'u', type: 'quantitative' } } })
       if ('refusedBy' in both) {
-        expect(both.refusedBy, name).toBe('vega-lite')
+        expect(both.refusedBy, `${name}: who refused it`).toBe('both')
         return
       }
       expect(await keptBy(both.ours), 'the rows kept').toEqual(await keptBy(both.theirs))
@@ -96,7 +96,7 @@ describe('a condition tests what vega-lite makes', () => {
   for (const [name, predicate] of PREDICATES.filter((_, i) => i % 7 === 0)) {
     it(name, () => {
       const both = bothCompile({ data: { values: DATA }, mark: 'point', encoding: { x: { field: 'q', type: 'quantitative' }, color: { condition: { test: predicate, value: 'red' }, value: 'grey' } } })
-      if ('refusedBy' in both) return expect(both.refusedBy, name).toBe('vega-lite')
+      if ('refusedBy' in both) return expect(both.refusedBy, `${name}: who refused it`).toBe('both')
       expect(expressionDiff(both.ours, both.theirs)).toBe('')
     })
   }
@@ -127,6 +127,25 @@ describe('a UTC time unit in a field predicate is read in local time, as vega-li
       // and it is what vega-lite writes
       const theirs = filterOf((vl as any).compile(JSON.parse(JSON.stringify(spec(predicate))), { logger: silent }).spec)
       expect(theirs).toBe(expected)
+    })
+  }
+})
+
+// A predicate vega-lite refuses is refused here too: the cases above never meet one (vega-lite compiles all of them), so these are asked on their own.
+describe('a predicate vega-lite refuses is refused here', () => {
+  const REFUSED: Array<[string, unknown]> = [
+    ['a range of one', { field: 'q', range: [1] }],
+    ['oneOf a number', { field: 'q', oneOf: 3 }],
+    ['not a predicate', { not: 5 }],
+    ['an empty and', { and: [] }],
+    ['a time unit range of a DateTime and nothing', { field: 't', timeUnit: 'year', range: [{ year: 2020 }] }],
+    ['a DateTime with a month that is none', { field: 't', timeUnit: 'year', equal: { year: 2020, month: 'nope' } }],
+  ]
+  for (const [name, predicate] of REFUSED) {
+    it(name, () => {
+      const both = bothCompile({ data: { values: DATA }, transform: [{ filter: predicate }], mark: 'point', encoding: { x: { field: 'q', type: 'quantitative' } } })
+      expect('refusedBy' in both, `${name}: vega-lite compiled it`).toBe(true)
+      expect('refusedBy' in both ? both.refusedBy : undefined, name).toBe('both')
     })
   }
 })

@@ -1,10 +1,10 @@
 // @vitest-environment node
 /**
- * HANDOFF (lane 3 -> lane 7): the expression functions `scale(name, v)` and `invert(name, v)` take a PROJECTION's name as well as a
- * scale's (vega registers a projection with the scales). vega-lite's interval selection over a map (interval.ts, the projection
- * branch) writes `[scale("projection", [lon, lat]), ...]` and `invert("projection", [width/2, height/2])`; Aster throws
- * "Cannot read properties of undefined (reading '0')" on every one of them. Fails today; belongs in packages/conformance/test/.
- * Gallery specs behind it: vl/interactive_1d_geo_brush, vl/interactive_airport_crossfilter (@aster-charts/vl compiles both now).
+ * The expression functions `scale(name, v)` and `invert(name, v)` take a PROJECTION's name as well as a scale's (vega registers a
+ * projection with the scales), and give what vega gives. vega-lite's interval selection over a map (interval.ts, the projection branch)
+ * writes `[scale("projection", [lon, lat]), ...]` and `invert("projection", [width/2, height/2])`; Aster once threw "Cannot read
+ * properties of undefined (reading '0')" on every one of them. Gallery specs behind it: vl/interactive_1d_geo_brush,
+ * vl/interactive_airport_crossfilter.
  */
 import { describe, it, expect } from 'vitest'
 import { renderSpec } from '@aster-charts/core'

@@ -1,9 +1,9 @@
 // @vitest-environment node
 /**
- * HANDOFF (lane 3 -> lane 7): a scale whose domain is a signal that reads another scale's domain (`domain('color')`) through a
- * `react: false` signal, with a legend bound to a selection. Real vega draws the legend with its 3 entries and every point; Aster's runtime
- * draws a legend with 0 values and drops the points. The Vega is vega-lite's own output (nothing of @aster-charts/vl is involved):
- * gallery spec vl/point_constant_legend_domain. Fails today; belongs in packages/conformance/test/.
+ * A scale whose domain is a signal that reads another scale's domain (`domain('color')`) through a `react: false` signal, with a legend
+ * bound to a selection: the legend has its 3 entries and every point is drawn, as real vega draws them (the Vega is vega-lite's own
+ * output, nothing of @aster-charts/vl is involved: gallery spec vl/point_constant_legend_domain). Aster once drew a legend with 0
+ * values and dropped the points; the render is compared with vega's here.
  */
 import { describe, it, expect } from 'vitest'
 import * as vl from 'vega-lite'

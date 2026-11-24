@@ -75,7 +75,8 @@ async function check(spec: Record<string, any>): Promise<void> {
 
 describe('@aster-charts/vl output renders identically to vega-lite in real vega', () => {
   it('found the corpus', () => {
-    expect(specs.length).toBeGreaterThan(150)
+    // (692: the floor of run-vl.ts for the Vega-Lite corpus; fewer means specs vanished from the directory)
+    expect(specs.length).toBeGreaterThanOrEqual(692)
   })
   for (const [name, spec] of specs) {
     it(name, async () => {

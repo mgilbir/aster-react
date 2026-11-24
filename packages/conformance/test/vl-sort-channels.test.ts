@@ -12,7 +12,19 @@ import { TIME_DATA, silent } from './vl-time-helpers.js'
 import { collect } from './vl-ranged-compare.js'
 import { PLACES, DATA, SCALE_TYPES, channelOf, type Obj } from './vl-honoured-space.js'
 
-const SORTS: Array<[string, unknown]> = [
+/**
+ * A list of values that the field holds, in an order that is not the field's own (a list that names values no row has orders nothing: every
+ * row gets the same sort index): `k` is 0, 1, 2; `v` is 0 to 4 and 9.
+ */
+function listOf(def: Obj): unknown[] | undefined {
+  if (def.field === 'k') return [2, 0, 1]
+  if (def.field === 'v') return [9, 4, 3, 2, 1, 0]
+  // (a time is ordered by a list of DateTime objects, which @aster-charts/vl refuses and documents as refused: packages/vl/README.md, pinned
+  // by packages/vl/test/readme-refusals.test.ts)
+  return undefined
+}
+
+const SORTS: Array<[string, unknown | ((def: Obj) => unknown)]> = [
   ['ascending', 'ascending'],
   ['descending', 'descending'],
   ['none', null],
@@ -23,7 +35,7 @@ const SORTS: Array<[string, unknown]> = [
   ['by the count of a field, descending', { field: 'k', op: 'count', order: 'descending' }],
   ['by the sum of a field', { field: 'v', op: 'sum' }],
   ['by the max of the time, descending', { field: 't', op: 'max', order: 'descending' }],
-  ['by a list of values', ['b', 'a', 'c']],
+  ['by a list of values', listOf],
 ]
 
 function scaleTypeVegaLiteGave(spec: Obj, channel: string): string | undefined {
@@ -44,7 +56,11 @@ describe('a sort orders a channel as vega-lite orders it', () => {
           const scaled = type === undefined ? def : { ...def, scale: { type } }
           // (a scale type asked for and not honoured is the fallback test's)
           if (type !== undefined && scaleTypeVegaLiteGave({ data: { values: TIME_DATA }, mark, encoding: make(scaled) }, channelOf(place)) !== type) continue
-          for (const [sn, sort] of SORTS) cases.push([`${dn}, ${type ?? 'default scale'}, sort ${sn}`, { data: { values: TIME_DATA }, mark, encoding: make({ ...scaled, sort }) }])
+          for (const [sn, sort] of SORTS) {
+            const chosen = typeof sort === 'function' ? sort(def) : sort
+            if (chosen === undefined) continue
+            cases.push([`${dn}, ${type ?? 'default scale'}, sort ${sn}`, { data: { values: TIME_DATA }, mark, encoding: make({ ...scaled, sort: chosen }) }])
+          }
         }
       }
       const bad = await collect(cases)

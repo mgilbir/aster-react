@@ -133,14 +133,16 @@ export async function drawn(vg: any): Promise<string[]> {
 /** Compile `make(unit)` both ways for every unit and report the units whose drawn text differs, in the zone this process is in. */
 export async function labelDifferences(make: Make): Promise<string[]> {
   const bad: string[] = []
+  let compared = 0
   for (const [name, unit] of UNITS) {
     // (a long loop gives the worker's event loop a turn, so vitest's reporting is not starved)
     await new Promise((resolve) => setImmediate(resolve))
     const both = bothCompile(make(unit))
     if ('refusedBy' in both) {
-      if (both.refusedBy === 'aster') bad.push(`${name}: refused by aster only`)
+      if (both.refusedBy !== 'both') bad.push(`${name}: refused by ${both.refusedBy} only`)
       continue
     }
+    compared++
     const theirs = await drawn(both.theirs)
     const ours = await drawn(both.ours)
     if (JSON.stringify(ours) !== JSON.stringify(theirs)) {
@@ -148,5 +150,7 @@ export async function labelDifferences(make: Make): Promise<string[]> {
       bad.push(`${name}: expected ${theirs[i] ?? '(nothing)'} got ${ours[i] ?? '(nothing)'}`)
     }
   }
+  // (a form of which no unit was compared is a difference too: vega-lite refusing every unit of a form compares nothing)
+  if (compared === 0) bad.push('no unit was compared')
   return bad
 }
