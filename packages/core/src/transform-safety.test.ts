@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import './addon-transforms.js'
 import { compileChart, evaluateChart, applyTransforms, renderSpec } from './index.js'
 import { buildStratifyTree } from './transform.js'
 import { minOf, maxOf, pushAll } from './util.js'
@@ -222,7 +223,17 @@ describe('stratify matches vega-hierarchy / d3-stratify', () => {
 
   it('an empty source yields vega\'s placeholder root instead of an error', async () => {
     expect(VEGA_STRATIFY_ERRORS.empty).toBeNull()
-    expect(() => buildStratifyTree([], 'id', 'p')).not.toThrow()
+    // vega-hierarchy's Stratify makes `stratify()([{}])` of an empty source: one node, its data an empty object, no parent, no children
+    const root = buildStratifyTree([], 'id', 'p')
+    expect(root.data).toEqual({})
+    expect(root).toMatchObject({ parent: null, children: [], depth: 0, height: 0, rowCount: 0 })
+    // and a layout over it draws nothing and does not throw
+    const scene = evaluateChart(compileChart({
+      width: 50, height: 50, padding: 0, autosize: 'none',
+      data: [{ name: 't', values: [], transform: [{ type: 'stratify', key: 'id', parentKey: 'p' }, { type: 'tree' }] }],
+      marks: [{ type: 'symbol', from: { data: 't' } }],
+    } as unknown as VgSpec), {})
+    expect(scene.items.flatMap((g) => g.items ?? [])).toEqual([])
   })
 
   it('a 300k-deep chain does not overflow the stack (iterative walks)', () => {
@@ -257,12 +268,18 @@ describe('bin follows vega-statistics bin()', () => {
 
   it('scale bins with a zero/NaN/negative step produce no bins instead of spinning', async () => {
     const r = await attack(`
+      const out = []
       for (const step of [0, -1, NaN]) {
-        core.renderSpec({ width: 100, height: 100, signals: [{ name: 'b', value: { start: 0, stop: 10, step } }],
+        const svg = core.renderSpec({ width: 100, height: 100, signals: [{ name: 'b', value: { start: 0, stop: 10, step } }],
           scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: [0, 100], bins: { signal: 'b' } }],
           axes: [{ orient: 'bottom', scale: 'x' }] })
-      }`)
+        out.push([step, (svg.match(/<text/g) || []).length])
+      }
+      return JSON.stringify(out)`)
     expect(r.killed, 'hang').toBe(false)
+    // not thrown (a throw on the first step would also skip the others), and each draws an axis with no ticks: no bins, no labels
+    expect(r.threw).toBeNull()
+    expect(JSON.parse(String(r.value))).toEqual([[0, 0], [-1, 0], [null, 0]])
   }, 30_000)
 })
 

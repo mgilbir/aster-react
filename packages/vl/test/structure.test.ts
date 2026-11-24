@@ -29,10 +29,25 @@ function defined(vg: any): { data: Set<string>; scales: Set<string>; dupes: stri
     if (Array.isArray(o.data)) for (const d of o.data) if (typeof d?.name === 'string') add(data, d.name, 'dataset')
     if (Array.isArray(o.scales)) for (const s of o.scales) if (typeof s?.name === 'string') add(scales, s.name, 'scale')
     if (o.facet && typeof o.facet.name === 'string') add(data, o.facet.name, 'facet')
-    if (o.type && typeof o.name === 'string' && o !== vg && Array.isArray(vg.marks)) data.add(o.name)
+    // (a mark's `name` is a dataset `from` can name; a scale, a projection or a signal that has a `type` and a `name` is not one)
+    if (Array.isArray(o.marks)) for (const m of o.marks) if (typeof m?.name === 'string') data.add(m.name)
   }
   return { data, scales, dupes }
 }
+
+describe('the names a reference may resolve to', () => {
+  it('are datasets, facets and marks: a scale of that name is not a dataset, so a `from.data` naming one is not defined', () => {
+    const vg = {
+      scales: [{ name: 'color', type: 'ordinal' }],
+      data: [{ name: 'table' }],
+      marks: [{ type: 'rect', name: 'bars', from: { data: 'table' } }, { type: 'text', from: { data: 'bars' } }],
+    }
+    const { data, scales } = defined(vg)
+    expect([...data].sort()).toEqual(['bars', 'table'])
+    expect([...scales]).toEqual(['color'])
+    expect(data.has('color')).toBe(false)
+  })
+})
 
 describe('every compiled corpus spec is internally consistent', () => {
   for (const [name, spec] of corpus) {

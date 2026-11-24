@@ -38,8 +38,13 @@ describe('host text metrics', () => {
     expect(renderSpec(spec, { textMetrics: wide })).toBe(inside)
   })
 
-  it('sanitizes invalid provider widths back to the estimate', () => {
-    const bad: TextMetricsProvider = { measure: () => Number.NaN }
-    expect(() => renderSpec(spec, { textMetrics: bad })).not.toThrow()
+  it('sanitizes invalid provider widths back to the estimate: the chart is the one the estimate draws', () => {
+    const estimate = renderSpec(spec)
+    for (const width of [Number.NaN, Infinity, -Infinity, -5, '12', undefined, null]) {
+      const bad: TextMetricsProvider = { measure: () => width as never }
+      expect(renderSpec(spec, { textMetrics: bad }), String(width)).toBe(estimate)
+    }
+    // the control: a provider that answers something usable does change the drawing
+    expect(renderSpec(spec, { textMetrics: wide })).not.toBe(estimate)
   })
 })

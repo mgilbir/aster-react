@@ -162,8 +162,13 @@ describe('the engine refuses a url dataset under urlData: refuse', () => {
     } as VgSpec
     const chart = compileChart(nested)
     expect(() => evaluateChart(chart, { data: { inner: [] }, urlData: 'refuse' })).toThrow(/dataset "inner"/)
-    // allowed, it is not refused (whatever the engine then makes of a group's url dataset nobody loaded)
-    expect(() => evaluateChart(chart, { data: { inner: [] } })).not.toThrow(AsterUrlError)
+    // allowed, it is not refused: the engine says the group's url dataset was never loaded (input.data does not reach a group's data),
+    // an error of its own, which is not the policy's AsterUrlError
+    let allowed: unknown
+    try { evaluateChart(chart, { data: { inner: [] } }) } catch (e) { allowed = e }
+    expect(allowed).toBeInstanceOf(Error)
+    expect(allowed).not.toBeInstanceOf(AsterUrlError)
+    expect((allowed as Error).message).toMatch(/dataset "inner" has a url but no data was loaded for it/)
     expect(() => getChartInfo(URL_SPEC, { data: ROWS, urlData: 'refuse' })).toThrow(AsterUrlError)
     expect(getChartInfo(URL_SPEC, { data: ROWS })).not.toBeNull()
   })

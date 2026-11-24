@@ -33,12 +33,15 @@ describe('the order rows were made in is left behind only by the sort that was a
     expect(folded.map((r) => `${r.g}${r.val}`)).toEqual(['a1', 'a3', 'b2', 'b3'])
   })
 
-  it('a transform that fails before its sort runs does not make the NEXT, unrelated sort leave an order behind', () => {
+  it('a run that throws before its sort leaves nothing behind for the next run, which sorts on its own', () => {
     // the first collect is the one a sort follows, so it is asked for the order; its `order` signal does not parse, so it throws
     // before it sorts anything
     const failing = [{ type: 'collect', sort: { field: 'v', order: { signal: '1 +' } } }, { type: 'collect', sort: { field: 'g' } }]
     expect(() => applyTransforms(rows(), failing as never, ctx)).toThrow()
-    const unrelated = sortBySpec(rows(), { field: 'v' })!
-    expect(orderOf(unrelated)).toBeNull()
+    // the next run, which keeps ties by the order its rows were made in, sees none of the failed run's ordering state
+    const next = applyTransforms(rows(), [{ type: 'collect', sort: { field: 'v' } }], ctx)
+    expect(orderOf(next)).toBeNull()
+    expect(next.map((r) => `${r.g}${r.v}`)).toEqual(['a1', 'b2', 'b3', 'a3'])
+    expect(applyTransforms(rows(), [{ type: 'collect', sort: { field: 'v' } }, { type: 'collect', sort: { field: 'g' } }], ctx).map((r) => `${r.g}${r.v}`)).toEqual(['a1', 'a3', 'b3', 'b2'])
   })
 })

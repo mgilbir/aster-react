@@ -108,6 +108,15 @@ describe('createScenePlayer: a scene that draws like the end of the running tran
     const end = scene(B, { w: 20 })
     player.draw('svg', end, null)
     expect(painted.at(-1)).not.toBe(frame)
+    // the new plan runs from where the transition STARTED (A) to the new end, a third of the way (the old one was a third in): the
+    // bars are at A + (end - A) / 3, not at the frame that was on screen (whose first bar is at y 60.8, which is where the old plan
+    // had got to by the clock of its own easing)
+    const geometry = (s: SceneRoot): number[][] => (firstMark(s).items as unknown as Array<{ x: number; y: number; width: number; height: number }>).map((i) => [i.x, i.y, i.width, i.height])
+    const planned = geometry(painted.at(-1)!)
+    const expected = [[0, 60, 40 / 3, 40], [100 / 3, 60, 40 / 3, 40]]
+    expect(planned).toHaveLength(2)
+    planned.forEach((row, i) => row.forEach((v, j) => expect(v).toBeCloseTo(expected[i]![j]!, 6)))
+    expect(geometry(frame)[0]![1]).toBeCloseTo(60.8, 6)
     vi.advanceTimersByTime(400)
     expect(painted.at(-1)).toBe(end)
   })

@@ -83,8 +83,11 @@ describe('wordcloud (vega-wordcloud / d3-cloud)', () => {
     expect(() => wordcloudRows(items(['a', 1]), { size: [0, 100], text: { field: 'text' } }, ctxOf(counting().next))).toThrow('Wordcloud size dimensions must be non-zero.')
   })
 
-  it('with no usable value the font size scale reads one past the end, as vega-util extent does: the accessor throws', () => {
-    expect(() => wordcloudRows(items(['a', 1]).map((r) => ({ ...r, datum: {} })), { size: [200, 100], text: { field: 'text' }, fontSize: { field: 'nope.count' }, fontSizeRange: [10, 40] }, ctxOf(counting().next))).toThrow()
+  it('with no usable value the font size scale reads one past the end, as vega-util extent does: the accessor throws vega\'s TypeError', () => {
+    // (vega's own run of the same spec logs `TypeError: Cannot read properties of undefined (reading 'count')`)
+    const call = (): unknown => wordcloudRows(items(['a', 1]).map((r) => ({ ...r, datum: {} })), { size: [200, 100], text: { field: 'text' }, fontSize: { field: 'nope.count' }, fontSizeRange: [10, 40] }, ctxOf(counting().next))
+    expect(call).toThrow(TypeError)
+    expect(call).toThrow("Cannot read properties of undefined (reading 'count')")
   })
 })
 
