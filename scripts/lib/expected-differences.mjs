@@ -16,13 +16,6 @@
  */
 export const EXPECTED_DIFFERENCES = Object.freeze([
   {
-    gate: 'canvas',
-    case: 'area-gradient',
-    reason: "the spec's fill is the string 'gradient' (no colour, no gradient object): vega's canvas assigns fillStyle='gradient', "
-      + 'which a canvas ignores (an invalid colour leaves the previous value), so what vega paints depends on the fillStyle earlier '
-      + "items left behind, not on the spec (view.scenegraph() item.fill === 'gradient'). The SVG gates compare this entry strictly.",
-  },
-  {
     gate: 'geometry-browser',
     case: "view-not-finite",
     reason:

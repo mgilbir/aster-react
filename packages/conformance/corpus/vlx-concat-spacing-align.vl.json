@@ -113,7 +113,7 @@
   },
   "spacing": 60,
   "bounds": "flush",
-  "hconcat": [
+  "concat": [
     {
       "mark": "point",
       "width": 120,
@@ -145,5 +145,6 @@
       }
     }
   ],
+  "columns": 2,
   "align": "all"
 }
