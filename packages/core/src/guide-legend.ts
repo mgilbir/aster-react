@@ -4,6 +4,7 @@
  * placed against each other from the bounds of what was drawn, and the legend is sized to hold them. See guide-encode.ts for how a
  * property becomes a channel of an item.
  */
+import { legendType } from './spec-structure.js'
 import { markTuple, markTuples } from './util.js'
 import { allot } from './limits.js'
 import type { EncodeValue, SceneGroup, SceneItem } from './types.js'
@@ -14,7 +15,7 @@ import { rectItemPath, symbolPath } from './render.js'
 import { boundFailure } from './bound-failure.js'
 import type { Locale } from './locale.js'
 import {
-  DiscreteLegend, GradientLegend, SymbolLegend, isContinuous, isDiscretizing, labelFormat, labelFraction, labelValues, scaleFraction, tickCount,
+  DiscreteLegend, GradientLegend, SymbolLegend, labelFormat, labelFraction, labelValues, scaleFraction, tickCount,
   type LabelValues,
 } from './scale.js'
 import { thinOverlaps } from './guide-axis.js'
@@ -29,18 +30,8 @@ type Scale = ((v: unknown) => unknown) & Rec
 
 export { LEGEND_SCALES }
 
-/**
- * What kind of legend a spec makes: as it says, or from its scale. A legend for one color channel with no `type` is a gradient on a
- * continuous scale, bands on a discretizing one and symbols otherwise; a gradient on a discretizing scale is bands.
- */
-export function legendType(spec: Rec, scaleType: string): string {
-  const channels = LEGEND_SCALES.filter((c) => spec[c]).length
-  let type = (spec.type as string) || SymbolLegend
-  if (!spec.type && channels === 1 && (spec.fill || spec.stroke)) {
-    type = isContinuous(scaleType) ? GradientLegend : isDiscretizing(scaleType) ? DiscreteLegend : SymbolLegend
-  }
-  return type === GradientLegend && isDiscretizing(scaleType) ? DiscreteLegend : type
-}
+/** What kind of legend a spec makes (spec-structure.ts, the one definition). */
+export { legendType }
 
 // --- the entries a legend lists -----------------------------------------------------------------------------------------------
 

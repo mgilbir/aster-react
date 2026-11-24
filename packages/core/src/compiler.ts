@@ -367,8 +367,10 @@ function compileSignalDefs(signals?: Array<Record<string, unknown>>): CompiledSi
       // vega leaves such a signal undefined until the event.)
       // Keep the full event-stream spec: the host binds these via
       // bindSignalEvents (signals.ts) to drive the event loop.
-      // Entries are kept whole (and copied, so the compiled chart never aliases the
-      // spec): the event loop interprets `events` (string | object | array) itself.
+      // Entries are kept whole (each entry object copied; what an entry holds -- its `events`, an
+      // `encode` -- is the spec's, as are a dataset's `values` and `format`, a guide's `encode` and a
+      // transform's parameter values: the compiled chart is not to be written, nor the spec while it is
+      // in use): the event loop interprets `events` (string | object | array) itself.
       const on = (s.on as SignalOnDef[]).filter((o) => o != null && typeof o === 'object').map((o) => ({ ...o })) as SignalOnDef[]
       def.on = on
     }
@@ -453,7 +455,7 @@ function compileGuideAxes(raw: Array<Record<string, unknown>> | undefined, cfg: 
       // `orient: {signal}`: the config blocks are consulted per key, as signal expressions over the orient signal (vega's
       // axis config), so a guide property that carries one is a signal property like any other
       const sc = [...scales].reverse().find((s) => s.name === a.scale)
-      const axis = compileAxis(applyConfigDefaults({ ...a, orient: '' }, signalOrientDefaults(cfg, (orientRaw as { signal: string }).signal, sc?.type === 'band'), scales))
+      const axis = compileAxis(applyConfigDefaults({ ...a, orient: '' }, signalOrientDefaults(cfg, (orientRaw as { signal: string }).signal, sc?.type === 'band')))
       axes.push({ ...axis, orientSignal: { signal: (orientRaw as { signal: string }).signal } })
       continue
     }
@@ -473,7 +475,7 @@ function compileGuideAxes(raw: Array<Record<string, unknown>> | undefined, cfg: 
       if (band) Object.assign(defaults, cfgAxisBand)
       if (memo !== undefined) { Object.freeze(defaults); markShareable(defaults); memo.set(memoKey, defaults) }
     }
-    axes.push(compileAxis(applyConfigDefaults(a, defaults, scales)))
+    axes.push(compileAxis(applyConfigDefaults(a, defaults)))
   }
   return axes
 }
@@ -482,7 +484,7 @@ function compileGuideAxes(raw: Array<Record<string, unknown>> | undefined, cfg: 
 function compileGuideLegends(raw: Array<Record<string, unknown>> | undefined, cfg: Record<string, unknown>): CompiledLegend[] {
   const cfgLegend = (cfg.legend ?? {}) as Record<string, unknown>
   if (cfg === defaultMergedConfig() && cfg.legend) markShareable(cfgLegend)
-  return (raw ?? []).map((l) => compileLegend(applyConfigDefaults(l, cfgLegend, undefined, true)))
+  return (raw ?? []).map((l) => compileLegend(applyConfigDefaults(l, cfgLegend, true)))
 }
 
 /** Where the config blocks say a thing about the orient: the keys of the blocks, whichever block holds them. */
@@ -545,12 +547,8 @@ function compileAxis(a: Record<string, unknown>): CompiledAxis {
     scale: a.scale as string,
     orient: a.orient as CompiledAxis['orient'],
   }
-  for (const key of ['grid', 'gridColor', 'gridWidth', 'gridDash', 'gridOpacity', 'gridCap', 'gridScale', 'domain', 'labels', 'ticks', 'tickCount', 'tickMinStep', 'tickSize', 'title', 'titlePadding', 'titleFontSize', 'titleFontWeight', 'titleOpacity', 'titleColor', 'titleAngle', 'titleAlign', 'titleBaseline', 'titleX', 'titleY', 'labelAlign', 'labelBaseline', 'labelFlush', 'labelFlushOffset', 'labelOverlap', 'labelSeparation', 'labelPadding', 'labelAngle', 'labelOffset', 'labelColor', 'labelOpacity', 'labelFontSize', 'labelFont', 'labelFontStyle', 'labelFontWeight', 'labelLimit', 'labelExpr', 'bandPosition', 'tickColor', 'tickWidth', 'tickDash', 'tickOffset', 'tickRound', 'tickExtra', 'domainColor', 'domainWidth', 'domainDash', 'domainOpacity', 'domainCap', 'maxExtent', 'minExtent', 'titleAnchor', 'titleLimit', 'titleFont', 'titleLineHeight', 'translate', 'position', 'offset', 'tickBand', 'format', 'formatType', 'zindex', 'values', 'aria', 'description'] as const) {
-    if (a[key] !== undefined) (out as unknown as Record<string, unknown>)[key] = a[key]
-  }
-  // Every other axis property vega defines (tickCap, tickOpacity, *DashOffset,
-  // titleFontStyle, ...) is carried too: a whitelist silently dropped whatever
-  // it forgot, and nothing reported it.
+
+  // Every axis property is carried as written (vega reads each by name; a whitelist silently dropped whatever it forgot).
   for (const key of Object.keys(a)) {
     if (key === 'encode' || key === 'scale' || key === 'orient') continue
     if (a[key] !== undefined && !Object.hasOwn(out, key)) (out as unknown as Record<string, unknown>)[key] = a[key]
@@ -561,11 +559,8 @@ function compileAxis(a: Record<string, unknown>): CompiledAxis {
 
 function compileLegend(l: Record<string, unknown>): CompiledLegend {
   const out: CompiledLegend = {}
-  for (const key of ['fill', 'stroke', 'size', 'shape', 'opacity', 'strokeDash', 'disable', 'strokeWidth', 'orient', 'direction', 'columns', 'title', 'offset', 'padding', 'gradientLength', 'gradientThickness', 'gradientStrokeColor', 'gradientStrokeWidth', 'gradientOpacity', 'symbolSize', 'symbolType', 'zindex', 'type', 'tickCount', 'tickMinStep', 'symbolStrokeWidth', 'symbolOffset', 'symbolOpacity', 'symbolDash', 'symbolStrokeColor', 'labelAlign', 'labelBaseline', 'labelColor', 'labelOpacity', 'labelFontSize', 'labelFontWeight', 'labelFontStyle', 'labelFont', 'labelOffset', 'labelLimit', 'labelSeparation', 'rowPadding', 'columnPadding', 'titlePadding', 'titleFontSize', 'titleFontWeight', 'titleOpacity', 'titleColor', 'titleBaseline', 'titleAlign', 'titleAnchor', 'titleAngle', 'titleOrient', 'titleLimit', 'titleFont', 'titleLineHeight', 'gridAlign', 'clipHeight', 'cornerRadius', 'fillColor', 'strokeColor', 'labelOverlap', 'symbolLimit', 'legendX', 'legendY', 'format', 'formatType', 'labelExpr', 'values', 'aria', 'layout'] as const) {
-    if (l[key] !== undefined) (out as unknown as Record<string, unknown>)[key] = l[key]
-  }
-  // every other legend property vega defines is carried too (titleFontStyle, ...):
-  // a whitelist silently dropped whatever it forgot
+
+  // every legend property is carried as written (a whitelist silently dropped whatever it forgot)
   for (const key of Object.keys(l)) {
     if (key === 'encode') continue
     if (l[key] !== undefined && !Object.hasOwn(out, key)) (out as unknown as Record<string, unknown>)[key] = l[key]
@@ -588,14 +583,15 @@ function compileTitle(value: unknown, config?: Record<string, unknown>): Compile
   for (const n of styleNames) Object.assign(sty, ownGet(cfgStyle, n))
   // Defaults mirror vega's config.title block (orient top, anchor middle,
   // offset 4, subtitlePadding 3).
-  const rawText = spec.text
-  const text: CompiledTitle['text'] = rawText && typeof rawText === 'object' && 'signal' in (rawText as Record<string, unknown>)
-    ? { signal: String((rawText as { signal: unknown }).signal) }
-    : typeof rawText === 'string' ? rawText : Array.isArray(rawText) ? rawText.map(String) : String(rawText ?? '')
+  const textOf = (raw: unknown): CompiledTitle['text'] => (raw && typeof raw === 'object' && 'signal' in (raw as Record<string, unknown>)
+    ? { signal: String((raw as { signal: unknown }).signal) }
+    : typeof raw === 'string' ? raw : Array.isArray(raw) ? raw.map(String) : String(raw ?? ''))
+  const text = textOf(spec.text)
   const fontSize = (spec.fontSize as number | undefined) ?? (cfg.fontSize as number | undefined) ?? (sty.fontSize as number | undefined) ?? 11
   return {
     text,
-    subtitle: typeof spec.subtitle === 'string' ? spec.subtitle : spec.subtitle != null ? String(spec.subtitle) : undefined,
+    // (lines or a signal, as the text: not one string of them, `"line1,line2"` / `"[object Object]"`)
+    subtitle: spec.subtitle != null ? textOf(spec.subtitle) : undefined,
     orient: (spec.orient as CompiledTitle['orient']) ?? (cfg.orient as CompiledTitle['orient']) ?? 'top',
     anchor: (spec.anchor as CompiledTitle['anchor']) ?? (cfg.anchor as CompiledTitle['anchor']) ?? 'middle',
     offset: (spec.offset as number | undefined) ?? (cfg.offset as number | undefined) ?? 4,
@@ -624,7 +620,7 @@ function compileTitle(value: unknown, config?: Record<string, unknown>): Compile
 }
 
 /** Fill properties from a config block (e.g. config.axis) for keys the spec omits. */
-function applyConfigDefaults(o: Record<string, unknown>, defaults: Record<string, unknown>, scales?: CompiledScale[], isLegend = false): Record<string, unknown> {
+function applyConfigDefaults(o: Record<string, unknown>, defaults: Record<string, unknown>, isLegend = false): Record<string, unknown> {
   if (!defaults || typeof defaults !== 'object') return o
   const out: Record<string, unknown> = { ...defaults, ...o }
   // (a property the spec leaves null is as good as one it omits: the config's value stands in -- vega-parser's `lookup`)
