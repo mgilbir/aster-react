@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import './addon-transforms.js'
+import './addon-geo.js'
+import { CORPUS_UNLOADABLE, isDataNotLoaded, vegaCorpusFiles } from './corpus.testlib.js'
 import { buildHitIndex } from './hit.js'
 import { evaluateChart } from './evaluate.js'
 import { compileChart } from './compiler.js'
 import type { SceneRoot } from './types.js'
-import { readFileSync, readdirSync } from 'node:fs'
-import { join, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { readFileSync } from 'node:fs'
 
 describe('buildHitIndex', () => {
   it('resolves rect marks by containment', () => {
@@ -179,25 +180,23 @@ describe('buildHitIndex', () => {
   })
 
   it('grid and linear modes agree across the vega corpus', () => {
-    const dir = join(dirname(fileURLToPath(import.meta.url)), '../../conformance/corpus')
-    let names: string[]
-    try {
-      names = readdirSync(dir).filter((f) => f.endsWith('.vg.json'))
-    } catch {
-      names = []
-    }
-    expect(names.length).toBeGreaterThan(250)
+    const files = vegaCorpusFiles()
+    let drawn = 0
     let checked = 0
     let hitCount = 0
-    for (const name of names) {
-      const doc = JSON.parse(readFileSync(join(dir, name), 'utf8'))
+    const types = new Set<string>()
+    for (const file of files) {
+      const doc = JSON.parse(readFileSync(file, 'utf8'))
       const spec = doc.spec ?? doc
       let scene: SceneRoot
       try {
         scene = evaluateChart(compileChart(spec), {})
-      } catch {
+      } catch (e) {
+        // (only a url dataset has nothing to draw: any other throw is a failure)
+        if (!isDataNotLoaded(e)) throw e
         continue
       }
+      drawn++
       const index = buildHitIndex(scene)
       if (index.size() === 0) continue
       checked++
@@ -211,11 +210,17 @@ describe('buildHitIndex', () => {
         const linKey = linear ? JSON.stringify(linear.item.datum ?? linear.marktype) : 'null'
         const autoKey = auto ? JSON.stringify(auto.item.datum ?? auto.marktype) : 'null'
         expect(autoKey).toBe(linKey)
-        if (auto != null) hitCount++
+        if (auto != null) {
+          hitCount++
+          types.add(String(auto.marktype))
+        }
       }
     }
-    expect(checked).toBeGreaterThan(100)
-    expect(hitCount).toBeGreaterThan(50)
+    expect(drawn).toBe(files.length - CORPUS_UNLOADABLE.length)
+    // measured: 387 specs with something to hit, 1054 hits, on 9 mark types (the projected shapes among them)
+    expect(checked).toBeGreaterThanOrEqual(380)
+    expect(hitCount).toBeGreaterThanOrEqual(1000)
+    expect([...types].sort()).toEqual(expect.arrayContaining(['arc', 'area', 'line', 'path', 'rect', 'shape', 'symbol', 'text']))
   })
 })
 
