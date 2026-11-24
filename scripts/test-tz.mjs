@@ -20,10 +20,9 @@
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { cli } from './lib/cli.mjs'
+import { ZONES } from './lib/tz-zones.mjs'
 
 
-/** Three zones with different offsets: one with DST, one half-hour offset without, one ahead of UTC whose daylight saving is half an hour. */
-export const ZONES = ['America/New_York', 'Asia/Kolkata', 'Australia/Lord_Howe']
 /** The corpus also runs in UTC (the default test run does not cover it). */
 const CORPUS_ZONES = ['UTC', ...ZONES]
 const UNIT_FILTERS = ['.tz.test.', 'differential-scale-spec']
