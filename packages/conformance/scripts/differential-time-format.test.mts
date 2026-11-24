@@ -13,9 +13,15 @@ import * as vf from 'vega-format'
 import { describe, expect, it, vi } from 'vitest'
 import * as aster from '../../core/src/time-format.ts'
 import { locale as asterLocale, timeFormatLocale as asterTimeLocale } from '../../core/src/locale.ts'
-import { compareCases, makeRng, scaled, type Rng } from './differential-gen.mts'
+import { compareWithFloors, makeRng, scaled, type Rng } from './differential-gen.mts'
 import { withTz } from './differential-util.mts'
 import { ZONES, genInstant, offsetChanges } from './differential-zones.mts'
+
+/** What each generated suite of this file must hold (measured: format all but a few, parse 29% (garbage and damaged text refuse to parse), parse directives 58%, directives all). */
+const compareCases = compareWithFloors({
+  format: { informative: 0.9 }, directives: { informative: 0.9 }, parse: { informative: 0.2 }, 'parse directives': { informative: 0.45 },
+  roundtrip: { informative: 0.9 }, iso: { informative: 0.85 }, timeFormatLocale: { informative: 0.85 }, 'multi-format': { informative: 0.85 }, 'vega-format': { informative: 0.85 },
+})
 
 vi.setConfig({ testTimeout: 120_000 })
 
@@ -271,7 +277,7 @@ describe('time locales vs d3-time-format and vega-format (generated, live)', () 
           },
         }
       })
-      expect(stats.cases).toBeGreaterThan(0)
+      expect(stats.refused, 'cases the oracle refused (malformed generated locales)').toBeLessThan(stats.cases * 0.1)
     })
   })
 
