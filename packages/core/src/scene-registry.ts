@@ -9,6 +9,10 @@
  * is therefore a function of the node's identity, for the nodes recorded here, and may be kept with it (WeakMap-keyed: it lives
  * as long as the node) and used for a later scene that kept the node (`keptInto`). A node a host built, or a clone of a scene (a
  * worker's), is not recorded: nothing derived from it is kept.
+ *
+ * The guarantee is the nodes', not the arrays read from them: the append path's push grows the items array a node held when it was
+ * returned (the node itself is moved to a snapshot that reads what it held). So a reader that keeps what a node held past the
+ * evaluation it was read in -- a hit index, an accessible tree -- keeps a copy of the array, not the array (C229).
  */
 import type { SceneGroup, SceneNode, SceneRoot } from './types.js'
 
