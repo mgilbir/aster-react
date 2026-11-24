@@ -2533,7 +2533,13 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
     }
     if (Array.isArray(sort)) {
       const idx = genName(channel, `${field}_sort_index`)
-      const expr = `${(sort as unknown[]).map((v, i) => `datum[${JSON.stringify(field)}]===${JSON.stringify(v)} ? ${i}`).join(' : ')} : ${sort.length}`
+      // (calculate.ts parseAllForSortIndex: each value is compared as a field predicate is, so a time unit's field compares its unit of
+      // the value - `"Jun"` against the month of the date - not the unit's timestamp against the name)
+      const tu = def?.timeUnit
+      const equals = (v: unknown): string => tu !== undefined && typeof def?.field === 'string'
+        ? predicateExpr({ field: def.field, timeUnit: tu, equal: v })
+        : `datum[${JSON.stringify(field)}]===${JSON.stringify(v)}`
+      const expr = `${(sort as unknown[]).map((v, i) => `${equals(v)} ? ${i}`).join(' : ')} : ${sort.length}`
       addToBase({ type: 'formula', expr, as: idx })
       return { cellField: idx, domainFields: [idx], domainOps: ['max'], domainAs: [idx], facetAgg: { field: idx, op: 'max', as: idx }, headerField: idx }
     }

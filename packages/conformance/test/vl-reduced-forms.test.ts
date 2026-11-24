@@ -2,9 +2,8 @@
 /**
  * Schema-valid forms found to draw differently from vega-lite 6.4.3 (C184, C442), each over the marks / channels / compositions it
  * applies to, through real Vega: a mark's `ariaRole`; a radius on a text, a height on a bar, a width on an image; an arc's radius offset
- * with a second radius; `x: {value: "width"}`; DateTime axis values; a facet's `bounds: "flush"`; a month sorted by an array of names (an axis);
- * (not here, not yet matched: a bar's mark width and height on a continuous x; a facet header sorted by an array of month names; a field
- * with an escaped backslash: the first is refused, the other two still differ.)
+ * with a second radius; `x: {value: "width"}`; DateTime axis values; a facet's `bounds: "flush"`; a month sorted by an array of names (an axis, and a facet's
+ * headers by a time unit's names or numbers). (A field with an escaped backslash: vl-escaped-names.test.ts.)
  */
 import { describe, it } from 'vitest'
 import { drawsLikeVegaLite, caseName } from './vl-composition-render.js'
@@ -40,6 +39,14 @@ for (const ch of ['row', 'column', 'facet'] as const) {
 cases.push(['facet operator: bounds flush', { data, bounds: 'flush', facet: { column: n('a') }, spec: { mark: 'point', encoding: { x: q('b') } } }])
 for (const ch of ['x', 'color']) {
   cases.push([caseName(ch, 'timeUnit month sorted by names'), { data, mark: 'point', encoding: { y: q('b'), [ch]: { field: 't', type: 'ordinal', timeUnit: 'month', sort: ['Jun', 'Jan'] } } }])
+}
+// (a facet's header sorted by an array of a time unit's names or numbers: the cells and headers in the array's order)
+for (const ch of ['row', 'column', 'facet'] as const) {
+  for (const [tu, sort] of [['month', ['Jun', 'Jan']], ['month', ['March', 'february', 'Jan']], ['month', [5, 1]], ['day', ['Wed', 'Mon']], ['quarter', [2, 1]], ['date', [15]]] as const) {
+    const fd = { field: 't', type: 'ordinal', timeUnit: tu, sort }
+    cases.push([caseName(`encoding ${ch}`, `${tu} sorted by ${JSON.stringify(sort)}`), { data, mark: 'point', encoding: { x: q('b'), y: q('c'), [ch]: fd } }])
+    cases.push([caseName(`facet operator ${ch}`, `${tu} sorted by ${JSON.stringify(sort)}`), { data, facet: ch === 'facet' ? fd : { [ch]: fd }, spec: { mark: 'point', encoding: { x: q('b') } } }])
+  }
 }
 describe('the reduced forms draw as vega-lite draws them', () => {
   for (const [name, spec] of cases) it(name, () => drawsLikeVegaLite(spec), 30_000)
