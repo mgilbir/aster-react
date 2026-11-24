@@ -62,18 +62,17 @@ describe('the server, with nothing imported', () => {
       expect(again).not.toContain('id="fb"')
       expect(again).toContain('<svg')
     })
-  })
 
-  it('a streaming render waits for the import and sends the chart', async () => {
-    expect(isAddonLoaded('geo')).toBe(false)
-    const { Chart } = await import('./Chart')
-    const stream = await renderToReadableStream(<React.Suspense fallback={<i id="fb" />}><Chart spec={MAP} width={400} height={300} a11y={false} /></React.Suspense>)
-    await stream.allReady
-    const html = await readAll(stream)
-    expect(isAddonLoaded('geo')).toBe(true)
-    expect(html).toContain('<svg')
-    expect(svgOf(html).replace(/<svg[^>]*>/, '')).toContain('class="mark-')
-    expect(html).not.toContain('id="fb"')
+    it('a streaming render waits for the import and sends the chart', async () => {
+      // (the first variant to run finds the geo add-on missing, and only the render can have loaded it)
+      const stream = await renderToReadableStream(<React.Suspense fallback={<i id="fb" />}><Chart spec={MAP} width={400} height={300} a11y={false} /></React.Suspense>)
+      await stream.allReady
+      const html = await readAll(stream)
+      expect(isAddonLoaded('geo')).toBe(true)
+      expect(html).toContain('<svg')
+      expect(svgOf(html).replace(/<svg[^>]*>/, '')).toContain('class="mark-')
+      expect(html).not.toContain('id="fb"')
+    })
   })
 
   it('renderChartToStaticMarkup is synchronous: it says what to do, and works after loadAddonsFor', async () => {
