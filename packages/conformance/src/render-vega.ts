@@ -26,6 +26,14 @@ export async function settleWithin<T>(work: Promise<T>, what: string, ms: number
 }
 
 export async function renderWithVega(vgSpec: Record<string, unknown>): Promise<string> {
+  return (await renderWithVegaCounted(vgSpec)).svg
+}
+
+/**
+ * `renderWithVega`, and how many items the spec's own (non-group) marks drew: the data-driven part of the picture. Axes, legends, titles
+ * and the frame are guides, not marks of the spec; a spec whose count is 0 compares its guides only.
+ */
+export async function renderWithVegaCounted(vgSpec: Record<string, unknown>): Promise<{ svg: string; markItems: number }> {
   const runtime = vega.parse(vgSpec as any)
   const view = new (vega as any).View(runtime, { renderer: 'none' })
   try {
@@ -33,7 +41,16 @@ export async function renderWithVega(vgSpec: Record<string, unknown>): Promise<s
     // The first frame: stop the view's timers (a Vega-Lite animation's clock) before they can tick. `toSVG` awaits further runs, and on
     // a busy event loop a timer that is due would land between them and draw frame two; a spec without timers is unaffected.
     view.finalize()
-    return await settleWithin(view.toSVG() as Promise<string>, 'the oracle (vega toSVG)')
+    let markItems = 0
+    const walk = (mark: any): void => {
+      if (mark.marktype === 'group') {
+        for (const g of mark.items ?? []) for (const child of g.items ?? []) walk(child)
+      } else if (mark.role === 'mark') {
+        markItems += mark.items?.length ?? 0
+      }
+    }
+    walk(view.scenegraph().root)
+    return { svg: await settleWithin(view.toSVG() as Promise<string>, 'the oracle (vega toSVG)'), markItems }
   } finally {
     view.finalize()
   }
@@ -45,6 +62,11 @@ export interface CheckedRender {
   errors: string[]
   /** vega logger warn() calls (invalid scale refs, bad encodings, ...). */
   warnings: string[]
+  /**
+   * The tooltip of every scenegraph item that has one, in scenegraph order (`mark role/name#index: value`). Neither engine's SVG carries a
+   * tooltip, so a gate that compares only the SVG cannot see them (they are what `encoding.tooltip` and `mark.tooltip` compile to).
+   */
+  tooltips: string[]
   /** `view.data(name)` of every top-level dataset the spec declares, after the first run (the tuples as plain objects). */
   datasets: Record<string, unknown[]>
 }
@@ -81,6 +103,7 @@ export async function renderWithVegaChecked(vgSpec: Record<string, unknown>): Pr
   }
   let svg = ''
   const datasets: Record<string, unknown[]> = {}
+  const tooltips: string[] = []
   try {
     const runtime = vega.parse(vgSpec as any)
     const view = new (vega as any).View(runtime, { renderer: 'none', logger })
@@ -91,6 +114,7 @@ export async function renderWithVegaChecked(vgSpec: Record<string, unknown>): Pr
         // (a dataset whose tuples hold themselves -- an argmax over a joinaggregate -- is not plain data: it is left out)
         try { datasets[d.name] = JSON.parse(JSON.stringify(view.data(d.name) ?? null)) as unknown[] } catch { /* not serializable */ }
       }
+      collectTooltips(view.scenegraph().root, tooltips)
       svg = await settleWithin(view.toSVG() as Promise<string>, 'the oracle (vega toSVG)')
     } finally {
       view.finalize()
@@ -98,5 +122,19 @@ export async function renderWithVegaChecked(vgSpec: Record<string, unknown>): Pr
   } catch (e) {
     errors.push(e instanceof Error ? e.message : String(e))
   }
-  return { svg, errors, warnings, datasets }
+  return { svg, errors, warnings, tooltips, datasets }
+}
+
+/** Every item's `tooltip` (a value the spec's `tooltip` channel produced), depth first, in scenegraph order. */
+function collectTooltips(mark: any, out: string[]): void {
+  const label = `${mark.role ?? ''}/${mark.name ?? ''}`
+  ;(mark.items ?? []).forEach((item: any, i: number) => {
+    if (mark.marktype === 'group') {
+      for (const child of item.items ?? []) collectTooltips(child, out)
+    } else if (item.tooltip !== undefined) {
+      let value: string
+      try { value = JSON.stringify(item.tooltip) } catch { value = String(item.tooltip) }
+      out.push(`${label}#${i}: ${value}`)
+    }
+  })
 }
