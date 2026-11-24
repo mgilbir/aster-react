@@ -179,13 +179,16 @@ describe('buildHitIndex', () => {
     expect(index.query(5, 5)).toBeNull()
   })
 
-  it('grid and linear modes agree across the vega corpus', () => {
+  it('the grid and the scan answer alike across the vega corpus', () => {
+    // The default index scans the boxes of a scene of up to 400 entries, and no corpus scene is larger: the two strategies are asked
+    // for by name, so the grid is built for every scene (C338; a cell size does not force either).
     const files = vegaCorpusFiles()
     let drawn = 0
     let checked = 0
     let hitCount = 0
-    const types = new Set<string>()
+    let probes = 0
     for (const file of files) {
+      const name = file
       const doc = JSON.parse(readFileSync(file, 'utf8'))
       const spec = doc.spec ?? doc
       let scene: SceneRoot
@@ -197,32 +200,54 @@ describe('buildHitIndex', () => {
         continue
       }
       drawn++
-      const index = buildHitIndex(scene)
-      if (index.size() === 0) continue
+      const scan = buildHitIndex(scene, undefined, { strategy: 'scan' })
+      if (scan.size() === 0) continue
       checked++
-      // probe a deterministic lattice; both code paths must agree exactly
-      for (let i = 0; i < 12; i++) {
-        const x = ((i * 37) % Math.max(1, scene.width)) + 0.5
-        const y = ((i * 53) % Math.max(1, scene.height)) + 0.5
-        // force each mode: rebuild with a huge cell (linear) vs default (grid)
-        const linear = buildHitIndex(scene, 1e9).query(x, y)
-        const auto = index.query(x, y)
-        const linKey = linear ? JSON.stringify(linear.item.datum ?? linear.marktype) : 'null'
-        const autoKey = auto ? JSON.stringify(auto.item.datum ?? auto.marktype) : 'null'
-        expect(autoKey).toBe(linKey)
-        if (auto != null) {
-          hitCount++
-          types.add(String(auto.marktype))
+      // (the default cell, a fine one where every entry spans many cells and the large ones are the grid's `big` list, and one that
+      // puts a box's edges on cell borders)
+      const grids = [undefined, 5, 16].map((cell) => buildHitIndex(scene, cell, { strategy: 'grid' }))
+      for (const g of grids) expect(g.size(), name).toBe(scan.size())
+      // a deterministic lattice, and the corners and middles of the items the scene positions (where a hit changes)
+      const points: Array<[number, number]> = []
+      for (let i = 0; i < 12; i++) points.push([((i * 37) % Math.max(1, scene.width)) + 0.5, ((i * 53) % Math.max(1, scene.height)) + 0.5])
+      collectPoints(scene.items as unknown as Array<Record<string, unknown>>, points)
+      for (const [x, y] of points) {
+        probes++
+        for (const q of ['query', 'queryMark', 'pick', 'tooltip'] as const) {
+          const a = scan[q](x, y)
+          for (const grid of grids) {
+            const b = grid[q](x, y)
+            expect(b?.item ?? null, `${name} ${q} ${x},${y}`).toBe(a?.item ?? null)
+            expect(b?.kind ?? null, `${name} ${q} ${x},${y}`).toBe(a?.kind ?? null)
+          }
+          if (q === 'query' && a != null) hitCount++
         }
       }
     }
+    // (every spec of the corpus is drawn but the ones whose data a url holds)
     expect(drawn).toBe(files.length - CORPUS_UNLOADABLE.length)
-    // measured: 387 specs with something to hit, 1054 hits, on 9 mark types (the projected shapes among them)
-    expect(checked).toBeGreaterThanOrEqual(380)
-    expect(hitCount).toBeGreaterThanOrEqual(1000)
-    expect([...types].sort()).toEqual(expect.arrayContaining(['arc', 'area', 'line', 'path', 'rect', 'shape', 'symbol', 'text']))
+    // measured over the corpus the audit's lanes share: 387 scenes with something to hit, 14 724 probes, 4 897 probes that hit
+    expect(checked, 'scenes compared').toBeGreaterThanOrEqual(380)
+    expect(probes, 'probes').toBeGreaterThanOrEqual(14000)
+    expect(hitCount, 'probes that hit an item').toBeGreaterThanOrEqual(4800)
   })
 })
+
+/** The positions of the items a scene holds (and of those inside its groups), offset by one pixel: where the answer may change. */
+function collectPoints(marks: Array<Record<string, unknown>>, out: Array<[number, number]>, limit = 40): void {
+  for (const mark of marks) {
+    for (const item of (mark.items ?? []) as Array<Record<string, unknown>>) {
+      if (out.length >= limit) return
+      const x = item.x, y = item.y
+      if (typeof x === 'number' && typeof y === 'number' && Number.isFinite(x + y)) {
+        const w = typeof item.width === 'number' ? item.width : 0
+        const h = typeof item.height === 'number' ? item.height : 0
+        out.push([x + 1, y + 1], [x + w / 2, y + h / 2], [x + w - 0.5, y + h - 0.5], [x + w, y + h], [x, y])
+      }
+      if (Array.isArray(item.items)) collectPoints(item.items as Array<Record<string, unknown>>, out, limit)
+    }
+  }
+}
 
 describe('an index asked many questions answers as one asked once', () => {
   // (a dense scene: its index answers its first questions by a scan of the boxes, and builds its grid when asked more)
