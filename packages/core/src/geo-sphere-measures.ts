@@ -135,6 +135,7 @@ export function sphereBounds(object: unknown): number[][] {
   let deltaSum = new Adder()
   const ringArea = new RingArea()
   let inPolygon = false
+  let rings = 0
   let inLine = false
 
   const widenLatitude = (phi: number): void => {
@@ -213,6 +214,7 @@ export function sphereBounds(object: unknown): number[][] {
         break
       case POLYGON_START:
         inPolygon = true
+        rings = 0
         deltaSum = new Adder()
         ringArea.begin()
         break
@@ -223,11 +225,17 @@ export function sphereBounds(object: unknown): number[][] {
           phi0 = -(phi1 = 90)
         } else if (+deltaSum > EPSILON) phi1 = 90
         else if (+deltaSum < -EPSILON) phi0 = -90
+        // a polygon with no ring at all is d3's TypeError; one whose rings are all empty adds no range (d3 closes the ring onto the
+        // vertex an earlier ring or call left behind, a deviation listed in docs/ARCHITECTURE.md)
+        if (rings > 0 && !range) break
         closeRange()
         break
       case LINE_START:
         inLine = true
-        if (inPolygon) ringArea.start()
+        if (inPolygon) {
+          rings++
+          ringArea.start()
+        }
         break
       case LINE_END:
         if (inPolygon) {
