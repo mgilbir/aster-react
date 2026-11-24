@@ -37,8 +37,8 @@ const DEFS: Array<[string, Obj]> = [
   ['t utcmonth', { field: 't', type: 'temporal', timeUnit: 'utcmonth' }],
   ['t year', { field: 't', type: 'temporal', timeUnit: 'year' }],
   ['t', { field: 't', type: 'temporal' }],
-  ['v, bin true and its default', { field: 'v', bin: { maxbins: 10 }, type: 'quantitative' }],
-  ['v binned', { field: 'v', bin: true, type: 'quantitative' }],
+  ['v, bin maxbins 10 (the default)', { field: 'v', bin: { maxbins: 10 }, type: 'quantitative' }],
+  ['v, bin true', { field: 'v', bin: true, type: 'quantitative' }],
   ['v, bin maxbins', { field: 'v', bin: { maxbins: 4 }, type: 'quantitative' }],
 ]
 /** A second channel takes a field of the same kind as the first: a number with a number, a time with a time. */

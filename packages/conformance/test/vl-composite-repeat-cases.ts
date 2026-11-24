@@ -42,7 +42,7 @@ const UNITS: Array<[string, (r: unknown) => Unit]> = [
   ['errorbar', (r) => ({ mark: 'errorbar', encoding: { x: n('c'), y: q(r) } })],
   ['errorbar horizontal', (r) => ({ mark: 'errorbar', encoding: { y: n('c'), x: q(r) } })],
   ['errorbar stdev', (r) => ({ mark: { type: 'errorbar', extent: 'stdev', ticks: true }, encoding: { x: n('c'), y: q(r) } })],
-  ['errorbar iqr with a point', (r) => ({ mark: { type: 'errorbar', extent: 'iqr', rule: { strokeWidth: 3 } }, encoding: { x: n('c'), y: q(r) } })],
+  ['errorbar iqr with a thick rule', (r) => ({ mark: { type: 'errorbar', extent: 'iqr', rule: { strokeWidth: 3 } }, encoding: { x: n('c'), y: q(r) } })],
   ['errorbar ci', (r) => ({ mark: { type: 'errorbar', extent: 'ci' }, encoding: { x: n('c'), y: q(r) } })],
   ['errorbar with y2', (r) => ({ mark: 'errorbar', encoding: { x: n('c'), y: q(r), y2: q('hi') } })],
   ['errorbar with yError', (r) => ({ mark: 'errorbar', encoding: { x: n('c'), y: q('v'), yError: q(r) } })],
@@ -200,7 +200,7 @@ group('@aster-charts/vl == vega-lite: the views a repeat names', (add) => {
   add('a repeat in a repeat', { data: DATA, repeat: { row: ['g', 'c'] }, spec: { repeat: { column: ['v', 'w'] }, spec: point({ x: q('x'), y: q(ref('column')), color: n(ref('row')) }) } })
   add('a list repeat in a list repeat', { data: DATA, repeat: ['g', 'c'], spec: { repeat: ['v', 'w'], spec: point({ x: q('x'), y: q(ref('repeat')) }) } })
   add('a layer repeat in a column repeat', { data: DATA, repeat: { column: ['g', 'c'] }, spec: { repeat: { layer: ['v', 'w'] }, spec: point({ x: q('x'), y: q(ref('layer')), color: n(ref('column')) }) } })
-  add('a column repeat in a layer-less list repeat, three deep', { data: DATA, repeat: { row: ['g', 'c'] }, spec: { repeat: { column: ['v', 'w'] }, spec: { repeat: { layer: ['x', 'k'] }, spec: point({ x: q(ref('layer')), y: q(ref('column')), color: n(ref('row')) }) } } })
+  add('a row repeat holding a column repeat holding a layer repeat', { data: DATA, repeat: { row: ['g', 'c'] }, spec: { repeat: { column: ['v', 'w'] }, spec: { repeat: { layer: ['x', 'k'] }, spec: point({ x: q(ref('layer')), y: q(ref('column')), color: n(ref('row')) }) } } })
   add('a hconcat of a repeat and a view', { data: DATA, hconcat: [{ repeat: { column: ['v', 'w'] }, spec: point({ x: q('x'), y: q(ref('column')) }) }, point({ x: q('x'), y: q('v') })] })
   add('a repeat of an hconcat', { data: DATA, repeat: { column: ['v', 'w'] }, spec: { hconcat: [point({ x: q('x'), y: q(ref('column')) }), point({ x: q('k'), y: q(ref('column')) })] } })
   add('a named repeated spec', { data: DATA, repeat: { column: ['v', 'w'] }, spec: { name: 'inner', ...point({ x: q('x'), y: q(ref('column')) }) } })
