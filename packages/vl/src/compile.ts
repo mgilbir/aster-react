@@ -6852,7 +6852,9 @@ function legendTitle(def: FieldDef, userLegend: Record<string, unknown>): unknow
 function rectAlignment(markDef: Record<string, unknown> | undefined, cfgType: Record<string, unknown> | undefined, cfgMark: Record<string, unknown> | undefined, ch: 'x' | 'y'): 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom' | undefined {
   const prop = ch === 'x' ? 'align' : 'baseline'
   const v = markDef?.[prop] ?? cfgType?.[prop] ?? cfgMark?.[prop]
-  if (v === undefined || v === null || isObject(v)) return undefined
+  if (v === undefined || v === null) return undefined
+  // (an expression is not read: the default places it)
+  if (isObject(v)) { consumeAll(v); return undefined }
   const ok = ch === 'x' ? ['left', 'center', 'right'] : ['top', 'middle', 'bottom']
   if (!ok.includes(v as string)) {
     const where = markDef?.[prop] !== undefined ? `mark.${prop}` : `config.${prop}`
@@ -7851,6 +7853,14 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     // (what was encoded of the mark def is dropped with it, as vega-lite drops it)
     consumeAll(update)
     for (const k of Object.keys(update)) delete update[k]
+  }
+  // (what vega-lite reads of a rect-like mark def only where the chart asks for it - the bin spacing of a binned position, the alignment
+  // of a sized band - and nothing else: the reads above are where it asks, so what is still unread here it ignores)
+  if ((mark === 'bar' || mark === 'rect' || mark === 'tick') && isObject(spec.mark)) {
+    const md = spec.mark as Record<string, unknown>
+    ignoreUnread(md, 'vega-lite reads it only where the chart bins or sizes a band (ignored-probe.mjs contexts)', ['binSpacing', 'align', 'baseline'])
+    // (an expression there is not read at all)
+    for (const k of ['binSpacing', 'align', 'baseline']) { const v = peek(() => md[k]); if (isObject(v)) consumeAll(v) }
   }
   const markSpec: Record<string, unknown> = {
     name: 'marks',

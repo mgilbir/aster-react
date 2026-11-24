@@ -399,13 +399,14 @@ export function ignore(obj: Obj, key: string, _why: string): void {
  * Consume what is still unread of `obj` (each such property and everything below it), where the code that reads `obj` reads what
  * vega-lite reads of it and vega-lite reads nothing else (`why` says where; a test pins it).
  */
-export function ignoreUnread(obj: Obj, why: string): void {
+export function ignoreUnread(obj: Obj, why: string, only?: readonly string[]): void {
   const t = active
   if (t === undefined) return
   const r = recOf(obj)
   if (r === undefined || r.t !== t) return
   // (each key once, by its live entry)
   for (const key of new Set(r.keys)) {
+    if (only !== undefined && !only.includes(key)) continue
     const i = r.keys.lastIndexOf(key)
     if (i < r.armed && (r.flags[i]! & TRACKED) === 0) continue
     const o = i < r.armed ? r : r.from![i]!
