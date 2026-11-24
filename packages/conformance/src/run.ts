@@ -38,7 +38,7 @@ import { GATE_FLAGS, runGate, type Gate } from '../../../scripts/lib/run-gate.mj
 cli({ url: import.meta.url, flags: GATE_FLAGS })
 
 /** The number of entries each corpus directory compares on a full run (today's counts; they only ratchet up). */
-const FLOORS: Record<string, number> = { corpus: 1063, 'corpus-tz': 28 }
+const FLOORS: Record<string, number> = { corpus: 1063, 'corpus-tz': 29 }
 
 interface CorpusEntry {
   name: string
