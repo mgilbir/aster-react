@@ -6,7 +6,11 @@
  * `<SvgChart interaction>`. Compared, control by control: what the input is (its type and, for a slider, min / max / step), the
  * value it shows, the options of a select or a radio group (their labels, the one selected or checked), the label of the
  * control; then each edit a user can make (choose every option, click every radio, type into a field, clear a number field,
- * tick a box, move a slider) and the signal value it writes.
+ * tick a box, move a slider) and the signal value it writes. Each case runs with the accessible tree on (the default) and off,
+ * the controls are read from the chart's whole element and found again before every edit (as a person, or a browser test,
+ * finds them), so a chart that draws a control twice, or keeps a stale one, differs from vega's one control per signal.
+ * Vega-Lite selections bound to inputs (the cases of the browser selections gate) are compared the same way, on the bound
+ * signal and the selection tuple it makes.
  *
  * Deliberate differences, not compared: vega names every input after its signal, so two charts on one page share a radio
  * group and a spec chooses the field names a host <form> submits; Aster names only a radio group, uniquely per chart (C156,
@@ -16,6 +20,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import * as vega from 'vega'
+import * as vl from 'vega-lite'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -109,13 +114,13 @@ function edits(root: Element): Array<[string, () => void]> {
   return out
 }
 
-async function vegaOf(s: Spec): Promise<{ view: VegaView; root: Element }> {
+async function vegaOf(s: Spec): Promise<{ view: VegaView; root: Element; host: Element }> {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => VegaView }).View(vega.parse(s as never), { renderer: 'svg' }).initialize(host)
   cleanups.push(() => view.finalize())
   await view.runAsync()
-  return { view, root: host.querySelector('.vega-bindings')! }
+  return { view, root: host.querySelector('.vega-bindings')!, host }
 }
 
 const SHELLS: Array<[string, (p: Record<string, unknown>) => React.ReactElement]> = [
@@ -123,17 +128,56 @@ const SHELLS: Array<[string, (p: Record<string, unknown>) => React.ReactElement]
   ['<SvgChart interaction>', (p) => React.createElement(SvgChart as never, { ...p, interaction })],
 ]
 
-function asterOf(shell: (p: Record<string, unknown>) => React.ReactElement, s: Spec): { root: Element; signal: () => unknown } {
+/** The accessible tree on (the default) and off: the bound inputs share the chart's element with it. */
+const A11Y: Array<[string, Record<string, unknown>]> = [['a11y on', {}], ['a11y off', { a11y: false }]]
+
+function asterOf(
+  shell: (p: Record<string, unknown>) => React.ReactElement, s: Spec, props: Record<string, unknown> = { a11y: false },
+): { root: Element; host: Element; signal: (name?: string) => unknown } {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const r = createRoot(host)
   cleanups.push(() => act(() => r.unmount()))
   const ref = React.createRef<ChartHandle>()
-  act(() => { r.render(shell({ spec: s, a11y: false, ref })) })
+  act(() => { r.render(shell({ spec: s, ...props, ref })) })
   return {
     root: host.querySelector('[data-aster-binds]')!,
+    host,
     // (the value the chart drew with: the text mark shows toString(s), the scene's signal is the value itself)
-    signal: () => (ref.current!.getScene() as unknown as { signalParams: Record<string, unknown> }).signalParams.s,
+    signal: (name = 's') => (ref.current!.getScene() as unknown as { signalParams: Record<string, unknown> }).signalParams[name],
+  }
+}
+
+/** A value as a signal holds it, less symbol-keyed properties (vega tags a tuple it made with `Symbol(vega_id)`, its own bookkeeping). */
+const observable = (x: unknown): unknown => {
+  if (Array.isArray(x)) return x.map(observable)
+  if (x === null || typeof x !== 'object' || Object.getPrototypeOf(x) !== Object.prototype) return x
+  return Object.fromEntries(Object.entries(x).map(([k, v]) => [k, observable(v)]))
+}
+
+/**
+ * Applies vega's edits to vega's controls and the same edits to the chart's, one at a time, each found again in the chart's
+ * whole element just before it is made, and compares the controls and the `names` signals after each.
+ */
+async function compareEdits(
+  where: string, v: { view: VegaView; host: Element }, a: { host: Element; signal: (name?: string) => unknown }, names: readonly string[],
+  rounds = 1,
+): Promise<void> {
+  expect(describeControls(a.host), `${where}: controls`).toEqual(describeControls(v.host))
+  const labels = edits(v.host).map(([e]) => e)
+  expect(edits(a.host).map(([e]) => e), `${where}: edits`).toEqual(labels)
+  for (let round = 0; round < rounds; round++) {
+    for (let i = 0; i < labels.length; i++) {
+      const step = `${labels[i]}${rounds > 1 ? ` (round ${round + 1})` : ''}`
+      edits(v.host)[i]![1]()
+      await tick()
+      await v.view.runAsync()
+      const mine = edits(a.host)
+      expect(mine.map(([e]) => e), `${where}: edits before ${step}`).toEqual(labels)
+      act(() => mine[i]![1]())
+      for (const name of names) expect(observable(a.signal(name)), `${where}: ${name} after ${step}`).toEqual(observable(v.view.signal(name)))
+      expect(describeControls(a.host), `${where}: controls after ${step}`).toEqual(describeControls(v.host))
+    }
   }
 }
 
@@ -141,21 +185,47 @@ describe('bound inputs show and write what vega-view\'s do', () => {
   for (const [name, signal] of SIGNALS) {
     it(name, async () => {
       for (const [shellName, shell] of SHELLS) {
-        const v = await vegaOf(spec(signal))
-        const a = asterOf(shell, spec(signal))
-        const where = `${shellName}: ${name}`
-        expect(describeControls(a.root), `${where}: controls`).toEqual(describeControls(v.root))
-        if ((signal.bind as Spec).input !== 'radio') expect(labelOf(a.root), `${where}: label`).toBe(labelOf(v.root))
-        const vEdits = edits(v.root)
-        const aEdits = edits(a.root)
-        expect(aEdits.map(([e]) => e)).toEqual(vEdits.map(([e]) => e))
-        for (let i = 0; i < vEdits.length; i++) {
-          vEdits[i]![1]()
-          await tick()
-          await v.view.runAsync()
-          act(() => aEdits[i]![1]())
-          expect(a.signal(), `${where}: after ${vEdits[i]![0]}`).toEqual(v.view.signal('s'))
-          expect(describeControls(a.root), `${where}: controls after ${vEdits[i]![0]}`).toEqual(describeControls(v.root))
+        for (const [a11yName, props] of A11Y) {
+          const v = await vegaOf(spec(signal))
+          const a = asterOf(shell, spec(signal), props)
+          const where = `${shellName}, ${a11yName}: ${name}`
+          if ((signal.bind as Spec).input !== 'radio') expect(labelOf(a.root), `${where}: label`).toBe(labelOf(v.root))
+          await compareEdits(where, v, a, ['s'], 2)
+        }
+      }
+    })
+  }
+})
+
+/** Vega-Lite point selections bound to an input (the browser selections gate's cases), compiled by vega-lite itself. */
+const ROWS = [
+  { a: 1, b: 3, c: 'x' }, { a: 2, b: 5, c: 'y' }, { a: 3, b: 2, c: 'x' }, { a: 4, b: 6, c: 'z' }, { a: 5, b: 4, c: 'y' }, { a: 6, b: 7, c: 'z' },
+]
+const boundSelection = (field: 'a' | 'c', bind: Spec): Spec => (vl.compile({
+  $schema: 'https://vega.github.io/schema/vega-lite/v6.json', data: { values: ROWS }, width: 120, height: 80,
+  params: [{ name: 'pick', select: { type: 'point', fields: [field] }, bind }],
+  mark: 'point',
+  encoding: {
+    x: { field: 'a', type: 'quantitative' }, y: { field: 'b', type: 'quantitative' },
+    color: { condition: { param: 'pick', field: 'c', type: 'nominal' }, value: 'lightgray' },
+  },
+} as never).spec as unknown as Spec)
+const BOUND_SELECTIONS: Array<[string, 'a' | 'c', Spec]> = [
+  ['radio', 'c', { input: 'radio', options: ['x', 'y', 'z'] }],
+  ['select', 'c', { input: 'select', options: ['x', 'y', 'z'] }],
+  ['range', 'a', { input: 'range', min: 1, max: 6, step: 1 }],
+  ['checkbox', 'a', { input: 'checkbox' }],
+]
+
+describe('Vega-Lite selections bound to inputs write what vega-view\'s do', () => {
+  for (const [name, field, bind] of BOUND_SELECTIONS) {
+    it(name, async () => {
+      const s = boundSelection(field, bind)
+      for (const [shellName, shell] of SHELLS) {
+        for (const [a11yName, props] of A11Y) {
+          const v = await vegaOf(s)
+          const a = asterOf(shell, s, props)
+          await compareEdits(`${shellName}, ${a11yName}: ${name}`, v, a, [`pick_${field}`, 'pick_tuple'], 2)
         }
       }
     })
