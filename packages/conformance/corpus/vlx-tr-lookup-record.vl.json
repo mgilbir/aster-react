@@ -121,15 +121,18 @@
           "values": [
             {
               "k": "A",
-              "w": 3
+              "w": 3,
+              "z": 1
             },
             {
               "k": "B",
-              "w": 6
+              "w": 6,
+              "z": 4
             },
             {
               "k": "C",
-              "w": 9
+              "w": 9,
+              "z": 2
             }
           ]
         },
@@ -138,7 +141,7 @@
       "as": "info"
     },
     {
-      "calculate": "datum.info.w",
+      "calculate": "datum.info.w + datum.info.z",
       "as": "w"
     }
   ],
