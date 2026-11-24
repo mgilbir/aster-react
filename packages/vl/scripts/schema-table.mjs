@@ -113,11 +113,12 @@ export const EXTENSIONS = [
     patch: (d) => { widen(d.LoessTransform.properties, 'as', ref('FieldName')) },
   },
   {
-    why: 'a projection\'s `rotate`, `translate` and `center` with an {"expr"} or a Vega {"signal"} per component, and a projection type in any letter case (vega reads it case-insensitively; validate.ts refuses a name vega does not have)',
+    why: 'a projection\'s `rotate`, `translate` and `center` with a Vega {"signal"} per component, and a projection type in any letter case (vega reads it case-insensitively; validate.ts refuses a name vega does not have)',
     pinnedBy: 'corpus/vlx-geo-params-type-rotate.vl.json, vlx-geo-params-scale-translate.vl.json, vlx-geo-geoshape-config-projection-signal-expr.vl.json, vlx-geo-proj-uppercase-type.vl.json',
     example: { data: { values: [] }, mark: 'geoshape', projection: { type: 'Mercator', rotate: [{ signal: 'r' }, 0] } },
     patch: (d) => {
-      const component = { anyOf: [{ type: 'number' }, ref('ExprRef'), SIGNAL] }
+      // (a Vega {"signal"} only: vega-lite passes it on to Vega, but its output for an {"expr"} there fails in Vega)
+      const component = { anyOf: [{ type: 'number' }, SIGNAL] }
       d.Projection.properties.rotate.anyOf.push({ type: 'array', items: component, minItems: 2, maxItems: 3 })
       for (const k of ['translate', 'center']) d.Projection.properties[k].anyOf.push({ type: 'array', items: component, minItems: 2, maxItems: 2 })
       d.Projection.properties.type.anyOf.push({ type: 'string' })
