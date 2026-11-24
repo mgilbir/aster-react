@@ -68,6 +68,7 @@ const REFUSED: Array<[string, Record<string, unknown>, RegExp]> = [
   ['independent x / y scales over layers sized\n  differently', { data, layer: [{ mark: 'bar', encoding: { x: n('a'), y: q('b') } }, { mark: 'point', encoding: { x: q('c'), y: q('b') } }], resolve: { scale: { x: 'independent' } } }, /independent x scales over layers sized differently/],
   ['`axis: null` on a layer after one that draws the axis', { data, layer: [{ mark: 'bar', encoding: { x: n('a'), y: q('b') } }, { mark: 'line', encoding: { x: n('a'), y: { ...q('c'), axis: null } } }] }, /`axis: null` on a layer after one that draws/],
   ['a layer in a facet that keeps its own x / y scales', { data, facet: { column: n('a') }, spec: { layer: [{ mark: 'point', encoding: { x: q('b'), y: q('b') } }, { mark: 'point', encoding: { x: q('b'), y: q('c') } }], resolve: { scale: { y: 'independent' } } } }, /a layer in a facet that keeps its own y scales/],
+  ['Names that are members of Object.prototype', unit('bar', { x: n('a'), y: { ...q('valueOf'), aggregate: 'sum' } }), /encoding\.y\.field: a field named "valueOf" is not supported: Vega keeps names in plain objects/],
 ]
 
 /** Features the README used to list as refused, that compile now. */

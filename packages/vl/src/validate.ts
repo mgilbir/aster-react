@@ -315,9 +315,124 @@ export function validateSpec(spec: unknown): void {
   try {
     collectParams(spec, state.declaredParams, state.timerNames)
     validateView(spec, '', true, undefined, true)
+    refusePrototypeNames(spec)
   } finally {
     state = saved
   }
+}
+
+/**
+ * The names of Object.prototype's members (`constructor`, `toString`, `valueOf`, `hasOwnProperty`, `__proto__` ...). Vega keeps the
+ * fields, datasets and signals of a spec in plain objects keyed by their names, so a field or a dataset named as one of these is mistaken
+ * for the prototype's member: vega-lite 6.4.3's output for it fails in Vega ("Operator not defined", "list.push is not a function"), or
+ * draws without it (an aggregate that aggregates nothing, a time unit of nothing, an aria description or a legend that leaves the field
+ * out). Such a name is refused (DECISIONS Q9), except in the places listed in PROTOTYPE_SAFE, where vega-lite's chart is the chart of
+ * any other name; a place not listed is refused (C442).
+ */
+const PROTOTYPE_MEMBERS: ReadonlySet<string> = new Set(Object.getOwnPropertyNames(Object.prototype))
+const allBut = (...names: string[]): ReadonlySet<string> => new Set([...PROTOTYPE_MEMBERS].filter((n) => !names.includes(n)))
+const GETTER_SETTER_HELPERS = ['__defineGetter__', '__defineSetter__', '__lookupGetter__', '__lookupSetter__']
+/**
+ * Where, and for which members, vega-lite's chart with such a name is the chart of any other name: what a transform reads only through
+ * a field accessor, a parameter's name, a binned channel's field (whose description drops some names), `x2`. Each entry is held to
+ * vega-lite through real Vega, both ways and for every member, by conformance/test/vl-prototype-names.test.ts.
+ */
+const PROTOTYPE_SAFE = {
+  fold: allBut('__proto__'),
+  binTransform: allBut('__proto__'),
+  stack: allBut('__proto__'),
+  parameter: allBut('__proto__'),
+  pivot: PROTOTYPE_MEMBERS,
+  density: PROTOTYPE_MEMBERS,
+  quantile: PROTOTYPE_MEMBERS,
+  binnedPosition: allBut('__proto__', ...GETTER_SETTER_HELPERS),
+  binnedColor: allBut('__proto__', 'propertyIsEnumerable', ...GETTER_SETTER_HELPERS),
+  x2: new Set(['__proto__']),
+} as const satisfies Record<string, ReadonlySet<string>>
+
+/** Refuse every field, dataset, output (`as`) and parameter name of the spec that Vega mistakes for an Object.prototype member. */
+function refusePrototypeNames(spec: Obj): void {
+  const refuse = (at: string, what: string, name: string): never =>
+    fail(at, `a ${what} named ${JSON.stringify(name)} is not supported: Vega keeps names in plain objects and mistakes it for Object.prototype's member, so vega-lite 6.4.3's chart fails or draws without it; rename it`)
+  const check = (v: unknown, at: string, what: string, safe?: ReadonlySet<string>): void => {
+    if (typeof v === 'string' && PROTOTYPE_MEMBERS.has(v) && !safe?.has(v)) refuse(at, what, v)
+  }
+  const checkAll = (v: unknown, at: string, what: string, safe?: ReadonlySet<string>): void => {
+    if (Array.isArray(v)) v.forEach((x, i) => check(x, `${at}[${i}]`, what, safe))
+    else check(v, at, what, safe)
+  }
+  // (every `field` below a predicate, a sort or a condition)
+  const fieldsBelow = (n: unknown, at: string): void => {
+    if (Array.isArray(n)) { n.forEach((x, i) => fieldsBelow(x, `${at}[${i}]`)); return }
+    if (!isObj(n)) return
+    for (const [k, v] of Object.entries(n)) {
+      if (k === 'field') check(v, `${at}.field`, 'field')
+      else fieldsBelow(v, `${at}.${k}`)
+    }
+  }
+  const data = (d: unknown, at: string): void => {
+    if (!isObj(d)) return
+    check(d.name, `${at}.name`, 'dataset')
+    if (isObj(d.format) && isObj(d.format.parse)) for (const k of Object.keys(d.format.parse)) check(k, `${at}.format.parse`, 'field')
+    for (const g of ['sequence']) if (isObj(d[g])) check((d[g] as Obj).as, `${at}.${g}.as`, 'field')
+  }
+  const channelDef = (def: unknown, at: string, channel?: string): void => {
+    if (Array.isArray(def)) { def.forEach((d, i) => channelDef(d, `${at}[${i}]`)); return }
+    if (!isObj(def)) return
+    const binned = def.bin !== undefined && def.bin !== false && def.bin !== null && def.bin !== 'binned'
+    const safe = binned && (channel === 'x' || channel === 'y') ? PROTOTYPE_SAFE.binnedPosition : binned && channel === 'color' ? PROTOTYPE_SAFE.binnedColor : !binned && channel === 'x2' ? PROTOTYPE_SAFE.x2 : undefined
+    check(def.field, `${at}.field`, 'field', safe)
+    if (def.condition !== undefined) channelDef(def.condition, `${at}.condition`)
+    if (isObj(def.sort)) check(def.sort.field, `${at}.sort.field`, 'field')
+  }
+  const transform = (t: unknown, at: string): void => {
+    if (!isObj(t)) return
+    const a = (k: string): string => `${at}.${k}`
+    checkAll(t.as, a('as'), 'field')
+    checkAll(t.groupby, a('groupby'), 'field')
+    if (t.filter !== undefined) fieldsBelow(t.filter, a('filter'))
+    if (t.bin !== undefined) check(t.field, a('field'), 'field', PROTOTYPE_SAFE.binTransform)
+    else if (t.timeUnit !== undefined) check(t.field, a('field'), 'field')
+    if (t.fold !== undefined) checkAll(t.fold, a('fold'), 'field', PROTOTYPE_SAFE.fold)
+    for (const k of ['aggregate', 'joinaggregate', 'window']) {
+      if (Array.isArray(t[k])) (t[k] as unknown[]).forEach((op, i) => { if (isObj(op)) { check(op.field, `${a(k)}[${i}].field`, 'field'); check(op.as, `${a(k)}[${i}].as`, 'field') } })
+    }
+    if (t.sort !== undefined) fieldsBelow(t.sort, a('sort'))
+    for (const k of ['stack', 'pivot', 'density', 'quantile'] as const) checkAll(t[k], a(k), 'field', PROTOTYPE_SAFE[k])
+    for (const k of ['flatten', 'impute', 'key', 'lookup', 'loess', 'regression', 'on', 'extent']) checkAll(t[k], a(k), 'field')
+    if (t.pivot !== undefined) check(t.value, a('value'), 'field')
+    if (t.extent !== undefined) check(t.param, a('param'), 'parameter', PROTOTYPE_SAFE.parameter)
+    if (isObj(t.from)) {
+      check(t.from.param, a('from.param'), 'parameter', PROTOTYPE_SAFE.parameter)
+      check(t.from.key, a('from.key'), 'field')
+      checkAll(t.from.fields, a('from.fields'), 'field')
+      data(t.from.data, a('from.data'))
+    }
+  }
+  const view = (v: unknown, at: string): void => {
+    if (!isObj(v)) return
+    const a = (k: string): string => (at ? `${at}.${k}` : k)
+    data(v.data, a('data'))
+    if (isObj(v.datasets)) for (const k of Object.keys(v.datasets)) check(k, a('datasets'), 'dataset')
+    if (Array.isArray(v.transform)) v.transform.forEach((t, i) => transform(t, `${a('transform')}[${i}]`))
+    if (isObj(v.encoding)) for (const [ch, def] of Object.entries(v.encoding)) channelDef(def, `${a('encoding')}.${ch}`, ch)
+    if (isObj(v.facet)) {
+      if (v.facet.field !== undefined) channelDef(v.facet, a('facet'))
+      else for (const [k, def] of Object.entries(v.facet)) channelDef(def, `${a('facet')}.${k}`)
+    }
+    if (Array.isArray(v.repeat)) checkAll(v.repeat, a('repeat'), 'field')
+    else if (isObj(v.repeat)) for (const [k, list] of Object.entries(v.repeat)) checkAll(list, `${a('repeat')}.${k}`, 'field')
+    if (Array.isArray(v.params)) {
+      v.params.forEach((p, i) => {
+        if (!isObj(p)) return
+        check(p.name, `${a('params')}[${i}].name`, 'parameter', PROTOTYPE_SAFE.parameter)
+        if (isObj(p.select)) checkAll(p.select.fields, `${a('params')}[${i}].select.fields`, 'field')
+      })
+    }
+    for (const k of ['layer', 'hconcat', 'vconcat', 'concat']) if (Array.isArray(v[k])) (v[k] as unknown[]).forEach((c, i) => view(c, `${a(k)}[${i}]`))
+    if (isObj(v.spec)) view(v.spec, a('spec'))
+  }
+  view(spec, '')
 }
 
 /**
@@ -703,12 +818,10 @@ function validateParams(params: unknown, path: string, selectionOk: boolean, kin
     }
     // variable parameter
     keysOf(p, set('name value expr bind react description push'), at, 'parameter')
-    if (p.expr !== undefined && p.value !== undefined) fail(at, '`expr` and `value` cannot be combined')
     if (p.expr !== undefined && typeof p.expr !== 'string') mustBe(`${at}.expr`, 'an expression string')
     if (p.push !== undefined) fail(`${at}.push`, '`push` is not a Vega-Lite parameter property (it is Vega\'s signal scoping, which vega-lite sets itself where it needs it)')
     if (p.react !== undefined && p.react !== false && p.react !== true) mustBe(`${at}.react`, 'a boolean')
     if (p.bind !== undefined) {
-      if (p.expr !== undefined) fail(`${at}.bind`, 'a parameter with `expr` cannot be bound to an input')
       if (!isObj(p.bind)) mustBe(`${at}.bind`, 'an input binding object (legend/scales bindings belong to selection parameters)')
       validateBinding(p.bind, `${at}.bind`)
     }
