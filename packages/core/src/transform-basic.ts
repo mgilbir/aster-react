@@ -9,7 +9,7 @@
  * values keep the meaning the grammar gives them (`null`, `''` and `NaN`, numeric strings, Dates), and field parameters accept
  * the access paths `a.b`, `a[0]` and `a\.b`.
  */
-import { accessorName, array, error, one, toNumber } from './util.js'
+import { accessorFields, accessorName, array, error, one, toNumber } from './util.js'
 import { compareOf, fieldOf, fieldsOf, flattenLength, lcg, numberRange, required, SEED, sortBySpec, stableSortBy, type Row } from './row-keys.js'
 import { quantile } from './arr.js'
 import { allotUpTo, meterTick } from './limits.js'
@@ -465,7 +465,7 @@ export function identifierRows(rows: Row[], p: Params, owned = false, ids?: IdCo
 // ---------------------------------------------------------------------------
 
 /** A binning: bin edges run from `start` to `stop` in steps of `step`. */
-export interface BinGrid { start: number; stop: number; step: number }
+export interface BinGrid { start: number; stop: number; step: number; fields?: string[]; fname?: string }
 
 /** The step of bins no coarser than `maxBins` over `span`: given, picked from the allowed `steps`, or searched as a nice power of the base. */
 function binStep(p: Params, span: number, maxBins: number, base: number): number {
@@ -551,7 +551,8 @@ export function binRows(rows: Row[], p: Params, publish?: (grid: BinGrid) => voi
     start += shift
     stop += shift
   }
-  publish?.({ start, stop, step })
+  // (vega's bin signal is its binning accessor: the three numbers, the fields it reads and its name, `name` or `bin_<field>`)
+  if (publish) publish({ start, stop, step, fields: accessorFields(read) ?? [], fname: (p.name as string) || 'bin_' + accessorName(read) })
   const withEnd = p.interval !== false
   const as = (p.as ?? ['bin0', 'bin1']) as string[]
   const startName = as[0] as string

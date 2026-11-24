@@ -126,3 +126,27 @@ export function transformParams(type: unknown): readonly TransformParam[] {
   }
   return params
 }
+
+/**
+ * What a transform's `signal` holds: vega binds it to the value of the transform's operator, which for these is data -- `own` the
+ * transform publishes itself (bin's and timeunit's bins, extent's extent, dotbin's `{start, stop, step}`, crossfilter's bitmaps,
+ * geojson's features), `output` the rows it returns, `added` the rows it adds after the ones it was given (impute, sequence),
+ * `values` the field values a pie measured, `counter` the last number an identifier gave, `none` a value it never sets (null). The
+ * value of any other operator is vega's internal state (an aggregate's cell map, a filter's bit set, a hierarchy's root, a force
+ * simulation, a projection's path), which Aster does not model: its signal holds an opaque object, one per transform -- enough for
+ * what specs use it for (`require: {signal}`, an order of evaluation), nothing to read parts of (docs/ARCHITECTURE.md, deviations).
+ */
+export type SignalValue = 'own' | 'output' | 'added' | 'values' | 'counter' | 'none'
+
+const SIGNAL_VALUES: Readonly<Record<string, SignalValue>> = {
+  bin: 'own', timeunit: 'own', extent: 'own', dotbin: 'own', crossfilter: 'own', geojson: 'own',
+  collect: 'output', sample: 'output', fold: 'output', flatten: 'output', cross: 'output', kde: 'output', density: 'output', quantile: 'output',
+  regression: 'output', loess: 'output', contour: 'output', kde2d: 'output', isocontour: 'output', treelinks: 'output',
+  impute: 'added', sequence: 'added', pie: 'values', identifier: 'counter',
+  formula: 'none', stack: 'none', countpattern: 'none', geopoint: 'none',
+}
+
+/** What the `signal` of a transform of that type holds; undefined when it is vega's internal state. */
+export function signalValueOf(type: unknown): SignalValue | undefined {
+  return Object.hasOwn(SIGNAL_VALUES, transformTypeOf(type)) ? SIGNAL_VALUES[transformTypeOf(type)] : undefined
+}

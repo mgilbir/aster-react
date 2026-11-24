@@ -122,7 +122,8 @@ export function deriveStepState(t: CompiledTransform, input: Row[], output: Row[
 export function applyOneWithState(
   rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string, previous?: Row[],
 ): { rows: Row[]; state?: unknown } {
-  if (t.type === 'filter') {
+  // (a filter with a `signal` runs as a transform: the signal is bound there, see `publishSignal`)
+  if (t.type === 'filter' && !(t as { signal?: unknown }).signal) {
     // Predicate flags and output in one pass (same function, same errors as the
     // plain transform).
     const fn = exprRowPass((t as { expr?: string }).expr ?? '', tctx)
