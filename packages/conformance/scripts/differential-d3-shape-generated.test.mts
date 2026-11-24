@@ -108,7 +108,7 @@ function pointSet(seed: number): Pt[] {
 // --- the curves under test ----------------------------------------------------------------------
 
 type ParamKind = 'beta' | 'tension' | 'alpha' | null
-interface Family { d3: string; name: string; param: ParamKind }
+interface Family { d3: string; name: string; param: ParamKind; /** vega's `interpolate` name and the mark's orient that draw it (the two monotone curves are one name, `monotone`, by orient) */ interpolate?: string; orient?: string }
 const FAMILIES: Family[] = [
   { d3: 'curveLinear', name: 'linear', param: null },
   { d3: 'curveLinearClosed', name: 'linear-closed', param: null },
@@ -122,8 +122,8 @@ const FAMILIES: Family[] = [
   { d3: 'curveCatmullRom', name: 'catmull-rom', param: 'alpha' },
   { d3: 'curveCatmullRomClosed', name: 'catmull-rom-closed', param: 'alpha' },
   { d3: 'curveCatmullRomOpen', name: 'catmull-rom-open', param: 'alpha' },
-  { d3: 'curveMonotoneX', name: 'monotone-x', param: null },
-  { d3: 'curveMonotoneY', name: 'monotone-y', param: null },
+  { d3: 'curveMonotoneX', name: 'monotone-x', param: null, interpolate: 'monotone', orient: 'vertical' },
+  { d3: 'curveMonotoneY', name: 'monotone-y', param: null, interpolate: 'monotone', orient: 'horizontal' },
   { d3: 'curveNatural', name: 'natural', param: null },
   { d3: 'curveStep', name: 'step', param: null },
   { d3: 'curveStepAfter', name: 'step-after', param: null },
@@ -208,7 +208,7 @@ const d3AreaCalls = (s: Spec, cfg: AreaConfig): Call[] => {
   return rec.calls
 }
 
-const asterCurve = (s: Spec) => aster.resolveCurve(s.variant.name, 'vertical', s.variant.p)
+const asterCurve = (s: Spec) => aster.resolveCurve(s.variant.interpolate ?? s.variant.name, s.variant.orient ?? 'vertical', s.variant.p)
 const cols = (pts: Pt[], f: (p: Pt) => number): Float64Array => Float64Array.from(pts, f)
 const liveOf = (pts: Pt[]): Uint8Array => Uint8Array.from(pts, (p) => (p.live ? 1 : 0))
 
@@ -328,19 +328,37 @@ describe('generated trail differential (the path writer\'s arcs)', () => {
 
 describe('resolveCurve is vega\'s curve choice', () => {
   const pts = [[0, 0], [10, 14], [20, 3], [30, 3], [40, 20], [55, 8]].map(([x, y]) => ({ x: x!, y: y!, x0: x!, x1: x!, y0: 0, y1: y!, live: true }))
-  const names: unknown[] = [undefined, '', 'linear', 'monotone', 'monotone-x', 'bundle', 'cardinal', 'cardinal-open', 'catmull-rom', 'catmull-rom-closed', 'step-after', 'natural', 'basis-open',
+  const names: unknown[] = [undefined, '', 'linear', 'monotone', 'monotone-x', 'monotone-y', 'bundle', 'cardinal', 'cardinal-open', 'catmull-rom', 'catmull-rom-closed', 'step-after', 'natural', 'basis-open',
     'nonsense', 'constructor', '__proto__', 'toString', 5]
   const orients = [undefined, 'vertical', 'horizontal']
   const tensions: unknown[] = [undefined, null, 0, 0.3, 1, '0.7', NaN]
-  // (where vega's lookup finds nothing it would crash on a null curve; Aster draws the linear curve instead)
+  const pathCurves = (vega as unknown as { pathCurves: (t: unknown, o: unknown, k: unknown) => any }).pathCurves
+  const linearD = exact(() => d3Shape.line<Pt>().x((p) => p.x).y((p) => p.y).curve(d3Shape.curveLinear).digits(null)(pts))
   it('every interpolate x orient x tension draws what vega\'s pathCurves draws', () => {
-    // Aster also takes `monotone-x` / `monotone-y` (the old engine did; vega's table has only `monotone`)
-    const aliases: Record<string, unknown> = { 'monotone-x': d3Shape.curveMonotoneX, 'monotone-y': d3Shape.curveMonotoneY }
-    const pathCurves = (vega as unknown as { pathCurves: (t: unknown, o: unknown, k: unknown) => any }).pathCurves
+    const noCurve: unknown[] = []
     for (const name of names) for (const orient of orients) for (const tension of tensions) {
-      const want = exact(() => d3Shape.line<Pt>().x((p) => p.x).y((p) => p.y).curve(pathCurves(name || 'linear', orient, tension) ?? (Object.hasOwn(aliases, name as string) ? aliases[name as string] : undefined) ?? d3Shape.curveLinear).digits(null)(pts))
       const got = exact(() => aster.linePath(aster.resolveCurve(name as never, orient, tension as never), cols(pts, (p) => p.x), cols(pts, (p) => p.y), null, null))
+      // pathCurves is vega's lookup: no `?? alias ?? linear` of this test's own is applied to what it gives
+      const curve = pathCurves(name || 'linear', orient, tension)
+      if (curve == null) {
+        // Vega has no curve for the name (its shape generator would call null and throw: the divergence below). Aster draws the
+        // linear curve there, the one it documents (docs/ARCHITECTURE.md, Deviations from Vega), and not a curve of its own.
+        if (!noCurve.includes(name)) noCurve.push(name)
+        expect({ name, orient, tension, got }).toEqual({ name, orient, tension, got: linearD })
+        continue
+      }
+      const want = exact(() => d3Shape.line<Pt>().x((p) => p.x).y((p) => p.y).curve(curve).digits(null)(pts))
       expect({ name, orient, tension, got }).toEqual({ name, orient, tension, got: want })
+    }
+    // exactly these have no curve in vega: a name that gains or loses one is a change to look at
+    expect(noCurve).toEqual(['monotone-x', 'monotone-y', 'nonsense', 'constructor', '__proto__', 'toString', 5])
+  })
+
+  it('the two monotone curves are vega\'s `monotone`, by the mark\'s orient, and no name of their own', () => {
+    for (const orient of ['vertical', 'horizontal']) {
+      const family = orient === 'vertical' ? d3Shape.curveMonotoneX : d3Shape.curveMonotoneY
+      const want = exact(() => d3Shape.line<Pt>().x((p) => p.x).y((p) => p.y).curve(family).digits(null)(pts))
+      expect(exact(() => aster.linePath(aster.resolveCurve('monotone', orient, undefined), cols(pts, (p) => p.x), cols(pts, (p) => p.y), null, null)), orient).toEqual(want)
     }
   })
 })
