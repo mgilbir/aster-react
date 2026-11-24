@@ -14,20 +14,26 @@
  *
  * Items are named by their place (src/geometry-keys.ts), never by the order they are first met in.
  *
- * Run: pnpm --filter @aster-charts/conformance exec tsx scripts/browser-geometry.mts [--seeds=N]   (after `pnpm build`)
+ * Where vega's two renderers disagree at a point (the browser tests an SVG text by its glyphs, its canvas pick by the text's box...) vega
+ * has no single answer, and Aster's SVG answer may be either (the rule of browser-signals-pick.mts): those points are counted.
  *
- * Status: NOT GREEN, and so a non-blocking gate (scripts/gates.mjs). On 20 seeds the SVG pass finds 231 of 3401 decisive points
- * where Aster's pick differs from what the browser hit-tests in vega's SVG, and 1 of 1080 intersect boxes. The classes seen: an
- * SVG text hit-tested by its glyphs (vega's two renderers disagree there: this gate should take the rule of browser-signals-pick.mts,
- * Aster's answer one of theirs); a path the browser draws up to its first coordinate that is no number (an area or a line with an
- * infinite or missing y), which Aster's geometry drops whole; group transforms with a unit (`translate(15px,…)`), which Chromium may
- * read as a CSS length. The audit-fix lane a11 left these open (its report says so).
+ * The differences that remain are named in src/geometry-differences.ts: each class says what the oracle does there (an attribute SVG
+ * rejects, a view of infinite size, glyph cells, a canvas of 32-bit floats), is read off the oracle's own scenegraph and DOM, and must
+ * still differ (a class no difference falls into fails the gate as `FIXED-GAP`, on a full run). A difference no class names fails it.
+ *
+ * Every pick runs under a deadline (SEED_DEADLINE_MS): a page that does not answer fails the gate naming the seed, it never hangs it.
+ * vega's own `intersect()` walks one `isPointInPath` per pixel of an item's bounds, which for a path of 1e15 pixels does not end: a box
+ * Aster refuses at its work ceiling (`AsterLimitError`, LIMITS.md) is never given to vega's walk, and is counted.
+ *
+ * Run: pnpm --filter @aster-charts/conformance exec tsx scripts/browser-geometry.mts [--seeds=N]   (after `pnpm build`)
  */
 import { writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { KNOWN_DIFFERENCES } from '../src/geometry-differences.ts'
+import { within as deadline } from '../src/deadline.ts'
 
 cli({ url: import.meta.url, flags: { seeds: 'eq' } })
 const SEEDS = Number(process.argv.find((a) => a.startsWith('--seeds='))?.slice('--seeds='.length) ?? 160)
@@ -40,14 +46,56 @@ import * as vega from 'vega'
 import { compileChart, evaluateChart } from '@aster-charts/core'
 import { sceneIntersect } from '@aster-charts/core/signals'
 import { buildHitIndex } from '@aster-charts/core/hit'
+import { loadImages, sceneImageUrls, withSceneImages } from '@aster-charts/core/canvas'
 import { genGeometrySpec, rng, MARK_TYPES } from '../src/geometry-specs.ts'
 import { vegaPlaces, asterPlaces, nameOf } from '../src/geometry-keys.ts'
+import { classify } from '../src/geometry-differences.ts'
+
+// An SVG attribute the browser rejects as vega wrote it: a value that is no number (NaN, Infinity, a unit), a size below 0, a number a
+// browser's float cannot hold.
+const SINGLE_OVERFLOW = 3.4028235677973366e38
+const NUMBER = /^\\s*[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?\\s*$/
+const NUMBERS = /[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?/g
+const okNumber = (v) => NUMBER.test(v) && Math.abs(+v) < SINGLE_OVERFLOW
+function okTransform(t) {
+  const call = /\\s*([a-zA-Z]+)\\(([^)]*)\\)[\\s,]*/y
+  let i = 0
+  if (t.trim() === '') return true
+  while (i < t.length) {
+    call.lastIndex = i
+    const m = call.exec(t)
+    if (!m) return false
+    for (const a of m[2].split(/[\\s,]+/).filter(Boolean)) if (!okNumber(a)) return false
+    i = call.lastIndex
+  }
+  return true
+}
+function okPath(d) {
+  if ((d.match(NUMBERS) || []).some((v) => Math.abs(+v) >= SINGLE_OVERFLOW)) return false
+  return d.replace(/[MmLlHhVvCcSsQqTtAaZz]/g, ' ').replace(NUMBERS, ' ').replace(/[\\s,]/g, '') === ''
+}
+/** The attributes of an SVG element, and of the groups above it, that SVG does not take as written. */
+function rejectedAttributes(el) {
+  const out = []
+  for (let n = el; n && n.tagName && n.tagName.toLowerCase() !== 'svg'; n = n.parentNode) {
+    const tag = n.tagName.toLowerCase()
+    for (const a of ['x', 'y', 'x1', 'y1', 'x2', 'y2', 'width', 'height', 'cx', 'cy', 'r', 'rx', 'ry']) {
+      const v = n.getAttribute(a)
+      if (v !== null && (!okNumber(v) || ((a === 'width' || a === 'height') && +v < 0))) out.push(tag + '@' + a)
+    }
+    const t = n.getAttribute('transform')
+    if (t !== null && !okTransform(t)) out.push(tag + '@transform')
+    const d = n.getAttribute('d')
+    if (d !== null && !okPath(d)) out.push(tag + '@d')
+  }
+  return out
+}
 
 const silent = (errors) => ({ level() { return this }, error(...a) { errors.push(a.map(String).join(' ')); return this }, warn() { return this }, info() { return this }, debug() { return this } })
 
 window.__run = async (seed, renderer) => {
   const { spec } = genGeometrySpec(seed)
-  const out = { seed, renderer, skipped: null, points: 0, decisive: 0, hits: 0, differ: [], boxes: 0, boxHits: 0, boxDiffer: [], refused: 0 }
+  const out = { seed, renderer, skipped: null, points: 0, decisive: 0, hits: 0, ambiguous: 0, differ: 0, classes: {}, unknown: [], boxes: 0, boxHits: 0, boxDiffer: [], refused: 0 }
   const holder = document.createElement('div')
   document.body.replaceChildren(holder)
   const errors = []
@@ -66,8 +114,20 @@ window.__run = async (seed, renderer) => {
   const { places: aplaces } = asterPlaces(scene)
   const aname = nameOf(aplaces)
   const anameOf = (it) => aname.get(it) ?? (it && it.items === scene.items ? '(root)' : '?')
+  // (an image the browser draws is sized by its bitmap where the item gives no size, and the host that draws Aster's scene has loaded
+  // it: the SVG's index is made of the scene as that host holds it. Vega's canvas pick, by bounds measured before the image loaded,
+  // and intersect(), by those bounds, take the scene as it was evaluated)
+  let indexScene = scene
+  let anameIndex = anameOf
   let index
-  try { index = buildHitIndex(scene, undefined, renderer === 'canvas' ? { renderer: 'canvas' } : {}) } catch (e) { out.skipped = 'aster index: ' + e.message; view.finalize(); return out }
+  try {
+    if (renderer === 'svg') {
+      indexScene = withSceneImages(scene, await loadImages(sceneImageUrls(scene), { timeoutMs: 10_000 }))
+      const iname = nameOf(asterPlaces(indexScene).places)
+      anameIndex = (it) => iname.get(it) ?? (it && it.items === indexScene.items ? '(root)' : '?')
+    }
+    index = buildHitIndex(indexScene, undefined, renderer === 'canvas' ? { renderer: 'canvas' } : {})
+  } catch (e) { out.skipped = 'aster index: ' + e.message; view.finalize(); return out }
   const el = holder.querySelector(renderer === 'canvas' ? 'canvas' : 'svg')
   const rect = el.getBoundingClientRect()
   const origin = [view.padding().left + view._origin[0], view.padding().top + view._origin[1]]
@@ -81,6 +141,46 @@ window.__run = async (seed, renderer) => {
     }
     return item ? (vname.get(item) ?? '(vega: ' + item.mark.marktype + ' ' + item.mark.name + ')') : 'nothing'
   }
+  // (the SVG renderer is hit-tested by the browser, which reads an SVG text by its glyphs and recovers from attributes SVG rejects in
+  // its own way; vega's canvas renderer picks by vega's own rules. Where the two disagree vega has no single answer, and Aster's
+  // may be either, as in browser-signals-pick.mts)
+  let canvasAt = null
+  let cview = null
+  if (renderer === 'svg') {
+    const holder2 = document.createElement('div')
+    document.body.append(holder2)
+    try {
+      cview = new vega.View(vega.parse(structuredClone(spec)), { renderer: 'canvas', container: holder2, logger: silent([]) })
+      await cview.runAsync()
+      const croot = cview.scenegraph().root
+      const cname = nameOf(vegaPlaces(croot.items[0]))
+      cname.set(croot.items[0], '(root)')
+      const corigin = [cview.padding().left + cview._origin[0], cview.padding().top + cview._origin[1]]
+      canvasAt = (x, y) => {
+        const item = cview._handler.pick(croot, x, y, x - corigin[0], y - corigin[1])
+        return item ? (cname.get(item) ?? '(vega: ' + item.mark.marktype + ' ' + item.mark.name + ')') : 'nothing'
+      }
+    } catch (e) { canvasAt = null }
+  }
+  // (what the oracle holds about an item, for src/geometry-differences.ts: its mark, the groups above it, its bounds, its SVG element's rejected attributes)
+  const domOf = new Map()
+  if (renderer === 'svg') for (const e of holder.querySelectorAll('*')) if (e.__data__ && e.__data__.mark) domOf.set(e.__data__, e)
+  const sideOf = (name) => {
+    const n = vplaces.get(name)
+    if (!n) return null
+    const groups = []
+    for (let g = n.mark && n.mark.group; g && g.mark; g = g.mark.group) groups.push([g.x, g.y, g.width, g.height])
+    const b = n.bounds
+    const el = domOf.get(n)
+    return {
+      type: (vplaces.get(name.replace(/\\[\\d+\\]$/, '')) || {}).marktype ?? 'group',
+      groups,
+      bounds: b ? [b.x1, b.y1, b.x2, b.y2] : [],
+      rejected: el ? rejectedAttributes(el) : [],
+    }
+  }
+  const viewOrigin = [view.padding().left + view._origin[0], view.padding().top + view._origin[1]]
+  const viewSize = [view._width, view._height]
   const R = rng(seed * 13 + (renderer === 'canvas' ? 1 : 2))
   const W = rect.width, H = rect.height
   const pts = []
@@ -106,9 +206,16 @@ window.__run = async (seed, renderer) => {
     out.decisive++
     if (want !== 'nothing') out.hits++
     const h = index.pick(x, y)
-    const got = h ? anameOf(h.item) : 'nothing'
-    if (got !== want && out.differ.length < 6) out.differ.push({ x, y, vega: want, aster: got })
-    else if (got !== want) out.differ.push(null)
+    const got = h ? anameIndex(h.item) : 'nothing'
+    const alt = canvasAt ? canvasAt(x, y) : want
+    if (alt !== want) out.ambiguous++
+    if (got !== want && got !== alt) {
+      out.differ++
+      const cls = classify({ renderer, origin: viewOrigin, size: viewSize, vega: sideOf(want), aster: sideOf(got) })
+      if (cls !== null) out.classes[cls] = (out.classes[cls] ?? 0) + 1
+      else if (out.unknown.length < 6) out.unknown.push({ x, y, vega: want, aster: got })
+      else out.unknown.push(null)
+    }
   }
   // intersect(): in the root group item's frame, boxes over the view, by every filter
   const vegaIntersect = vega.expressionFunction('intersect')
@@ -121,16 +228,19 @@ window.__run = async (seed, renderer) => {
     for (const opt of filters) {
       out.boxes++
       let want, got
-      try { want = vegaIntersect.call({ context: { dataflow: view } }, box, opt, undefined).map((it) => vname.get(it) ?? '?').join(' ') } catch (e) { want = 'throws ' + e.message }
+      // Aster first: where its work ceiling refuses the box, vega's walk of the same lattice (one isPointInPath per pixel of an
+      // item's bounds, which a path of 1e15 pixels makes endless) is not run at all: it has no answer to compare with
       try { got = sceneIntersect(scene, box, opt, undefined).map(anameOf).join(' ') } catch (e) {
         if (e.name === 'AsterLimitError' && /intersect\\(\\) lattice tests/.test(e.message)) { out.refused++; continue }
         got = 'throws ' + e.message
       }
+      try { want = vegaIntersect.call({ context: { dataflow: view } }, box, opt, undefined).map((it) => vname.get(it) ?? '?').join(' ') } catch (e) { want = 'throws ' + e.message }
       if (want !== '' && !want.startsWith('throws')) out.boxHits++
       if (want !== got) out.boxDiffer.push({ box, opt, vega: want, aster: got })
     }
   }
   view.finalize()
+  if (cview) cview.finalize()
   return out
 }
 `
@@ -150,30 +260,59 @@ page.on('pageerror', (e) => console.error('[page]', e.message.slice(0, 300)))
 await page.goto(`file://${join(OUT_DIR, 'index.html')}`)
 await page.waitForFunction(() => '__run' in window, null, { timeout: 30_000 })
 
-type Result = { seed: number; renderer: string; skipped: string | null; points: number; decisive: number; hits: number; differ: Array<Record<string, unknown> | null>; boxes: number; boxHits: number; boxDiffer: Array<Record<string, unknown>>; refused: number }
+/** One seed takes a few milliseconds; a page still busy (or waiting) after this is hung, and the gate fails naming the seed. */
+const SEED_DEADLINE_MS = 60_000
+async function within<T>(ms: number, what: string, work: Promise<T>): Promise<T> {
+  try { return await deadline(ms, what, work) } catch (e) {
+    // (a hung page cannot be asked to close: leave, and the browser with its parent)
+    console.error(`[browser-geometry] FAIL: ${(e as Error).message}`)
+    process.exit(1)
+  }
+}
+
+type Result = {
+  seed: number; renderer: string; skipped: string | null; points: number; decisive: number; hits: number; ambiguous: number
+  differ: number; classes: Record<string, number>; unknown: Array<Record<string, unknown> | null>
+  boxes: number; boxHits: number; boxDiffer: Array<Record<string, unknown>>; refused: number
+}
 const t0 = Date.now()
+/** A run without `--seeds` is the full one: only it can say that a class of known differences has no difference left in it. */
+const FULL = !process.argv.some((a) => a.startsWith('--seeds='))
 let failed = false
+const seen: Record<string, Record<string, number>> = { svg: {}, canvas: {} }
 for (const renderer of ['svg', 'canvas'] as const) {
-  const total = { specs: 0, skipped: 0, points: 0, decisive: 0, hits: 0, differ: 0, boxes: 0, boxHits: 0, boxDiffer: 0, refused: 0 }
+  const total = { specs: 0, skipped: 0, points: 0, decisive: 0, hits: 0, ambiguous: 0, differ: 0, known: 0, unknown: 0, boxes: 0, boxHits: 0, boxDiffer: 0, refused: 0 }
   const shown: string[] = []
   for (let seed = 1; seed <= SEEDS; seed++) {
-    const r = await page.evaluate(([s, rd]) => (window as unknown as { __run: (s: number, r: string) => Promise<Result> }).__run(s, rd), [seed, renderer] as const)
+    const r = await within(SEED_DEADLINE_MS, `${renderer} seed ${seed}`, page.evaluate(([s, rd]) => (window as unknown as { __run: (s: number, r: string) => Promise<Result> }).__run(s, rd), [seed, renderer] as const))
     if (r.skipped) { total.skipped++; continue }
     total.specs++
-    total.points += r.points; total.decisive += r.decisive; total.hits += r.hits; total.differ += r.differ.length
+    total.points += r.points; total.decisive += r.decisive; total.hits += r.hits; total.ambiguous += r.ambiguous; total.differ += r.differ
+    for (const [id, n] of Object.entries(r.classes)) { total.known += n; seen[renderer]![id] = (seen[renderer]![id] ?? 0) + n }
+    total.unknown += r.unknown.length
     total.boxes += r.boxes; total.boxHits += r.boxHits; total.boxDiffer += r.boxDiffer.length; total.refused += r.refused
-    for (const d of r.differ) if (d && shown.length < 16) shown.push(`  PICK seed ${seed} (${(d.x as number).toFixed(2)}, ${(d.y as number).toFixed(2)}): vega ${d.vega} aster ${d.aster}`)
+    for (const d of r.unknown) if (d && shown.length < 16) shown.push(`  PICK seed ${seed} (${(d.x as number).toFixed(2)}, ${(d.y as number).toFixed(2)}): vega ${d.vega} aster ${d.aster}`)
     for (const d of r.boxDiffer) if (shown.length < 24) shown.push(`  INTERSECT seed ${seed} ${JSON.stringify(d.box)} ${JSON.stringify(d.opt)}: vega [${d.vega}] aster [${d.aster}]`)
   }
-  console.log(`[browser-geometry] ${renderer}: ${total.specs} specs (${total.skipped} vega or Aster could not run), ${total.decisive}/${total.points} decisive points, ${total.hits} on an item, ${total.differ} differ; ${total.boxes} intersect boxes, ${total.boxHits} meet something, ${total.boxDiffer} differ, ${total.refused} refused by the lattice ceiling (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
+  console.log(`[browser-geometry] ${renderer}: ${total.specs} specs (${total.skipped} vega or Aster could not run), ${total.decisive}/${total.points} decisive points, ${total.hits} on an item, ${total.ambiguous} where vega's renderers disagree, ${total.differ} differ (${total.known} known: ${JSON.stringify(seen[renderer])}, ${total.unknown} not); ${total.boxes} intersect boxes, ${total.boxHits} meet something, ${total.boxDiffer} differ, ${total.refused} refused by the work ceiling (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
   for (const s of shown) console.log(s)
-  if (total.differ || total.boxDiffer) failed = true
-  // what was compared: most specs run, most points decide, and many of them are on an item; many boxes meet something
-  if (total.specs < 0.9 * SEEDS || total.decisive < 0.6 * total.points || total.hits < 20 * SEEDS || total.boxHits < 20 * SEEDS) {
+  if (total.unknown || total.boxDiffer) failed = true
+  // what was compared: most specs run, most points decide, and many of them are on an item; boxes meet something (measured: 28 and 16 a seed)
+  if (total.specs < 0.9 * SEEDS || total.decisive < 0.6 * total.points || total.hits < 20 * SEEDS || total.boxHits < 12 * SEEDS) {
     console.log(`[browser-geometry] FLOOR (${renderer}): ${JSON.stringify(total)}`)
     failed = true
   }
 }
-await browser.close()
+// the known differences must still differ (a fixed one is removed from src/geometry-differences.ts)
+if (FULL) {
+  for (const k of KNOWN_DIFFERENCES) {
+    const n = (k.renderer === 'both' ? ['svg', 'canvas'] : [k.renderer]).reduce((a, r) => a + (seen[r]![k.id] ?? 0), 0)
+    if (n === 0) {
+      console.log(`[browser-geometry] FIXED-GAP ${k.id}: listed in src/geometry-differences.ts but no difference falls into it any more; remove the entry`)
+      failed = true
+    }
+  }
+}
+await within(30_000, 'closing the browser', browser.close())
 rmSync(OUT_DIR, { recursive: true, force: true })
 process.exit(failed ? 1 : 0)
