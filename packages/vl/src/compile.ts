@@ -6665,7 +6665,7 @@ function axisTitle(def: FieldDef, userAxis?: Record<string, unknown> | null, fie
 /** The paint of a legend's symbols, for the legend of a channel with the user's legend definition (legendSymbolPaint). */
 type SymbolPaint = (channel: string, userLegend: Record<string, unknown>) => Record<string, unknown>
 
-function buildLegends(fields: FieldDef[], mark: string, markOpacity: number | undefined, markFilled: boolean, cfgLegendIn: Record<string, unknown> | undefined, formats: { numberFormat?: string; timeFormat?: string; customFormatTypes?: boolean; numberFormatType?: string; timeFormatType?: string }, paint: { shape?: string | { signal: string } }, symbolPaint: SymbolPaint): Record<string, unknown>[] {
+function buildLegends(fields: FieldDef[], mark: string, markOpacity: number | { signal: string } | undefined, markFilled: boolean, cfgLegendIn: Record<string, unknown> | undefined, formats: { numberFormat?: string; timeFormat?: string; customFormatTypes?: boolean; numberFormatType?: string; timeFormatType?: string }, paint: { shape?: string | { signal: string } }, symbolPaint: SymbolPaint): Record<string, unknown>[] {
   const legends: Record<string, unknown>[] = []
   // config.legend is a defaults layer: orient/direction keys are translated
   // into the compiled `direction`, everything else merges under the channel's
@@ -6724,7 +6724,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity: number | un
       GRADIENT_LEGENDS.add(lg)
       lg.gradientLength = { signal: 'clamp(height, 64, 200)' }
       const opacity = markOpacity ?? (['point', 'circle', 'square', 'tick'].includes(mark) ? reducedOpacity : undefined)
-      if (opacity) lg.encode = { gradient: { update: { opacity: { value: opacity } } } }
+      if (opacity) lg.encode = { gradient: { update: { opacity: constRef(opacity) } } }
     } else {
       lg.symbolType = symbolType
       const symUpdate = symbolPaint(colorDef.channel, userLegend)
@@ -6762,7 +6762,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity: number | un
         type: 'gradient',
         gradientLength: sizeUser.gradientLength ?? { signal: 'clamp(height, 64, 200)' },
         title: legendTitle(sizeDef, sizeUser),
-        encode: { gradient: { update: { opacity: { value: markOpacity ?? reducedOpacity ?? 1 } } } },
+        encode: { gradient: { update: { opacity: constRef(markOpacity ?? reducedOpacity ?? 1) } } },
       }
       applyTimeUnitLegend(glg, sizeDef, sizeUser, formats)
       forwardLegendProps(sizeUser, glg, true)
@@ -9888,11 +9888,16 @@ function buildUnitLegends(spec: VLSpec, fields: FieldDef[], mark: string, markRa
   // legend/encode.ts getMaxValue(encoding.opacity) ?? markDef.opacity: the largest opacity the channel can produce
   // (its value and the values of its conditions) is the opacity of the legend's symbols
   const opacityChannel = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>).opacity : undefined
-  const channelOpacity = (() => {
+  // (legend/encode.ts getMaxValue: the largest of the channel's value and its conditions' values; an expression is no number to compare,
+  // and a comparison with one is NaN, which Vega draws as opaque. A value that stands alone, expression or not, is itself.)
+  const channelOpacity: number | { signal: string } | undefined = (() => {
     if (!isObject(opacityChannel)) return undefined
+    if (opacityChannel.field !== undefined || opacityChannel.datum !== undefined) return undefined
     const conds = opacityChannel.condition === undefined ? [] : (Array.isArray(opacityChannel.condition) ? opacityChannel.condition : [opacityChannel.condition])
     const values = [opacityChannel.value, ...conds.map((c) => (isObject(c) ? c.value : undefined))]
-    if (opacityChannel.field !== undefined || opacityChannel.datum !== undefined) return undefined
+    const signalOf = (v: unknown): { signal: string } | undefined => (isObject(v) && typeof v.expr === 'string' ? { signal: v.expr } : isObject(v) && typeof v.signal === 'string' ? { signal: v.signal } : undefined)
+    if (conds.length === 0) return signalOf(opacityChannel.value) ?? (typeof opacityChannel.value === 'number' ? opacityChannel.value : undefined)
+    if (values.some((v) => signalOf(v) !== undefined)) return 1
     const nums = values.filter((v): v is number => typeof v === 'number')
     return nums.length ? nums.reduce((a, b) => Math.max(a, b)) : undefined
   })()
@@ -9944,7 +9949,7 @@ function firstConditionValue(def: unknown): unknown {
  * fill that a field paints is black (or the symbol fill colour the legend asks for) and a stroke a field paints is left out, and a
  * property that only conditions paint takes the first value they give. The symbols carry the mark's opacity.
  */
-function legendSymbolPaint(spec: VLSpec, mark: string, fields: FieldDef[], channel: string, userLegend: Record<string, unknown>, channelOpacity: number | undefined): Record<string, unknown> {
+function legendSymbolPaint(spec: VLSpec, mark: string, fields: FieldDef[], channel: string, userLegend: Record<string, unknown>, channelOpacity: number | { signal: string } | undefined): Record<string, unknown> {
   const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
   const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
   const cfgLegend = isObject(spec.config) && isObject((spec.config as Record<string, unknown>).legend) ? ((spec.config as Record<string, unknown>).legend as Record<string, unknown>) : {}
