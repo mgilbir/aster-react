@@ -529,16 +529,17 @@ function paramSignals(root: VLSpec): Record<string, unknown>[] {
     if (Array.isArray(n.params)) {
       for (const p of n.params as Record<string, unknown>[]) {
         if (p.select !== undefined) continue
+        // (parameter.ts assembleParameterSignals: the parameter as it is - its `value` a literal, whatever it holds (`{expr: "x"}` is an
+        // object, not an expression: C442) - with its `expr` the signal's update, or its init when the parameter is bound)
         const sig: Record<string, unknown> = { name: p.name }
+        if (p.value !== undefined) sig.value = p.value
+        if (p.react !== undefined) sig.react = p.react
         if (p.expr !== undefined) {
-          sig.update = p.expr
-          if (p.react === false) sig.react = false
-        } else if (isObject(p.value) && typeof p.value.expr === 'string') {
-          sig.init = p.value.expr
-        } else {
-          sig.value = p.value
+          if (p.bind !== undefined) sig.init = p.expr
+          else sig.update = p.expr
         }
         if (p.bind !== undefined) sig.bind = p.bind
+        if (p.description !== undefined) sig.description = p.description
         out.push(sig)
       }
     }
@@ -578,11 +579,20 @@ function exprRefsToSignals(node: unknown): unknown {
     const v = node[k]
     // (a voronoi transform's x / y are Vega's own `{expr}` parameters)
     if (k === 'transform' && Array.isArray(v)) out[k] = v.map((t) => (isObject(t) && t.type === 'voronoi' ? plainCopy(t) : exprRefsToSignals(t)))
+    // (a signal's `value` is a literal, whatever it holds: a parameter's `value: {expr: "x"}` is that object, as in vega-lite (C442))
+    else if (k === 'signals' && Array.isArray(v)) out[k] = v.map((sg) => (isObject(sg) ? signalDefinition(sg) : exprRefsToSignals(sg)))
     else if (k === 'values' || (keepFields && k === 'fields')) out[k] = plainCopy(v)
     else if (k === 'value' && isObject(v) && Object.keys(v).length === 1 && typeof v.expr === 'string') out.signal = v.expr
     else if (k === '__proto__') setOwn(out, k, exprRefsToSignals(v))
     else out[k] = exprRefsToSignals(v)
   }
+  return out
+}
+
+/** A signal definition made ordinary (exprRefsToSignals), its `value` copied as the literal it is. */
+function signalDefinition(sg: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const k of Object.keys(sg)) setOwn(out, k, k === 'value' ? plainCopy(sg[k]) : exprRefsToSignals(sg[k]))
   return out
 }
 
@@ -4721,7 +4731,10 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   // turns the implicit parsing of the source off altogether)
   const explicitParse = isObject(spec.data) && isObject(spec.data.format) ? (spec.data.format as Record<string, unknown>).parse : undefined
   if (isObject(explicitParse)) for (const k of Object.keys(explicitParse)) castDone.add(flatField(k).key)
-  if (!skipCasts && explicitParse !== null) {
+  // (data/parse.ts: the implicit parse of the encoding comes after the unit's transforms, and a pivot produces fields no one can name
+  // (pivot.ts producedFields), so nothing parses past it: with a pivot, vega-lite parses no field of the encoding)
+  const pivots = userTransforms.some((t) => isObject(t) && peek(() => t.pivot) !== undefined)
+  if (!skipCasts && explicitParse !== null && !pivots) {
     // a field carrying a timeUnit anywhere in the encoding casts as a date,
     // even if another channel declares it quantitative
     const timeUnitFields = new Set(fields.filter((f) => f.timeUnit).map((f) => f.field))

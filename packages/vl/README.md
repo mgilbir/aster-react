@@ -194,6 +194,13 @@ The list below is the features refused by name, each checked by `test/readme-ref
   in a nested layer, draws the layer past the view); `axis: null` on a layer after one that draws the axis
   (vega-lite crashes); a layer in a facet that keeps its own x / y scales unless the facet resolves them
   independent too (vega-lite reads a scale it never defines).
+- Names that are members of Object.prototype (`constructor`, `toString`, `valueOf`, `hasOwnProperty`, `__proto__` ...) as
+  a field, a dataset, a transform's output or a parameter. Vega keeps names in plain objects and mistakes these for the
+  prototype's members, so vega-lite 6.4.3's chart of them fails in Vega or draws without them (an aggregate of nothing, a
+  time unit of nothing, a legend or description that leaves the field out). They are refused by name, except where
+  vega-lite's chart is the chart of any other name: a field only a fold, a bin transform, a stack transform, a pivot, a
+  density or a quantile reads, a binned x / y / colour, `x2`, and a parameter (all but `__proto__`); each place is held to
+  vega-lite for every member by `vl-prototype-names.test.ts` (conformance).
 
 ## Where it matches vega-lite on purpose, rather than the specification
 
