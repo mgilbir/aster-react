@@ -182,8 +182,8 @@ The list below is the features refused by name, each checked by `test/readme-ref
   emits marks that read a dataset it never defines); layers, concats, facets, composite marks
   (boxplot / errorbar / errorband) and point / line overlays are refused, as are `bind` / `value` on the timer
   selection.
-- Bins and time units: `timeUnit.maxbins`, errorbar / errorband over a binned channel, and the
-  `timeUnitBandPosition` / `timeUnitBandSize` mark keys.
+- Bins and time units: `timeUnit.maxbins` and errorbar / errorband over a binned channel. (The `timeUnitBandPosition` /
+  `timeUnitBandSize` mark keys are accepted and ignored: vega-lite 6.4.3 reads them from `config` only.)
 - Channel definitions vega-lite 6.4.3 compiles that are not implemented yet: a `datum`
   condition on fillOpacity, strokeOpacity, angle, text or tooltip; an array of conditions that holds a field condition; `impute` or
   pre-binned data (`binned`) on a channel other than x and y (and longitude / latitude, where vega-lite ignores
