@@ -159,8 +159,8 @@ const SPECS: Record<string, Record<string, unknown>> = {
   'rotated symbols': base([
     mk('symbol', { x: { field: 'x' }, y: { value: 80 }, size: { value: 900 }, shape: { value: 'square' }, angle: { field: 'a' }, fill: { value: '#e45756' } }),
   ], { data: dataset([0, 20, 45, 70].map((a, i) => ({ a, x: 30 + i * 55 }))) }),
-  'circle marks': base([
-    mk('circle', { x: { field: 'x' }, y: { value: 70 }, size: { value: 500 }, fill: { value: '#54a24b' }, stroke: { value: '#000' }, strokeWidth: { value: 3 } }),
+  'circle symbols (vega has no circle mark type)': base([
+    mk('symbol', { shape: { value: 'circle' }, x: { field: 'x' }, y: { value: 70 }, size: { value: 500 }, fill: { value: '#54a24b' }, stroke: { value: '#000' }, strokeWidth: { value: 3 } }),
   ], { data: dataset(rowsOf(4, (i) => ({ x: 30 + i * 55 }))) }),
   rects: base([
     mk('rect', { x: { field: 'x' }, y: { field: 'y' }, width: { value: 30 }, height: { field: 'h' }, fill: { value: '#4c78a8' } }),
