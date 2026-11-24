@@ -34,6 +34,7 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { renderSpec } from '@aster-charts/core'
 import { renderWithVega } from '../src/render-vega.js'
+import { forEngines } from '../src/engines.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 import { plantSvg } from '../src/gate-plant.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
@@ -226,7 +227,8 @@ export function makeSceneSpec(seed: number): Record<string, unknown> {
 
 async function runOne(spec: Record<string, unknown>, plant: boolean): Promise<{ pass: boolean; diffs: string[]; error?: string }> {
   try {
-    const [oracleSvg, ourSvg] = await Promise.all([renderWithVega(spec), Promise.resolve(renderSpec(spec as never))])
+    // (each engine its own copy: vega writes onto the rows it ingests)
+    const [oracleSvg, ourSvg] = await forEngines(spec, (oracle, aster) => Promise.all([renderWithVega(oracle), Promise.resolve(renderSpec(aster as never))]))
     const diffs = diffCanonical(canonicalizeSvg(oracleSvg), canonicalizeSvg(plant ? plantSvg(ourSvg) : ourSvg))
     return { pass: diffs.length === 0, diffs }
   } catch (err) {
