@@ -185,14 +185,14 @@ such gate narrowed, with `--plant-difference` and narrowed to nothing ([scripts/
 
 | What | Command | Result |
 |---|---|---|
-| Corpus size | `ls packages/conformance/corpus \| wc -l`; `... \| grep -c '\.vg\.json$'`; `... \| grep -c '\.vl\.json$'` | 1120 specs: 437 raw Vega, 683 Vega-Lite |
+| Corpus size | `ls packages/conformance/corpus \| wc -l`; `... \| grep -c '\.vg\.json$'`; `... \| grep -c '\.vl\.json$'` | 1129 specs: 437 raw Vega, 692 Vega-Lite |
 | Unit, React, script and vector tests | `pnpm test` | 319 files, 33665 tests passed |
 | Time-zone matrix | `pnpm test:tz` | `[tz] all zones passed` (zone-sensitive vitest suites under America/New_York, Asia/Kolkata and Australia/Lord_Howe; `corpus-tz` under UTC and those three) |
-| SVG corpus vs real Vega | `pnpm conformance` | 1120/1120 passed |
-| Vega-Lite corpus through `@aster-charts/vl` | `pnpm conformance-vl` | 683 passed, 0 failed, 0 errored / 683 |
-| Scene differential | `pnpm scene-diff` | 1120/1120 scenes match |
+| SVG corpus vs real Vega | `pnpm conformance` | 1129/1129 passed |
+| Vega-Lite corpus through `@aster-charts/vl` | `pnpm conformance-vl` | 692 passed, 0 failed, 0 errored / 692 |
+| Scene differential | `pnpm scene-diff` | 1129/1129 scenes match |
 | Incremental vs fresh evaluation (no oracle) | `pnpm conformance:diff` | 0 differential mismatches, 0 skipped |
-| Guide captions vs Vega `aria-label` | `pnpm a11y-parity` | 1120/1120 caption sets match |
+| Guide captions vs Vega `aria-label` | `pnpm a11y-parity` | 1129/1129 caption sets match |
 | Transform option combinations | `pnpm transform-matrix` | 77/78 match (1 browser-only case skipped here, run by `conformance:browser`) |
 | Vega schema sweep | `pnpm sweep-vega -- --floor 7549 --min-ok 7538 --max-node-error 3` | 7538 ok, 9 both-refused, 2 node-error (the oracle crashes), 0 engine-error, 0 differ / 7549 |
 | Vega-Lite schema sweep | `pnpm sweep-vl -- --floor 27513 --min-ok 27452 --max-node-error 17 --vega-check` | 27452 ok, 47 both-refused, 14 node-error, 0 engine-error, 0 differ, 0 vega-differ / 27513 |
@@ -200,8 +200,8 @@ such gate narrowed, with `--plant-difference` and narrowed to nothing ([scripts/
 | Signals sweep | `pnpm sweep-signals -- --floor 166 --min-ok 103 --max-node-error 2 --max-retained 60` | 103 ok, 60 retained, 1 both-refused, 2 node-error, 0 differ / 166 |
 | Gap probes (a failing probe documents a gap only when listed in `scripts/lib/expected-differences.mjs`, which requires it to still fail) | `pnpm probe -- --min-pass 2` | 2/2 pass (floor 2) |
 | Fuzz reproducers | `pnpm fuzz:replay` | 2/2 pass |
-| Corpus in Chromium, live text metrics | `pnpm conformance:browser` | 1120/1120 passed |
-| Canvas pixels vs Vega's canvas | `pnpm conformance:canvas` | chromium: 1126 entries compared with ink on both sides (16 blank on both, named), 150 gradients call by call, 46 gradient refusals; append painting: 120 scenarios, 309 append frames; signal moves: 160 scenarios, 414 frames painted nothing for; symbol runs: 548 cases, 144 through Path2D |
+| Corpus in Chromium, live text metrics | `pnpm conformance:browser` | 1129/1129 passed |
+| Canvas pixels vs Vega's canvas | `pnpm conformance:canvas` | chromium: 1143 entries compared with ink on both sides (8 blank on both, named), 150 gradients call by call, 46 gradient refusals; append painting: 120 scenarios, 309 append frames; signal moves: 160 scenarios, 414 frames painted nothing for; symbol runs: 548 cases, 144 through Path2D |
 | Batched (dense) SVG vs per-item SVG pixels | `pnpm conformance:batch` | 61/61 passed |
 | Signal event streams vs real Vega, on its svg and its canvas renderer | `pnpm conformance:signals` | 77/78 cases agree on each renderer (group scopes among them; the one that does not, `anim-time-unit-year`, is an engine difference found by stepping the clock: vega's selection test rewrites the dates a timer selection stores as numbers in place, and Aster keeps the dates); the pointer phase's answers of Aster's canvas that are vega's svg renderer's where its canvas renderer differs: 2 (Chromium's stroker bulging a canvas arc's stroke), ceiling 2 |
 | Vega-Lite selections vs real Vega (same native input, signals/stores/SVG -- or canvas pixels -- compared per step, on vega's svg and canvas renderers against `<Chart renderer>`) | `pnpm conformance:selections` | 54/54 cases agree on each renderer (concat, facet and repeat views, geographic interval selections and the chart-bench survival tooltip among them; steps counted as `retained` ([INTERACTION.md](INTERACTION.md#signals)): 13 on svg, ceiling 13; 10 on canvas, ceiling 10) |
