@@ -115,3 +115,20 @@ export function compareCases(name: string, count: number, gen: (i: number) => Ca
   if (failures) throw new Error(`${name}: ${failures}/${count} cases differ from the oracle\n${bad.join('\n')}`)
   return { cases: count, refused, informative }
 }
+
+/**
+ * `compareCases` that also holds what it counted to a floor, named by the first word of the suite's name: at least `informative` of
+ * the cases gave the oracle a value worth comparing, and no more than `refused` of them were refused by it (a suite whose cases are
+ * mostly refused, or empty, compares little whatever its size). A name with no entry is an error: every call states its floor.
+ */
+export function compareWithFloors(floors: Record<string, { informative: number; refused?: number }>): typeof compareCases {
+  return (name, count, gen) => {
+    const stats = compareCases(name, count, gen)
+    const key = Object.keys(floors).filter((k) => name === k || name.startsWith(`${k} `)).sort((a, b) => b.length - a.length)[0]
+    if (key === undefined) throw new Error(`${name}: no floor is stated for this suite`)
+    const floor = floors[key]!
+    if (!(stats.informative >= stats.cases * floor.informative)) throw new Error(`${name}: ${stats.informative} of ${stats.cases} cases informative, floor ${floor.informative}`)
+    if (!(stats.refused <= stats.cases * (floor.refused ?? 0.1))) throw new Error(`${name}: ${stats.refused} of ${stats.cases} cases refused by the oracle, ceiling ${floor.refused ?? 0.1}`)
+    return stats
+  }
+}

@@ -9,15 +9,25 @@
  * utcFloor over generated unit lists and steps, timeInterval / timeOffset / timeSequence (and utc), dayofyear / week,
  * and timeBin (which lives in `transform-timeunit.ts`).
  */
+import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import * as d3 from 'd3-time'
 import * as vt from 'vega-time'
 import { describe, expect, it, vi } from 'vitest'
 import * as aster from '../../core/src/time.ts'
 import { AsterLimitError } from '../../core/src/limits.ts'
 import { timeBin as asterTimeBin } from '../../core/src/transform-timeunit.ts'
-import { compareCases, makeRng, scaled, type Rng } from './differential-gen.mts'
+import { compareWithFloors, makeRng, scaled, type Rng } from './differential-gen.mts'
 import { withTz } from './differential-util.mts'
 import { ZONES, genInstant, offsetChanges } from './differential-zones.mts'
+
+/** What each generated suite of this file must hold (measured: intervals 92% informative, every 72%, filter and floor all, offset 90%, dayofyear 91%, timeUnits 8% refused). */
+const compareCases = compareWithFloors({
+  intervals: { informative: 0.8 }, every: { informative: 0.6 }, filter: { informative: 0.9 }, floor: { informative: 0.9 },
+  'offset/sequence': { informative: 0.8 }, 'dayofyear/week': { informative: 0.8 }, timeUnits: { informative: 0.85, refused: 0.12 },
+  timeBin: { informative: 0.9 },
+})
 
 vi.setConfig({ testTimeout: 120_000 })
 
@@ -87,9 +97,6 @@ function asInput(r: Rng, t: number, bounded: boolean): unknown {
   // null and true read as the epoch: fine for one date, but a range from there to now is millions of entries
   return r.chance(0.7) ? new Date(t) : r.chance(0.9) ? t : r.pick<unknown>(bounded ? [String(t), undefined, [t]] : [String(t), null, undefined, true, [t]])
 }
-
-const instants = (iv: AnyInterval, ...ts: unknown[]) => ts.map((t) => (t == null ? t : iv.floor(t)))
-void instants
 
 function runDerived(iv: AnyInterval, ts: number[], extra: unknown): unknown {
   const [t0, t1] = ts as [number, number]
@@ -243,9 +250,13 @@ describe('d3-time intervals vs d3-time (generated, live)', () => {
     }
   })
 
-  it('interval durations', () => {
-    expect([aster.durationSecond, aster.durationMinute, aster.durationHour, aster.durationDay, aster.durationWeek, aster.durationMonth, aster.durationYear])
-      .toEqual([d3.timeSecond.every(1) && 1000, 60_000, 3_600_000, 86_400_000, 604_800_000, 2_592_000_000, 31_536_000_000])
+  it('interval durations are the constants d3-time itself uses', async () => {
+    // (d3-time's duration.js is not part of its exports: read as the file next to its entry, so the constants are the oracle's own)
+    const entry = createRequire(import.meta.url).resolve('d3-time')
+    const d3Durations = (await import(pathToFileURL(join(dirname(entry), 'duration.js')).href)) as Record<string, number>
+    expect(Object.keys(d3Durations).sort(), 'the constants d3-time defines').toEqual(['durationDay', 'durationHour', 'durationMinute', 'durationMonth', 'durationSecond', 'durationWeek', 'durationYear'])
+    const mine = aster as unknown as Record<string, number>
+    for (const [name, value] of Object.entries(d3Durations)) expect(mine[name], name).toBe(value)
   })
 })
 
