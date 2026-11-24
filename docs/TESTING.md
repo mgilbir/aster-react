@@ -140,8 +140,8 @@ both schema sweeps, 3000 fuzz seeds and the reproducer replay, plus Firefox and 
 
 ## Time zones
 
-The repo's default run pins `TZ=UTC`, which hides zone bugs (a UTC scale formatted in local
-time passes there). The `tz-matrix` gate (`pnpm test:tz`) re-runs the zone-aware unit tests
+The repo's default run pins `TZ=UTC` (`vitest.config.mjs`, unless `TZ` is set: a zone given
+there is kept), which hides zone bugs (a UTC scale formatted in local time passes there). The `tz-matrix` gate (`pnpm test:tz`) re-runs the zone-aware unit tests
 (`*.tz.test.ts`), the live scale-spec differential (every case also runs in each zone inside the test) and
 `packages/conformance/corpus-tz` (raw Vega specs rendered by vega and Aster in the same zone)
 under `America/New_York`, `Asia/Kolkata` and `Australia/Lord_Howe` (a half-hour daylight-saving offset the other two cannot catch; `ZONES` in `scripts/test-tz.mjs`; the corpus also runs in UTC). Add a case to `corpus-tz` when a fix depends on

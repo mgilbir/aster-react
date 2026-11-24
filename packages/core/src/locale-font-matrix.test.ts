@@ -89,12 +89,15 @@ describe('locale matrix', () => {
       defaultLocale(c.number, c.time)
       const L = locale()
       for (const [spec, value, expected] of c.formats) expect(L.format(spec)(value), `${c.name} ${spec}`).toBe(expected)
-      if (c.date) expect(L.timeFormat(c.date)(new Date(Date.UTC(2024, 2, 5))), c.name).toBe(c.month)
+      // (timeFormat formats local time: the instant is local midnight, so the day is the 5th in any zone)
+      if (c.date) expect(L.timeFormat(c.date)(new Date(2024, 2, 5)), c.name).toBe(c.month)
     }
     // round-trip parsing through the active locale
     defaultLocale(deNumber, deTime)
-    expect(locale().timeParse('%d. %B %Y')('05. März 2024')?.toISOString()).toBe('2024-03-05T00:00:00.000Z')
-    expect(locale().timeParse('%d. %B %Y')('05. März 2024')?.getUTCMonth()).toBe(2)
+    // (timeParse reads local time: local midnight of the 5th, whatever the zone; utcParse reads it as UTC)
+    expect(locale().timeParse('%d. %B %Y')('05. März 2024')?.toISOString()).toBe(new Date(2024, 2, 5).toISOString())
+    expect(locale().timeParse('%d. %B %Y')('05. März 2024')?.getMonth()).toBe(2)
+    expect(locale().utcParse('%d. %B %Y')('05. März 2024')?.toISOString()).toBe('2024-03-05T00:00:00.000Z')
   })
 
   it('localizes rendered axis labels and titles', () => {
