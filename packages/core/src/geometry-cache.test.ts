@@ -12,6 +12,7 @@ import { geometryCounts } from './geometry.js'
 import { renderSceneToSvg } from './render.js'
 import { patchSceneDom, renderSceneToDomElement, sceneToDomDesc } from './dom.js'
 import { renderSceneToCanvas } from './canvas.js'
+import { renderSceneToCanvas as legacyCanvas } from './legacy-canvas.testlib.js'
 import { buildHitIndex } from './hit.js'
 import { Bounds, boundTypedMark } from './bounds.js'
 import { setTextMetricsProvider } from './text-metrics.js'
@@ -149,11 +150,21 @@ describe('invalidation: an input changed in place misses the cache', () => {
     cell.x = (cell.x ?? 0) + 13
     cell.y = (cell.y ?? 0) - 4
     expect(diffScene(scene, mulberry32(2))).toEqual([])
-    const a = loggingContext()
-    const b = loggingContext()
-    renderSceneToCanvas(scene, a.ctx, { dpr: 3 })
-    renderSceneToCanvas(scene, b.ctx, { dpr: 3 })
-    expect(a.log).toEqual(b.log)
+    // (diffScene compared the legacy renderer at dpr 1 and 2, drawing the scene as it caches its geometry: a context at 3 must draw
+    // what the legacy renderer draws at 3 on the scene warmed at the other ratios, and the same again)
+    const warm = loggingContext()
+    renderSceneToCanvas(scene, warm.ctx, { dpr: 3 })
+    const legacy = loggingContext()
+    legacyCanvas(scene, legacy.ctx, { dpr: 3 })
+    expect(warm.log).toEqual(legacy.log)
+    expect(warm.log.length).toBeGreaterThan(0)
+    const again = loggingContext()
+    renderSceneToCanvas(scene, again.ctx, { dpr: 3 })
+    expect(again.log, 'the same scene drawn again').toEqual(legacy.log)
+    // the ratio is in the drawing: dpr 3 is not what dpr 1 draws
+    const one = loggingContext()
+    renderSceneToCanvas(scene, one.ctx, { dpr: 1 })
+    expect(one.log).not.toEqual(legacy.log)
   })
 
   it('a new text-metrics provider is seen by every consumer (nothing here caches text)', () => {

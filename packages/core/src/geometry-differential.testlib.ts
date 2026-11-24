@@ -176,6 +176,8 @@ export function diffScene(scene: SceneRoot, r: Rnd, opts: { label?: string; dom?
   }
   if (opts.hit !== false) {
     const pts = probePoints(scene, r)
+    // (the default cell and a huge one decide nothing: the index scans a scene of up to 400 entries and builds its grid above that.
+    // The new index is asked for the grid and for the scan by name, so the grid is compared on every scene: C338)
     for (const cell of [undefined, 1e9]) {
       tryBoth(`hit${cell ? '-linear' : ''}`, () => {
         const ids = new Map<object, number>()
@@ -183,7 +185,7 @@ export function diffScene(scene: SceneRoot, r: Rnd, opts: { label?: string; dom?
         return [`size ${ix.size()}`, ...pts.flatMap(([x, y]) => [targetText(ix.query(x, y), ids), targetText(ix.queryMark(x, y), ids), targetText(ix.pick(x, y), ids), targetText(ix.tooltip(x, y), ids)])]
       }, () => {
         const ids = new Map<object, number>()
-        const ix = buildHitIndex(scene, cell)
+        const ix = buildHitIndex(scene, cell, { strategy: cell ? 'scan' : 'grid' })
         return [`size ${ix.size()}`, ...pts.flatMap(([x, y]) => [targetText(ix.query(x, y), ids), targetText(ix.queryMark(x, y), ids), targetText(ix.pick(x, y), ids), targetText(ix.tooltip(x, y), ids)])]
       }, firstDiff)
     }
