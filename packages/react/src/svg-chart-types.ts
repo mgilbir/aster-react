@@ -25,10 +25,11 @@ export const SVG_CHART_SHARED_PROPS = [
  *   tooltipContainer
  *   onPointSelect, selection,   a click resolves the mark under the pointer through the hit index
  *   select, onSelectionChange
- *   preventDefault              only affects the `signal.on` event loop
+ *   preventDefault,             only affect the `signal.on` event loop
+ *   eventSources
  */
 export const SVG_CHART_INTERACTION_PROPS = [
-  'tooltip', 'renderTooltip', 'tooltipContainer', 'onPointSelect', 'selection', 'select', 'onSelectionChange', 'preventDefault',
+  'tooltip', 'renderTooltip', 'tooltipContainer', 'onPointSelect', 'selection', 'select', 'onSelectionChange', 'preventDefault', 'eventSources',
 ] as const
 
 /** ChartProps `<SvgChart>` does not have, each with the reason. */

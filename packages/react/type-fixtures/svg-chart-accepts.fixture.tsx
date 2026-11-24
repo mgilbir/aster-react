@@ -31,7 +31,7 @@ export const other = (
 export const rich = (
   <SvgChart
     spec={spec} interaction={interaction} tooltip renderTooltip={(d) => <i>{String(d.x)}</i>} tooltipContainer={null}
-    onPointSelect={(d) => void d} selection={null} select={null} onSelectionChange={(v) => void v} preventDefault
+    onPointSelect={(d) => void d} selection={null} select={null} onSelectionChange={(v) => void v} preventDefault eventSources={{ window: true, selector: ["click"] }}
   />
 )
 

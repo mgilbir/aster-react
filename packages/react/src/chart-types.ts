@@ -1,4 +1,5 @@
 import type * as React from 'react'
+import type { EventSourcePolicy } from '@aster-charts/core/signals'
 import type {
   A11yOptions,
   ChartInfo,
@@ -335,6 +336,15 @@ export interface ChartProps {
    * prevents all but `wheel`). A stream marked `consume` always prevents.
    */
   preventDefault?: boolean
+  /**
+   * Which `window` and CSS-selector event sources a spec's `signal.on` streams may listen to (core's `SignalBindOptions.eventSources`;
+   * DECISIONS Q1, the host decides what reaches beyond the chart). `true` allows every type of that kind of source, `false` none,
+   * a list those types. Default: `window` for the pointer moves, ends and cancels and `resize` (what Vega-Lite's drags and
+   * `width: "container"` listen to), and no selector source, so a spec cannot read the page's keystrokes or listen to elements
+   * outside the chart. A host that renders trusted specs only may widen it: `eventSources={{ window: true, selector: true }}`.
+   * A spec's own `config.events` can only narrow it. Compared by content, so an inline literal is safe to write.
+   */
+  eventSources?: EventSourcePolicy
   /** Host text measurement for custom fonts / non-browser engines. */
   textMetrics?: TextMetricsProvider
   /** Accessible scene tree. Enabled by default; pass `false` to opt out. */

@@ -21,6 +21,8 @@ export const f = <SvgChart spec={spec} onSelectionChange={() => {}} />
 // @error
 export const g = <SvgChart spec={spec} preventDefault />
 // @error
+export const g2 = <SvgChart spec={spec} eventSources={{ window: true }} />
+// @error
 export const h = <SvgChart spec={spec} renderer="canvas" />
 // @error
 export const i = <SvgChart spec={spec} interaction={undefined} tooltip />
