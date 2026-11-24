@@ -13,9 +13,11 @@ import { compile } from '@aster-charts/vl'
 
 const ROOT = join(__dirname, '..', 'corpus')
 const specs = readdirSync(ROOT)
-  .filter((f) => f.endsWith('.vl.json') && (f.startsWith('vlx-sel-') || f === 'select-interval.vl.json'))
+  .filter((f) => f.endsWith('.vl.json'))
   .sort()
   .map((f) => [f.replace('.vl.json', ''), JSON.parse(readFileSync(join(ROOT, f), 'utf8'))] as const)
+  // every spec that declares a param or a selection (a bound input, a handler or a config.selection only shows in the emitted signals, never in a static render)
+  .filter(([, spec]) => /"(params|selection)"/.test(JSON.stringify(spec)))
 
 const signalsOf = (s: any): Array<[string, unknown]> => (s.signals ?? []).map((x: any) => [x.name, x])
 const storesOf = (s: any): unknown[] => (s.data ?? []).filter((d: any) => /_store$/.test(d.name))
@@ -34,7 +36,7 @@ const legendsOf = (s: any): unknown[] => (s.legends ?? []).map((l: any) => l.enc
 
 describe('selection output is vega-lite\'s output', () => {
   it('covers the whole corpus of selection specs', () => {
-    expect(specs.length).toBeGreaterThanOrEqual(60)
+    expect(specs.length).toBeGreaterThanOrEqual(90)
   })
   for (const [name, spec] of specs) {
     it(name, () => {
