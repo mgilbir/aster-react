@@ -86,7 +86,9 @@ an expression or a generated dataset/signal/scale name.
   offset-band padding, `pointPadding`, `continuousPadding`, `round`, `clamp`, `zero`, `xReverse`,
   `useUnaggregatedDomain`, `minSize`/`maxSize`, `minBandSize`/`maxBandSize`, `minFontSize`/
   `maxFontSize`, `minStrokeWidth`/`maxStrokeWidth`, `minOpacity`/`maxOpacity`, `quantileCount`,
-  `quantizeCount` and `invalid`. `scale.domain: "unaggregated"`, `scale.rangeMin` / `rangeMax`.
+  `quantizeCount` and `invalid`. `scale.domain: "unaggregated"`, `scale.rangeMin` / `rangeMax` (on the scale types vega-lite gives them
+  to - continuous, point, band - and dropped on the others, as vega-lite drops them). An `order` that is a list is accepted and orders
+  nothing, as in vega-lite 6.4.3.
 - `mark.invalid` (`filter`, `show`, `break-paths-filter-domains`, `break-paths-show-domains`,
   `break-paths-show-path-domains`, `null`) and `config.scale.invalid`.
 - Custom format types (`formatType`, `config.customFormatTypes`, `numberFormatType`,
@@ -200,7 +202,8 @@ The list below is the features refused by name, each checked by `test/readme-ref
   outside the supported list, a wrapped facet (a single `facet` field) around or inside another facet, a selection or
   a map inside a facet inside a facet, independent scales or legends in a facet that holds another facet, a concat in a
   layer (the Vega-Lite schema forbids it), layer repeats combined with row / column, layers whose scales are
-  incompatible or conflict, a facet of layers over different data, `argmax` / `argmin` as an op of a `window`
+  incompatible or conflict, a facet of layers over different data, independent x / y scales sized by steps in a
+  wrapped facet, `argmax` / `argmin` as an op of a `window`
   transform, sort arrays of DateTime objects.
 - Layer resolution where vega-lite 6.4.3's output is broken: independent x / y scales over layers sized
   differently (by steps, or by different widths / heights: vega-lite gives the view no size and draws nothing, or,

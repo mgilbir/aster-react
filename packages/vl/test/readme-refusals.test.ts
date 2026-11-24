@@ -64,6 +64,7 @@ const REFUSED: Array<[string, Record<string, unknown>, RegExp]> = [
   ['a concat in a\n  layer', { data, layer: [{ hconcat: [{ mark: 'point' }] }] }, /not allowed inside `layer`/],
   ['layer repeats combined with row / column', { data, repeat: { layer: ['b', 'c'], row: ['b'] }, spec: { mark: 'point', encoding: { x: { field: { repeat: 'layer' }, type: 'quantitative' } } } }, /layer repeats combined/],
   ['layers whose scales are\n  incompatible or conflict', { data, layer: [{ mark: 'point', encoding: { x: n('a') } }, { mark: 'point', encoding: { x: q('b') } }] }, /independent x scales over layers sized differently/],
+  ['independent x / y scales sized by steps in a\n  wrapped facet', { data, facet: n('a'), spec: { mark: 'point', encoding: { x: n('a'), y: q('b') } }, resolve: { scale: { x: 'independent' } } }, /sized by steps/],
   ['a facet of layers over different data', { data, facet: { row: { field: 'a' } }, spec: { layer: [{ data, mark: 'point' }, { data: { values: [{ a: 1 }] }, mark: 'line' }] } }, /different data sources/],
   ['`argmax` / `argmin` as an op of a `window`', unit('point', { x: q('b') }, { transform: [{ window: [{ op: 'argmax', field: 'b', as: 'm' }] }] }), /window op "argmax"/],
   ['sort arrays of DateTime objects', unit('point', { x: { field: 'd', type: 'temporal', sort: [{ year: 2020 }] } }), /DateTime objects/],

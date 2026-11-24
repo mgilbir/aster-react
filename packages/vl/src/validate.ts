@@ -1166,7 +1166,7 @@ function validateEncoding(enc: unknown, path: string, where: 'unit' | 'layer', m
     if ((ch === 'row' || ch === 'column' || ch === 'facet') && where === 'layer') fail(at, 'facet channels are not allowed in a layer encoding (use the facet operator)')
     if (ch === 'detail' || ch === 'order' || ch === 'tooltip' || ch === 'href' || ch === 'description') {
       if (Array.isArray(def)) {
-        if (ch === 'order' || ch === 'href') fail(at, `${ch} cannot be an array`)
+        if (ch === 'href') fail(at, `${ch} cannot be an array`)
         def.forEach((d, i) => validateChannelDef(ch, d, `${at}[${i}]`))
         continue
       }
