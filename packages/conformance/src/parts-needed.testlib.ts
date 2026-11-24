@@ -143,6 +143,8 @@ export interface PartsReport {
   wrong: string[]
   /** specs compared (drawn with every part, then from empty slots) */
   compared: number
+  /** the specs that do not draw at all with every part, with the error: said nothing about parts, and named so that nobody is dropped unseen */
+  dropped: string[]
   /** per part: the specs that read it, and the specs whose `specNeeds` names it */
   read: Record<EnginePart, number>
   named: Record<EnginePart, number>
@@ -157,11 +159,12 @@ export async function checkParts(specs: ReadonlyArray<{ name: string; spec: VgSp
   const read = Object.fromEntries(SPEC_PARTS.map((p) => [p, 0])) as Record<EnginePart, number>
   const named = { ...read }
   let compared = 0
+  const dropped: string[] = []
   for (const { name, spec } of specs) {
     // (a turn of the event loop per spec: a long check must not starve the test runner's own messages)
     await new Promise((resolve) => setImmediate(resolve))
     let all: string
-    try { all = around(() => drawn(spec, inputOf)) } catch { continue } // a spec that does not draw at all says nothing about parts
+    try { all = around(() => drawn(spec, inputOf)) } catch (e) { dropped.push(`${name}: ${String(e).slice(0, 160)}`); continue } // a spec that does not draw at all says nothing about parts: the caller holds the list
     const needs = new Set(specNeeds(spec, options).parts)
     const found = await discovered(spec, inputOf, around)
     if ('error' in found) { wrong.push(`${name}: draws with every part but not by loading them one at a time: ${found.error.slice(0, 160)}`); continue }
@@ -182,7 +185,7 @@ export async function checkParts(specs: ReadonlyArray<{ name: string; spec: VgSp
       await restoreAll()
     }
   }
-  return { wrong, compared, read, named }
+  return { wrong, compared, dropped, read, named }
 }
 
 /**

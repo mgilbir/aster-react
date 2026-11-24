@@ -55,21 +55,29 @@ describe('the loader loads the calendar its date patterns read', () => {
 describe('specNeeds names every part the engine reads, over the whole corpus', async () => {
   const specs: Array<{ name: string; spec: VgSpec }> = []
   const raw: Array<{ name: string; spec: VgSpec }> = []
+  let files = 0
+  /** the corpus files that are not a case here, with why: none is allowed */
+  const lost: string[] = []
   for (const dir of [CORPUS, CORPUS_VEGA_ONLY]) {
     for (const f of readdirSync(dir).sort()) {
       const kind = f.endsWith('.vl.json') ? 'vl' : f.endsWith('.vg.json') ? 'vg' : null
       if (!kind) continue
+      files++
       const doc = JSON.parse(readFileSync(join(dir, f), 'utf8')) as VgSpec
       let spec = (doc.$schema ? doc : ((doc as { spec?: VgSpec }).spec ?? doc)) as VgSpec
       if (kind === 'vl') {
-        try { spec = vl.compile(spec as never).spec as unknown as VgSpec } catch { continue }
+        try { spec = vl.compile(spec as never).spec as unknown as VgSpec } catch (e) { lost.push(`${f}: vega-lite does not compile it: ${String(e).slice(0, 100)}`); continue }
       }
       raw.push({ name: f, spec })
-      try { specs.push({ name: f, spec: await loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS) as VgSpec }) } catch { /* a spec whose data cannot load is not a rendering case */ }
+      try { specs.push({ name: f, spec: await loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS) as VgSpec }) } catch (e) { lost.push(`${f}: its data did not load: ${String(e).slice(0, 100)}`) }
     }
   }
 
-  it('covers the corpus', () => { expect(specs.length).toBeGreaterThan(900) })
+  it('covers the corpus: every file is a case', () => {
+    expect(lost, 'corpus files left out of every comparison below').toEqual([])
+    expect(files).toBeGreaterThan(1000)
+    expect(specs.length).toBe(files)
+  })
 
   it('loads a spec\'s data with the parts the loader reads, whatever is already in the page', async () => {
     const { wrong, loaded } = await checkLoad(raw, TRUSTED_LOAD_OPTIONS)
@@ -101,10 +109,11 @@ describe('specNeeds names every part the engine reads, over the whole corpus', a
 
   for (const [mode, input] of [['without limits', {}], ['under limits', { limits: LIMITS }]] as const) {
     it(`${mode}: names every part the drawing reads, and draws with just those what it draws with all`, async () => {
-      const { wrong, compared, read: counts, named } = await checkParts(specs, () => ({ ...input }), { limits: 'limits' in input })
+      const { wrong, compared, dropped, read: counts, named } = await checkParts(specs, () => ({ ...input }), { limits: 'limits' in input })
       console.log(`[parts-needed] ${mode}: ${compared} specs; read ${JSON.stringify(counts)}; named ${JSON.stringify(named)}`)
       expect(wrong.slice(0, 12).join('\n'), `${wrong.length} wrong`).toBe('')
-      expect(compared).toBeGreaterThan(900)
+      expect(dropped, 'specs that do not draw with every part and were left out').toEqual([])
+      expect(compared).toBe(specs.length)
       // not vacuous: the parts a spec's drawing can read are read by some corpus specs, and most specs read none of them
       expect(counts.legend).toBeGreaterThan(50)
       expect(counts.layout).toBeGreaterThan(5)
