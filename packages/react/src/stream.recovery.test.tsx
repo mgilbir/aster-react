@@ -90,8 +90,13 @@ describe('maxQueuedRows reaches the stream (hooks)', () => {
     const m = probe(() => useChartStream(spec(), { maxQueuedRows: 5 }))
     await act(async () => { await wait() })
     expect(m.result().stats().maxQueuedRows).toBe(5)
-    expect(m.result().push({ append: { t: rows(10) } })).toBe(false)
-    expect(m.result().push({ append: { t: rows(3) } })).toBe(true)
+    let tooBig = true; let fits = false
+    act(() => {
+      tooBig = m.result().push({ append: { t: rows(10) } })
+      fits = m.result().push({ append: { t: rows(3) } })
+    })
+    expect(tooBig).toBe(false)
+    expect(fits).toBe(true)
   })
 
   it.each(['coalesce', 'drop-newest', 'drop-oldest'] as const)('useChartWorkerStream (%s): the producer buffer applies the row bound and the worker gets it', async (policy) => {

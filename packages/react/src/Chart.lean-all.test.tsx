@@ -87,17 +87,19 @@ forEachVariant(['svg'], (Chart, variant) => describe(`${variant.name} with every
     act(() => root.unmount())
   })
 
-  it('and the check can see a wait: a part taken out again makes a chart that needs it suspend', () => {
+  it('and the check can see a wait: a part taken out again makes a chart that needs it suspend', async () => {
     const restore = withdrawParts(['time'])
+    const c = document.createElement('div')
+    document.body.appendChild(c)
+    const root = createRoot(c)
     try {
-      const c = document.createElement('div')
-      document.body.appendChild(c)
-      const root = createRoot(c)
       act(() => { root.render(<React.Suspense fallback={<i id="fb" />}><Chart spec={SPECS[1]![1]} width={300} height={160} /></React.Suspense>) })
       expect(c.querySelector('#fb')).not.toBeNull()
       act(() => root.unmount())
     } finally {
       restore()
     }
+    // (the load the chart started finishes after the unmount: inside an awaited `act`, where React expects such an event)
+    await act(async () => { await new Promise((r) => setTimeout(r, 100)) })
   })
 }))
