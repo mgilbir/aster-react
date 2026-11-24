@@ -125,6 +125,10 @@ interface Entry {
   ox?: number
   oy?: number
   bmark?: SceneGroup
+  /** (canvas index) a typed mark's item: its mark and the frame it clips to, for the mark's bounds vega asks first */
+  tmark?: SceneGroup
+  tfw?: number
+  tfh?: number
   vb?: Float64Array
 }
 
@@ -638,10 +642,17 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
   const frameClip = (x: number, y: number, w: number, h: number): Clip =>
     !Number.isFinite(w) || !Number.isFinite(h) || (!canvas && (w < 0 || h < 0)) ? { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity } : rectClip(x, y, w, h)
   /** A group item's bounds (vega's: what it holds, its box unless `noBound`, its stroke) in scene coordinates. */
+  /** A group item's bounds as vega measured them, made once per index (the group item's own clip and its group mark's union ask them). */
+  const groupBounds = new Map<SceneGroup, Bounds>()
+  const boundsOf = (group: SceneGroup): Bounds => {
+    let b = groupBounds.get(group)
+    if (b === undefined) groupBounds.set(group, (b = groupLayoutBounds(group, true)))
+    return b
+  }
   const boundsClip = (group: SceneGroup, tx: number, ty: number): Clip => {
     // (vega's `contains`, "not outside": an edge as `Number` reads it, and one that is not a number excludes nothing; empty bounds
     // hold nothing)
-    const b = groupLayoutBounds(group, true)
+    const b = boundsOf(group)
     const lo = (v: number): number => { const n = +v; return Number.isNaN(n) ? -Infinity : n }
     const hi = (v: number): number => { const n = +v; return Number.isNaN(n) ? Infinity : n }
     return { x1: tx + lo(b.x1), y1: ty + lo(b.y1), x2: tx + hi(b.x2), y2: ty + hi(b.y2) }
@@ -649,7 +660,8 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
   /**
    * (canvas index) The bounds vega's pick asks of each group MARK among `nodes` (a group's marks, the root's), before its items: the
    * union of its group items' bounds (an edge that is not a number leaves that edge out of the union), cut to the frame when the mark
-   * clips, in scene coordinates, for the node at each index that is a group item of one; `undefined` for the rest.
+   * clips, in scene coordinates, for the node at each index that is a group item of one; `undefined` for the rest. A mark whose items
+   * have bounds that are all numbers needs none: each item's own bounds, asked next, are inside the union.
    */
   const groupMarkClips = (nodes: readonly SceneGroup[], fw: number, fh: number, gx: number, gy: number): (Clip | undefined)[] | undefined => {
     let out: (Clip | undefined)[] | undefined
@@ -658,24 +670,39 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
     for (let k = 0; k < nodes.length;) {
       const first = nodes[k]!
       if (rec(first)._scope !== true) { k++; continue }
-      const mb = new Bounds()
       let end = k
-      while (end < nodes.length && sameGroupMark(first as unknown as Record<string, unknown>, nodes[end] as unknown as Record<string, unknown>)) mb.union(groupLayoutBounds(nodes[end]!, true)), end++
-      const m = rec(first).markClip === true ? mb.intersect(new Bounds().set(0, 0, fw, fh)) : mb
-      const clip: Clip = { x1: gx + lo(m.x1), y1: gy + lo(m.y1), x2: gx + hi(m.x2), y2: gy + hi(m.y2) }
-      out ??= []
-      for (let i = k; i < end; i++) out[i] = clip
+      let numbers = true
+      while (end < nodes.length && sameGroupMark(first as unknown as Record<string, unknown>, nodes[end] as unknown as Record<string, unknown>)) {
+        const b = boundsOf(nodes[end]!)
+        if (!(Number.isFinite(b.x1) && Number.isFinite(b.y1) && Number.isFinite(b.x2) && Number.isFinite(b.y2))) numbers = false
+        end++
+      }
+      if (!numbers) {
+        const mb = new Bounds()
+        for (let i = k; i < end; i++) mb.union(boundsOf(nodes[i]!))
+        const m = rec(first).markClip === true ? mb.intersect(new Bounds().set(0, 0, fw, fh)) : mb
+        const clip: Clip = { x1: gx + lo(m.x1), y1: gy + lo(m.y1), x2: gx + hi(m.x2), y2: gy + hi(m.y2) }
+        out ??= []
+        for (let i = k; i < end; i++) out[i] = clip
+      }
       k = end
     }
     return out
   }
-  /** (canvas index) The bounds vega's pick asks of a typed mark before its items (`pickMark`): the union of the items' bounds, cut to the frame when it clips. */
-  const typedMarkClip = (mark: SceneGroup, fw: number, fh: number, tx: number, ty: number): Clip => {
-    const b = boundTypedMark(new Bounds(), mark)
-    const m = mark.clip === true ? b.intersect(new Bounds().set(0, 0, fw, fh)) : b
-    const lo = (v: number): number => { const n = +v; return Number.isNaN(n) ? -Infinity : n }
-    const hi = (v: number): number => { const n = +v; return Number.isNaN(n) ? Infinity : n }
-    return { x1: tx + lo(m.x1), y1: ty + lo(m.y1), x2: tx + hi(m.x2), y2: ty + hi(m.y2) }
+  /**
+   * (canvas index) The bounds vega's pick asks of a typed mark before its items (`pickMark`): the union of the items' bounds (an edge
+   * that is not a number is left out of it), cut to the frame when the mark clips. Asked of an item whose own bounds have an edge that is
+   * not a number only: where they are all numbers, the item's own test is inside the mark's.
+   */
+  const typedMarkBoxes = new Map<SceneGroup, Float64Array>()
+  const typedMarkBox = (mark: SceneGroup, fw: number, fh: number): Float64Array => {
+    let box = typedMarkBoxes.get(mark)
+    if (box === undefined) {
+      const b = boundTypedMark(new Bounds(), mark)
+      const m = mark.clip === true ? b.intersect(new Bounds().set(0, 0, fw, fh)) : b
+      typedMarkBoxes.set(mark, (box = Float64Array.of(+m.x1, +m.y1, +m.x2, +m.y2)))
+    }
+    return box
   }
   const pathClip = (d: string, ox: number, oy: number): Clip => {
     const polys = transformPolys(pathPolys(d), (x, y) => [ox + x, oy + y])
@@ -776,9 +803,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
     const guidePart = group.role === 'title-text' || group.role === 'title-subtitle'
     // a mark's `clip`: its items are clipped to the frame of the group they are in (or to its rounded outline)
     const clip = group.clip === true ? (group.clipPathD ? pathClip(group.clipPathD, tx, ty) : frameClip(tx, ty, fw, fh)) : null
-    // (vega's canvas pick asks every mark's bounds, the union of its items', before the mark: `pickMark`)
-    const markBounds = canvas && !unbounded ? typedMarkClip(group, fw, fh, tx, ty) : null
-    withClip(markBounds, () => withClip(clip, () => {
+    withClip(clip, () => {
       // (a mark of a scene the engine returned holds what it held: at the same place, its entries are the ones made before, see
       // `MARK_ENTRIES`; each index takes copies, which the clips and flags below are written onto)
       const kept = type !== 'text' && isEngineNode(group) ? keptEntries.get(group) : undefined
@@ -786,11 +811,11 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
         for (const t of kept.entries) entries.push({ ...t })
       } else {
         addMark(group, type, gx, gy)
-        if (canvas && !unbounded) measuredBy(e0, type, gx, gy, type === 'line' || type === 'area' || type === 'trail' ? group : undefined)
+        if (canvas && !unbounded) measuredBy(e0, type, gx, gy, type === 'line' || type === 'area' || type === 'trail' ? group : undefined, group, fw, fh)
         if (type !== 'text' && isEngineNode(group)) keptEntries.set(group, { gx, gy, unbounded, entries: entries.slice(e0).map((e) => ({ ...e })), root: scene })
       }
       clipFrom(e0)
-    }))
+    })
     // (an item of a mark that reads a dataset has a row for its datum; a title's text is a guide's part)
     if (group.__source !== undefined && !guidePart && entries.length > e0) dataRuns.push(e0, entries.length)
     // a mark that is not interactive takes no pointer (its container says `pointer-events: none`)
@@ -798,7 +823,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
     if (guidePart) for (let i = e0; i < entries.length; i++) entries[i]!.guide = true
   }
   /** (canvas index) The entries made since `from` are measured as vega's bounds pass measures `kind`, in the frame at (ox, oy). */
-  const measuredBy = (from: number, kind: string, ox: number, oy: number, mark?: SceneGroup): void => {
+  const measuredBy = (from: number, kind: string, ox: number, oy: number, mark?: SceneGroup, typed?: SceneGroup, fw?: number, fh?: number): void => {
     for (let i = from; i < entries.length; i++) {
       const e = entries[i]!
       // (a group item's box -- a guide's, a legend entry's, its stroke in front too -- lies within the group item's bounds, which
@@ -808,6 +833,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
       e.ox = ox
       e.oy = oy
       if (mark) e.bmark = mark
+      else if (typed) { e.tmark = typed; e.tfw = fw!; e.tfh = fh! }
     }
   }
   const addMark = (group: SceneGroup, type: string, gx: number, gy: number): void => {
@@ -1332,7 +1358,14 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
     }
     const lx = x - e.ox!
     const ly = y - e.oy!
-    return !(lx < vb[0]! || lx > vb[2]! || ly < vb[1]! || ly > vb[3]!)
+    if (lx < vb[0]! || lx > vb[2]! || ly < vb[1]! || ly > vb[3]!) return false
+    // (the mark's bounds are asked before the item's, and leave an edge that is not a number out of their union: an item with one
+    // holds a point its mark's bounds do not)
+    if (e.tmark !== undefined && !(Number.isFinite(vb[0]!) && Number.isFinite(vb[1]!) && Number.isFinite(vb[2]!) && Number.isFinite(vb[3]!))) {
+      const m = typedMarkBox(e.tmark, e.tfw!, e.tfh!)
+      if (lx < m[0]! || lx > m[2]! || ly < m[1]! || ly > m[3]!) return false
+    }
+    return true
   }
 
   const hitLinear = (x: number, y: number, mode: Mode): number => {
