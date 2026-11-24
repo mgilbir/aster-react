@@ -25,9 +25,10 @@
  * `^\s*(.*?)\s*$` 3; a loop from which the match can always end at once is no link of a chain, `\s*.*`, `\d+\.?\d*`, but still reads
  * the input: at least 1), and `work`, the transitions tried per character from the live paths of one start, counted on the whole
  * automaton (a bounded run after a loop over the same characters, `a*[ab]{0,20}x`, is entered from every place the loop can stop).
- * A run on `n` characters takes about `work * n ** degree` steps; `regexHazard` refuses the pattern when that, at
- * REGEX_NS_PER_UNIT, exceeds the time a run may take on the longest subject the limits allow (limits.ts: `maxTimeMs`, else
- * REGEX_RUN_BUDGET_MS; `maxStringLength`, else REGEX_MAX_INPUT). Nothing can interrupt a running RegExp: that time is the bound.
+ * A run on `n` characters takes about `work * n ** degree` steps, at REGEX_NS_PER_UNIT each: under limits every run is refused,
+ * before it starts, when that on its actual subject exceeds the time left (limits.ts `checkRegexRun`: `maxTimeMs`, else
+ * REGEX_RUN_BUDGET_MS; the subject is at most `maxStringLength`, else REGEX_MAX_INPUT). Nothing can interrupt a running RegExp.
+ * `regexHazard` gives the same verdict for a subject length and a budget (`regexRunMs` is the time).
  * Bounded repeats of a single character set are expanded exactly up to 64; any other repeat that may run twice is read as
  * unbounded (`(a+){1,60}` is `(a+)+`, the exponential shape it has in practice). Lookaround bodies are screened as patterns of
  * their own (they run at every position the match tries). A Unicode property is read as "any character" (an upper bound), a
@@ -39,7 +40,7 @@
  */
 
 import { TextTable } from './util.js'
-import { REGEX_MAX_INPUT, REGEX_RUN_BUDGET_MS } from './limits.js'
+import { REGEX_MAX_INPUT, REGEX_NS_PER_UNIT, REGEX_RUN_BUDGET_MS } from './limits.js'
 
 // --- character sets ---------------------------------------------------------------------------------
 
@@ -1073,12 +1074,6 @@ function analyse(tree: RNode, unanchored: boolean, budget: { steps: number }, se
 
 const CACHE = new TextTable<string | RegexCost | null>('regex verdicts', 256, 1_000_000)
 
-/**
- * Nanoseconds one unit of {@link RegexCost} (`work * n ** degree`) may take V8: the slowest measured over 130 generated and named
- * shapes was 1.93 (`a+a{30}x`; `(\w?)+!` 1.80; the median 0.16) on a machine at load 5 to 10, and the gate runs under up to about 4
- * times that load, so a run the model allows finishes within its budget there too.
- */
-export const REGEX_NS_PER_UNIT = 8
 
 /**
  * The screen's reading of a pattern whatever its input: the reason it is refused (exponential backtracking, an ambiguity too

@@ -88,7 +88,7 @@ anywhere in a render is never swallowed by a defensive `catch`: the call fails w
 | `maxGeneratedRows`, `maxGeneratedBytes` | cumulative rows / characters generated during one evaluation |
 | `maxItems`, `maxPathLength` | generated scene budget (also tick counts and generated paths) |
 | `... > N (built-in ceiling that applies even without limits ...)` | a ceiling of `HARD_CAPS` (`rows`, `cells`, `items`, `bytes`, `coords`, `work`, `pixels`, `vertices`, `latticeTests`) or the spec size; the message names the limit that raises it, when one does (`docs/LIMITS.md`, "Built-in ceilings") |
-| `regexSafety: ...` | a regular expression was refused (only under `limits`): an exponential shape, or a run on the longest subject the limits allow (`maxStringLength`, default 10 000) that would take longer than `maxTimeMs` (default 100 ms per run); see LIMITS.md |
+| `regexSafety: ...` | a regular expression was refused (only under `limits`): an exponential shape whatever its input, or one run whose cost on the text it was given would take longer than the time left under `maxTimeMs` (default 100 ms per run), refused before it starts; see LIMITS.md |
 | `timeoutMs`, `maxBytes`, `maxTotalBytes`, `maxRequests`, `maxRedirects` | `loadSpecData` request caps |
 | `csv cells filled in for missing fields N > 1000000 (built-in ceiling ...)` | a delimited text whose lines are shorter than its header would fill in more cells than the ceiling (`maxGeneratedRows` replaces it); `maxRows N > M (csv rows)` is the row budget, checked as the rows are read |
 | `maxSvgLength` | serialized output budget |
