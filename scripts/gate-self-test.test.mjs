@@ -115,7 +115,7 @@ describe('each self-tested gate passes its control, fails a planted difference a
       expect(planted.code, `${g.name} planted:\n${planted.out.slice(-3000)}`).toBe(1)
       expect(planted.out).toMatch(new RegExp(`\\[${g.name}\\] DIFFERS `))
       if (none === null) {
-        expect(noneWhy, `${g.name}: a gate that cannot be narrowed to nothing says why`).toMatch(/\w{20}/)
+        expect(noneWhy, `${g.name}: a gate that cannot be narrowed to nothing says why`).toMatch(/\w+(\s+\w+){3,}/)
         return
       }
       const zero = await runScript(s, none)
