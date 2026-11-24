@@ -222,11 +222,18 @@ runtime report `<SvgChart>` gives, see [API.md](API.md#svgchart-and-the-interact
 plain `SvgChart` variant refuses interaction props and the missing-event-loop report, so a test that uses them must declare
 `interaction`/`signals`. `variant.it(needs, name, fn)` declares needs for a single test.
 
-Guards, all in `pnpm test`: `Chart.matrix.test.ts` (no test renders `<Chart>` outside the matrix without a listed reason),
-`Chart.shells.test.ts` (the shells stay thin; `@aster-charts/react/lite` never reaches canvas/hit/signals), `Chart.types.test.ts` (type fixtures that
-must compile and must fail on exact lines, the props/handle parity assertions, and the documented examples) and
-`Chart.corpus-parity.test.tsx` (the DOM of `<Chart>`, `<SvgChart>` and `<SvgChart interaction>` equal over every corpus
-spec: server markup, client mount, hydration).
+Guards, all in `pnpm test`: `Chart.matrix.test.ts` (no test renders `<Chart>` or `<ChartCore>` outside the matrix without a listed reason: it
+follows the file's own bindings, so a renamed or dynamic import, a destructured `Chart` and a local component that shadows the variant are found),
+`Chart.shells.test.ts` (each shell is exactly one `<ChartCore {...props} [its capabilities] ref={ref}>`; `@aster-charts/react/lite` never reaches
+canvas/hit/signals by any import form), `Chart.types.test.ts` (type fixtures that must compile and must fail on exact lines, the props/handle parity
+assertions compiled from `parity.assert.ts` itself, and the documented examples) and `Chart.corpus-parity.test.tsx` (the DOM of `<Chart>`,
+`<SvgChart>` and `<SvgChart interaction>` equal over every corpus spec: server markup, client mount, hydration, which must leave the client mount's
+DOM and log nothing to `console.error`; every spec is a drawn chart, never the error state). The guards that read source use the TypeScript API, not
+patterns of text.
+
+Every test file runs in React's act environment (`scripts/vitest-react-act.setup.mjs` sets `IS_REACT_ACT_ENVIRONMENT` before any file runs) and a test
+during which React reports an update "not wrapped in act(...)" fails: wrap the update, or the wait for it, in `act`. Worker hooks are tested against
+`testing/fake-worker.ts`, which clones requests and answers like a real worker, answers on a later turn, and can be held, silent, reordered or failed.
 
 ## Oracle vectors
 
