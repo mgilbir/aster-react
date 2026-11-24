@@ -133,6 +133,13 @@ function boxPathOf(item: SceneItem): string {
 /** How an index picks: as the browser hit-tests vega's SVG (the default), or as vega's canvas renderer picks. */
 export interface HitIndexOptions {
   renderer?: 'svg' | 'canvas'
+  /**
+   * How the index finds the entry under a point. `'auto'` (the default) scans a small scene's boxes and builds a grid for a
+   * larger one that is asked more than a few questions. `'scan'` never builds a grid; `'grid'` builds it for the first question,
+   * whatever the size. All three answer alike (the grid lists every entry whose box holds a point, and both take the last that
+   * hits it); a host that knows its scene is static and dense can ask for the grid at once, and the tests compare the two.
+   */
+  strategy?: 'auto' | 'scan' | 'grid'
 }
 
 /** A target is read-only: the index hands out the same object for the same item each time it is hit. */
@@ -497,6 +504,7 @@ const TOP_GUIDE_ROLES: ReadonlySet<string> = new Set(['axis', 'legend', 'title']
 
 export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: HitIndexOptions = {}): HitIndex {
   const canvas = options.renderer === 'canvas'
+  const strategy = options.strategy ?? 'auto'
   const keptEntries = canvas ? MARK_ENTRIES.canvas : MARK_ENTRIES.svg
   const entries: Entry[] = []
   /** The runs of entries `[from, to)` made for a mark that reads a dataset (their items' datums are rows), in order. */
@@ -1166,7 +1174,7 @@ export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: Hi
   const find = (x: number, y: number, mode: Mode): number => {
     if (entries.length === 0 || !(x === x && y === y)) return -1
     if (surface !== null && !(x >= 0 && x <= surface.w && y >= 0 && y <= surface.h)) return -1
-    if (entries.length <= GRID_THRESHOLD || (grid == null && queries++ < LINEAR_QUERIES)) {
+    if (strategy !== 'grid' && (strategy === 'scan' || entries.length <= GRID_THRESHOLD || (grid == null && queries++ < LINEAR_QUERIES))) {
       if (boxes === null) seal()
       return hitLinear(x, y, mode)
     }
