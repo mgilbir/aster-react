@@ -979,6 +979,22 @@ const ANIM_CASES: AnimCase[] = [
     vl: animBase({ params: [{ name: 'anim', select: { type: 'point', on: 'timer', fields: ['date'] } }], mark: 'circle', encoding: { x: { field: 'life', type: 'quantitative' }, y: { field: 'fert', type: 'quantitative' }, time: { field: 'date', type: 'temporal' } } }),
     at: SAMPLES,
   },
+  // the specs of the corpus that only a stepped clock can tell from their neighbours (the corpus compares the first frame, where the timer's selection is empty)
+  {
+    name: 'anim-timer-object-throttle',
+    vl: animBase({ params: [{ name: 'anim', select: { type: 'point', on: { type: 'timer', throttle: 100 }, fields: ['year'] } }], ...scatter }),
+    at: SAMPLES,
+  },
+  {
+    name: 'anim-quantitative-time',
+    vl: animBase({ mark: 'tick', encoding: { x: { field: 'life', type: 'quantitative' }, y: { field: 'country', type: 'nominal' }, time: { field: 'year', type: 'quantitative' } } }),
+    at: SAMPLES,
+  },
+  {
+    name: 'anim-time-unit-year',
+    vl: animBase({ params: [{ name: 'anim', select: { type: 'point', on: 'timer', fields: ['date'] } }], mark: 'point', encoding: { x: { field: 'life', type: 'quantitative' }, y: { field: 'fert', type: 'quantitative' }, time: { field: 'date', type: 'temporal', timeUnit: 'year' } } }),
+    at: SAMPLES,
+  },
   { name: 'anim-named-selection', vl: animBase({ params: [{ name: 'play', select: { type: 'point', on: 'timer', encodings: ['time'] } }], transform: [{ filter: { param: 'play' } }], mark: 'square', encoding: scatter.encoding }), at: SAMPLES },
 ]
 
