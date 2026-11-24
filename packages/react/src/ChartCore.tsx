@@ -353,6 +353,7 @@ function ChartView({
   random,
   logger,
   preventDefault,
+  eventSources: eventSourcesProp,
   textMetrics,
   a11y: a11yProp = true,
   onError,
@@ -390,6 +391,7 @@ function ChartView({
   const stableView = useStableContent(viewProp)
   const stableBrush = useStableContent(brushProp)
   const stableSelection = useStableContent(selectionProp)
+  const eventSources = useStableContent(eventSourcesProp)
   const stableSelect = useStableContent(selectProp)
   const checkedView = React.useMemo(() => checkAxes('view', stableView), [stableView])
   const checkedBrush = React.useMemo(() => checkAxes('brush', stableBrush), [stableBrush])
@@ -659,7 +661,7 @@ function ChartView({
   // are only known after evaluation. Reported through `onError`, else the logger, else the console.
   const eventStreamsUnbound = interaction == null && interactive && scene != null && hasEventStreams(scene)
   const interactionPropsUsed = interaction == null
-    ? Object.entries({ tooltip: tooltip === true, renderTooltip, tooltipContainer, onPointSelect, selection, select, onSelectionChange, preventDefault: preventDefault === true })
+    ? Object.entries({ tooltip: tooltip === true, renderTooltip, tooltipContainer, onPointSelect, selection, select, onSelectionChange, preventDefault: preventDefault === true, eventSources: eventSourcesProp })
       .filter(([, v]) => v !== undefined && v !== false).map(([k]) => k).join(', ')
     : ''
   const canvasUnavailable = requestedRenderer === 'canvas' && canvasCap == null
@@ -998,6 +1000,7 @@ function ChartView({
       ...(stableLogger ? { logger: stableLogger } : {}),
       ...(preventDefault != null ? { preventDefault } : {}),
     }, {
+      ...(eventSources ? { eventSources } : {}),
       pick: (x, y) => hitIndexFor(displayScene ?? scene)?.pick(x, y) ?? null, containerSize: liveContainerSize,
       ...(inputData ? { data: inputData } : {}), ...(host ? { owner: host } : {}), ...(events ? { events } : {}),
     })
@@ -1010,7 +1013,7 @@ function ChartView({
       binding.detach()
       if (signalBindingRef.current === binding) signalBindingRef.current = null
     }
-  }, [interactive, scene, displayScene, renderer, interaction, canvasCap, domMarkup, denseSvg, hasSignalListeners, mergedSignals, signalStore, dataStore, timerEdits, inputData, stableLogger, preventDefault, hitIndexFor, liveContainerSize])
+  }, [interactive, scene, displayScene, renderer, interaction, canvasCap, domMarkup, denseSvg, hasSignalListeners, mergedSignals, signalStore, dataStore, timerEdits, inputData, stableLogger, preventDefault, eventSources, hitIndexFor, liveContainerSize])
 
   // Canvas backend: size the backing store for devicePixelRatio and paint the scene whenever it changes: the appended marks of an
   // append-only scene, nothing for a scene that paints the same pixels, else all of it.
