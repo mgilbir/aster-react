@@ -7,6 +7,7 @@ import '@aster-charts/core/transforms'
 import { createChartStream } from '@aster-charts/core'
 import './vl'
 import { forEachVariant } from './testing/variants'
+import type { ChartHandle } from './chart-types'
 import { normalizeChartSpec } from './spec'
 import { useChart } from './useChart'
 import { renderChartToStaticMarkup } from './ssr'
@@ -102,12 +103,24 @@ forEachVariant(['svg'], (Chart, variant) => describe('every path leaves a deep-f
       const errors: unknown[] = []
       const logger = { error: (...a: unknown[]) => { errors.push(a) }, warn: () => {} }
       const onError = (e: Error): void => { errors.push(e) }
-      const mount = (spec: Record<string, unknown>): { html: () => string; root: ReturnType<typeof createRoot>; container: HTMLElement } => {
+      type Run = { html: () => string; root: ReturnType<typeof createRoot>; container: HTMLElement; ref: React.RefObject<ChartHandle | null> }
+      const mount = (spec: Record<string, unknown>): Run => {
         const container = document.createElement('div')
         document.body.appendChild(container)
         const root = createRoot(container)
-        act(() => { root.render(<Chart spec={spec as never} width={160} height={120} logger={logger} onError={onError} />) })
-        return { html: () => container.innerHTML, root, container }
+        const ref = React.createRef<ChartHandle>()
+        act(() => { root.render(<Chart ref={ref} spec={spec as never} width={160} height={120} logger={logger} onError={onError} />) })
+        return { html: () => container.innerHTML, root, container, ref }
+      }
+      /** Where each symbol mark is drawn, in client coordinates: a click there is a click on that mark (the hit index decides by position). */
+      const markPoints = (run: Run): Array<[number, number]> => {
+        const pad = run.ref.current!.getScene()!.padding!
+        const out: Array<[number, number]> = []
+        for (const path of Array.from(run.container.querySelectorAll('g.role-mark path'))) {
+          const m = /^translate\(([-\d.e]+),([-\d.e]+)\)$/.exec(path.getAttribute('transform') ?? '')
+          if (m) out.push([Number(m[1]) + pad.left, Number(m[2]) + pad.top])
+        }
+        return out
       }
       const steps: Array<(spec: Record<string, unknown>) => Record<string, unknown>> = [
         () => vlSpecs(rows(24))[name]!,
@@ -119,22 +132,38 @@ forEachVariant(['svg'], (Chart, variant) => describe('every path leaves a deep-f
       const frozenRun = mount(deepFreeze(steps[0]!({})))
       const plainRun = mount(copy(steps[0]!({})))
       expect(frozenRun.html()).toBe(plainRun.html())
+      let clickedSomething = false
+      let hoverChangedSomething = false
       for (const step of steps.slice(1)) {
         const next = step({})
-        act(() => { frozenRun.root.render(<Chart spec={deepFreeze(copy(next)) as never} width={160} height={120} logger={logger} onError={onError} />) })
-        act(() => { plainRun.root.render(<Chart spec={copy(next) as never} width={160} height={120} logger={logger} onError={onError} />) })
+        act(() => { frozenRun.root.render(<Chart ref={frozenRun.ref} spec={deepFreeze(copy(next)) as never} width={160} height={120} logger={logger} onError={onError} />) })
+        act(() => { plainRun.root.render(<Chart ref={plainRun.ref} spec={copy(next) as never} width={160} height={120} logger={logger} onError={onError} />) })
         expect(frozenRun.html()).toBe(plainRun.html())
-        // events: a click on every mark (point selections toggle), pointer moves across the view (nearest selections)
+        // events: a click on each of the first marks, at the mark's own coordinates (point selections toggle with the shift key),
+        // pointer moves across the view (nearest selections)
+        const afterClicks: string[] = []
+        const afterMoves: string[] = []
         for (const run of [frozenRun, plainRun]) {
           const svg = run.container.querySelector('svg')!
-          for (const mark of Array.from(run.container.querySelectorAll('g.role-mark path, g.role-mark rect')).slice(0, 6)) {
-            act(() => { mark.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 20, clientY: 20, shiftKey: true })) })
+          const beforeClicks = run.html()
+          for (const [x, y] of markPoints(run).slice(0, 6)) {
+            act(() => { svg.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: x, clientY: y, shiftKey: true })) })
           }
+          afterClicks.push(run.html())
+          if (run.html() !== beforeClicks) clickedSomething = true
+          const beforeMoves = run.html()
           for (const x of [5, 40, 80, 120]) act(() => { svg.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: x, clientY: 30 })) })
+          afterMoves.push(run.html())
+          if (run.html() !== beforeMoves) hoverChangedSomething = true
           act(() => { svg.dispatchEvent(new PointerEvent('pointerout', { bubbles: true })) })
         }
+        expect(afterClicks[0]).toBe(afterClicks[1])
+        expect(afterMoves[0]).toBe(afterMoves[1])
         expect(frozenRun.html()).toBe(plainRun.html())
       }
+      // the events did something: a comparison of two DOMs that never changed would hold for any implementation
+      if (name === 'pointSelection') expect(clickedSomething, 'the clicks toggled a point selection').toBe(true)
+      if (name === 'nearestHover') expect(hoverChangedSomething, 'the pointer moves moved the nearest selection').toBe(true)
       expect(errors).toEqual([])
       expect(frozenRun.container.querySelector('svg')).not.toBeNull()
       act(() => { frozenRun.root.unmount(); plainRun.root.unmount() })

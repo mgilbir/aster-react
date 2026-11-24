@@ -129,6 +129,10 @@ forEachVariant(['svg'], (Chart, variant) => {
         root.render(<Chart ref={ref} spec={vlSpec({ params: [{ name: 'pick', select: { type: 'point', fields: ['c'] }, value: [{ c: 'y' }] }] })} />)
       })
       expect(strokes(container).filter((s) => s === 'lightgray')).toHaveLength(2)
+      // a click on nothing (a point of the plot with no mark under it) clears it: every mark is coloured by its field again
+      act(() => { container.querySelector('svg')!.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 100, clientY: 90 })) })
+      expect(strokes(container).filter((s) => s === 'lightgray')).toHaveLength(0)
+      expect(new Set(strokes(container)).size).toBe(3)
       act(() => { root.unmount() })
     })
   })

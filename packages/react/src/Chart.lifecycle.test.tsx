@@ -221,12 +221,22 @@ describe('hygiene', () => {
     container.innerHTML = html
     document.body.appendChild(container)
     const ref = React.createRef<ChartStreamHandle>()
+    const adopted = container.querySelector('svg')
+    const recoverable: unknown[] = []
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
     let root: ReturnType<typeof hydrateRoot> | null = null
-    await act(async () => { root = hydrateRoot(container, <ChartStream ref={ref} spec={spec} width={400} height={300} a11y={false} />) })
-    await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+    try {
+      await act(async () => { root = hydrateRoot(container, <ChartStream ref={ref} spec={spec} width={400} height={300} a11y={false} />, { onRecoverableError: (e) => recoverable.push(e) }) })
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+      expect(recoverable).toEqual([])
+      expect(logged.mock.calls.map((a) => String(a[0]))).toEqual([])
+    } finally { logged.mockRestore() }
+    // in place: the server's svg element is the one that is kept and then patched by the stream
+    expect(container.querySelector('svg')).toBe(adopted)
     expect(container.querySelectorAll('svg g.mark-symbol path').length).toBe(2)
     await act(async () => { ref.current!.push({ append: { t: [{ x: 30, y: 30, k: 'p2' }] } }); ref.current!.flush(); await new Promise((r) => setTimeout(r, 0)) })
     expect(container.querySelectorAll('svg g.mark-symbol path').length).toBe(3)
+    expect(container.querySelector('svg')).toBe(adopted)
     await act(async () => { root!.unmount() })
   })
 })
