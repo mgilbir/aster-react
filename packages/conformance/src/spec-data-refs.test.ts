@@ -121,7 +121,7 @@ describe('vega-util array(): scope lists given as a lone object, null or a scala
       expect(want).toHaveProperty('svg')
       const got = engine(spec)
       expect(got).toHaveProperty('svg')
-      expect(diffCanonical(canonicalizeSvg((got as { svg: string }).svg), canonicalizeSvg((want as { svg: string }).svg))).toEqual([])
+      expect(diffCanonical(canonicalizeSvg((want as { svg: string }).svg), canonicalizeSvg((got as { svg: string }).svg))).toEqual([])
     })
   }
 })
