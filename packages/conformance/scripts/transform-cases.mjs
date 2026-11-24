@@ -1,6 +1,7 @@
 /**
  * The TRANSFORM-level case list: (transform params + input rows [+ extra datasets])
- * for every transform the engine implements, with deliberately odd inputs: numeric
+ * for the transforms of the engine that are not compared with Vega somewhere of their own (the 18 that are not here, and the
+ * suite that does compare each, are listed in differential-transforms.test.mts), with deliberately odd inputs: numeric
  * strings, null/undefined/NaN/Infinity, Dates, empty groups, nested field paths
  * (`a.b`, `a\.b`, `a[0]`), omitted params (Vega's defaults for `as`, `ops`, `offset`,
  * `sort`, ...), ties and stable order. Random cases come from a seeded PRNG, so the
@@ -292,8 +293,9 @@ const AGG_OPS = OPS.filter((o) => o !== 'exponential' && o !== 'exponentialb')
       add(S, `extent ${JSON.stringify(ext)} ${JSON.stringify(o)}`, { type: 'bin', field: 'v', extent: ext, ...o }, rows)
     }
   }
-  // Not recorded: `extent` omitted. Vega throws 'Missing required "bin" parameter: "extent"'; the engine
-  // derives it from the data instead (documented extension, unit test in transform-semantics.test.ts).
+  // `extent` omitted: Vega throws 'Missing required "bin" parameter: "extent"'; the engine derives it from the data instead (a
+  // documented extension). It is a known difference (expected-differences.mjs), compared below, not a case left out.
+  add(S, 'extent omitted', { type: 'bin', field: 'v', maxbins: 10 }, rows)
   add(S, 'odd values', { type: 'bin', field: 'v', extent: [0, 100], maxbins: 10 }, ODD.map((v, i) => ({ v, i })))
   add(S, 'odd values interval false', { type: 'bin', field: 'v', extent: [0, 100], maxbins: 10, interval: false }, ODD.map((v, i) => ({ v, i })))
   add(S, 'values outside extent', { type: 'bin', field: 'v', extent: [10, 20], maxbins: 5 }, [5, 10, 14.99, 15, 20, 20.0001, 25, Infinity, -Infinity, NaN, null, undefined, '12', ''].map((v) => ({ v })))
@@ -448,8 +450,7 @@ const AGG_OPS = OPS.filter((o) => o !== 'exponential' && o !== 'exponentialb')
   const S = 'sequence'
   const sig = []
   const src = [{ q: 1 }]
-  for (const [start, stop, step] of [[0, 5, 1], [0, 5, 2], [5, 0, -1], [0, 1, 0.25], [0, 0, 1], [3, 1, 1], [1, 4, undefined], [0, 1, 0.1], [-2, 2, 1], [0, 3, 0], ['0', '3', '1'], [0, 3, NaN], [NaN, 3, 1], [0, Infinity, 1]]) {
-    if (stop === Infinity) continue
+  for (const [start, stop, step] of [[0, 5, 1], [0, 5, 2], [5, 0, -1], [0, 1, 0.25], [0, 0, 1], [3, 1, 1], [1, 4, undefined], [0, 1, 0.1], [-2, 2, 1], [0, 3, 0], ['0', '3', '1'], [0, 3, NaN], [NaN, 3, 1]]) {
     add(S, `sequence ${start},${stop},${step}`, { type: 'sequence', start, stop, ...(step !== undefined ? { step } : {}) }, [])
   }
   add(S, 'as given', { type: 'sequence', start: 0, stop: 3, as: 'k' }, [])
@@ -596,9 +597,9 @@ const AGG_OPS = OPS.filter((o) => o !== 'exponential' && o !== 'exponentialb')
   add(S, 'number text throws', { type: 'countpattern', field: 't' }, [{ t: 12 }])
   add(S, 'count ties keep first-seen order', { type: 'countpattern', field: 't' }, [{ t: 'b a b a c' }])
   add(S, 'integer-like tokens iterate first', { type: 'countpattern', field: 't' }, [{ t: 'b 10 a 2 c 1' }])
-  // Not recorded: tokens named like Object.prototype members ('constructor', '__proto__') hit
-  // vega's plain-object token table and yield garbage there; the engine counts them as data
-  // (unit test in transform-semantics.test.ts).
+  // Tokens named like Object.prototype members ('constructor', '__proto__') hit vega's plain-object token table and yield garbage
+  // there; the engine counts them as data. A known difference (expected-differences.mjs), compared below.
+  add(S, 'tokens named like Object.prototype members', { type: 'countpattern', field: 't' }, [{ t: 'constructor a constructor __proto__ a b' }])
   add(S, 'error: field omitted', { type: 'countpattern' }, rows)
 }
 
@@ -853,8 +854,7 @@ const TZS = ['America/New_York', 'Asia/Kolkata', 'Australia/Lord_Howe', 'Europe/
   add(S4, 'as given', [st, { type: 'partition', field: 'size', size: [100, 80], as: ['X0', 'Y0', 'X1', 'Y1', 'D', 'C'] }], nodes)
   add(S4, 'data has x0/y0/x1/y1/depth/children that must survive', [st, { type: 'partition', field: 'size', size: [100, 80] }], nodes.map((n) => ({ ...n, x0: 'keep', y0: 'keep', x1: 'keep', y1: 'keep', depth: 'keep', children: 'keep' })))
   add(S4, 'size omitted', [st, { type: 'partition', field: 'size' }], nodes)
-  // Not recorded: `tree`, `nest` and `treelinks` are not implemented by the engine (no consumer in
-  // Vega-Lite output); recorded vectors for them would only assert 'unsupported transform'.
+  // (`tree`, `nest` and `treelinks` are compared in differential-nest.test.mts.)
 }
 
 // ============================================================================
@@ -864,7 +864,7 @@ const TZS = ['America/New_York', 'Asia/Kolkata', 'Australia/Lord_Howe', 'Europe/
   const S = 'geojson'
   const pts = [{ lon: 10, lat: 20, n: 'a' }, { lon: -40, lat: 5, n: 'b' }, { lon: null, lat: 1 }, { lon: 'x', lat: 2 }]
   add(S, 'fields', { type: 'geojson', fields: ['lon', 'lat'] }, pts)
-  // Not recorded: the GeoJSON transform's value (a FeatureCollection) as a signal is consumed by the
+  // Not in this list: the GeoJSON transform's value (a FeatureCollection) as a signal is consumed by the
   // projection `fit` machinery, which lives in the geo layer and has its own corpus coverage.
   add(S, 'geojson field', { type: 'geojson', geojson: 'geo' }, [{ geo: { type: 'Point', coordinates: [1, 2] } }, { geo: { type: 'LineString', coordinates: [[0, 0], [1, 1]] } }], { signals: [] })
   add(S, 'nested fields', { type: 'geojson', fields: ['o.lon', 'o.lat'] }, pts.map((p) => ({ o: p })))
@@ -880,6 +880,15 @@ const TZS = ['America/New_York', 'Asia/Kolkata', 'Australia/Lord_Howe', 'Europe/
   add(S, 'step and extent', { type: 'graticule', extent: [[-30, -20], [30, 20]], step: [15, 10] }, [])
   add(S, 'extent major and minor, precision', { type: 'graticule', extentMajor: [[-90, -45], [90, 45]], extentMinor: [[-60, -30], [60, 30]], stepMajor: [45, 30], stepMinor: [15, 10], precision: 5 }, rows)
   add(S, 'a mark after other steps', [{ type: 'formula', expr: 'datum.a * 2', as: 'b' }, { type: 'graticule', step: [30, 30] }], rows)
+}
+{
+  // isocontour reads a grid from each row (`field`, or the row itself): the level sets of its cells.
+  const S = 'isocontour'
+  const grid = { width: 3, height: 3, values: [0, 0, 0, 0, 5, 0, 0, 0, 0] }
+  add(S, 'the row is the grid', { type: 'isocontour', thresholds: [1] }, [grid])
+  add(S, 'field and levels', { type: 'isocontour', field: 'g', levels: 3 }, [{ g: grid, k: 'a' }])
+  add(S, 'a row that is no grid (vega: invalid size)', { type: 'isocontour' }, [{ a: 1 }])
+  add(S, 'smooth off, as', { type: 'isocontour', thresholds: [1, 3], smooth: false, as: 'c' }, [grid])
 }
 
 if (prevTz === undefined) delete process.env.TZ

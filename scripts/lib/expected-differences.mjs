@@ -89,4 +89,19 @@ export const EXPECTED_DIFFERENCES = Object.freeze([
       + "that array, so it holds itself (length rows + 1); Aster's root holds the rows (length rows), nothing cyclic. Vega's aliasing, "
       + "invisible to a chart, and Aster's tree is the one that can be walked (C470).",
   },
+  {
+    gate: 'test',
+    case: 'differential-transforms: bin: extent omitted',
+    reason:
+      "bin without `extent`: vega refuses (`Missing required \"bin\" parameter: \"extent\"`); Aster derives the extent from the "
+      + "data, a documented extension that the Vega-Lite compiler's output never needs and a hand-written spec may use (C748).",
+  },
+  {
+    gate: 'test',
+    case: 'differential-transforms: countpattern: tokens named like Object.prototype members',
+    reason:
+      "countpattern keeps its token counts in a plain object in vega, so a token named `constructor` or `__proto__` reads an "
+      + "inherited member and its count is garbage; Aster counts such tokens as data (a null-prototype table), which is the "
+      + "count anyone would expect (C748).",
+  },
 ])
