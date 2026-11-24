@@ -36,11 +36,16 @@ describe('generated trellis layouts vs vega', () => {
   // the first (a track edge on a whole pixel), and a header beyond the columns leaves the bounds of the view and its title.
   it('fit grids whose second layout rounds a track the other way render the vega document', { timeout: 120_000 }, async () => {
     const bad: string[] = []
+    let compared = 0
     for (const seed of [1240, 2376, 671, 935, 1734]) {
       const c = trellisCase(seed)
       const out = await compareToVega(c.spec)
-      if (out.refused === undefined && out.diffs.length) bad.push(`${c.id}: ${out.diffs.slice(0, 2).join(' | ')}`)
+      // (a seed vega refuses is not a case of this test: the five are named for what they draw, so each one must be compared)
+      if (out.refused !== undefined) { bad.push(`${c.id}: vega refuses it (${String(out.refused).slice(0, 80)}), nothing compared`); continue }
+      compared++
+      if (out.diffs.length) bad.push(`${c.id}: ${out.diffs.slice(0, 2).join(' | ')}`)
     }
     expect(bad).toEqual([])
+    expect(compared).toBe(5)
   })
 })
