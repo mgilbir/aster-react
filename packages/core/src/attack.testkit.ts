@@ -35,6 +35,14 @@ export interface AttackResult {
   /** CPU time (user + system, ms) the child burned from the start of the attack to the throw/return; immune to scheduling delays. */
   cpuMs: number
   killed: boolean
+  /**
+   * The child printed its RESULT line. When it did not (an out-of-memory abort, a crash, a syntax error in the body) `threw` is
+   * null and the times are Infinity: never read `threw === null` alone as a clean return (C199).
+   */
+  reported: boolean
+  /** The child's exit code, or null when a signal ended it (SIGABRT on a fatal out-of-memory, SIGKILL from the hard kill). */
+  exitCode: number | null
+  signal: string | null
   stderr: string
 }
 
@@ -78,18 +86,36 @@ export async function attack(body: string): Promise<AttackResult> {
     child.stdout.on('data', (d) => { stdout += d })
     child.stderr.on('data', (d) => { stderr += d })
     const timer = setTimeout(() => { killed = true; child.kill('SIGKILL') }, HARD_KILL_MS)
-    child.on('close', () => {
+    child.on('close', (exitCode, signal) => {
       clearTimeout(timer)
       const line = stdout.split('\n').find((l) => l.startsWith('RESULT '))
       const parsed = line ? (JSON.parse(line.slice(7)) as { threw: AttackResult['threw']; value?: unknown; ms: number; cpuMs: number }) : { threw: null, ms: Infinity, cpuMs: Infinity }
-      resolve({ ...parsed, killed, stderr: stderr.slice(0, 500) })
+      // (the head and the tail of stderr: a fatal error's reason comes first, the native stack after it)
+      resolve({ ...parsed, killed, reported: line !== undefined, exitCode, signal, stderr: stderr.length > 500 ? stderr.slice(0, 350) + ' ... ' + stderr.slice(-150) : stderr })
     })
   })
 }
 
+/** The child ended by itself and printed its RESULT line; otherwise the message says how it died. */
+function expectReported(r: AttackResult): void {
+  expect(r.killed, `child had to be killed (hang). stderr: ${r.stderr}`).toBe(false)
+  expect(r.reported, `child died without reporting (exit code ${r.exitCode}, signal ${r.signal}; out of memory?). stderr: ${r.stderr}`).toBe(true)
+}
+
+/**
+ * The body ran to its end without an error: the child reported, threw nothing, and (when `value` is given) returned `value`. A
+ * child that crashed (a fatal out-of-memory under the 512 MB cap) did not return, whatever `threw` says.
+ */
+export function expectReturned(r: AttackResult, ...value: [unknown?]): void {
+  expectReported(r)
+  expect(r.threw, JSON.stringify(r)).toBeNull()
+  expect(r.exitCode, `child exited with ${r.exitCode} after reporting. stderr: ${r.stderr}`).toBe(0)
+  if (value.length) expect(r.value, JSON.stringify(r)).toEqual(value[0])
+}
+
 /** The attack must fail with an AsterLimitError naming `fragment`, having burned a bounded amount of CPU. */
 export function expectLimit(r: AttackResult, fragment: RegExp, maxTimeMs?: number): void {
-  expect(r.killed, `child had to be killed (hang). stderr: ${r.stderr}`).toBe(false)
+  expectReported(r)
   expect(r.threw, `no error thrown (the attack succeeded). stderr: ${r.stderr}`).not.toBeNull()
   expect(r.threw!.name, JSON.stringify(r)).toBe('AsterLimitError')
   expect(r.threw!.code).toBe('ASTER_LIMIT')

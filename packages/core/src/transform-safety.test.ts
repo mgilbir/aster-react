@@ -14,7 +14,7 @@ import './addon-transforms.js'
 import { compileChart, evaluateChart, applyTransforms, renderSpec } from './index.js'
 import { buildStratifyTree } from './transform.js'
 import { minOf, maxOf, pushAll } from './util.js'
-import { attack } from './attack.testkit.js'
+import { attack, expectReturned } from './attack.testkit.js'
 import type { VgSpec } from './types.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -251,9 +251,7 @@ describe('bin follows vega-statistics bin()', () => {
           [{ type: 'bin', field: 'x', extent: [1, 99], as: ['b0', 'b1'], ...${JSON.stringify(params)} }],
           { runtime: { expr() { throw new Error('no expressions') } }, signals: {} })
         return JSON.stringify(rows)`)
-      expect(r.killed, 'hang').toBe(false)
-      expect(r.threw).toBeNull()
-      expect(r.value).toBe(oracle)
+      expectReturned(r, oracle)
     }, 30_000)
   }
 
@@ -276,9 +274,8 @@ describe('bin follows vega-statistics bin()', () => {
         out.push([step, (svg.match(/<text/g) || []).length])
       }
       return JSON.stringify(out)`)
-    expect(r.killed, 'hang').toBe(false)
     // not thrown (a throw on the first step would also skip the others), and each draws an axis with no ticks: no bins, no labels
-    expect(r.threw).toBeNull()
+    expectReturned(r)
     expect(JSON.parse(String(r.value))).toEqual([[0, 0], [-1, 0], [null, 0]])
   }, 30_000)
 })

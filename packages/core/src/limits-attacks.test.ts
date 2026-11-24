@@ -7,7 +7,7 @@
  * thing, the test counts instead ("refused before encoding").
  */
 import { describe, it, expect } from 'vitest'
-import { attack, expectLimit } from './attack.testkit.js'
+import { attack, expectLimit, expectReturned } from './attack.testkit.js'
 
 const T = 40_000
 /**
@@ -16,6 +16,23 @@ const T = 40_000
  * the refusal is still asserted, on CPU time (the third argument of expectLimit), which load does not inflate.
  */
 const BACKSTOP_MS = 5000
+
+describe('the kit tells a crashed child from a clean return (C199)', () => {
+  it('a child that dies of the heap cap fails expectReturned and expectLimit with how it died', async () => {
+    const r = await attack(`const hold = []; for (;;) hold.push(new Array(1000000).fill(1.5))`)
+    expect(r.killed, r.stderr).toBe(false)
+    expect(r.reported, r.stderr).toBe(false)
+    expect(r.exitCode === 0 && r.signal === null, `exit ${r.exitCode} signal ${r.signal}`).toBe(false)
+    expect(() => expectReturned(r)).toThrow(/died without reporting/)
+    expect(() => expectLimit(r, /./)).toThrow(/died without reporting/)
+  }, T)
+  it('a body that returns is a return, with its value', async () => {
+    const r = await attack(`return 7`)
+    expectReturned(r, 7)
+    expect(() => expectReturned(r, 8)).toThrow()
+    expect(() => expectLimit(r, /./)).toThrow(/no error thrown/)
+  }, T)
+})
 
 describe('single-call allocators are bounded before they allocate', () => {
   it('sequence transform: 5e7 rows under maxRows', async () => {
@@ -389,10 +406,11 @@ describe('maxPathLength and maxStringLength cover generated paths and text array
 // raw RangeError. Each is paired with a large-but-legitimate input that must still render (the ceilings sit far above it).
 // ---------------------------------------------------------------------------
 describe('built-in ceilings hold without limits (crash-class amplification)', () => {
-  const okResult = (r: Awaited<ReturnType<typeof attack>>): void => {
-    expect(r.killed, `child had to be killed. stderr: ${r.stderr}`).toBe(false)
-    expect(r.threw, JSON.stringify(r)).toBeNull()
-  }
+  // The legitimate input rendered: the child reported, nothing threw, and the body returned `true` (a non-empty SVG). A child that
+  // died of the 512 MB cap reports nothing; it must fail here, not pass as "no error" (C199).
+  const okResult = (r: Awaited<ReturnType<typeof attack>>): void => expectReturned(r, true)
+  /** The body that renders `args` and returns whether the SVG is non-empty. */
+  const renders = (args: string): string => `return core.renderSpec(${args}).length > 0`
   const CEILING = /built-in ceiling that applies even without limits/
   const axisSpec = (extra: string) => `{
     width: 300, height: 200,
@@ -411,8 +429,8 @@ describe('built-in ceilings hold without limits (crash-class amplification)', ()
     expect(r.threw!.message).toMatch(/limits\.maxRows/)
   }, T)
   it('topojson: a topology decoding to 1M positions still renders; limits.maxGeneratedRows raises the ceiling', async () => {
-    okResult(await attack(`${topo(1000)}; core.renderSpec(${topoSpec})`))
-    okResult(await attack(`${topo(2500)}; core.renderSpec(${topoSpec}, { limits: { maxGeneratedRows: 4000000 } })`))
+    okResult(await attack(`${topo(1000)}; ${renders(topoSpec)}`))
+    okResult(await attack(`${topo(2500)}; ${renders(`${topoSpec}, { limits: { maxGeneratedRows: 4000000 } }`)}`))
   }, T)
 
   it('axis tickCount 2e6 with an empty limits object (fatal OOM before)', async () => {
@@ -424,11 +442,11 @@ describe('built-in ceilings hold without limits (crash-class amplification)', ()
     expectLimit(await attack(`core.renderSpec(${axisSpec('tickCount: 2000000')})`), CEILING, 200)
   }, T)
   it('a dense axis (tickCount 5000) still renders; limits.maxItems raises the ceiling', async () => {
-    okResult(await attack(`core.renderSpec(${axisSpec('tickCount: 5000')})`))
-    okResult(await attack(`core.renderSpec(${axisSpec('tickCount: 150000')}, { limits: { maxItems: 1000000 } })`))
+    okResult(await attack(renders(axisSpec('tickCount: 5000'))))
+    okResult(await attack(renders(`${axisSpec('tickCount: 150000')}, { limits: { maxItems: 1000000 } }`)))
   }, T)
 
-  const seq = (stop: string, limits = '') => `core.renderSpec({ data: [{ name: 't', transform: [{ type: 'sequence', start: 0, stop: ${stop}, as: 'x' }] }] }${limits})`
+  const seq = (stop: string, limits = '') => `return core.renderSpec({ data: [{ name: 't', transform: [{ type: 'sequence', start: 0, stop: ${stop}, as: 'x' }] }] }${limits}).length > 0`
   it('sequence transform 5e7 rows: with no limits, and with limits that do not name rows', async () => {
     expectLimit(await attack(seq('5e7')), CEILING, 200)
     expectLimit(await attack(seq('5e7', ', { limits: { maxStringLength: 10000, maxItems: 1000 } }')), CEILING, 200)
@@ -447,7 +465,7 @@ describe('built-in ceilings hold without limits (crash-class amplification)', ()
   const cols = (n: number, limits = '') => `
     const spec = JSON.parse(trellisSpec)
     spec.layout.columns = ${n}
-    core.renderSpec(spec${limits})`
+    return core.renderSpec(spec${limits}).length > 0`
   it('trellis layout.columns 5e7 (3.7 s before, even under maxTimeMs 100)', async () => {
     // Under a 100 ms time budget the attack must be bounded either way: on a fast machine the facet-columns ceiling trips first,
     // on a slow or loaded one the clock can trip first (both are AsterLimitError). Which limit names the error is a race, so this
@@ -466,7 +484,7 @@ describe('built-in ceilings hold without limits (crash-class amplification)', ()
   const nested = (depth: number, limits = '') => `
     let o = { type: 'group' }; const root = o
     for (let i = 0; i < ${depth}; i++) { const n = { type: 'group' }; o.marks = [n]; o = n }
-    core.renderSpec({ width: 10, height: 10, marks: [root] }${limits})`
+    return core.renderSpec({ width: 10, height: 10, marks: [root] }${limits}).length > 0`
   it('a spec nested 20000 deep with no limits is a typed error, not a RangeError', async () => {
     const r = await attack(nested(20000))
     expectLimit(r, /maxDepth 1001 > 1000/, 100)
