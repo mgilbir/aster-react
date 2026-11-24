@@ -1,10 +1,16 @@
 // @vitest-environment jsdom
+import * as React from 'react'
+import { createRoot } from 'react-dom/client'
+import { act } from 'react'
 import { renderToString } from 'react-dom/server'
 import { describe, it, expect } from 'vitest'
 import { forEachVariant } from './testing/variants'
 
 // The matrix runs every test below on <Chart>, <SvgChart> and <SvgChart interaction={interaction}>;
 // `Chart` is the variant's component (see testing/variants.tsx).
+/** The opening tag of the markup's first element: the chart's container. */
+const firstTag = (markup: string): string => /^<[^>]*>/.exec(markup)![0]
+
 forEachVariant(['svg'], (Chart, variant) => {
   describe('Chart', () => {
     it('renders an SVG for a minimal line chart spec', () => {
@@ -76,7 +82,8 @@ forEachVariant(['svg'], (Chart, variant) => {
       const markup = renderToString(<Chart spec={spec as never} tooltip />)
       // React serializes the inline style; the container must establish a
       // containing block even without selection/pan interaction.
-      expect(markup).toContain('position:relative')
+      // (the container: the chart's own element, the first tag of the markup, not a style that appears somewhere inside it)
+      expect(firstTag(markup)).toContain('position:relative')
     })
 
     it('container div has width 100% and height 100% inline style', () => {
@@ -127,10 +134,10 @@ forEachVariant(['svg'], (Chart, variant) => {
       const markup = renderToString(
         <Chart spec={spec} ariaLabel="t" />
       )
-      expect(markup).toMatch(/style=".*width:100%.*height:100%.*"/)
+      expect(firstTag(markup)).toMatch(/style="[^"]*width:100%;height:100%[^"]*"/)
     })
 
-    it('re-renders when signals prop changes', () => {
+    it('the signals prop is drawn: other values, other markup, and a mounted chart given new values shows what a fresh mount of them shows', () => {
       const spec: Record<string, unknown> = {
         $schema: 'https://vega.github.io/schema/vega/v6.json',
         width: 400,
@@ -193,6 +200,28 @@ forEachVariant(['svg'], (Chart, variant) => {
       expect(markupA).toContain('<svg')
       expect(markupB).toContain('<svg')
       expect(markupA).not.toEqual(markupB)
+
+      // the same on a MOUNTED chart: the change re-renders it, and it equals a fresh mount (the markup carries the useId of its root)
+      const dom = (node: React.ReactElement): string => {
+        const container = document.createElement('div')
+        document.body.appendChild(container)
+        const root = createRoot(container)
+        act(() => { root.render(node) })
+        const html = container.innerHTML
+        act(() => { root.unmount() })
+        container.remove()
+        return html
+      }
+      const container = document.createElement('div')
+      document.body.appendChild(container)
+      const root = createRoot(container)
+      act(() => { root.render(<Chart spec={spec as never} ariaLabel="t" signals={{ shift: 25 }} />) })
+      const before = container.innerHTML
+      act(() => { root.render(<Chart spec={spec as never} ariaLabel="t" signals={{ shift: 30 }} />) })
+      expect(container.innerHTML).not.toBe(before)
+      expect(container.innerHTML).toBe(dom(<Chart spec={spec as never} ariaLabel="t" signals={{ shift: 30 }} />))
+      act(() => { root.unmount() })
+      container.remove()
     })
   })
 })

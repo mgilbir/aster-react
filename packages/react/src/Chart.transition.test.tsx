@@ -247,7 +247,7 @@ forEachVariant(['svg'], (Chart, variant) => {
       expect(svgOf(container)).toBe(svgOf(mount(<Chart spec={dense} width={100} height={100} data={{ t: pts(1) }} />).container))
     })
 
-    variant.it(['canvas'], 'canvas: switching from SVG during a transition stops it, and the canvas draws the new scene', () => {
+    variant.it(['canvas'], 'canvas: switching from SVG during a transition stops it, and leaves a canvas with nothing animating', () => {
       const { container, root } = mount(el(Chart, { data: { t: A }, transition: LINEAR }))
       act(() => { root.render(el(Chart, { data: { t: B }, transition: LINEAR })) })
       expect(vi.getTimerCount()).toBeGreaterThan(0)
