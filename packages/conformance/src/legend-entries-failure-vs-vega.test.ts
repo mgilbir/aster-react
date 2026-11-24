@@ -150,7 +150,7 @@ describe('named legend failures', () => {
     it(name, async () => {
       const want = await oracle(spec)
       const got = aster(spec)
-      expect('threw' in want ? `vega cannot serialize it: ${want.threw.slice(0, 80)}` : 'a document').toBe('a document')
+      if ('threw' in want) throw new Error(`vega cannot serialize it (${want.threw.slice(0, 80)}): a refusal to compare, none is written`)
       if ('threw' in got) throw new Error(`vega drew a document, aster refused: ${got.threw}`)
       expect(diffCanonical(canonicalizeSvg(want.svg), canonicalizeSvg(got.svg)).slice(0, 8)).toEqual([])
     })
