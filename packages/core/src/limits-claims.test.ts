@@ -122,10 +122,15 @@ describe('regular expressions: the default caps are exact', () => {
   const withString = (n: number) => [{ s: 'a'.repeat(n) }]
   const limits: SpecLimits = {}
   it('a pattern of 1024 characters runs and one of 1025 is refused, under limits {}', () => {
-    expect(() => renderSpec(formula("test(regexp(pad('a', 1024, 'a')), 'a')"), { limits })).not.toThrow()
-    expect(() => renderSpec(formula("test(regexp(pad('a', 1025, 'a')), 'a')"), { limits })).toThrow(/pattern length 1025 > 1024/)
-    expect(() => renderSpec(formula(`test(/${'a'.repeat(1024)}/, 'a')`), { limits })).not.toThrow()
-    expect(() => renderSpec(formula(`test(/${'a'.repeat(1025)}/, 'a')`), { limits })).toThrow(/pattern length 1025 > 1024/)
+    // (a class of 1022 letters is one position to the screen: the cap is what is measured here. A plain run of 1024 letters is one
+    // position each, and the screen's analysis of all the patterns of an evaluation, SCREEN_STEPS, is spent at about 600 of them)
+    const cls = (n: number): string => `[${'a'.repeat(n - 2)}]`
+    expect(() => renderSpec(formula(`test(regexp('${cls(1024)}'), 'a')`), { limits })).not.toThrow()
+    expect(() => renderSpec(formula(`test(regexp('${cls(1025)}'), 'a')`), { limits })).toThrow(/pattern length 1025 > 1024/)
+    expect(() => renderSpec(formula(`test(/${cls(1024)}/, 'a')`), { limits })).not.toThrow()
+    expect(() => renderSpec(formula(`test(/${cls(1025)}/, 'a')`), { limits })).toThrow(/pattern length 1025 > 1024/)
+    // and a run of letters under the analysis budget still runs
+    expect(() => renderSpec(formula(`test(/${'a'.repeat(500)}/, 'a')`), { limits })).not.toThrow()
   })
   it('an input of 10 000 characters runs and one of 10 001 is refused, in test, replace, split and countpattern', () => {
     const calls: Array<[string, (n: number) => VgSpec]> = [
