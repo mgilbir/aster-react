@@ -127,7 +127,8 @@ group('@aster-charts/vl == vega-lite: boxplot in a layer, a facet, with axis and
     ['titled continuous axis', { data: DATA, mark: 'boxplot', encoding: { x: n('c'), y: q('v', { title: 'Value' }) } }],
     ['axis options on the continuous channel', { data: DATA, mark: 'boxplot', encoding: { x: n('c'), y: q('v', { axis: { title: 'V!', grid: false } }) } }],
     ['scale options on the continuous channel', { data: DATA, mark: 'boxplot', encoding: { x: n('c'), y: q('v', { scale: { zero: false, domain: [-40, 50] } }) } }],
-    ['log scale', { data: DATA, mark: 'boxplot', encoding: { x: n('c'), y: q('w', { scale: { type: 'sqrt' } }) } }],
+    ['sqrt scale', { data: DATA, mark: 'boxplot', encoding: { x: n('c'), y: q('w', { scale: { type: 'sqrt' } }) } }],
+    ['log scale', { data: DATA, mark: 'boxplot', encoding: { x: n('c'), y: q('e', { scale: { type: 'log' } }) } }],
     ['an aggregate on the continuous channel', { data: DATA, mark: 'boxplot', encoding: { x: n('c'), y: q('v', { aggregate: 'mean' }) } }],
     ['a field with a space', { data: { values: DATA.values.map((d) => ({ ...d, 'my v': d.v })) }, mark: 'boxplot', encoding: { x: n('c'), y: q('my v') } }],
     ['a filter transform before', { data: DATA, transform: [{ filter: 'datum.v > 0' }], mark: 'boxplot', encoding: { x: n('c'), y: q('v') } }],
@@ -362,7 +363,7 @@ group('stack order follows a colour domain', (add) => {
   add('a stacked bar with a sorted offset', { data: DATA, mark: 'bar', encoding: { x: n('g'), xOffset: n('c', { sort: 'descending' }), y: q('v', { aggregate: 'sum' }), color: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } })
   add('a stacked bar in a layer sharing the encoding', { data: DATA, encoding: { x: n('g'), y: q('v', { aggregate: 'sum' }), color: n('c', { scale: { domain: ['C', 'A', 'B'] } }) }, layer: [{ mark: 'bar' }, { mark: { type: 'text', dy: -4 }, encoding: { text: q('v', { aggregate: 'sum' }) } }] })
   add('stacked bars in a layer, the domain on the second', { data: DATA, layer: [{ mark: 'bar', encoding: { x: n('g'), y: q('v', { aggregate: 'sum' }) } }, { mark: 'bar', encoding: { x: n('g'), y: q('w', { aggregate: 'sum' }), color: n('c', { scale: { domain: ['B', 'C', 'A'] } }) } }] })
-  add('a stacked bar in an hconcat', { data: DATA, hconcat: [{ mark: 'bar', encoding: { x: n('g'), y: q('v', { aggregate: 'sum' }), color: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } }, { mark: 'point', encoding: { x: q('x'), y: q('y' as string) } }] })
+  add('a stacked bar in an hconcat', { data: DATA, hconcat: [{ mark: 'bar', encoding: { x: n('g'), y: q('v', { aggregate: 'sum' }), color: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] })
   add('a stacked bar in a facet spec', { data: DATA, facet: { column: n('k') }, spec: { mark: 'bar', encoding: { x: n('g'), y: q('v', { aggregate: 'sum' }), color: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } } })
   add('a stacked bar with a calculate before', { data: DATA, transform: [{ calculate: 'datum.v * 2', as: 'v2' }], mark: 'bar', encoding: { x: n('g'), y: q('v2', { aggregate: 'sum' }), color: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } })
   add('a normalized stacked bar', { data: DATA, mark: 'bar', encoding: { x: n('g'), y: q('v', { aggregate: 'sum', stack: 'normalize' }), color: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } })
