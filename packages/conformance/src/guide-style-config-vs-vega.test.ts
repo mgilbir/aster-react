@@ -81,11 +81,26 @@ describe('the guide blocks of the config', () => {
     ['legend: gradient and symbol knobs', { legend: { gradientThickness: 10, gradientOpacity: 0.7, gradientStrokeWidth: 1, symbolType: 'square', symbolStrokeColor: '#333', symbolOpacity: 0.5, symbolLimit: 2 } }],
     ['title: nulled defaults', { title: { color: null, fontSize: null, subtitleColor: null, subtitleFontSize: null, offset: null } }],
     ['title: set', { title: { anchor: 'start', orient: 'bottom', fontSize: 18, color: 'navy', subtitleColor: 'teal', offset: 10, subtitlePadding: 8, frame: 'group' } }],
-    ['lineBreak', { lineBreak: '|' }],
   ]
   for (const [what, config] of blocks) {
     it(what, async () => { expect(await differences(chart(config))).toEqual([]) })
   }
+
+  // `config.lineBreak` splits the text of a title, an axis title and a legend title: the chart must HAVE a break character in them,
+  // or vega's document is the same with and without the config and an engine that ignores it passes
+  const broken: Spec = {
+    axes: [{ orient: 'bottom', scale: 'x', title: 'X|x', grid: true }, { orient: 'left', scale: 'y', title: 'Y|y' }],
+    legends: [{ fill: 'cat', title: 'C|at' }],
+    title: { text: 'Ti|tle', subtitle: 'Sub|title' },
+  }
+  it('lineBreak: the break character splits a title, an axis title and a legend title like vega\'s', async () => {
+    const spec = chart({ lineBreak: '|' }, broken)
+    expect(await differences(spec)).toEqual([])
+    // not vacuous: the config changes vega's document, and Aster's
+    const without = chart({}, broken)
+    expect(canonicalizeSvg(await oracleSvg(spec))).not.toEqual(canonicalizeSvg(await oracleSvg(without)))
+    expect(renderSpec(spec as never)).not.toEqual(renderSpec(without as never))
+  })
 })
 
 describe('the matrix is not vacuous', () => {
