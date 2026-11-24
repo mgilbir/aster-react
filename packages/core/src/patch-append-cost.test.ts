@@ -50,7 +50,7 @@ function countReads(items: readonly SceneItem[], key: string): { n: number } {
 const markOf = (scene: SceneRoot, i: number): SceneGroup => scene.items[i] as SceneGroup
 
 describe('an append costs the appended items', () => {
-  it('dense DOM chunks: no unchanged item is read, and the patch matches the old implementation', () => {
+  it('dense DOM chunks: no unchanged item is read, and the patched DOM is the one a full render of the scene makes', () => {
     const stream = createChartStream(spec([symbols('t', '#4c78a8')], ['t']) as never, { capacity: 8 })
     stream.push({ data: { t: rows(3000) } })
     let scene = stream.flush()!.scene
@@ -71,10 +71,15 @@ describe('an append costs the appended items', () => {
     // and the DOM patch itself, append after append
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
     document.body.appendChild(svg)
+    // (each patch leaves the DOM a full render of the same scene makes: the chunks hold the same paths, in the same order)
     patchSceneDom(svg, scene, o)
-    stream.push({ append: { t: rows(2, 9000) } })
-    scene = stream.flush()!.scene
-    patchSceneDom(svg, scene, o)
+    expect(svg.outerHTML).toBe(legacyDomElement(scene, document, o).outerHTML)
+    for (let k = 0; k < 3; k++) {
+      stream.push({ append: { t: rows(2 + k, 9000 + k * 10) } })
+      scene = stream.flush()!.scene
+      patchSceneDom(svg, scene, o)
+      expect(svg.outerHTML, `append ${k}`).toBe(legacyDomElement(scene, document, o).outerHTML)
+    }
     expect(svg.querySelectorAll('path').length).toBeGreaterThan(0)
   })
 
@@ -103,7 +108,7 @@ describe('an append costs the appended items', () => {
     expect(svg.outerHTML).toBe(legacyDomElement(scene, document).outerHTML)
   })
 
-  it('canvas append: a mark left alone is not read, and the paint matches the old implementation', () => {
+  it('canvas append: a mark left alone is not read, and the calls match the old implementation\'s append (a pixel-level equality with a full repaint is the canvas gates\')', () => {
     const stream = createChartStream(spec([symbols('a', '#f58518'), symbols('t', '#4c78a8')], ['a', 't']) as never, { capacity: 8 })
     stream.push({ data: { a: rows(2000, 50000), t: rows(500) } })
     let scene = stream.flush()!.scene
