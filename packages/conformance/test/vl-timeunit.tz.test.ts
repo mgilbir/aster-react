@@ -45,7 +45,7 @@ describe('every time unit is what vega-lite makes', () => {
           const spec = make(unit)
           const both = bothCompile(spec)
           if ('refusedBy' in both) {
-            expect(both.refusedBy, `${name} in a ${formName}`).toBe('vega-lite')
+            expect(both.refusedBy, `${name} in a ${formName}: who refused it`).toBe('both')
             return
           }
           expect(transformsOf(both.ours), 'time-unit transforms').toEqual(transformsOf(both.theirs))
@@ -62,7 +62,7 @@ describe('the pre-binned time units', () => {
     for (const [formName, make] of [['encoding', FORMS[0]![1]], ['transform', FORMS[3]![1]]] as const) {
       it(`${unit}, in an ${formName}`, async () => {
         const both = bothCompile(make(unit))
-        if ('refusedBy' in both) return expect(both.refusedBy).toBe('vega-lite')
+        if ('refusedBy' in both) return expect(both.refusedBy, 'who refused it').toBe('both')
         expect(transformsOf(both.ours), 'time-unit transforms').toEqual(transformsOf(both.theirs))
         expect(await rowsOf(both.ours)).toEqual(await rowsOf(both.theirs))
         expect(expressionDiff(both.ours, both.theirs)).toBe('')
