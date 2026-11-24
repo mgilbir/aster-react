@@ -13,6 +13,7 @@ import {
 } from './identifier-ids.js'
 import { applyTransforms, exprRowPass, sortOrder, aggregateGroup, type Row } from './transform.js'
 import { fieldsArePlainNames } from './param-resolve.js'
+import { signalValueOf } from './transform-params.js'
 import { checkRowCount } from './limits.js'
 import { markTuples } from './util.js'
 import { datasetsReadIn } from './step-reuse.js'
@@ -766,6 +767,11 @@ function applyStepWithPulse(
   const type = String(t.type)
   // (the steps that keep state key or order rows by the raw `groupby` / `fields` / `sort`: a field written as a signal or an
   // object is resolved per evaluation, by the step itself)
+  // (a step whose `signal` is bound to what it returns runs whole: the paths below make its rows without it)
+  const signal = (t as { signal?: unknown }).signal
+  if (typeof signal === 'string' && signal && signalValueOf(type) !== 'own') {
+    return { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+  }
   if (keepsStepState(type) && !fieldsArePlainNames(t)) {
     return { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
   }

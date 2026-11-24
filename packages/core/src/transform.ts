@@ -22,6 +22,7 @@ import { compareOf, fieldOf, numberRange, required, sortBySpec } from './row-key
 import type { AggregateParams } from './transform-agg.js'
 import { part } from './engine-parts.js'
 import { resolveTransformParams } from './param-resolve.js'
+import { signalValueOf } from './transform-params.js'
 
 
 /** One group's aggregate tuple (the incremental aggregate re-derives only dirty groups). */
@@ -159,6 +160,9 @@ export function applyTransforms(
     // (a collect that sorts, with a sort after it, leaves the order the rows were made in beside its result)
     const input = out
     out = applyTransform(out, t, run, sourceName, ownedIn, placesAt(transforms, k))
+    // (a transform's `signal`: what vega binds it to, see `signalValueOf`)
+    const published = (t as { signal?: unknown }).signal
+    if (typeof published === 'string' && published) publishSignal(t, published, input, out, run)
     carryOrder(t.type, input, out)
     if (meter) {
       // Whatever a transform produced is a dataset like any other: it may not
@@ -170,6 +174,29 @@ export function applyTransforms(
   }
   return out
 }
+
+/** Bind a transform's `signal` to the value vega binds it to (the transforms that publish their own did so already). */
+function publishSignal(t: CompiledTransform, name: string, input: Row[], out: Row[], ctx: TransformContext): void {
+  switch (signalValueOf(t.type)) {
+    case 'output': ctx.signals[name] = out; break
+    case 'added': ctx.signals[name] = out.slice(input.length); break
+    case 'values': {
+      const field = (t as { field?: unknown }).field ? fieldOf((resolveTransformParams(t, ctx) as { field?: unknown }).field) : null
+      ctx.signals[name] = input.map((r) => (field ? field(r) : 1))
+      break
+    }
+    case 'counter': ctx.signals[name] = ctx.ids?.value; break
+    case 'none': ctx.signals[name] = null; break
+    case 'own': break
+    default: {
+      // (vega's internal state of the operator: an opaque object that stands for it, the same one every evaluation)
+      let token = OPAQUE.get(t)
+      if (token === undefined) OPAQUE.set(t, (token = Object.freeze({})))
+      ctx.signals[name] = token
+    }
+  }
+}
+const OPAQUE = new WeakMap<object, object>()
 
 /** A parameter value that is a lone `{signal: <expression>}`. */
 function isSignalRef(v: unknown): boolean {
