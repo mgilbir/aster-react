@@ -4548,6 +4548,10 @@ const MAY_DRAW = new WeakMap<CompiledChart, boolean>()
  */
 function pulsePath(ctx: EvalContext): boolean {
   if (ctx.engine?.applyPipelineWithPulse !== undefined) return true
+  // With an injected random source the two builds do not draw alike (the pulse path draws only for the rows it re-derives): a
+  // dataset that may draw is not derived in full instead, it is a missed detection like any other empty slot (specNeeds names
+  // `pulse` for it, so the shells have loaded it; C572).
+  if (ctx.runtime.random !== undefined && datasetsMayDraw(ctx.chart)) part('pulse')
   requestPart('pulse')
   return false
 }
