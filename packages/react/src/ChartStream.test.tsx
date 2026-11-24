@@ -132,7 +132,7 @@ describe('streaming chart components', () => {
     act(() => root.unmount())
   })
 
-  it('renders a streamed scene on the canvas backend', async () => {
+  it('mounts a canvas for a streamed scene, and a pushed row reaches the scene it holds', async () => {
     const ref = React.createRef<ChartStreamHandle>()
     const host = document.createElement('div')
     document.body.appendChild(host)

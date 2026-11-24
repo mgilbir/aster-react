@@ -119,7 +119,7 @@ describe('<ChartStream> honours the Chart props its type accepts', () => {
     expect(m.container.querySelector('[role="alert"]')).not.toBeNull()
   })
 
-  it('limits tightened on a live stream take effect on the next flush', async () => {
+  it('limits tightened on a live stream are applied to it at once: the chart reports the violation, once', async () => {
     const onStreamError = vi.fn()
     const ref = React.createRef<ChartStreamHandle>()
     const node = (limits: { maxItems: number }) => <ChartStream ref={ref} spec={dataSpec(base)} width={200} height={100} limits={limits} onStreamError={onStreamError} />
@@ -127,7 +127,11 @@ describe('<ChartStream> honours the Chart props its type accepts', () => {
     await m.render(node({ maxItems: 1000 }))
     expect(onStreamError).not.toHaveBeenCalled()
     await m.render(node({ maxItems: 1 }))
-    expect(onStreamError).toHaveBeenCalled()
+    expect(onStreamError).toHaveBeenCalledTimes(1)
+    expect(onStreamError.mock.calls[0]![0]).toMatchObject({ code: 'ASTER_LIMIT' })
+    // rows pushed afterwards are held to the same limit (the error is the same one: reported once per error)
+    await act(async () => { ref.current!.push({ append: { t: [{ a: 20, b: 5 }] } }); ref.current!.flush(); await wait() })
+    expect(onStreamError.mock.calls.every((c) => (c[0] as { code?: string }).code === 'ASTER_LIMIT')).toBe(true)
   })
 
   it('textMetrics reaches the stream evaluation', async () => {
@@ -231,10 +235,14 @@ describe('pan/zoom/brush use the streamed or supplied data, not just the spec', 
       await key(m.host(), 'ArrowRight')
       const view = onViewChange.mock.calls.at(-1)![0] as ViewDomain
       expect(view.x![0]).toBeGreaterThan(100)
-      // zooming out is capped by the data extent (0..500), proving the base came from the data prop
+      // zooming out is capped by the data extent (0..500), proving the base came from the data prop (a view that came back to null would
+      // have lost the base: it is the zoomed-out view that must be reported, at most the extent wide)
       for (let i = 0; i < 20; i++) await key(m.host(), '-')
       const out = onViewChange.mock.calls.at(-1)![0] as ViewDomain | null
-      expect(out?.x == null || out.x[1] - out.x[0] <= 500 + 1e-6).toBe(true)
+      expect(out, 'a view is still reported after zooming out').not.toBeNull()
+      expect(out!.x![1] - out!.x![0]).toBeLessThanOrEqual(500 + 1e-6)
+      expect(out!.x![0]).toBeGreaterThanOrEqual(0 - 1e-6)
+      expect(out!.x![1]).toBeLessThanOrEqual(500 + 1e-6)
     })
   })
 
