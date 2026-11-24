@@ -25,7 +25,7 @@ import { GeoPath } from '../../core/src/geo-path.ts'
 import { sphereArea, sphereBounds, sphereCentroid } from '../../core/src/geo-sphere-measures.ts'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.ts'
 import { enc, exact, quietLogger } from './differential-util.mts'
-import { PLANAR_SHAPES, PROJECTION_TYPES, Rand, geoObject, oddParams, probePoints, projectionParams, randomSpec, regional, seedOf, type Json } from './geo-gen.mts'
+import { PLANAR_SHAPES, PROJECTION_TYPES, Rand, geoObject, oddParams, probePoints, projectionParams, randomSpec, regional, seedOf, withoutEmptyRings, type Json } from './geo-gen.mts'
 import { scaled } from './differential-gen.mts'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -180,7 +180,10 @@ function drawsPoints(g: any): boolean {
 /**
  * Whether a GeoJSON object has a polygon ring that streams no vertex (a ring is streamed without its closing position,
  * so one or no positions leave nothing). d3's measures close such a ring against whatever vertex the previous call left in
- * module state, so what they report depends on the history of the process: only a thrown error is a stable answer.
+ * module state, so what they report depends on the history of the process (a throw is the one stable answer). Where there is no
+ * projection, Aster's measures add nothing for an empty ring (docs/ARCHITECTURE.md, Deviations from Vega), so the oracle is asked
+ * about the shape without them (`withoutEmptyRings`) and Aster about the shape itself; through a projection d3's clip throws on an
+ * empty ring and Aster's does too, and a throw is the only answer of d3's that is held to (`stable`).
  */
 function hasEmptyRing(g: any): boolean {
   if (!g || typeof g !== 'object') return false
@@ -192,7 +195,11 @@ function hasEmptyRing(g: any): boolean {
   return false
 }
 
-/** `value` unless it is a result that depends on process history (see `hasEmptyRing`), which is replaced by a marker. */
+/**
+ * `value` unless it is a result that depends on process history (see `hasEmptyRing`), which is replaced by a marker: d3's planar
+ * measures through a projection either THROW on an empty ring (its clip reads `ring[0]`: a stable answer, which Aster's clip
+ * reproduces) or answer from whatever a previous call left in module state. A throw is held to; an answer is not comparable.
+ */
 const stable = (value: unknown): unknown => ((value as Any)?.$ === 'throw' ? value : 'history-dependent')
 
 /**
@@ -342,17 +349,20 @@ describe(`generated geo differential vs vega@${vega.version} / d3-geo@3.1.1 (liv
 
   it('spherical geoArea / geoBounds / geoCentroid over generated shapes', () => {
     const r = new Rand(seedOf('sphere', 4))
+    let withEmpty = 0
     for (let i = 0; i < CASES.sphere; i++) {
       const g = geoObject(r)
-      if (hasEmptyRing(g)) continue
+      if (hasEmptyRing(g)) withEmpty++
       for (const [name, theirs, ours] of [['geoArea', d3Geo.geoArea, sphereArea], ['geoBounds', d3Geo.geoBounds, sphereBounds], ['geoCentroid', d3Geo.geoCentroid, sphereCentroid]] as const) {
-        const want = exact(() => (theirs as Any)(structuredClone(g)))
+        const want = exact(() => (theirs as Any)(withoutEmptyRings(structuredClone(g))))
         if ((want as Any)?.$ === 'throw') repairD3()
         const got = exact(() => (ours as Any)(structuredClone(g)))
         const d = firstDiff(want, got)
         if (d) throw new Error(`${name}#${i} ${JSON.stringify(g)}\n  ${d}`)
       }
     }
+    // the shapes with an empty ring are measured too, not skipped
+    expect(withEmpty, 'generated shapes with an empty ring').toBeGreaterThan(CASES.sphere * 0.02)
   })
 
   it('the default path (no projection) draws and measures coordinates as they are', () => {
@@ -373,22 +383,22 @@ describe(`generated geo differential vs vega@${vega.version} / d3-geo@3.1.1 (liv
         own.digits = null
         check('draw-full', exact(() => raw(g as Any)), exact(() => own.draw(g)))
       }
-      if (!hasEmptyRing(g)) {
-        check('area', exact(() => dg.area(g as Any)), exact(() => ag.area(g)))
-        check('bounds', exact(() => dg.bounds(g as Any)), exact(() => ag.bounds(g)))
-        check('centroid', exact(() => dg.centroid(g as Any)), exact(() => ag.centroid(g)))
-        check('measure', exact(() => dg.measure(g as Any)), exact(() => ag.measure(g)))
-      }
-      if (JSON.stringify(exact(() => dg.area(g as Any))).includes('throw')) repairD3()
+      // (the oracle measures the shape without its empty rings: see `hasEmptyRing`)
+      const clean = withoutEmptyRings(structuredClone(g)) as Any
+      check('area', exact(() => dg.area(clean)), exact(() => ag.area(g)))
+      check('bounds', exact(() => dg.bounds(clean)), exact(() => ag.bounds(g)))
+      check('centroid', exact(() => dg.centroid(clean)), exact(() => ag.centroid(g)))
+      check('measure', exact(() => dg.measure(clean)), exact(() => ag.measure(g)))
+      if (JSON.stringify(exact(() => dg.area(clean))).includes('throw')) repairD3()
     }
     expect(failures.length, failures.slice(0, 3).join('\n')).toBe(0)
   })
 
   it('the geo expression-level entry points agree on hostile objects', () => {
-    const odd = [null, undefined, {}, [], 'x', 5, { type: 'Feature' }, { type: 'Feature', geometry: null }, { type: 'FeatureCollection', features: [] }, { type: 'Polygon', coordinates: [] }, { type: 'Point', coordinates: [] }, { type: 'LineString', coordinates: [[0, 0]] }, { type: 'constructor' }, { type: '__proto__' }]
+    const odd = [null, undefined, {}, [], 'x', 5, { type: 'Feature' }, { type: 'Feature', geometry: null }, { type: 'FeatureCollection', features: [] }, { type: 'Polygon', coordinates: [] }, { type: 'Polygon', coordinates: [[]] }, { type: 'MultiPolygon', coordinates: [[[]], [[[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]]] }, { type: 'MultiPolygon', coordinates: [[[]]] }, { type: 'Point', coordinates: [] }, { type: 'LineString', coordinates: [[0, 0]] }, { type: 'constructor' }, { type: '__proto__' }]
     for (const g of odd) {
       for (const [theirs, ours] of [[d3Geo.geoArea, sphereArea], [d3Geo.geoBounds, sphereBounds], [d3Geo.geoCentroid, sphereCentroid]] as const) {
-        const want = exact(() => (theirs as Any)(structuredClone(g)))
+        const want = exact(() => (theirs as Any)(withoutEmptyRings(structuredClone(g))))
         if ((want as Any)?.$ === 'throw') repairD3()
         expect(exact(() => (ours as Any)(structuredClone(g))), JSON.stringify(g)).toEqual(want)
       }
@@ -407,38 +417,58 @@ describe(`generated geo differential vs vega@${vega.version} / d3-geo@3.1.1 (liv
 
 /* ---- whole specs: geoshape, geopath, geopoint, graticule ------------------------------------- */
 
+/** The generated specs (seed `specs`/5) on which vega logs or throws, and the ones whose SVG the canonicalizer cannot read: measured, and pinned. */
+const REFUSED_BY_VEGA: number[] = [1, 13, 22, 23, 29, 34, 69, 72]
+const UNREADABLE: number[] = [81]
+
 describe('generated whole specs vs vega (live)', () => {
   /**
    * Specs on which real Vega itself reports an error (its path parser refuses a `NaN` coordinate that a degenerate clip produced,
-   * its d3 stream throws on an empty ring), or whose SVG the canonicalizer cannot read (a mark at an infinite position), are not comparable: what a view does after an error is the runtime's business, not the
-   * geo engine's. They are counted, and pinned, so the exclusion cannot grow unnoticed.
+   * its d3 stream throws on an empty ring) are not compared as pictures: what a view does after an error is the runtime's business,
+   * not the geo engine's. They are compared by what is LOGGED: Aster, run on the same spec, must log the same first error. And they
+   * are pinned by index (`REFUSED_BY_VEGA`), so one more or fewer fails here; so does a spec whose SVG the canonicalizer cannot
+   * read (a mark at an infinite position, which vega draws for a vertex at a pole), pinned in `UNREADABLE`.
    */
   const refusedByVega: number[] = []
+  const unreadable: number[] = []
   const r = new Rand(seedOf('specs', 5))
   for (let i = 0; i < CASES.specs; i++) {
     const spec = randomSpec(r)
     it(`spec #${i} ${(spec.projections as Any)[0].type}`, async () => {
       const errors: unknown[][] = []
       let want: string
+      let said: string | undefined
       try {
         const view = new vega.View(vega.parse(structuredClone(spec) as vega.Spec), { renderer: 'none', logger: quietLogger(errors) as never })
         await view.runAsync()
         want = await view.toSVG()
         view.finalize()
-      } catch {
-        errors.push(['threw'])
+      } catch (e) {
+        said = (e as Error).message
         want = ''
       }
-      if (errors.length) {
+      said ??= errors.length ? String((errors[0]![0] as Error)?.message ?? errors[0]![0]) : undefined
+      if (said !== undefined) {
         refusedByVega.push(i)
+        // Aster, on the spec vega refuses: the same first error is logged (or thrown), whatever the picture then is
+        const logged: string[] = []
+        try {
+          renderSpec(structuredClone(spec) as never, { logger: { error: (...a: unknown[]) => { logged.push(String((a[0] as Error)?.message ?? a[0])) }, warn: () => {} } } as never)
+        } catch (e) {
+          logged.push((e as Error).message)
+        }
+        expect(logged[0], `Aster's first error where vega says ${JSON.stringify(said)}`).toBe(said)
         return
       }
       let wantCanonical: ReturnType<typeof canonicalizeSvg>
       try {
         wantCanonical = canonicalizeSvg(want)
       } catch {
-        // the canonicalizer does not take a mark at a non-finite position, which vega draws for a vertex at a pole
-        refusedByVega.push(i)
+        // (the canonicalizer does not take a number that is not finite, which vega writes for a vertex at a pole): the two SVG texts
+        // are compared as written, once the generated ids are the same, and the index is pinned
+        unreadable.push(i)
+        const text = renderSpec(structuredClone(spec) as never) as string
+        expect(text, `spec #${i}: the SVG vega draws, and Aster's, as text`).toBe(want)
         return
       }
       const got = renderSpec(structuredClone(spec) as never) as string
@@ -446,7 +476,8 @@ describe('generated whole specs vs vega (live)', () => {
       expect(d, d.slice(0, 3).join('\n') + '\n' + JSON.stringify(spec)).toEqual([])
     })
   }
-  it('compares most of the generated specs (the ones vega refuses stay few)', () => {
-    expect(refusedByVega.length, `vega refused specs ${refusedByVega.join(',')}`).toBeLessThanOrEqual(Math.floor(CASES.specs / 4))
+  it('the specs vega refuses, and the ones it draws that cannot be read, are exactly the pinned ones', () => {
+    expect(refusedByVega, 'refused by vega (index of the generated spec)').toEqual(REFUSED_BY_VEGA)
+    expect(unreadable, 'drawn by vega, unreadable by the canonicalizer').toEqual(UNREADABLE)
   })
 })
