@@ -13,7 +13,7 @@ import { canonicalizeSvg, diffCanonical } from './normalize.js'
 type Spec = Record<string, unknown>
 
 async function oracleSvg(spec: Spec): Promise<string> {
-  const view = new vega.View(vega.parse(spec as never), { renderer: 'none' })
+  const view = new vega.View(vega.parse(structuredClone(spec) as never), { renderer: 'none' })
   try {
     await view.runAsync()
     return await view.toSVG()

@@ -21,7 +21,7 @@ import { canonicalizeSvg, diffCanonical } from './normalize.js'
 
 type Obj = Record<string, unknown>
 type View = { runAsync(): Promise<unknown>; toSVG(): Promise<string>; signal(n: string, v: unknown): View; finalize(): void }
-const newView = (spec: Obj): View => new (vega as unknown as { View: new (rt: unknown, o: unknown) => View }).View(vega.parse(spec as never), { renderer: 'none' })
+const newView = (spec: Obj): View => new (vega as unknown as { View: new (rt: unknown, o: unknown) => View }).View(vega.parse(structuredClone(spec) as never), { renderer: 'none' })
 
 async function oracleSvg(spec: Obj): Promise<string> {
   const view = newView(spec)

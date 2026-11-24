@@ -34,7 +34,7 @@ const AUTOSIZES: Array<[string, unknown]> = [
 ]
 
 async function viewOf(spec: Spec): Promise<{ width: number; height: number; padding: Record<string, number>; range: (n: string) => number[] }> {
-  const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => any }).View(vega.parse(spec as never), { renderer: 'none' })
+  const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => any }).View(vega.parse(structuredClone(spec) as never), { renderer: 'none' })
   await view.runAsync()
   const out = { width: view.width(), height: view.height(), padding: view.padding(), range: (n: string) => view.scale(n).range() as number[] }
   return out
