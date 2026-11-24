@@ -1,5 +1,6 @@
 {
   "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "description": "binSpacing bites; minBandSize does nothing for a binned bar in vega-lite and is kept to pin that",
   "padding": 5,
   "autosize": "none",
   "data": {

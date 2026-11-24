@@ -119,14 +119,28 @@
   },
   "encoding": {
     "theta": {
-      "field": "v",
+      "field": "x",
       "type": "quantitative",
-      "stack": true
+      "scale": {
+        "domain": [
+          0,
+          10
+        ]
+      }
+    },
+    "theta2": {
+      "field": "y"
     },
     "radius": {
-      "field": "y",
+      "field": "v",
       "type": "quantitative",
-      "stack": true
+      "scale": {
+        "zero": true,
+        "rangeMin": 10
+      }
+    },
+    "radius2": {
+      "value": 5
     },
     "color": {
       "field": "c",
