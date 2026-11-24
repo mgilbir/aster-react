@@ -20,8 +20,48 @@ const GLOBAL_NAMES: ReadonlySet<string> = new Set([
   'null', 'true', 'false',
 ])
 
+/** Expressions that name nothing but globals (so they are fine whatever the spec declares): kept, bounded, so a text is read once. */
+const GLOBAL_ONLY = new Set<string>()
+const STRING_LITERAL = /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g
+const NAME = /[A-Za-z_$][\w$]*/g
+
+/**
+ * The same, for the common expression: no `/` (a division or a regular expression), no escape, nothing outside ASCII once its strings are
+ * gone. Its names are found in the text itself, without the tokens; `undefined` where the text is not so plain (readNames reads it).
+ */
+function readPlainNames(expr: string): string[] | undefined {
+  if (expr.includes('\\') || expr.includes('/')) return undefined
+  const text = expr.includes('"') || expr.includes("'") ? expr.replace(STRING_LITERAL, '""') : expr
+  // eslint-disable-next-line no-control-regex
+  if (/[^\x00-\x7f]/.test(text) || text.includes('"') || text.includes("'")) return undefined
+  const names: string[] = []
+  NAME.lastIndex = 0
+  for (let m = NAME.exec(text); m !== null; m = NAME.exec(text)) {
+    const at = m.index
+    // (the name is not the tail of a number such as `1e3`, nor of a longer name)
+    const prev = at > 0 ? text.charCodeAt(at - 1) : 32
+    if ((prev >= 48 && prev <= 57) || prev === 46) continue
+    let b = at - 1
+    while (b >= 0 && text.charCodeAt(b) <= 32) b--
+    let a = at + m[0].length
+    while (a < text.length && text.charCodeAt(a) <= 32) a++
+    const before = b >= 0 ? text[b] : ''
+    const after = a < text.length ? text[a] : ''
+    if (before === '.' || after === '(' || (after === ':' && (before === '{' || before === ','))) continue
+    if (after === ')' && before === '(') {
+      let c = a + 1
+      while (c < text.length && text.charCodeAt(c) <= 32) c++
+      if (text[c] === '(') continue
+    }
+    names.push(m[0])
+  }
+  return names
+}
+
 /** The names an expression reads as signals: not a property (`a.b`), not called (`f(x)`), not an object key (`{k: 1}`), not in a string. */
 function readNames(expr: string): string[] {
+  const plain = readPlainNames(expr)
+  if (plain !== undefined) return plain
   const names: string[] = []
   const tokens = tokenize(expr)
   // (text with a stray backslash is no expression vega can read: it says so itself, when it parses it)
@@ -55,12 +95,22 @@ function declaredSignals(node: unknown, into: Set<string>, inTransform = false):
 
 /** Throws a VLCompileError for the first expression of `out` that reads a name no signal of `out` declares. */
 export function refuseUndeclaredNames(out: Obj): void {
-  const declared = new Set<string>()
-  declaredSignals(out, declared)
+  // (the signals are collected the first time an expression reads a name that is not a global one: most specs have none to look for)
+  let declared: Set<string> | undefined
   const check = (expr: string, where: string): void => {
+    if (GLOBAL_ONLY.has(expr)) return
+    let globalOnly = true
     for (const name of readNames(expr)) {
-      if (GLOBAL_NAMES.has(name) || declared.has(name)) continue
+      if (GLOBAL_NAMES.has(name)) continue
+      globalOnly = false
+      if (declared === undefined) declaredSignals(out, (declared = new Set<string>()))
+      if (declared.has(name)) continue
       throw new VLCompileError(`${where}: the expression ${JSON.stringify(expr)} reads "${name}", which no parameter or signal declares (declare it in \`params\`)`)
+    }
+    // (the same text turns up again - in every dataset a filter is repeated in, and in the next compile of a spec being edited)
+    if (globalOnly) {
+      if (GLOBAL_ONLY.size >= 4096) GLOBAL_ONLY.clear()
+      GLOBAL_ONLY.add(expr)
     }
   }
   const walk = (node: unknown, path: string, inTransform: boolean): void => {
