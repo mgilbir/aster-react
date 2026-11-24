@@ -7,6 +7,7 @@ import { AsterLimitError } from '@aster-charts/core'
 import type { ChartHandle } from './Chart'
 import { useChart, type UseChartResult } from './useChart'
 import { forEachVariant } from './testing/variants'
+import { stubPointerCapture, type PointerCaptureStub } from './testing/pointer-capture'
 
 function mount(node: React.ReactElement) {
   const container = document.createElement('div')
@@ -16,11 +17,11 @@ function mount(node: React.ReactElement) {
   return { container, root, rerender: (n: React.ReactElement) => act(() => { root.render(n) }) }
 }
 
+let pointerCapture: PointerCaptureStub
 beforeEach(() => {
-  ;(Element.prototype as unknown as Record<string, unknown>).setPointerCapture = vi.fn()
-  ;(Element.prototype as unknown as Record<string, unknown>).releasePointerCapture = vi.fn()
+  pointerCapture = stubPointerCapture()
 })
-afterEach(() => { document.body.innerHTML = '' })
+afterEach(() => { pointerCapture.restore(); document.body.innerHTML = '' })
 
 const setInputValue = (input: HTMLInputElement, value: string): void => {
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)

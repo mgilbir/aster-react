@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { forEachVariant } from './testing/variants'
+import { stubPointerCapture, type PointerCaptureStub } from './testing/pointer-capture'
 
 // The matrix runs every test below on <Chart>, <SvgChart> and <SvgChart interaction={interaction}>;
 // `Chart` is the variant's component (see testing/variants.tsx).
@@ -63,19 +64,14 @@ forEachVariant(['svg'], (Chart, variant) => {
   }
 
   describe('Chart brush interaction', () => {
-    const setPointerCaptures = vi.fn()
-    const releasePointerCaptures = vi.fn()
+    let pointerCapture: PointerCaptureStub
 
     beforeEach(() => {
-      ;(Element.prototype as unknown as Record<string, unknown>).setPointerCapture = setPointerCaptures
-      ;(Element.prototype as unknown as Record<string, unknown>).releasePointerCapture = releasePointerCaptures
-      ;(Element.prototype as unknown as Record<string, unknown>).hasPointerCapture = vi.fn(() => false)
-      ;(Element.prototype as unknown as Record<string, unknown>).getPointerCapture = vi.fn(() => null)
+      pointerCapture = stubPointerCapture()
     })
 
     afterEach(() => {
-      setPointerCaptures.mockReset()
-      releasePointerCaptures.mockReset()
+      pointerCapture.restore()
       document.body.innerHTML = ''
     })
 
@@ -143,11 +139,11 @@ forEachVariant(['svg'], (Chart, variant) => {
   })
 
   describe('Chart point selection', () => {
+    let pointerCapture: PointerCaptureStub
     beforeEach(() => {
-      ;(Element.prototype as unknown as Record<string, unknown>).setPointerCapture = vi.fn()
-      ;(Element.prototype as unknown as Record<string, unknown>).releasePointerCapture = vi.fn()
+      pointerCapture = stubPointerCapture()
     })
-    afterEach(() => { document.body.innerHTML = '' })
+    afterEach(() => { pointerCapture.restore(); document.body.innerHTML = '' })
 
     variant.it(['interaction'], 'reports the clicked datum and clears interval selection on a click', async () => {
       const onPointSelect = vi.fn()

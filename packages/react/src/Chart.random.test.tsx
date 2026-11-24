@@ -18,7 +18,9 @@ const counting = (): { next: () => number; drawn: () => number } => {
 
 const texts = (container: HTMLElement): string[] => [...container.querySelectorAll('text')].map((t) => t.textContent ?? '')
 
-afterEach(() => { document.body.innerHTML = '' })
+// (every root a test mounted is unmounted, inside act, whether the test passed or not)
+const roots: Array<{ unmount(): void }> = []
+afterEach(() => { act(() => { for (const r of roots.splice(0)) r.unmount() }); document.body.innerHTML = '' })
 
 describe('<Chart random> (the per-chart counterpart of vega\'s setRandom)', () => {
   forEachVariant(['svg'], (Chart) => {
@@ -27,6 +29,7 @@ describe('<Chart random> (the per-chart counterpart of vega\'s setRandom)', () =
       const container = document.createElement('div')
       document.body.appendChild(container)
       const root = createRoot(container)
+      roots.push(root)
       act(() => { root.render(<Chart spec={spec} width={80} height={40} random={source.next} />) })
       expect(texts(container)).toEqual(['0.01', '0.02', '0.03'])
       expect(source.drawn()).toBe(3)
@@ -37,6 +40,7 @@ describe('<Chart random> (the per-chart counterpart of vega\'s setRandom)', () =
       const container = document.createElement('div')
       document.body.appendChild(container)
       const root = createRoot(container)
+      roots.push(root)
       act(() => { root.render(<Chart spec={spec} width={80} height={40} random={source.next} />) })
       act(() => { root.render(<Chart spec={spec} width={120} height={60} random={source.next} />) })
       expect(texts(container)).toEqual(['0.01', '0.02', '0.03'])
@@ -47,6 +51,7 @@ describe('<Chart random> (the per-chart counterpart of vega\'s setRandom)', () =
       const container = document.createElement('div')
       document.body.appendChild(container)
       const root = createRoot(container)
+      roots.push(root)
       const real = Math.random
       Math.random = () => 0.5
       try {

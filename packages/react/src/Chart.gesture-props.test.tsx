@@ -13,9 +13,10 @@
 import * as React from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { ChartHandle } from './chart-types'
 import { forEachVariant } from './testing/variants'
+import { stubPointerCapture, type PointerCaptureStub } from './testing/pointer-capture'
 
 const W = 200
 const H = 100
@@ -36,12 +37,14 @@ const withBinds = scatter({
   ],
 })
 
+let pointerCapture: PointerCaptureStub
 let roots: Array<{ root: Root; el: HTMLElement }> = []
 beforeEach(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
-  for (const k of ['setPointerCapture', 'releasePointerCapture']) (Element.prototype as unknown as Record<string, unknown>)[k] = vi.fn()
+  pointerCapture = stubPointerCapture()
 })
 afterEach(() => {
+  pointerCapture.restore()
   act(() => { for (const r of roots) r.root.unmount() })
   for (const r of roots) r.el.remove()
   roots = []
