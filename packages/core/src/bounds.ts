@@ -782,6 +782,9 @@ function boundSymbol(bounds: Bounds, it: SceneItem): Bounds {
 function boundPathItem(bounds: Bounds, it: SceneItem, miter: boolean, nullIsOrigin = true): Bounds {
   const rec = it as Record<string, unknown>
   if (it.path == null) return nullIsOrigin ? bounds.set(0, 0, 0, 0) : bounds
+  // (an empty path -- a geo shape entirely clipped away -- has no commands to read: it draws nothing, so the path reader, a part a
+  // spec of shapes need not carry, is not asked; it still takes its stroke)
+  if (it.path === '') return boundStroke(bounds, it, miter)
   // (the shape is the item's own when a mark's geoshape transform wrote it, its datum's when the data's did)
   const shaped = rec.angle ? undefined : it.path === rec.shape ? it : it.datum && it.path === (it.datum as Record<string, unknown>).shape ? it.datum : undefined
   const exact = shaped !== undefined ? SHAPE_BOUNDS.get(shaped as object)?.() : undefined

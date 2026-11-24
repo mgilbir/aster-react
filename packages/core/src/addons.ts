@@ -201,7 +201,7 @@ function namesCurve(v: unknown): boolean {
 }
 
 /** Whether a dataset's `parse` may read a column with a date pattern (anything but `'auto'` or a table of plain types). */
-function parsesDates(parse: unknown): boolean {
+export function parsesDates(parse: unknown): boolean {
   if (parse == null || parse === 'auto') return false
   if (!isObj(parse) || Array.isArray(parse)) return true
   return Object.values(parse).some((t) => typeof t !== 'string' || /^\s*(date|utc)\s*:/i.test(t))

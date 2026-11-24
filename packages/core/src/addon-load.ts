@@ -513,6 +513,12 @@ export async function loadSpecData<T extends VgSpec>(spec: T, opts: LoadOptions 
     sem: new Semaphore(Math.max(1, opts.maxConcurrent ?? LOAD_DEFAULTS.maxConcurrent)),
   }
   try {
+    // (a dataset read with a date pattern in its `parse` is read with the engine's time part, which a shell that loads parts on demand
+    // does not have yet: reading the data asks for it here, where the data is read, not of whoever called)
+    if (tasks.some((t) => t.format?.parse != null)) {
+      const { loadParts, parsesDates } = await import('./addons.js')
+      if (tasks.some((t) => parsesDates(t.format?.parse))) await loadParts(['time'])
+    }
     await Promise.all(
       tasks.map(async (task) => {
         const { text, finalUrl } = await fetchText(task.url, o)
