@@ -496,7 +496,8 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
     : new Set()
   validateData(spec, at)
   if (spec.transform !== undefined) validateTransforms(spec.transform, at('transform'))
-  validateSize(spec, at, top && (kind === 'unit' || kind === 'layer'))
+  // (`"container"`: a top-level view's, or a facet's cells' - vega-lite sizes each cell by the container, child_width / child_height)
+  validateSize(spec, at, (top || parent === 'facet') && (kind === 'unit' || kind === 'layer'))
   if (spec.params !== undefined) validateParams(spec.params, at('params'), kind !== 'layer' && selOk, kind, spec, at('params'))
   if (spec.resolve !== undefined) validateResolve(spec.resolve, at('resolve'), kind, isObj(spec.encoding) && (spec.encoding.row != null || spec.encoding.column != null || spec.encoding.facet != null))
   if (spec.projection !== undefined) validateProjection(spec.projection, at('projection'))
@@ -579,7 +580,7 @@ function validateSize(spec: Obj, at: (k: string) => string, containerOk: boolean
     if (isObj(v) && typeof v.step === 'number' && v.step > 0 && Object.keys(v).every((x) => x === 'step' || (x === 'for' && (v.for === 'position' || v.for === 'offset')))) continue
     if (v === 'container') {
       if (containerOk) continue
-      fail(at(k), `${k}: "container" is only supported on a top-level unit or layer view; give a number or {"step": n}`)
+      fail(at(k), `${k}: "container" is only supported on a top-level unit or layer view, or on a facet's spec; give a number or {"step": n}`)
     }
     // (JSON writes a NaN or an infinity as null: the value is shown as it is)
     fail(at(k), `${k} must be a non-negative number or {"step": n}, got ${typeof v === 'number' ? String(v) : JSON.stringify(v)}`)
@@ -596,7 +597,8 @@ function validateData(spec: Obj, at: (k: string) => string): void {
   const kinds = ['values', 'url', 'name', 'sequence', 'sphere', 'graticule'].filter((k) => data[k] !== undefined)
   if (kinds.length === 0) fail(at('data'), 'needs one of `values`, `url`, `name`, or a generator (`sequence`, `sphere`, `graticule`)')
   if (data.sequence !== undefined) {
-    if (kinds.length > 1) fail(at('data'), 'a `sequence` data generator cannot be combined with another data source')
+    // (a generator takes a `name`, the name of the dataset it makes: vega-lite data.ts DataBase)
+    if (kinds.some((k) => k !== 'sequence' && k !== 'name')) fail(at('data'), 'a `sequence` data generator cannot be combined with another data source')
     keysOf(data, set('sequence name'), at('data'), 'data generator')
     const q = data.sequence
     if (!isObj(q)) mustBe(at('data.sequence'), 'an object {start, stop, step, as}')
@@ -1042,18 +1044,7 @@ function validateResolve(r: unknown, path: string, kind: Kind, facetedUnit = fal
   }
   // a unit faceted through its encoding is a facet over that unit: its resolve is the facet's
   if (kind === 'unit' && !facetedUnit) fail(path, '`resolve` has no meaning on a single unit spec')
-  if (kind === 'facet' || facetedUnit) {
-    for (const what of ['scale', 'axis', 'legend'] as const) {
-      const m = r[what]
-      if (!isObj(m)) continue
-      for (const [ch, v] of Object.entries(m)) {
-        if (v !== 'independent') continue
-        // independent x / y scales are laid out (each cell with its own scale and axes), and so are independent x / y axes over shared scales (the axes sit in the cells); a legend's own resolution is not
-        if ((what === 'scale' || what === 'axis') && (ch === 'x' || ch === 'y')) continue
-        fail(`${path}.${what}.${ch}`, `an independent ${what} resolution of ${ch} inside a facet is not supported yet (independent x and y scales are)`)
-      }
-    }
-  }
+  // (a facet's independent scales, axes and legends are laid out in its cells, each channel's: compile.ts compileFacetedView)
 }
 
 // --- unit specs --------------------------------------------------------------
@@ -1506,10 +1497,8 @@ function validateCondition(cond: unknown, at: string): void {
     const isCount = kinds.length === 0 && c.aggregate === 'count'
     if (kinds.length !== 1 && !isCount) fail(a, 'a condition needs exactly one of `value`, `field`, `datum`, or `aggregate: "count"`')
     if (inArray && !(kinds[0] === 'value')) fail(a, 'conditions in an array must be value conditions')
-    if (c.field !== undefined) {
-      if (typeof c.field !== 'string') mustBe(`${a}.field`, 'a string')
-      accessPath(c.field, `${a}.field`)
-    }
+    // (a `{repeat}` reference is replaced in a condition's field as in the channel's own: vega-lite normalize/repeater.ts)
+    if (c.field !== undefined) checkFieldName(c.field, `${a}.field`)
     if (c.timeUnit !== undefined) normalizeTimeUnit(c.timeUnit, `${a}.timeUnit`)
   }
   if (Array.isArray(cond)) {
@@ -1579,9 +1568,25 @@ function validateTransforms(tr: unknown, at: string): void {
     }
     if (primary.length > 1) fail(a, `ambiguous transform: ${primary.join(' + ')}`)
     const kind = primary[0]!
+    // (vega-lite 6.4.3 replaces `{repeat}` references in the encoding and the facet only: in a transform it writes the reference into
+    // the output as it is, a field "[object Object]" or "" that reads nothing; C83)
+    const ref = repeatRefIn(t, a)
+    if (ref !== undefined) fail(ref, 'a `{"repeat": ...}` reference in a transform is not supported: vega-lite 6.4.3 replaces repeat references only in the encoding, and leaves this one in its output as a field that reads nothing')
     keysOf(t, TRANSFORM_KEYS[kind]!, a, `${kind} transform`)
     validateTransform(kind, t, a)
   })
+}
+
+/** The path of the first `{repeat}` reference below `node`, if any. */
+function repeatRefIn(node: unknown, at: string): string | undefined {
+  if (isRepeatRef(node)) return at
+  if (Array.isArray(node)) {
+    for (let i = 0; i < node.length; i++) { const p = repeatRefIn(node[i], `${at}[${i}]`); if (p !== undefined) return p }
+  } else if (isObj(node)) {
+    // (rows are the user's data, not references)
+    for (const [k, v] of Object.entries(node)) { if (k === 'values') continue; const p = repeatRefIn(v, `${at}.${k}`); if (p !== undefined) return p }
+  }
+  return undefined
 }
 
 function validateTransform(kind: string, t: Obj, a: string): void {
@@ -1785,6 +1790,9 @@ function validateRepeatOperator(spec: Obj, at: (k: string) => string, selOk: boo
   const rep = spec.repeat
   if (!isObj(spec.spec)) fail(at('spec'), 'a repeat spec needs a nested `spec`')
   const fieldArr = (v: unknown, a: string): void => {
+    // (the schema allows only an array; vega-lite 6.4.3 iterates a string as the list of its characters, `"bc"` repeats the fields `b`
+    // and `c`, so its chart is the chart of the name only when the name is one character long: C83)
+    if (typeof v === 'string') fail(a, `must be an array of field names (${JSON.stringify([v])}): vega-lite 6.4.3 reads the string ${JSON.stringify(v)} as the list of its characters`)
     if (!Array.isArray(v) || v.length === 0 || !v.every((s) => typeof s === 'string')) mustBe(a, 'a non-empty array of field names')
     ;(v as string[]).forEach((f, i) => accessPath(f, `${a}[${i}]`))
   }
