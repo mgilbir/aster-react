@@ -91,8 +91,9 @@ and fails when a script named in a `package.json` does not call `cli()`, so a ne
   gives and the oracle's SVG changes (a property that is the default, written out, says so in its `description`). Two entries whose real-Vega
   renders are the same compare the same thing twice, so `pnpm conformance` refuses a new such pair (`packages/conformance/src/corpus-distinct.ts`),
   and refuses a spec whose own marks draw no item unless it is listed with its reason. The two tables that hold the exceptions,
-  `packages/conformance/corpus-identical.json` (groups still to be made distinct) and `corpus-no-items.json` (guide-only specs, by
-  design), are exact in both directions: an entry that is fixed has to be removed, so they only shrink. Where a spec is the default
+  `packages/conformance/corpus-identical.json` (groups still to be made distinct: none today) and `corpus-no-items.json` (specs whose own marks draw nothing, by
+  design, each with its reason), are exact in both directions: an entry that is fixed has to be removed, so they only shrink. `pnpm conformance-vl` prints, under an entry,
+  the data warnings real vega raises on vega-lite's own output (an `Infinite extent` is a scale built from no value). Where a spec is the default
   written out (a stack offset `zero`, an align `0.5`), it is kept for that, next to specs where the property bites.
 - **What the corpus cannot see.** The SVG carries no tooltip, so `pnpm conformance-vl` compares the tooltip of every item of real Vega's
   scenegraph on the Vega that `@aster-charts/vl` emits against the one it gets from vega-lite's. It compares the first frame of an
@@ -164,7 +165,9 @@ there is kept), which hides zone bugs (a UTC scale formatted in local time passe
 (`*.tz.test.ts`), the live scale-spec differential (every case also runs in each zone inside the test) and
 `packages/conformance/corpus-tz` (raw Vega specs rendered by vega and Aster in the same zone)
 under `America/New_York`, `Asia/Kolkata` and `Australia/Lord_Howe` (a half-hour daylight-saving offset the other two cannot catch; `ZONES` in `scripts/lib/tz-zones.mjs`; `calendar.tz.test.ts` holds what vega draws in each, recorded by `packages/conformance/scripts/gen-tz-hours.mjs`; the corpus also runs in UTC). Add a case to `corpus-tz` when a fix depends on
-the zone.
+the zone. The main corpus runs under UTC only, where a `utc*` time unit and its local twin are the same, so the `timeunit-*-boundaries` cases of `corpus-tz` (timestamps within an hour of a month and a year boundary) are where `utcmonth`, `utcyearmonth` and `{unit, utc: true}` differ from `month` and `yearmonth`.
+
+Three corpus specs are off the Vega-Lite schema on purpose, and say so in their name or here: `vlx-tr-aggregate-default-as` and `vlx-tr-stack-default-as` leave out `as` (the schema requires it; vega-lite names the outputs `max_v`, `min_y`, `v_start`, `v_end`), and the `*-offschema-signal-element` geo specs put a `{signal}` where the schema allows a number (the schema-valid forms are the `*-expr` specs).
 
 ## Reference results
 

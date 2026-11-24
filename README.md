@@ -229,7 +229,7 @@ The behaviour is checked against the real packages by the gates in
 produced it, are in [docs/TESTING.md](docs/TESTING.md#reference-results) and
 [docs/PERFORMANCE.md](docs/PERFORMANCE.md#reference-measurements); in short, as measured on this tree:
 
-- the SVG corpus (1120 specs: 437 Vega, 683 Vega-Lite) renders identically to real Vega under a strict
+- the SVG corpus (1129 specs: 437 Vega, 692 Vega-Lite) renders identically to real Vega under a strict
   canonicalizer: `pnpm conformance` (1120/1120);
 - the same 683 Vega-Lite specs compiled by `@aster-charts/vl` render identically to vega-lite's output: `pnpm conformance-vl` (683/683);
 - the schema sweeps (one chart per property/value of the schema) have no differences: Vega 7538 ok of 7549 (9 both-refused, 2 the oracle itself crashes on), Vega-Lite 27452 ok of 27513 (47 both-refused, 14 oracle crashes),
