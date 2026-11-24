@@ -33,8 +33,15 @@ export type Scale = vs.Scale
 
 type SchemeFn = (t: number) => unknown
 
-/** Continuous types (the runtime's domain census and gradient legends key on these). */
-export const CONTINUOUS_TYPES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'sequential', 'quantize'])
+/**
+ * How a scale type's domain is read from a field of a dataset, by the kinds the registry gives it (as `resolveDomain` reads it): the
+ * distinct values for a discrete type, every value for a quantile type, the numeric extent for any other. The runtime's domain census
+ * keys on this; undefined for a name that is no scale type.
+ */
+export function fieldDomainKind(type: string): 'categories' | 'values' | 'extent' | undefined {
+  if (!vs.isValidScaleType(type)) return undefined
+  return vs.isDiscrete(type) ? 'categories' : vs.isQuantile(type) ? 'values' : 'extent'
+}
 
 /** Colours in a discretizing scale's range when the spec does not count them. */
 const DEFAULT_CLASSES = 5

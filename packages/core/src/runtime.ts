@@ -24,12 +24,11 @@ import { getTextMetricsProvider, withTextMetricsProvider } from './text-metrics.
 import { AsterUrlError } from './url-policy.js'
 import { SpecParseError } from './parse-error.js'
 import { consoleLogger, type Logger } from './logger.js'
-import { buildScale, sameSettings, scaleOfSettings, scaleSettings, scaleTicks, type Scale, type Settings, CONTINUOUS_TYPES, type ScaleContext } from './scales.js'
+import { buildScale, sameSettings, scaleOfSettings, scaleSettings, scaleTicks, type Scale, type Settings, fieldDomainKind, type ScaleContext } from './scales.js'
 import { sortReadsCategoriesOnly } from './scale-domain.js'
 import { implicit as implicitCategory } from './scale-discrete.js'
 
 /** Scale types whose domain is an ordered set of discrete values. */
-const DISCRETE_TYPES = new Set(['band', 'point', 'ordinal'])
 import { ITEM_MARK, geoRegistry, requireGeo } from './registry.js'
 import { formatEnvironmentKey, locale } from './locale.js'
 import type {
@@ -5173,14 +5172,14 @@ function buildScales(ctx: EvalContext): void {
         const pulse = ctx.datasetPulses.get(dom.data)
         const rows = ctx.datasets.get(dom.data) ?? []
         if (pulse && !pulse.full) {
-          if (CONTINUOUS_TYPES.has(s.type) && entry.cont && entry.cont.finite
+          if (fieldDomainKind(s.type) === 'extent' && entry.cont && entry.cont.finite
             && entry.cont.data === dom.data && entry.cont.field === dom.field) {
             // The census is updated in place for the append-only form: claim it.
             if (claim(ctx, censusParts(entry.cont))) {
               const next = advanceContCensus(entry.cont, rows, pulse)
               if (next) { reuse = true; entry = { ...entry, cont: next } }
             }
-          } else if (DISCRETE_TYPES.has(s.type) && entry.disc && discreteCensusApplies(dom)
+          } else if (fieldDomainKind(s.type) === 'categories' && entry.disc && discreteCensusApplies(dom)
             && entry.disc.data === dom.data && entry.disc.field === dom.field) {
             if (claim(ctx, censusParts(entry.disc))) {
               const next = advanceDiscCensus(entry.disc, rows, pulse)
@@ -5233,9 +5232,9 @@ function buildScales(ctx: EvalContext): void {
     // can prove the domain unchanged instead of rescanning.
     if (dom) {
       const rows = ctx.datasets.get(dom.data) ?? []
-      if (DISCRETE_TYPES.has(s.type)) {
+      if (fieldDomainKind(s.type) === 'categories') {
         if (discreteCensusApplies(dom)) entry.disc = freshDiscCensus(dom, rows)
-      } else if (CONTINUOUS_TYPES.has(s.type)) {
+      } else if (fieldDomainKind(s.type) === 'extent') {
         entry.cont = freshContCensus(dom, rows)
       }
     }
@@ -5247,11 +5246,11 @@ function buildScales(ctx: EvalContext): void {
 }
 
 /**
- * `sameSettings`, but a band, point or ordinal scale given a domain override (`domainRaw`) reads its own domain nowhere (the override
+ * `sameSettings`, but a discrete scale (band, point, ordinal, bin-ordinal) given a domain override (`domainRaw`) reads its own domain nowhere (the override
  * is the domain, and the scale's family is not chosen by it), so the domain its data would give is left out of the comparison.
  */
 function sameScaleSettings(type: string, a: Settings, b: Settings): boolean {
-  if (DISCRETE_TYPES.has(type) && a.domainRaw && b.domainRaw) return sameSettings({ ...a, domain: undefined }, { ...b, domain: undefined })
+  if (fieldDomainKind(type) === 'categories' && a.domainRaw && b.domainRaw) return sameSettings({ ...a, domain: undefined }, { ...b, domain: undefined })
   return sameSettings(a, b)
 }
 
