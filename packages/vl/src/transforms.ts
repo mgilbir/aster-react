@@ -7,7 +7,7 @@
  * later in-place edit of the emitted transforms (e.g. facet group-by
  * injection) cannot reach back into the caller's spec or into a sibling.
  */
-import { pushAll, genSignal, safeKey, splitAccessPath, VLCompileError, datumPathRef, guardedPathRef, replacePathInField } from './names.js'
+import { pushAll, genSignal, safeKey, flatField, splitAccessPath, VLCompileError, datumPathRef, guardedPathRef, replacePathInField } from './names.js'
 import { predicateExpr, paramLeaves } from './predicate.js'
 import { normalizeTimeUnit, timeUnitTransform } from './timeunit.js'
 
@@ -38,6 +38,8 @@ export interface TransformContext {
   selectionTest?(pred: ParamTest): string
   /** The time-unit transforms a selection over a time-unit field needs in the pipeline that tests it. */
   selectionTimeUnits?(param: string): Array<{ as: string; field: string; timeUnit: unknown }>
+  /** The expression a bin's `span` reads for an extent that is a parameter's value (`br["b"]`): the parameter's own, by its channel or field. */
+  parameterSpan?(extent: { param: string; field?: string; encoding?: string }): string | undefined
   /** The dataset a lookup `from: {param}` reads: the selection's unit data, filtered by the selection. */
   addSelectionLookup?(param: string): string
 }
@@ -167,11 +169,14 @@ const PARSE_FN: Record<Parse, string> = { number: 'toNumber', string: 'toString'
 export interface TranslateState {
   /** field -> how it was parsed (or 'derived'); mirrors vega-lite's ancestorParse. */
   parsed: Map<string, Parse | 'derived'>
+  /** the names a time-unit transform of the list made (vega-lite removes a time unit the pipeline already made upstream) */
+  timeUnitOutputs?: Set<string>
+  /** the joined names of the nested or escaped group keys an aggregate carries through (the rows keep that key, and no other copy of the field) */
+  carried?: Set<string>
   /** the unit has a selection that projects `_vgsid_`: an aggregate is followed by an identifier transform */
   requiresSelectionId?: boolean
 }
 
-/** Translate one VL transform. Returns the Vega transforms it expands to. */
 /** impute.ts processSequence: `{start, stop, step}` key values are the signal `sequence(start, stop[, step])`. */
 function imputeKeyvals(kv: unknown): unknown {
   if (Array.isArray(kv)) return copyArr(kv)
@@ -215,6 +220,7 @@ export function imputeTransforms(t: Obj): Obj[] {
   return out
 }
 
+/** Translate one VL transform. Returns the Vega transforms it expands to. */
 export function translateTransform(t: Obj, ctx: TransformContext, st: TranslateState): Obj[] {
   const out: Obj[] = []
   const derived = (names: Iterable<string>): void => {
@@ -260,11 +266,10 @@ export function translateTransform(t: Obj, ctx: TransformContext, st: TranslateS
     const asArr: [string, string] = typeof as === 'string' ? [as, `${as}_end`] : [as[0]!, as[1]!]
     const bin = normalizeBin(t.bin)
     const names = binNames(bin, field)
-    const { extent, ...params } = bin
-    if (extent === undefined) out.push({ type: 'extent', field: replacePathInField(field), signal: names.extentSignal })
-    const bt: Obj = { type: 'bin', field: replacePathInField(field), as: asArr, signal: names.signal, extent: extent !== undefined ? [...(extent as number[])] : { signal: names.extentSignal } }
-    for (const [k, v] of Object.entries(params)) bt[k] = copyArr(v)
-    out.push(bt)
+    // (the channel's bin writes the same transforms: a literal extent, a parameter's `span`, or the extent over the rows)
+    const span = isParameterExtent(bin.extent) ? ctx.parameterSpan?.(bin.extent) : undefined
+    const made = binTransforms(bin, replacePathInField(field), { ...names, start: asArr[0], end: asArr[1] }, span)
+    pushAll(out, made)
     derived(asArr)
   } else if (t.timeUnit !== undefined && t.field !== undefined) {
     const field = t.field as string
@@ -272,6 +277,7 @@ export function translateTransform(t: Obj, ctx: TransformContext, st: TranslateS
     const tu = normalizeTimeUnit(t.timeUnit)
     out.push(timeUnitTransform(tu, field, t.as as string))
     derived([t.as as string, `${t.as as string}_end`])
+    ;(st.timeUnitOutputs ??= new Set()).add(t.as as string)
   } else if (t.aggregate !== undefined) {
     const ops: string[] = []
     const fields: Array<string | null> = []
@@ -281,9 +287,13 @@ export function translateTransform(t: Obj, ctx: TransformContext, st: TranslateS
       fields.push(typeof d.field === 'string' ? replacePathInField(d.field) : null)
       as.push((d.as as string | undefined) ?? defaultAs(d))
     }
-    out.push({ type: 'aggregate', groupby: ((t.groupby as string[] | undefined) ?? []).map(replacePathInField), ops, fields, as })
+    const groupby = (t.groupby as string[] | undefined) ?? []
+    out.push({ type: 'aggregate', groupby: groupby.map(replacePathInField), ops, fields, as })
     if (st.requiresSelectionId) out.push({ type: 'identifier', as: '_vgsid_' })
     derived(as)
+    // (a group key with a path keeps its joined name in the rows the aggregate makes - the flat key the groupby read - and nothing else
+    // of the row's fields: a channel that reads the path finds it there, once the safe key is copied from it again)
+    for (const g of groupby) if (flatField(g).expr !== undefined) (st.carried ??= new Set()).add(splitAccessPath(g).join('.'))
   } else if (t.joinaggregate !== undefined) {
     const ops: string[] = []
     const fields: Array<string | null> = []
@@ -307,7 +317,7 @@ export function translateTransform(t: Obj, ctx: TransformContext, st: TranslateS
       fields.push(typeof d.field === 'string' ? d.field : null)
     }
     const frame = t.frame as [number | null, number | null] | undefined
-    const aggOps = new Set('average count distinct max mean median min missing product q1 q3 ci0 ci1 stderr stdev stdevp sum valid values variance variancep exponential exponentialb'.split(' '))
+    const aggOps = new Set('average count distinct max mean median min missing product q1 q3 ci0 ci1 stderr stdev stdevp sum valid values variance variancep'.split(' '))
     if (frame && frame[0] === null && frame[1] === null && ops.every((o) => aggOps.has(o))) {
       out.push({ type: 'joinaggregate', as, ops, fields, ...(t.groupby !== undefined ? { groupby: copyArr(t.groupby) } : {}) })
     } else {
