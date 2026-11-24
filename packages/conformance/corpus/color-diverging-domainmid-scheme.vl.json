@@ -43,7 +43,7 @@
    "type": "quantitative",
    "scale": {
     "scheme": "redblue",
-    "domainMid": 6
+    "domainMid": 4
    }
   }
  }
