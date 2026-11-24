@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { compileChart, evaluateChart, renderSceneToSvg, type VgSpec } from './index.js'
+import { compileChart, datasetsOfScene, evaluateChart, renderSceneToSvg, type VgSpec } from './index.js'
 import { createChartSession } from './session.js'
 import { diffRows } from './pulse.js'
 
@@ -71,25 +71,49 @@ describe('session auto changes', () => {
 })
 
 describe('sorted grouped transforms', () => {
-  it('incremental sorted window/stack matches a full re-derive', () => {
-    const base = {
-      width: 200, height: 100, padding: 0, autosize: 'none',
-      data: [{
-        name: 't',
-        values: [{ g: 'a', v: 1 }, { g: 'a', v: 3 }, { g: 'b', v: 2 }, { g: 'b', v: 4 }],
-        transform: [{ type: 'window', groupby: ['g'], sort: { field: 'v', order: 'descending' }, ops: ['rank'], as: ['r'] }],
-      }],
-      scales: [{ name: 'y', type: 'linear', domain: [0, 5], range: [100, 0] }],
-      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { value: 50 }, y: { scale: 'y', field: 'v' }, size: { value: 30 } } } }],
-    } as unknown as VgSpec
-    const chart = compileChart(base)
-    const rows = [{ g: 'a', v: 1 }, { g: 'a', v: 3 }, { g: 'b', v: 2 }, { g: 'b', v: 4 }]
-    evaluateChart(chart, { data: { t: rows } })
-    const next = [{ g: 'a', v: 2 }, { g: 'a', v: 3 }, { g: 'b', v: 2 }, { g: 'b', v: 4 }]
-    const inc = evaluateChart(chart, { data: { t: next }, dataChanges: { t: [0] } })
-    const full = evaluateChart(chart, { data: { t: next } })
-    expect(renderSceneToSvg(inc)).toBe(renderSceneToSvg(full))
-  })
+  // The transforms whose output depends on the ORDER of a group (a window rank, a sorted stack): an evaluation told which rows
+  // changed must write the same values as a chart compiled afresh and evaluated from scratch. The values are compared on the
+  // rows, not on a rendering (a mark that does not encode the window's or the stack's output would show nothing), over generated
+  // changes that move a row past others in its group (C456).
+  const transforms = {
+    'window rank': [{ type: 'window', groupby: ['g'], sort: { field: 'v', order: 'descending' }, ops: ['rank', 'row_number'], as: ['r', 'n'] }],
+    'stack sorted': [{ type: 'stack', groupby: ['g'], field: 'v', sort: { field: 'v' }, as: ['y0', 'y1'] }],
+    'stack, then window over its output': [
+      { type: 'stack', groupby: ['g'], field: 'v', sort: { field: ['v'], order: ['descending'] }, as: ['y0', 'y1'] },
+      { type: 'window', groupby: ['g'], sort: { field: 'y0' }, ops: ['rank'], as: ['r'] },
+    ],
+  }
+  const specOf = (transform: unknown): VgSpec => ({
+    width: 200, height: 100, padding: 0, autosize: 'none',
+    data: [{ name: 't', transform }],
+    scales: [{ name: 'y', type: 'linear', domain: [0, 30], range: [100, 0] }],
+    marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { value: 50 }, y: { scale: 'y', field: 'v' }, size: { value: 30 } } } }],
+  } as unknown as VgSpec)
+  const rowsOf = (scene: ReturnType<typeof evaluateChart>): unknown => datasetsOfScene(scene).get('t')
+
+  for (const [name, transform] of Object.entries(transforms)) {
+    it(`${name}: an incremental evaluation writes what a fresh one writes, over generated changes`, () => {
+      let seed = 7
+      const random = (): number => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646
+      let swapped = 0
+      for (let trial = 0; trial < 60; trial++) {
+        const spec = specOf(transform)
+        const chart = compileChart(spec)
+        const rows = Array.from({ length: 8 }, (_, i) => ({ g: 'ab'[i % 2]!, v: 1 + Math.floor(random() * 20) }))
+        evaluateChart(chart, { data: { t: rows } })
+        const changed = [Math.floor(random() * rows.length)]
+        if (random() < 0.5) changed.push((changed[0]! + 1 + Math.floor(random() * (rows.length - 1))) % rows.length)
+        const next = rows.map((r, i) => (changed.includes(i) ? { ...r, v: 1 + Math.floor(random() * 20) } : r))
+        const before = rowsOf(evaluateChart(compileChart(spec), { data: { t: rows } }))
+        const inc = rowsOf(evaluateChart(chart, { data: { t: next }, dataChanges: { t: changed } }))
+        const fresh = rowsOf(evaluateChart(compileChart(spec), { data: { t: next } }))
+        expect(inc, `trial ${trial}: ${JSON.stringify(rows)} -> ${JSON.stringify(next)}`).toEqual(fresh)
+        if (JSON.stringify(before) !== JSON.stringify(fresh)) swapped++
+      }
+      // the changes did move the transform's output (ranks or stack offsets), most of the time
+      expect(swapped).toBeGreaterThan(40)
+    })
+  }
 })
 
 describe('a row diff sees values as the scene does', () => {
