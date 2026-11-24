@@ -21,6 +21,17 @@ import { schemaBase, schemaSites, type SchemaSite } from './schema-expression-si
 const POOL = ['1 +', '(1', 'foo(1)', 'nosuch', 'nosuch + foo()', 's + nosuch', '1', 'datum.a', 's']
 const REGEX = "test(/a/, 'a') ? 1 : 1"
 const crashes = (message: string): boolean => /^Cannot read properties|is not a function$|is not iterable$|^Unexpected token/.test(message)
+/**
+ * The spec of a site made with an expression. The schema fills a mark's `type` with a placeholder string: vega builds a View of such a
+ * spec and refuses the type only when the view runs, Aster refuses it when it compiles (C238), so the sites are read on the mark
+ * type their factory means.
+ */
+function made(site: SchemaSite, expr: string): Record<string, unknown> {
+  const spec = site.make(expr) as { marks?: Array<{ type?: unknown }> }
+  const first = spec.marks?.[0]
+  if (first !== undefined && first.type === 'a') first.type = site.name.startsWith('markGroup') ? 'group' : 'rect'
+  return spec as Record<string, unknown>
+}
 
 /**
  * vega's outcome for a spec: its parser's, and when the parser accepts it, whether a View can be built of it (the code of the
@@ -77,7 +88,7 @@ describe('every expression site of the Vega schema is read as vega reads it', { 
       for (const site of list) {
         const property = site.name.split(/[.\s]/)[1] ?? ''
         for (const e of POOL) {
-          const spec = site.make(e)
+          const spec = made(site, e)
           const want = oracleOutcome(spec)
           const got = asterOutcome(spec)
           if (got === want) continue
@@ -86,8 +97,8 @@ describe('every expression site of the Vega schema is read as vega reads it', { 
           bad.push(`${site.name} ${JSON.stringify(e)}\n   vega:  ${want}\n   aster: ${got}`)
         }
         // a site vega reads (it refuses a syntax error there) records the regular expression it holds
-        const regexSpec = site.make(REGEX)
-        const reads = vegaOutcome(site.make('1 +')).startsWith('Expression parse error')
+        const regexSpec = made(site, REGEX)
+        const reads = vegaOutcome(made(site, '1 +')).startsWith('Expression parse error')
         if (reads && oracleOutcome(regexSpec) === 'ok' && !(compileChart(structuredClone(regexSpec) as never).regexSites?.length)) bad.push(`${site.name}: a regex there is not recorded`)
       }
       expect(bad).toEqual([])
