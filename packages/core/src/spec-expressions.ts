@@ -29,7 +29,7 @@ import { checkExpression } from './expr-check.js'
 import { parseEventSelectorString } from './event-selector.js'
 import { filterCode } from './stream-defs.js'
 import {
-  checkFrom, checkScale, dataInputOf, dataWithoutRows, legendType, LEGEND_CHANNELS, Names, need, needDataRef, parseAxisNames, parseLegendNames, parseTitleNames, specList, stringValue,
+  axisValue, checkFrom, checkScale, dataInputOf, dataWithoutRows, legendType, LEGEND_CHANNELS, Names, need, needDataRef, parseAxisNames, parseLegendNames, parseTitleNames, specList, stringValue,
 } from './spec-structure.js'
 import { transformParams, type ParamKind, type TransformParam } from './transform-params.js'
 import { TUPLE_MAKING_TRANSFORMS, transformTypeOf } from './transform-names.js'
@@ -443,7 +443,12 @@ class Check {
   private guide(kind: GuideKind, g: Rec, lambdas: string[]): void {
     // a guide that holds no signal, no encode, nothing but values has no expression to read
     const keys = Object.keys(g)
-    if (!keys.some((key) => key !== 'scale' && isObject(g[key]))) return
+    // (a parameter of the guide's data vega looks up in the config when the guide has none: see CONFIG_VALUES)
+    const fromConfig = kind === 'axis' || kind === 'legend'
+      ? CONFIG_VALUES[kind].filter((key) => g[key] == null).map((key) => [key, kind === 'axis' ? axisValue(g, key, (name) => this.scope.scaleType(name), this.config)
+        : isRecord(this.config.legend) ? this.config.legend[key] : undefined] as const).filter(([, v]) => isObject(v))
+      : []
+    if (!fromConfig.length && !keys.some((key) => key !== 'scale' && isObject(g[key]))) return
     const reading = guideReading(kind, g, this.env)
     const symbols = kind === 'legend' && legendType(g, this.scope.scaleType(LEGEND_CHANNELS.map((c) => g[c]).find((s) => !!s))) === 'symbol'
     // a symbol legend measures its entries as soon as they are made: before any of its marks are read
@@ -457,6 +462,7 @@ class Check {
       else if (how === 'value') this.lambdas(v, lambdas)
       else if (how === 'entry') entries.push(key)
     }
+    for (const [key, v] of fromConfig) if (reading(key) === 'value') this.lambdas(v, lambdas)
     // the entries of a symbol legend lie in a group of their own
     for (const key of entries) {
       if (symbols && ENTRY_PARTS.test(key)) this.within(new Scope(this.scope), () => this.guideEntries(g[key]))
@@ -621,6 +627,12 @@ const colorText = (type: string, parts: unknown[]): string | null => {
 }
 
 /** The expression vega builds for an entry (null: for one it would refuse in another way, which is not this check's). */
+/** The parameters of a guide's data vega looks up in the config too (`_(name)`); `tickMinStep`, `tickCount`, `values` it reads off the guide alone. */
+const CONFIG_VALUES: Readonly<Record<'axis' | 'legend', readonly string[]>> = {
+  axis: ['labelBound', 'labelOverlap', 'labelSeparation', 'tickExtra'],
+  legend: ['symbolLimit'],
+}
+
 export function entryText(spec: unknown): string | null {
   if (!isObject(spec) || Array.isArray(spec)) return 'null'
   const e = spec as Rec

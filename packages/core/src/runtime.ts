@@ -33,6 +33,7 @@ const DISCRETE_TYPES = new Set(['band', 'point', 'ordinal'])
 import { ITEM_MARK, geoRegistry, requireGeo } from './registry.js'
 import { chartLocale, formatEnvironmentKey, type Locale } from './locale.js'
 import { adjustSpatial, ENTER_COPY } from './spatial.js'
+import { objectProperty } from './object-property.js'
 import type {
   CompiledAxis,
   CompiledChart,
@@ -1664,7 +1665,8 @@ function buildAxisGroup(ctx: EvalContext, axis0: CompiledAxis, axisIndex: number
     meta.orient = (typeof axis.orient === 'string' ? ((group as unknown as { axis?: { itemOrient?: string } }).axis?.itemOrient ?? axis.orient) : axis.orient)
     meta.scale = axis.scale
     meta.aria = axis.aria
-    meta.grid = guideScalar(ctx, axis.grid) === true
+    // (vega-parser draws the grid for any truthy `grid`, a signal object included, without reading it: `!!_('grid')`)
+    meta.grid = !!axis.grid
     const unencoded = (group as unknown as { axis?: { unencoded?: boolean } }).axis?.unencoded === true
     // (the caption reads the format and its type off the axis's group item, as its encode left them: a literal object is an
     // encode entry there, a signal is what it holds whatever its type, and an `encode.axis` may set them)
@@ -1875,7 +1877,9 @@ function buildAxisAndLegend(
     return (anchors = { xb, yb })
   }
   // What placing the legends reads besides the legends themselves: the anchors, the plot's size and whether they are laid out.
-  const placement = keep && legends.length > 0 && guidesKeepable(ctx) ? legendPlacementKey(anchorsOf(), layoutW, layoutH, ctx.rawGuides === true) : null
+  // `config.legend.layout`, as vega reads it (`objectProperty`): signals at any depth, the value they hold now
+  const legendLayout = legends.length ? resolvedLegendLayout(ctx) : NO_LAYOUT
+  const placement = keep && legends.length > 0 && guidesKeepable(ctx) ? legendPlacementKey(anchorsOf(), layoutW, layoutH, ctx.rawGuides === true) + '\u0001' + valueKey(legendLayout) : null
   // Every legend of the scope kept as the evaluation before placed it, when each is kept and they are placed against the same: the
   // placement of one depends on the others of its orient, so they are kept together or made again together (see `keptLegends`).
   const keptGroups = placement !== null ? keptLegends(ctx, legends, placement) : undefined
@@ -1900,7 +1904,8 @@ function buildAxisAndLegend(
     // at its unlayouted position, which is the origin)
     const byOrient = new Map<string, { legend: CompiledLegend; group: SceneGroup; props: LegendProps }[]>()
     for (const x of built) {
-      const orient = String(x.props.orient ?? 'right')
+      // (vega: `item.orient || 'right'`)
+      const orient = String(x.props.orient || 'right')
       // (a legend whose entries were never made has nothing to lay out: it stays where its encode put it)
       if ((x.group as unknown as { _entriesPending?: boolean })._entriesPending) continue
       if (orient === 'none') {
@@ -1921,7 +1926,7 @@ function buildAxisAndLegend(
     for (const [orient, list] of byOrient) {
       // Raw-guide mode skips the legend grid: the groups stay at (0,0) (the built legends are pushed unpositioned below).
       if (ctx.rawGuides) continue
-      placeLegendStack(orient, list.map((x) => x.group), list.map((x) => x.props.offset), (ctx.chart.legendLayout ?? {}) as Record<string, unknown>, xb, yb, layoutW, layoutH)
+      placeLegendStack(orient, list.map((x) => x.group), list.map((x) => x.props.offset), legendLayout, xb, yb, layoutW, layoutH)
     }
   }
   const placed = built.length && keptGroups === undefined ? countingLogs(ctx, placeLegends).logged === 0 : true
@@ -1939,6 +1944,18 @@ function buildAxisAndLegend(
 }
 
 /** What the legends of a scope are placed against (see `buildAxisAndLegend`), as a key: the anchors, the plot's size, the raw mode. */
+const NO_LAYOUT: Record<string, unknown> = {}
+
+/** `config.legend.layout` with the signals in it (at any depth, or the whole of it) resolved; none when it is no object. */
+function resolvedLegendLayout(ctx: EvalContext): Record<string, unknown> {
+  const raw = ctx.chart.legendLayout
+  if (raw === undefined) return NO_LAYOUT
+  const v = objectProperty(raw, (code) => {
+    try { return ctx.runtime.expr(code)({}, ctx.signalParams) } catch (e) { reportEvalError(ctx, e); return undefined }
+  })
+  return v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : NO_LAYOUT
+}
+
 function legendPlacementKey(anchors: { xb: Sides; yb: Sides }, w: number, h: number, raw: boolean): string {
   const { xb, yb } = anchors
   return `${xb.x1},${xb.y1},${xb.x2},${xb.y2}\u0001${yb.x1},${yb.y1},${yb.x2},${yb.y2}\u0001${w}x${h}\u0001${raw ? 1 : 0}`
@@ -7262,13 +7279,10 @@ function formatValue(v: unknown, spec: EncodeValue, ctx: EvalContext): unknown {
 function resolveLegendValues(legend: CompiledLegend, ctx: EvalContext): unknown[] | undefined {
   const raw = (legend as { values?: unknown }).values
   if (raw == null) return undefined
-  const evalSignal = (v: unknown): unknown => {
-    if (v && typeof v === 'object' && typeof (v as { signal?: unknown }).signal === 'string') {
-      try { return ctx.runtime.expr((v as { signal: string }).signal)({}, ctx.signalParams) } catch { return undefined }
-    }
-    return v
-  }
-  const resolved = Array.isArray(raw) ? raw.map(evalSignal) : evalSignal(raw)
+  // (vega's `objectProperty`, as for an axis: signals at any depth; an expression that throws gives no value)
+  const resolved = objectProperty(raw, (code) => {
+    try { return ctx.runtime.expr(code)({}, ctx.signalParams) } catch { return undefined }
+  })
   return Array.isArray(resolved) ? resolved : undefined
 }
 
@@ -7382,7 +7396,8 @@ function makeLegend(legend: CompiledLegend, ctx: EvalContext, index: number): Sc
     return null
   }
   // vega's `_('tickCount')`: a signal is what it holds
-  const tickCountRaw = guideScalar(ctx, spec.tickCount ?? config.tickCount)
+  // (vega reads a legend's tick count, the config's included, and its values through `objectProperty`: signals at any depth)
+  const tickCountRaw = axisObjectParam(spec.tickCount ?? config.tickCount, ctx)
   const values = resolveLegendValues({ values: spec.values } as unknown as CompiledLegend, ctx)
   const minstep = guideScalar(ctx, spec.tickMinStep) as number | undefined
   const formatSpecifier = guideScalar(ctx, spec.format)
@@ -7898,18 +7913,6 @@ function markLayoutWarnings(mark: CompiledMark, ctx: EvalContext, outcomes: read
   for (const message of warnings) ctx.layoutState.warnings.push(message)
 }
 
-/** The count the tick labels are formatted for: the axis's tick count through vega's tickCount (bins, tickMinStep). */
-function labelTickCount(axis: CompiledAxis, scale: Scale, count: number, ctx: EvalContext): number {
-  let minstep: unknown = axis.tickMinStep
-  if (minstep && typeof minstep === 'object' && typeof (minstep as { signal?: unknown }).signal === 'string') {
-    try { minstep = ctx.runtime.expr((minstep as { signal: string }).signal)({}, ctx.signalParams) } catch { minstep = undefined }
-  }
-  const step = typeof minstep === 'number' && Number.isFinite(minstep) && minstep > 0 ? minstep : undefined
-  if (step === undefined && !(scale as { bins?: unknown }).bins) return count
-  const counted = tickCount(scale, count, step)
-  return typeof counted === 'number' ? counted : count
-}
-
 /**
  * Build the view's guides with what reads a late signal that threw left out: in vega the operators that read it never ran, so an
  * expression of a guide that reads it gives nothing here, and throws nothing.
@@ -7970,23 +7973,21 @@ function makeAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGro
     failPass(ctx, { axis: index }, lambda.error)
     return null
   }
+  // vega's AxisTicks: the values and the tick count (signals at any depth resolved), the tally the count stands for, the count
+  // through vega's tickCount (bins, tickMinStep, interval names), the ticks; the labels are formatted for the same count
+  let plan: AxisTickPlan
   let ticks: unknown[]
   try {
-    ticks = axisTicks(axis, scale, ctx)
+    plan = axisTickPlan(axis, scale, ctx)
+    ticks = plan.ticks
   } catch (e) {
     return axisTicksFailed(axis, ctx, e, index)
   }
-  // The approximate tick count used for label formatting: the axis's tickCount, else one per explicit value, else 10 (vega's
-  // AxisTicks tally); it matters for log-scale labels, whose formatter only labels a subset of ticks depending on the count,
-  // and for the precision of a span format.
-  const count0 = (typeof axis.tickCount === "number") ? axis.tickCount : (axis.tickCount && typeof axis.tickCount === "object" && axis.tickCount.signal) ? (ctx.runtime.expr(axis.tickCount.signal)({}, ctx.signalParams) as number) || 10 : tallyOfValues(axisValues(axis, ctx))
-  // (AxisTicks formats with tickCount(scale, tally, minstep) too: a scale with bins asks for a tick per boundary, a minimum step
-  // thins the count)
-  const count = labelTickCount(axis, scale, count0, ctx)
+  const count = plan.count as number
   let labelFormat: (v: unknown) => unknown
   const labelCache: unknown[] = []
   try {
-    labelFormat = axisLabelFormat(axis, scale, count, ctx, !!axisValues(axis, ctx))
+    labelFormat = axisLabelFormat(axis, scale, count, ctx, !!plan.values)
     // vega's AxisTicks formats every tick as it makes the tuples: a format that throws (an invalid
     // specifier) is logged and the axis never gets its ticks
     for (let i = 0; i < ticks.length; i++) labelCache[i] = labelFormat(ticks[i])
@@ -8010,7 +8011,7 @@ function makeAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGro
   const built = buildAxisGuide({
     store: guides.evals > 1 ? (guides.defs ??= new Map()) : undefined, keep: guides.evals > 1,
     spec: own, cfg, scale: axis.scale, orient, orientSignal: axis.orientSignal !== undefined, encode: (axis.encode ?? NO_PROPS) as Record<string, UserEncode | undefined>,
-    ticks: rows, distinctTicks: !axisValues(axis, ctx) && DISTINCT_TICK_SCALES.has(ctx.scaleTypes.get(axis.scale) ?? ''), width: ctx.width, height: ctx.height, raw: !!ctx.rawGuides, host, style: guideStyles(ctx),
+    ticks: rows, distinctTicks: !plan.values && DISTINCT_TICK_SCALES.has(ctx.scaleTypes.get(axis.scale) ?? ''), width: ctx.width, height: ctx.height, raw: !!ctx.rawGuides, host, style: guideStyles(ctx),
   })
   failGuide(ctx, host, { axis: index, inside: true })
   const knownOrient = orient === 'top' || orient === 'bottom' || orient === 'left' || orient === 'right'
@@ -8117,100 +8118,32 @@ function vetGuideLinks(g: SceneGroup, ctx: EvalContext): void {
  */
 const DISTINCT_TICK_SCALES = new Set(['linear', 'log', 'pow', 'sqrt', 'symlog', 'band', 'point'])
 
-/** The tick count the labels are formatted for when the axis gives none: one per explicit value, else ten. */
-const tallyOfValues = (values: unknown): number => (Array.isArray(values) ? values.length : 10)
+/** What vega's AxisTicks makes of an axis's parameters: its explicit values, the tick count, and the ticks. */
+interface AxisTickPlan { values: unknown; count: unknown; ticks: unknown[] }
 
-function axisValues(axis: CompiledAxis, ctx: EvalContext): unknown {
-  const vs: unknown = axis.values
-  if (vs && typeof vs === 'object' && !Array.isArray(vs) && 'signal' in (vs as Record<string, unknown>)) {
-    return ctx.runtime.expr((vs as { signal: string }).signal)({}, ctx.signalParams)
-  }
-  return vs
+/** An axis parameter vega reads through `objectProperty` (`values`, `tickCount`): signals at any depth resolved. */
+function axisObjectParam(v: unknown, ctx: EvalContext): unknown {
+  return objectProperty(v, (code) => ctx.runtime.expr(code)({}, ctx.signalParams))
 }
 
-function axisTicks(axis: CompiledAxis, scale: Scale, ctx: EvalContext): unknown[] {
-  // Explicit `values` override any generated ticks (vega AxisTicks sorts them).
-  const vs = axisValues(axis, ctx)
-  if (vs) {
-    // vega AxisTicks: validTicks(scale, values, count) -- a value outside the scale's range is dropped, the rest are
-    // sorted in range order and thinned to the tick count (the number of values when the axis has none); a `values`
-    // that is no list is a TypeError in the dataflow (`ticks.map is not a function`)
-    if (!Array.isArray(vs)) throw new TypeError('ticks.map is not a function')
-    let given: unknown = axis.tickCount
-    if (given && typeof given === 'object' && typeof (given as { signal?: unknown }).signal === 'string') {
-      given = ctx.runtime.expr((given as { signal: string }).signal)({}, ctx.signalParams)
-    }
-    let minstep: unknown = axis.tickMinStep
-    if (minstep && typeof minstep === 'object' && typeof (minstep as { signal?: unknown }).signal === 'string') {
-      minstep = ctx.runtime.expr((minstep as { signal: string }).signal)({}, ctx.signalParams)
-    }
-    const tally = given == null ? vs.length : given
-    return validTicks(scale, vs, tickCount(scale, tally, minstep as number | undefined) as number)
+/**
+ * vega-encode AxisTicks: the tally is the tick count, else one per explicit value, else 10; the count is vega's `tickCount(scale,
+ * tally, minstep)` (a number thinned by the minimum step and widened to the bins, an interval name or `{interval, step}` on a
+ * calendar scale -- a name it does not know is no interval, so the scale's default ticks -- anything else as it is); the ticks are
+ * the explicit values valid on the scale (`validTicks`), else the scale's ticks for the count. A `values` that is no list is a
+ * TypeError in the dataflow, as vega's (`ticks.map is not a function`).
+ */
+function axisTickPlan(axis: CompiledAxis, scale: Scale, ctx: EvalContext): AxisTickPlan {
+  const values = axisObjectParam(axis.values, ctx)
+  const given = axisObjectParam(axis.tickCount, ctx)
+  const minstep = guideScalar(ctx, axis.tickMinStep)
+  const tally = given == null ? (values ? (values as unknown[]).length : 10) : given
+  const count = tickCount(scale, tally, minstep as number | undefined)
+  if (values) {
+    if (!Array.isArray(values)) throw new TypeError('ticks.map is not a function')
+    return { values, count, ticks: validTicks(scale, values, count as number) }
   }
-  let count: number | undefined
-  // vega's AxisTicks reads the (signal-resolved) tickCount through tickCount(scale, count, minstep)
-  let tickCountValue: unknown = axis.tickCount
-  if (tickCountValue && typeof tickCountValue === 'object' && typeof (tickCountValue as { signal?: unknown }).signal === 'string') {
-    tickCountValue = ctx.runtime.expr((tickCountValue as { signal: string }).signal)({}, ctx.signalParams)
-  }
-  if (typeof tickCountValue === 'number') count = tickCountValue
-  else if (typeof tickCountValue === 'string' || (tickCountValue && typeof tickCountValue === 'object' && !Array.isArray(tickCountValue) && 'interval' in (tickCountValue as Record<string, unknown>))) {
-    // vega's tickCount util resolves an interval string against the scale:
-    // legal only on time/utc scales, where it becomes a calendar interval the
-    // scale's ticks consume; anything else is an error in the dataflow (the
-    // caller logs it and the axis is not drawn).  `{interval, step}` objects resolve the interval and
-    // widen it with `every(step)`.
-    const raw = typeof tickCountValue === 'string' ? tickCountValue : (tickCountValue as { interval?: unknown }).interval
-    const step = typeof tickCountValue === 'object' && tickCountValue !== null ? (tickCountValue as { step?: unknown }).step : undefined
-    if (typeof raw !== 'string') throw new Error('Invalid tick count.')
-    if (scale.type !== 'time' && scale.type !== 'utc') {
-      throw new Error('Only time and utc scales accept interval strings.')
-    }
-    // vega-time has no singular sub-day intervals; vega falls back to the
-    // default tick count for these names rather than refusing the axis.
-    if (raw === 'hour' || raw === 'minute' || raw === 'second' || raw === 'millisecond') {
-      count = undefined
-    } else {
-      const ival = scale.type === 'time' ? part('time').timeIntervalFor(raw) : part('time').utcIntervalFor(raw)
-      if (!ival) throw new Error(`[aster] unknown time interval: ${raw}`)
-      count = (step != null ? (ival as { every?: (n: number) => unknown }).every?.(step as number) : ival) as unknown as number
-    }
-  }
-  // Resolve tickMinStep (may be a number or a signal expression).
-  let tickMinStep: number | undefined
-  if (typeof axis.tickMinStep === 'number') {
-    tickMinStep = axis.tickMinStep
-  } else if (axis.tickMinStep && typeof axis.tickMinStep === 'object') {
-    const sig = (axis.tickMinStep as { signal?: string }).signal
-    if (sig !== undefined) {
-      try {
-        const v = ctx.runtime.expr(sig)({}, ctx.signalParams)
-        if (typeof v === 'number' && Number.isFinite(v)) tickMinStep = v
-      } catch { /* ignore */ }
-    }
-  }
-
-  // A negative tickMinStep makes vega's tickCount reduce the count below 1
-  // (floor(span / negative) + 1), and tickValues then yields no ticks at all.
-  // Band/point scales are exempt: tickValues returns their domain untouched.
-  if (tickMinStep != null && tickMinStep < 0 && scale.type !== 'band' && scale.type !== 'point') return []
-
-  // vega's AxisTicks tally: no tickCount means 10 (not "let the scale pick").
-  // Without this a linear axis with tickMinStep and no tickCount would step
-  // every minStep across the whole domain (hundreds of month labels).
-  if (count === undefined) count = 10
-  // vega-encode passes tickMinStep into tickCount, which clamps the tick
-  // count to one tick per minimum step: count = min(count, span/minstep + 1)
-  // and, for non-temporal non-log scales, shrinks count until tickStep >=
-  // minStep. tickCount() implements that rule for every scale type.
-  // (a scale with bins asks for at least one tick per bin boundary, whatever the count)
-  if (typeof count === 'number' && ((tickMinStep != null && tickMinStep > 0) || (scale as { bins?: unknown }).bins)) {
-    const counted = tickCount(scale, count, tickMinStep != null && tickMinStep > 0 ? tickMinStep : undefined)
-    if (typeof counted === 'number') count = counted
-  }
-
-  // (the minimum step acts only through the tick count above, as in vega: a log scale's ticks may sit closer than it)
-  return scaleTicks(scale, count)
+  return { values, count, ticks: scaleTicks(scale, count as number) }
 }
 
 function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx: EvalContext, noSkip = false): (v: unknown) => string {
