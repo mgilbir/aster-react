@@ -5,7 +5,6 @@ import { act } from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { AsterUrlError } from '@aster-charts/core'
 import { loadSpecData, loadSpecDataResource, useChartData, type UseChartResult } from './useChart'
-import { forEachVariant } from './testing/variants'
 
 const specOf = (url: string): never => ({
   width: 50, height: 50, padding: 0, autosize: 'none',
@@ -70,56 +69,76 @@ describe('loader options are forwarded', () => {
     await Promise.allSettled([a, b, withAllow, other, named])
   })
 
-  let variantRun = 0
-  forEachVariant(['svg'], (Chart) => {
-    it('useChartData splits loader options from chart options', async () => {
-      // (each variant loads its own url: the Suspense cache is module-wide, so equal inputs would share one load)
-      const file = `data-${++variantRun}.csv`
-      const fetchImpl = csv()
-      let result: UseChartResult | null = null
-      function Chart(): React.ReactElement {
-        result = useChartData(specOf(file), { fetch: fetchImpl, baseURL: 'https://data.example.com/', limits: { maxRows: 100 }, width: 50, height: 50 })
-        return <div />
-      }
-      const host = document.createElement('div')
-      document.body.appendChild(host)
-      const root = createRoot(host)
-      await act(async () => { root.render(<React.Suspense fallback={null}><Chart /></React.Suspense>) })
+  // (these test the hooks, which no chart variant is involved in: each test loads its own urls, since the Suspense cache is
+  // module-wide and equal inputs would share one load)
+  let run = 0
+
+  async function mountProbe(useIt: () => UseChartResult, give: (r: UseChartResult) => void): Promise<() => void> {
+    function Probe(): React.ReactElement {
+      give(useIt())
+      return <div />
+    }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    await act(async () => { root.render(<React.Suspense fallback={null}><Probe /></React.Suspense>) })
+    return () => act(() => { root.unmount() })
+  }
+
+  it('useChartData splits loader options from chart options: the loader gets baseURL, the chart gets width, height and limits', async () => {
+    const file = `data-${++run}.csv`
+    const fetchImpl = csv()
+    let result: UseChartResult | null = null
+    const spec1 = specOf(file)
+    const unmount = await mountProbe(() => useChartData(spec1, { fetch: fetchImpl, baseURL: 'https://data.example.com/', width: 80, height: 70 }), (r) => { result = r })
+    await act(async () => { for (let i = 0; i < 100 && !result; i++) await new Promise((r) => setTimeout(r, 10)) })
+    expect(result!.error).toBeNull()
+    // the loader's side: the relative url was resolved against baseURL
+    expect((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0]![0].toString()).toBe(`https://data.example.com/${file}`)
+    // the chart's side: the size reached the drawing (the spec itself says 50 x 50)
+    expect(result!.svg).toMatch(/<svg[^>]* width="80"[^>]* height="70"/)
+    unmount()
+
+    // `limits` reach the chart as well as the loader: a budget only the drawing can break (the SVG's length) is enforced
+    const file2 = `data-${++run}.csv`
+    let limited: UseChartResult | null = null
+    const spec2 = specOf(file2)
+    const limitedFetch = csv()
+    const unmount2 = await mountProbe(
+      () => useChartData(spec2, { fetch: limitedFetch, baseURL: 'https://data.example.com/', limits: { maxSvgLength: 10 } }),
+      (r) => { limited = r },
+    )
+    await act(async () => { for (let i = 0; i < 100 && !limited; i++) await new Promise((r) => setTimeout(r, 10)) })
+    expect(limited!.error).toMatchObject({ code: 'ASTER_LIMIT' })
+    unmount2()
+  })
+
+  it('useChartData loads a {signal} url for the host\'s signal value, and again when it changes (C531)', async () => {
+    const fetchImpl = csv()
+    const dir = `https://data.example.com/v${++run}/`
+    const spec = {
+      width: 50, height: 50, padding: 0, autosize: 'none',
+      signals: [{ name: 'file', value: 'spec.csv' }],
+      data: [{ name: 't', url: { signal: `'${dir}' + file` }, format: { type: 'csv' } }],
+      marks: [],
+    } as never
+    let result: UseChartResult | null = null
+    function Probe({ file }: { file: string }): React.ReactElement {
+      result = useChartData(spec, { fetch: fetchImpl, allow: ANY, signals: { file }, width: 50, height: 50 })
+      return <div />
+    }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const urls = (): string[] => (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]))
+    for (const file of ['a.csv', 'b.csv']) {
+      result = null
+      await act(async () => { root.render(<React.Suspense fallback={null}><Probe file={file} /></React.Suspense>) })
       await act(async () => { for (let i = 0; i < 100 && !result; i++) await new Promise((r) => setTimeout(r, 10)) })
       expect(result!.error).toBeNull()
-      expect(result!.svg).toContain('<svg')
-      expect((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0]![0].toString()).toBe(`https://data.example.com/${file}`)
-      act(() => { root.unmount() })
-    })
-
-    it('useChartData loads a {signal} url for the host\'s signal value, and again when it changes (C531)', async () => {
-      const fetchImpl = csv()
-      // (each variant its own urls: the Suspense cache is module-wide, so equal inputs would share one load)
-      const dir = `https://data.example.com/v${++variantRun}/`
-      const spec = {
-        width: 50, height: 50, padding: 0, autosize: 'none',
-        signals: [{ name: 'file', value: 'spec.csv' }],
-        data: [{ name: 't', url: { signal: `'${dir}' + file` }, format: { type: 'csv' } }],
-        marks: [],
-      } as never
-      let result: UseChartResult | null = null
-      function Chart({ file }: { file: string }): React.ReactElement {
-        result = useChartData(spec, { fetch: fetchImpl, allow: ANY, signals: { file }, width: 50, height: 50 })
-        return <div />
-      }
-      const host = document.createElement('div')
-      document.body.appendChild(host)
-      const root = createRoot(host)
-      const urls = (): string[] => (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]))
-      for (const file of ['a.csv', 'b.csv']) {
-        result = null
-        await act(async () => { root.render(<React.Suspense fallback={null}><Chart file={file} /></React.Suspense>) })
-        await act(async () => { for (let i = 0; i < 100 && !result; i++) await new Promise((r) => setTimeout(r, 10)) })
-        expect(result!.error).toBeNull()
-      }
-      expect(urls()).toEqual([`${dir}a.csv`, `${dir}b.csv`])
-      act(() => { root.unmount() })
-    })
+    }
+    expect(urls()).toEqual([`${dir}a.csv`, `${dir}b.csv`])
+    act(() => { root.unmount() })
   })
 })
 
