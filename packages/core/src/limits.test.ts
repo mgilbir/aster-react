@@ -191,10 +191,14 @@ describe('formatter caches are bounded LRU', () => {
 
   it('a flood of distinct specifiers stays bounded (heap does not retain 100k closures)', () => {
     const l = locale()
-    for (let i = 0; i < 100_000; i++) l.timeFormat(`%Y-${i}`)
-    // observable bound: the oldest key is gone, so asking again builds a new formatter
-    const a = l.timeFormat('%Y-0')
-    expect(l.timeFormat('%Y-0')).toBe(a) // cached again after the rebuild
+    const oldest = l.timeFormat('%Y-0')
+    for (let i = 1; i < 100_000; i++) l.timeFormat(`%Y-${i}`)
+    // The table holds at most CACHE_MAX formatters, so the oldest is gone (asking again builds another) and the newest is held.
+    // On an unbounded table both are the objects first made.
+    const newest = l.timeFormat('%Y-99999')
+    expect(l.timeFormat('%Y-99999')).toBe(newest)
+    expect(l.timeFormat('%Y-0')).not.toBe(oldest)
+    expect(l.timeFormat('%Y-99999')).toBe(newest)
   })
 })
 
