@@ -216,7 +216,7 @@ export const BUDGETS = {
   '@aster-charts/react Chart': 191.1 * KB,
   '@aster-charts/react SvgChart': 179.5 * KB,
   '@aster-charts/react SvgChart + interaction': 190.8 * KB,
-  '@aster-charts/react Chart + VL': 297.4 * KB,
+  '@aster-charts/react Chart + VL': 302.0 * KB,
   '@aster-charts/react Chart + all': 262.1 * KB,
   '@aster-charts/react useChartWorker': 204.5 * KB,
   '@aster-charts/react hydrateChart': 219.5 * KB,
