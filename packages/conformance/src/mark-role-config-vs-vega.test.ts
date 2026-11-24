@@ -6,20 +6,20 @@
  * root frame (and a data mark that calls itself `frame`), and a named `style` for any role. This file generates the
  * product of mark type x role x config block x style x encode override and compares the string renderer to vega.
  *
- * Excluded, exactly (both are layout divergences with no config in them, documented in aria-guides-vs-vega.test.ts):
- *  - a GROUP mark whose role starts with axis / legend / title (vega keeps that role and lays the mark out as a guide);
- *  - a DATA mark whose role is `frame` or `scope` while the chart has a legend or a title (vega then drops them), and a
- *    stroked `area` with either role even without them (vega's parser makes such a mark a layout container: its stroke
- *    does not grow the view as it does for every other role). Every other type with these roles is generated in charts
- *    with neither, and so is config.group on them.
- *  - a third class this file found: a DATA mark whose role is exactly `axis`, `legend` or `title` (vega's ViewLayout
- *    lays it out as the guide: offsets it by half a pixel, takes the legends away). The guide-prefixed roles
- *    (`axis-label`, `legend-entry`, `title-text`, `title-subtitle`) are generated.
+ * Not an exclusion: every cell of the product is compared. A cell that differs must belong to one of the named classes of
+ * `scripts/lib/expected-differences.mjs` (vega's ViewLayout reads the role of an authored mark; Aster lays out only the guides it
+ * generates, C205), the matrix fails a difference outside them, and each class is held to STILL DIFFER on its own probe (so a fix
+ * on either side fails until the entry is removed). The classes:
+ *  - a GROUP mark whose role starts with axis / legend / title;
+ *  - a DATA mark whose role is exactly `axis`; or `legend` in a chart with a legend (vega's layout takes them as the guide);
+ *  - a DATA mark whose role is `frame` or `scope` in a chart with a legend and a title;
+ *  - a stroked `area` with `frame`, `scope`, `legend` or `title` (vega makes it a layout container).
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
 import { renderSpec } from '@aster-charts/core'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
+import { expectKnownDifference } from '../scripts/known-differences.mts'
 
 type Spec = Record<string, unknown>
 
@@ -70,10 +70,28 @@ function chart(type: string, role: string | undefined, config: Spec | undefined,
   }
 }
 
-const excluded = (type: string, role: string | undefined, guides: boolean): boolean =>
-  (type === 'group' && role !== undefined && /^(axis|legend|title)/.test(role)) || (type !== 'group' && (role === 'frame' || role === 'scope') && (guides || type === 'area'))
-  // (third class, found by this file: vega's layout treats a DATA mark whose role is exactly axis / legend / title as the guide)
-  || (type !== 'group' && (role === 'axis' || role === 'legend' || role === 'title'))
+const FILE = 'mark-role-config-vs-vega'
+
+/** The named classes of difference: what tells one apart, and the probe cell that must still show it. */
+const KNOWN: Array<{ name: string; in: (type: string, role: string | undefined, guides: boolean) => boolean; probe: [type: string, role: string, guides: boolean, enc: Spec] }> = [
+  { name: 'a group mark whose role starts with axis, legend or title', in: (t, r) => t === 'group' && r !== undefined && /^(axis|legend|title)/.test(r), probe: ['group', 'axis', false, {}] },
+  { name: 'a data mark whose role is exactly axis', in: (t, r) => t !== 'group' && r === 'axis', probe: ['rect', 'axis', false, {}] },
+  { name: 'a data mark whose role is legend, in a chart with a legend', in: (t, r, g) => t !== 'group' && r === 'legend' && g, probe: ['rect', 'legend', true, {}] },
+  { name: 'a data mark whose role is frame or scope, in a chart with a legend and a title', in: (t, r, g) => t !== 'group' && (r === 'frame' || r === 'scope') && g, probe: ['rect', 'frame', true, {}] },
+  { name: 'a stroked area whose role is frame, scope, legend or title', in: (t, r) => t === 'area' && (r === 'frame' || r === 'scope' || r === 'legend' || r === 'title'), probe: ['area', 'frame', false, { stroke: { value: '#456' } }] },
+]
+const classOf = (type: string, role: string | undefined, guides: boolean): string | undefined => KNOWN.find((k) => k.in(type, role, guides))?.name
+
+describe('the known differences of an authored mark role still differ (C205)', () => {
+  for (const k of KNOWN) {
+    it(k.name, async () => {
+      const [type, role, guides, enc] = k.probe
+      expect(k.in(type, role, guides), 'the probe belongs to its class').toBe(true)
+      const spec = chart(type, role, undefined, undefined, enc, guides)
+      expectKnownDifference(FILE, k.name, canonicalizeSvg(await oracle(spec)), canonicalizeSvg(renderSpec(spec as never)))
+    })
+  }
+})
 
 describe('mark type x role x config x style x encode, full document', () => {
   for (const type of TYPES) {
@@ -85,11 +103,11 @@ describe('mark type x role x config x style x encode, full document', () => {
         if (en !== 'no override' && sn !== 'no style') continue
         if (sn !== 'no style' && cn !== 'none' && cn !== 'named styles') continue
         for (const guides of [false, true]) {
-          if (excluded(type, role, guides)) continue
           const spec = chart(type, role, cfg, st, enc, guides)
           n++
           const want = canonicalizeSvg(await oracle(spec))
           const d = diffCanonical(want, canonicalizeSvg(renderSpec(spec as never)))
+          if (d.length && classOf(type, role, guides) !== undefined) continue // (a named class: held on its probe above)
           if (d.length) bad.push(`${type} role=${role} ${cn} ${sn} ${en} guides=${guides}: ${d.slice(0, 2).join(' | ').slice(0, 260)}`)
         }
       }

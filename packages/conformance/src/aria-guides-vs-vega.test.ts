@@ -15,6 +15,7 @@ import * as vega from 'vega'
 import { buildA11yTree, compileChart, evaluateChart, renderSceneToSvg } from '@aster-charts/core'
 import { renderSceneToDomElement } from '@aster-charts/core/dom'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
+import { expectKnownDifference } from '../scripts/known-differences.mts'
 
 type Spec = Record<string, unknown>
 
@@ -84,7 +85,7 @@ function legendSpec(r: () => number): Spec {
   const d = pick(r, DESCRIPTIONS); if (d !== undefined) lg.description = d
   const a = pick(r, ARIAS); if (a !== undefined) lg.aria = a
   const enc: Spec = {}
-  for (const part of ['legend', 'entries', 'labels', 'symbols', 'title', 'gradient', 'title']) { const e = ariaEncode(r); if (e && maybe(r, 0.4)) enc[part] = e }
+  for (const part of ['legend', 'entries', 'labels', 'symbols', 'title', 'gradient']) { const e = ariaEncode(r); if (e && maybe(r, 0.4)) enc[part] = e }
   if (Object.keys(enc).length) lg.encode = enc
   return lg
 }
@@ -110,8 +111,9 @@ function markSpec(r: () => number): Spec {
   const d = pick(r, DESCRIPTIONS); if (d !== undefined) m.description = d
   const a = pick(r, ARIAS); if (a !== undefined) m.aria = a
   // (the role a spec gives a mark. A guide's own roles on a DATA mark are read by vega's ARIA as the guide's. Not generated: a
-  // guide role on a GROUP mark, and `frame` / `scope` on a data mark -- vega then draws the chart's guides differently (a layout
-  // matter that has no ARIA in it), and Aster does not follow; see the report of this change)
+  // guide role on a GROUP mark, and `frame` / `scope` on a data mark -- vega then lays the chart's guides out differently (a layout
+  // matter that has no ARIA in it), and Aster does not follow: the classes are held, still differing, in
+  // mark-role-config-vs-vega.test.ts (scripts/lib/expected-differences.mjs) and listed in docs/ARCHITECTURE.md "Deviations from Vega")
   const roles = type === 'group' ? ['mark', 'custom'] : ['mark', 'axis', 'legend', 'title', 'axis-label', 'legend-entry', 'title-text', 'title-subtitle', 'legend-label', 'custom']
   if (maybe(r, 0.2)) m.role = pick(r, roles)
   if (maybe(r, 0.15)) m.interactive = false
@@ -168,7 +170,6 @@ async function judgeStructure(spec: Spec, what: string): Promise<void> {
 /** Judge many specs and report every divergence (the spec's JSON included), not just the first. */
 async function judgeAll(specs: Array<[string, Spec]>): Promise<void> {
   const bad: string[] = []
-  for (const [what] of specs.slice(0,0)) void what
   for (const [what, spec] of specs) {
     const want = canonicalizeSvg(await oracle(spec))
     const got = aster(spec)
@@ -227,7 +228,16 @@ describe('empty guides and empty marks', () => {
       marks: [{ type: 'rect', from: { data: 't' }, encode: { update: row } }, { type: 'group', from: { data: 't' }, encode: { update: row } }, { type: 'rect', role: 'custom', from: { data: 't' }, encode: { update: row } }],
     })],
   ]
-  for (const [what, spec] of cases) it(what, async () => { await (what.startsWith('a data mark with a guide role') ? judgeStructure : judge)(spec, what) })
+  for (const [what, spec] of cases) {
+    // (a data mark whose role is exactly `axis` is laid out by vega as the guide, a half-pixel offset: the ARIA is held to vega's, the
+    // geometry is the known difference of mark-role-config-vs-vega.test.ts. Every other case is judged in full.)
+    if (what.includes('the description of the first item only')) {
+      it(what, async () => {
+        await judgeStructure(spec, what)
+        expectKnownDifference('mark-role-config-vs-vega', 'a data mark whose role is exactly axis', canonicalizeSvg(await oracle(spec)), canonicalizeSvg(aster(spec).string))
+      })
+    } else it(what, async () => { await judge(spec, what) })
+  }
 })
 
 describe('generated guides and marks carry the ARIA vega writes', () => {
@@ -241,19 +251,24 @@ describe('generated guides and marks carry the ARIA vega writes', () => {
 
 describe('the matrix is not vacuous', () => {
   it('each family occurs in vega\'s documents with the ARIA the comparison judges', async () => {
-    const seen = { axis: 0, legend: 0, title: 0, subtitle: 0, hidden: 0, mark: 0, item: 0, noparts: 0 }
+    const seen = { axis: 0, legend: 0, title: 0, subtitle: 0, hiddenGuide: 0, hiddenMark: 0, markContainer: 0, item: 0, noparts: 0 }
     for (let seed = 0; seed < 600; seed++) {
       const svg = await oracle(generated(seed))
       seen.axis += +/role-axis[^>]*role="graphics-symbol" aria-roledescription="axis"/.test(svg)
       seen.legend += +/aria-roledescription="legend"/.test(svg)
       seen.title += +/aria-roledescription="title"/.test(svg)
       seen.subtitle += +/aria-roledescription="subtitle"/.test(svg)
-      seen.hidden += +/aria-hidden="true"/.test(svg)
-      seen.mark += +/aria-roledescription="[a-z]+ mark container"/.test(svg)
+      // (`aria: false` on a guide, and on a mark: a container that carries aria-hidden and no role)
+      seen.hiddenGuide += +/class="mark-group role-(axis|legend|title)[^"]*"[^>]*aria-hidden="true"/.test(svg)
+      seen.hiddenMark += +/class="mark-(rect|symbol|text|line|area|rule|arc|path|trail) role-mark[^"]*"[^>]*aria-hidden="true"/.test(svg)
+      // (a data mark's container with its description: the root frame is a "group mark container" in every document and is not counted)
+      seen.markContainer += +/class="mark-(rect|symbol|text|line|area|rule|arc|path|trail) role-[a-z-]+[^"]*"[^>]*aria-roledescription="[a-z]+ mark container"/.test(svg)
       seen.item += +/aria-roledescription="[a-z]+ mark"/.test(svg)
-      seen.noparts += +/class="mark-group role-axis"[^>]*role="graphics-symbol"[^>]*><g[^>]*><path[^>]*><\/path><\/g>/.test(svg)
+      // (an axis that draws nothing and is still a graphics-symbol: its group holds the background and an empty parts group)
+      seen.noparts += +/class="mark-group role-axis"[^>]*role="graphics-symbol"[^>]*><g[^>]*><path class="background"[^>]*\/><g\/>/.test(svg)
     }
-    for (const [k, v] of Object.entries(seen)) if (k !== 'noparts') expect(v, k).toBeGreaterThan(20)
+    // (the generator draws the part-less axis in 11 of 600 seeds; the hand-written block above holds it in full)
+    for (const [k, v] of Object.entries(seen)) expect(v, k).toBeGreaterThan(k === 'noparts' ? 5 : 20)
   }, 300_000)
 })
 
