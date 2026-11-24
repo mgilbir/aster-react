@@ -10,7 +10,9 @@
  * A slot that is read while it is empty is a missed detection, never a reason to go on without the part: the reader throws, so a
  * chart is refused rather than drawn differently, and the regular-expression screen in particular can never be skipped (limits.ts).
  * The one exception is the pulse path of the incremental engine, which is an optimisation: without it a re-evaluation derives its
- * datasets in full, which makes the same scene, and asks for the part so that the next one is incremental (runtime.ts).
+ * datasets in full, which makes the same scene, and asks for the part so that the next one is incremental (runtime.ts). Not for a
+ * dataset that may draw from an injected random source: the two builds draw other numbers from the same source, so there the slot
+ * is read like any other (`specNeeds` names `pulse` for it, addons.ts).
  *
  * Only types are imported here: this module is in every bundle, the parts are not.
  */
