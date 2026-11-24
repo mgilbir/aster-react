@@ -10,15 +10,22 @@
  *   on what it would fetch and return, not on which array holds the rows);
  * - the data-valued options (`baseURL`, `protocols`, `timeoutMs`, `limits`, ...) by content;
  * - a stateful object (`signal`, an `AbortSignal`) by identity;
- * - a function option (`fetch`, `allow`) through a latest-ref: an inline arrow rebuilt by every render is the same option, and
- *   the function called is the latest one given. A function is not data: it cannot be compared by content, and comparing it by
- *   identity makes every inline arrow a new load, which a suspended component asks for again on every retry (C50). Its CODE is in
- *   the key all the same, as a guard: two components whose `allow` differ in code are never served one load, so a component is
- *   never handed rows that only another component's veto let through.
- * - `cacheKey`, a string the host gives, by value. Functions with the same code that close over different values (a `fetch` made
- *   per user by one factory, a per-request `fetch` on a server, where this module cache is shared by every request) are the same
- *   option to the cache; a host that needs such loads kept apart gives each its own `cacheKey`, as it gives a query library a
- *   query key.
+ * - a function option (`fetch`, `allow`) by IDENTITY (DECISIONS, later decisions: useSpecData function options). A function is
+ *   not data and closures of the same code differ in what they capture (a per-request `fetch` on a server carries that request's
+ *   credentials, and this module cache is shared by every request), so two different functions are never served one load.
+ * - `cacheKey`, a string the host gives, by value: the one way to share a load across function identities. With it the host
+ *   names the load, the functions are not part of the key, and the ones called are the latest given (a latest-ref), so an inline
+ *   arrow is fine.
+ *
+ * An inline function option WITHOUT a `cacheKey` is a new identity on every render, so each retry of a suspended component asks
+ * for a new load (C50). That is caught, not looped: when a render misses its load while the same spec and data options already
+ * have a load that settled and was never read again (the previous attempt, abandoned by its retry), the inputs churn. After
+ * `UNSTABLE_LOAD_LIMIT` such loads in a row, the ask throws an `AsterUnstableLoadOptionError` naming the option and the fix,
+ * instead of fetching again. A load read again after it settled (a retry that found its own load, a mounted reader) proves the
+ * inputs stable and clears the count. Before anything settles, a parent re-rendering the suspended tree misses too: once
+ * `UNSTABLE_LOAD_LIMIT` loads of the same inputs are in flight that nobody asked for again, a further miss waits for them (a
+ * stand-in that is no data) instead of fetching. So an inline function costs fewer than 2 x `UNSTABLE_LOAD_LIMIT` fetches, then
+ * the typed error; `resetSpecDataErrors()` clears the count (a new attempt, bounded the same way).
  *
  * Lifetime: a load a mounted component reads stays while it is mounted; one nothing mounted reads (a component that suspended and
  * went away, a component that unmounted) is kept among the last `IDLE_LOADS` such loads, so a remount or a retry finds it, and is
@@ -37,17 +44,53 @@ import type { LoadOptions } from '@aster-charts/core/load'
 /** The loader's options plus the host's own name for a load (see `cacheKey` above). */
 export type SpecDataOptions = LoadOptions & { cacheKey?: string }
 
+/** Loads one spec and set of data options may start, with function options that change identity, before the ask throws. */
+export const UNSTABLE_LOAD_LIMIT = 3
+
+/**
+ * `useSpecData` (or `loadSpecDataResource`) was given a function option that is a new function on every render, so a suspended
+ * component would start a new load on every retry. `options` names the function options that changed.
+ */
+export class AsterUnstableLoadOptionError extends Error {
+  readonly code = 'ASTER_UNSTABLE_LOAD_OPTION'
+  readonly options: readonly string[]
+  constructor(options: readonly string[], loads: number) {
+    const names = options.map((n) => `\`${n}\``).join(', ')
+    super(`[aster] useSpecData: ${names || 'a function option'} is a new function on every render, so every retry of the suspended `
+      + `component starts a new load (${loads} so far). Hoist it out of the component (or keep it in a stable reference, such as a `
+      + `module-level function), or pass a \`cacheKey\` that names the load: with one, the latest function given is used.`)
+    this.name = 'AsterUnstableLoadOptionError'
+    this.options = options
+  }
+}
+
 /** A promise React can read synchronously once it has settled (the fields React's own `use` bookkeeping sets). */
 type Tracked<T> = Promise<T> & { status?: 'pending' | 'fulfilled' | 'rejected'; value?: T; reason?: unknown }
 
 interface Load {
   readonly key: string
+  readonly family: Family
   readonly promise: Tracked<VgSpec>
   /** The latest function options given for this load (read when the loader calls them). */
   functions: Record<string, (...args: never[]) => unknown>
   /** Mounted components reading it. */
   users: number
+  /** It has settled. */
+  settled: boolean
+  /** It was asked for again after it settled (its inputs are stable). */
+  readAfterSettle: boolean
+  /** It was asked for again at all after it was started. */
+  readAgain: boolean
 }
+
+/** The loads of one spec and set of data options, whatever their function identities. */
+interface Family {
+  readonly key: string
+  readonly loads: Set<Load>
+  /** Loads started in a row while an earlier one was abandoned (see the module comment). */
+  churn: number
+}
+const families = new Map<string, Family>()
 
 /** Loads nothing mounted reads that are kept, oldest dropped first. */
 export const IDLE_LOADS = 32
@@ -126,7 +169,8 @@ function optionsKey(options: SpecDataOptions): { key: string; functions: Record<
     let part: string
     if (typeof v === 'function') {
       functions[name] = v as (...args: never[]) => unknown
-      part = `f:${Function.prototype.toString.call(v)}`
+      // (by identity, unless the host names the load: then the latest function is called through a forwarder)
+      part = options.cacheKey !== undefined ? 'f' : `f#${objectId(v)}`
     } else if (typeof AbortSignal !== 'undefined' && v instanceof AbortSignal) {
       part = `#${objectId(v)}`
     } else {
@@ -137,18 +181,39 @@ function optionsKey(options: SpecDataOptions): { key: string; functions: Record<
   return { key, functions }
 }
 
+/** The options' key with the function identities left out: the family of loads they belong to. */
+function familyKey(options: SpecDataOptions): string {
+  let key = ''
+  for (const name of Object.keys(options).sort()) {
+    const v = (options as Record<string, unknown>)[name]
+    if (v === undefined) continue
+    key += `${JSON.stringify(name)}=${typeof v === 'function' ? 'f' : typeof AbortSignal !== 'undefined' && v instanceof AbortSignal ? `#${objectId(v)}` : contentKey(v)};`
+  }
+  return key
+}
+
+function drop(key: string): void {
+  const load = loads.get(key)
+  if (!load) return
+  loads.delete(key)
+  idle.delete(key)
+  load.family.loads.delete(load)
+  // (a family with no loads left and nothing counted is forgotten; one whose inputs churned keeps its count)
+  if (load.family.loads.size === 0 && load.family.churn === 0) {
+    if (families.get(load.family.key) === load.family) families.delete(load.family.key)
+  }
+}
+
 function markIdle(load: Load): void {
   idle.delete(load.key)
   idle.set(load.key, true)
   while (idle.size > IDLE_LOADS) {
-    const oldest = idle.keys().next().value as string
-    idle.delete(oldest)
-    loads.delete(oldest)
+    drop(idle.keys().next().value as string)
   }
 }
 
-function start(key: string, spec: VgSpec, options: SpecDataOptions, functions: Load['functions']): Load {
-  const load: Load = { key, promise: undefined as never, functions, users: 0 }
+function start(key: string, family: Family, spec: VgSpec, options: SpecDataOptions, functions: Load['functions']): Load {
+  const load: Load = { key, family, promise: undefined as never, functions, users: 0, settled: false, readAfterSettle: false, readAgain: false }
   // the loader gets the data options as given and, for each function option, a forwarder to the latest one
   const { cacheKey: _name, ...loaderOptions } = options
   const call: Record<string, unknown> = { ...loaderOptions }
@@ -156,23 +221,66 @@ function start(key: string, spec: VgSpec, options: SpecDataOptions, functions: L
   const promise: Tracked<VgSpec> = import('@aster-charts/core/load').then((mod) => mod.loadSpecData(spec, call as LoadOptions))
   promise.status = 'pending'
   promise.then(
-    (value) => { promise.status = 'fulfilled'; promise.value = value },
-    (reason: unknown) => { promise.status = 'rejected'; promise.reason = reason },
+    (value) => { promise.status = 'fulfilled'; promise.value = value; load.settled = true },
+    (reason: unknown) => { promise.status = 'rejected'; promise.reason = reason; load.settled = true },
   )
   ;(load as { promise: Tracked<VgSpec> }).promise = promise
   loads.set(key, load)
+  family.loads.add(load)
   markIdle(load)
   return load
 }
 
-/** The load for these inputs: the one already made, or a new one. The function options given become its latest. */
+/**
+ * The load for these inputs: the one already made, or a new one. The function options given become its latest. Throws
+ * `AsterUnstableLoadOptionError` when function options that change identity on every ask would start one load per ask.
+ */
 export function acquireSpecData(spec: VgSpec, options: SpecDataOptions): Load {
   const { key: optKey, functions } = optionsKey(options)
-  const key = `${specKey(spec)}|${optKey}`
-  let load = loads.get(key)
-  if (load === undefined) return start(key, spec, options, functions)
-  load.functions = functions
-  return load
+  const sKey = specKey(spec)
+  const key = `${sKey}|${optKey}`
+  const fKey = `${sKey}|${familyKey(options)}`
+  let family = families.get(fKey)
+  if (!family) families.set(fKey, (family = { key: fKey, loads: new Set(), churn: 0 }))
+  const load = loads.get(key)
+  if (load !== undefined) {
+    load.readAgain = true
+    if (load.settled && !load.readAfterSettle) {
+      load.readAfterSettle = true
+      family.churn = 0
+    }
+    load.functions = functions
+    return load
+  }
+  // a load of the same spec and data options that settled and was never asked for again, by nobody mounted: the attempt this
+  // ask most likely retries, with new function identities
+  let abandoned: Load | undefined
+  for (const l of family.loads) if (l.settled && !l.readAfterSettle && l.users === 0) { abandoned = l; break }
+  if (abandoned) {
+    family.churn++
+    if (family.churn >= UNSTABLE_LOAD_LIMIT) {
+      const changed = Object.keys(functions).filter((n) => abandoned!.functions[n] !== functions[n]).sort()
+      throw new AsterUnstableLoadOptionError(changed, family.loads.size)
+    }
+  }
+  // While loads of this family that nobody read again are still in flight, a render that misses again (a parent re-rendering
+  // the suspended tree with new function identities) waits for them instead of fetching: at most UNSTABLE_LOAD_LIMIT such loads
+  // are in flight, so the fetches are bounded before the count above can trip. The wait is no load: when it ends the render is
+  // retried and asks again.
+  const unread = [...family.loads].filter((l) => !l.settled && !l.readAgain && l.users === 0)
+  if (unread.length >= UNSTABLE_LOAD_LIMIT) return waitFor(unread, family)
+  return start(key, family, spec, options, functions)
+}
+
+/** Whether `load` is a wait stand-in (see `waitFor`): its value is no data, and the ask is made again once it settles. */
+export function isSpecDataWait(load: Load): boolean {
+  return load.key === ''
+}
+
+/** A stand-in that settles when the first of `pending` settles; never cached, never data (see `acquireSpecData`). */
+function waitFor(pending: readonly Load[], family: Family): Load {
+  const promise: Tracked<VgSpec> = Promise.race(pending.map((l) => l.promise.then(() => undefined, () => undefined))).then(() => ({}) as VgSpec)
+  return { key: '', family, promise, functions: {}, users: 0, settled: false, readAfterSettle: false, readAgain: false }
 }
 
 /**
@@ -182,12 +290,13 @@ export function acquireSpecData(spec: VgSpec, options: SpecDataOptions): Load {
  */
 export function resetSpecDataErrors(): number {
   let n = 0
-  for (const [key, load] of loads) {
+  for (const [key, load] of [...loads]) {
     if (load.promise.status !== 'rejected') continue
-    loads.delete(key)
-    idle.delete(key)
+    drop(key)
     n++
   }
+  // (a reset is a new attempt: inputs that churned get their bounded number of loads again)
+  for (const family of families.values()) family.churn = 0
   return n
 }
 

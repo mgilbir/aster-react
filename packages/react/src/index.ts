@@ -44,6 +44,7 @@ export {
   loadSpecData,
   loadSpecDataResource,
   resetSpecDataErrors,
+  AsterUnstableLoadOptionError,
   type UseChartOptions,
   type UseChartResult,
   type UseSpecDataOptions,
