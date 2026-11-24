@@ -437,7 +437,7 @@ function geoAccessor(f: unknown, ctx: TransformContext): (r: Row) => unknown {
 function geopointRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
   const projName = String(t.projection)
   const projection = ctx.projections?.get(projName) as GeoProjection | undefined
-  if (!projection) throw new Error(`[aster] geopoint: unknown projection "${projName}"`)
+  if (!projection) throw new Error(`Unrecognized scale name: ${JSON.stringify(projName)}`)
   const fields = (t.fields as [unknown, unknown]) ?? ['lon', 'lat']
   const lon = geoAccessor(fields[0], ctx)
   const lat = geoAccessor(fields[1], ctx)
@@ -461,7 +461,7 @@ function geopathRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCont
   } else {
     const projName = String(t.projection)
     path = (ctx.projections?.get(projName) as GeoProjection | undefined)?.path
-    if (!path) throw new Error(`[aster] geopath: unknown projection "${projName}"`)
+    if (!path) throw new Error(`Unrecognized scale name: ${JSON.stringify(projName)}`)
   }
   // (no field: the row itself is the GeoJSON feature)
   const field = t.field == null ? (r: Row): unknown => r : geoAccessor(t.field, ctx)

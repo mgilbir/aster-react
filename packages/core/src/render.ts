@@ -202,7 +202,6 @@ function switchMarkup(type: string, group: SceneGroup, open: string): string {
     case 'trail': return renderTrail(group, open)
     case 'path': return renderPaths(group, open)
     case 'shape': return renderPaths(group, open)
-    case 'geoshape': return renderPaths(group, open)
     case 'image': return renderImages(group, open)
     case 'arc': return renderArcs(group, open)
     default: return ''
@@ -644,7 +643,7 @@ function renderPaths(group: SceneGroup, open: string): string {
     // translate transform; items whose path already encodes absolute
     // coordinates (e.g. geoshape output) have x=y=0 and emit no transform).
     w.s = ''
-    pathItemAttrs(it, w, group.marktype === 'geoshape' ? 'shape' : group.marktype)
+    pathItemAttrs(it, w, group.marktype)
     out += links ? withLink(it, `<path${w.s}/>`) : `<path${w.s}/>`
   }
   out += '</g>'
@@ -1237,7 +1236,7 @@ export function clipIdAttrs(id: string, w: AttrSink): void {
  * that contains it at (0,0) (vega: `clip(renderer, scene, scene.group)`).
  */
 export function groupClipId(group: SceneGroup, clips: ClipCollector, frameW: number, frameH: number): string {
-  return clips.id(group.clipPathD ? { d: group.clipPathD } : { x: 0, y: 0, w: frameW, h: frameH })
+  return clips.id(group.clipPathD !== undefined ? { d: group.clipPathD } : { x: 0, y: 0, w: frameW, h: frameH })
 }
 
 /**
@@ -1257,6 +1256,12 @@ export function leafClipId(it: SceneItem, clips: ClipCollector): string | null {
 /** The shape inside a `<clipPath>`: a path, or a rect in the clipped element's frame. */
 export function clipShapeAttrs(def: ClipDef, w: AttrSink): 'path' | 'rect' {
   if ('d' in def) {
+    // (a shape that draws nothing clips everything away: vega writes it as a rect with no size)
+    if (def.d === '') {
+      w.n('x', 0)
+      w.n('y', 0)
+      return 'rect'
+    }
     w.v('d', def.d)
     return 'path'
   }
@@ -1402,7 +1407,8 @@ export function pathItemAttrs(it: SceneItem, w: AttrSink, marktype = 'path'): vo
   w.t('transform', transformItemTransform(it))
   itemDatumAttr(it, w)
   ariaItemAttrs(it, w, marktype)
-  w.v('d', it.path)
+  // (a shape that draws nothing has no `d` in vega, which writes the path its shape draws; a path mark writes its path as it is)
+  if (!(marktype === 'shape' && it.path === '')) w.v('d', it.path)
   paintAttrs(it, w)
 }
 
@@ -1621,9 +1627,6 @@ export function markContainerAttrs(group: SceneGroup, w: AttrSink, clipId: strin
     case 'arc': case 'path': case 'shape':
       kind = type
       break
-    case 'geoshape':
-      kind = 'shape'
-      break
     default:
       return false
   }
@@ -1776,8 +1779,9 @@ export function childNodes(items: readonly SceneItem[] | undefined, frameW: numb
 
 function groupContainer(run: SceneGroup[], frameW: number, frameH: number, scope: GuideScope, clips: ClipCollector): SvgEl {
   const first = run[0]!
-  // vega's mark-level `clip`: the container is clipped to the frame of the enclosing group
-  const attrs = (w: AttrSink): void => groupContainerAttrs(first, w, first.markClip === true ? clips.id({ x: 0, y: 0, w: frameW, h: frameH }) : null, scope)
+  // vega's mark-level `clip`: the container is clipped to the frame of the enclosing group, or to the shape the clip is
+  const clip = first.markClipPathD !== undefined ? { d: first.markClipPathD } : { x: 0, y: 0, w: frameW, h: frameH }
+  const attrs = (w: AttrSink): void => groupContainerAttrs(first, w, first.markClip === true ? clips.id(clip) : null, scope)
   return el('g', attrs, run.filter((g) => !flag(g, 'emptyMark')).map((g) => groupItem(g, frameW, frameH, scope, clips)))
 }
 

@@ -239,7 +239,7 @@ function test(marktype: string, item: SceneItem, bounds: Bounds, box: Bounds): b
       return intersectText(item, box)
     case 'image':
       return true
-    case 'arc': case 'shape': case 'path': case 'geoshape':
+    case 'arc': case 'shape': case 'path':
       return intersectPath(marktype, item, bounds, box)
     default:
       // a mark type the engine has no test for: vega's `Marks[type].isect` would be undefined; the bounds are all there is

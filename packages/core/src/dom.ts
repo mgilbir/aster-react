@@ -671,11 +671,10 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
       return out
     }
     case 'path':
-    case 'shape':
-    case 'geoshape': {
+    case 'shape': {
       const out: DomDesc[] = []
       for (const it of items) {
-        out.push(cachedDesc(it, () => linked(it, { tag: 'path', attrs: pairs((w) => pathItemAttrs(it, w, type === 'geoshape' ? 'shape' : type)), clean: isClean(it) })))
+        out.push(cachedDesc(it, () => linked(it, { tag: 'path', attrs: pairs((w) => pathItemAttrs(it, w, type)), clean: isClean(it) })))
       }
       return out
     }

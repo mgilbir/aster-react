@@ -734,6 +734,8 @@ export interface SceneGroup extends SceneItem {
   hasLinks?: boolean
   /** The MARK's `clip` (not the item's): this group item sits in a container clipped to the enclosing group's frame. */
   markClip?: boolean
+  /** The shape the MARK's `clip` is when it is one (`{sphere}`, `{path}`, a `{signal}` shape): the container is clipped to it instead. */
+  markClipPathD?: string
   /** A grid header or footer the layout had no column (row) for: it stays where it was and adds nothing to the bounds of the group. */
   unbounded?: boolean
   /** Pre-computed rounded-rect path `d` for clip-path defs (when cornerRadius > 0). */

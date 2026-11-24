@@ -262,30 +262,32 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       return rows
     }
     case 'geoshape': {
-      // Vega's geoshape transform turns the GeoJSON geometry of each tuple's field (by default
-      // `datum`) into an SVG path (default output 'shape'). With a `projection` param the
-      // geometry is projected first.
+      // vega's geoshape: the GeoJSON of each tuple's field (by default the tuple itself) as a shape, written to `as` (default
+      // `shape`); through the named projection, or with none through the default path (the coordinates as they are). Either way
+      // the geo add-on draws it, the path and its unrounded bounds (for the bound pass) in one pass over the geometry.
       const as = (t as { as?: unknown }).as ?? 'shape'
       const field = (t as { field?: unknown }).field
       const projName = (t as { projection?: unknown }).projection
-      const projection = projName != null ? ctx.projections?.get(String(projName)) : undefined
-      if (projection != null && !geoRegistry.projectedPath) requireGeo() // throws: addon not loaded
+      if (!geoRegistry.projectedShape) requireGeo() // throws: the add-on is not loaded
+      const projection = projName != null ? ctx.projections?.get(String(projName)) : null
+      if (projection === undefined) throw new Error(`Unrecognized scale name: ${JSON.stringify(String(projName))}`)
       const pointRadius = geoPointRadius((t as { pointRadius?: unknown }).pointRadius, ctx)
+      // The field is read off the item that draws the shape, as vega's shape generator reads it when drawing (`datum` by default). A
+      // mark's transform runs on its items. A dataset's runs on rows whose shape a mark's encode hands its items: there the item's
+      // `datum` is the row, and any other property of the item is none a row can give.
+      const path = field == null ? 'datum' : String(field)
+      const onItems = ctx.inPlace === true
+      const read = onItems ? (r: Row): unknown => getField(r, path)
+        : path === 'datum' ? (r: Row): unknown => r
+        : path.startsWith('datum.') ? (r: Row): unknown => getField(r, path.slice('datum.'.length))
+        : (): unknown => undefined
       return rows.map((r) => {
-        // (a mark's transform runs on its items: the field is read off the item, `datum` -- the default -- being its data, and the
-        // path is written on the item, which is the transform's own)
-        const geo = getField(r, field == null ? 'datum' : String(field))
-        // a projected shape's path and its unrounded bounds (for the bound pass) come from one pass over the geometry
-        const shape = projection != null && as === 'shape' && geoRegistry.projectedShape ? geoRegistry.projectedShape(projection, geo, pointRadius) : undefined
-        const p = shape
-          ? shape.path
-          : projection != null
-            ? geoRegistry.projectedPath!(projection, geo, pointRadius)
-            : geoJSONPath(geo)
-        if (p === undefined) return r
+        const geo = read(r)
+        const shape = geoRegistry.projectedShape!(projection ?? null, geo, pointRadius)
         const out = owned ? r : { ...r }
-        out[as as string] = p
-        if (shape) SHAPE_BOUNDS.set(out, () => shape.bounds)
+        // (a shape that draws nothing is the empty path: the item is still drawn, with no `d`, and bounds to nothing)
+        out[as as string] = shape.path ?? ''
+        if (as === 'shape') SHAPE_BOUNDS.set(out, shape.bounds)
         return out
       })
     }
@@ -481,77 +483,6 @@ export function sortOrder(rows: Row[], sort?: SortSpec, limit = Infinity): numbe
 // ---------------------------------------------------------------------------
 // aggregate / window / stack
 // ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// geoshape: GeoJSON -> SVG path (identity projection)
-// ---------------------------------------------------------------------------
-
-function fmtCoord(v: unknown): string {
-  const n = typeof v === 'number' ? v : Number(v)
-  if (!Number.isFinite(n)) return String(v)
-  return String(Math.round(n * 1000) / 1000)
-}
-
-/** Build the SVG path for a GeoJSON polygon ring (closing point omitted). */
-function ringPath(ring: unknown[]): string {
-  if (!ring.length) return ''
-  const pts = ring as unknown[][]
-  const n = pts.length
-  let d = `M${fmtCoord(pts[0]![0])},${fmtCoord(pts[0]![1])}`
-  for (let i = 1; i < n; i++) {
-    // GeoJSON rings repeat the first point at the end; d3-geo omits it because
-    // the path closes with Z.
-    if (i === n - 1 && pts[i]![0] === pts[0]![0] && pts[i]![1] === pts[0]![1]) break
-    d += `L${fmtCoord(pts[i]![0])},${fmtCoord(pts[i]![1])}`
-  }
-  return d + 'Z'
-}
-
-function lineStringPath(pts: unknown[][]): string {
-  if (!pts.length) return ''
-  let d = `M${fmtCoord(pts[0]![0])},${fmtCoord(pts[0]![1])}`
-  for (let i = 1; i < pts.length; i++) d += `L${fmtCoord(pts[i]![0])},${fmtCoord(pts[i]![1])}`
-  return d
-}
-
-/**
- * Convert a GeoJSON geometry (or Feature / FeatureCollection) into an SVG path
- * string using an identity projection (no projection). Returns undefined when
- * the geometry type is not handled.
- */
-export function geoJSONPath(geo: unknown): string | undefined {
-  if (geo == null || typeof geo !== 'object') return undefined
-  const g = geo as { type?: string; geometry?: unknown; coordinates?: unknown; features?: unknown[] }
-  if (g.type === 'Feature') return geoJSONPath(g.geometry)
-  if (g.type === 'FeatureCollection' && Array.isArray(g.features)) {
-    let out = ''
-    for (const f of g.features) {
-      const p = geoJSONPath(f)
-      if (p !== undefined) out += p
-    }
-    return out || undefined
-  }
-  const coords = g.coordinates
-  if (g.type === 'Polygon' && Array.isArray(coords)) {
-    return (coords as unknown[][]).map(ringPath).join('')
-  }
-  if (g.type === 'MultiPolygon' && Array.isArray(coords)) {
-    let out = ''
-    for (const poly of coords as unknown[][][]) {
-      for (const ring of poly) out += ringPath(ring)
-    }
-    return out
-  }
-  if (g.type === 'LineString' && Array.isArray(coords)) {
-    return lineStringPath(coords as unknown[][])
-  }
-  if (g.type === 'MultiLineString' && Array.isArray(coords)) {
-    let out = ''
-    for (const line of coords as unknown[][][]) out += lineStringPath(line)
-    return out
-  }
-  return undefined
-}
 
 // ---------------------------------------------------------------------------
 // kde / quantile / regression

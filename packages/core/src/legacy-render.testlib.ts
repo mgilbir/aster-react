@@ -1623,7 +1623,8 @@ export function pathItemAttrs(it: SceneItem, w: AttrSink, marktype = 'path'): vo
   w.t('transform', transformItemTransform(it))
   itemDatumAttr(it, w)
   ariaItemAttrs(it, w, marktype)
-  w.v('d', it.path)
+  // (a shape that draws nothing has no `d` in vega: C425, mirrored from render.ts so the reference keeps vega's output)
+  if (!((marktype === 'shape' || marktype === 'geoshape') && it.path === '')) w.v('d', it.path)
   paintAttrs(it, w)
 }
 

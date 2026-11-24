@@ -544,10 +544,11 @@ function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW
   const type = group.marktype
   if (!type || type === 'group') {
     ctx.save()
-    // vega's mark-level `clip`: the mark container is clipped to the ENCLOSING group's frame
+    // vega's mark-level `clip`: the mark container is clipped to the ENCLOSING group's frame, or to the shape the clip is
     if (group.markClip === true) {
       ctx.beginPath()
-      ctx.rect(0, 0, plotW, plotH)
+      if (group.markClipPathD !== undefined) tracePath(ctx, parsePathData(group.markClipPathD), 0, 0)
+      else ctx.rect(0, 0, plotW, plotH)
       ctx.clip()
     }
     if (group.x != null || group.y != null) ctx.translate(group.x ?? 0, group.y ?? 0)
@@ -556,7 +557,7 @@ function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW
     const gh = group.height ?? plotH
     if (group.clip === true) {
       ctx.beginPath()
-      if (group.clipPathD) tracePath(ctx, parsePathData(group.clipPathD), group.x ?? 0, group.y ?? 0)
+      if (group.clipPathD !== undefined) tracePath(ctx, parsePathData(group.clipPathD), group.x ?? 0, group.y ?? 0)
       else ctx.rect(0, 0, gw, gh)
       ctx.clip()
     }
@@ -592,7 +593,7 @@ function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW
   if (group.clip === true) {
     ctx.save()
     ctx.beginPath()
-    if (group.clipPathD) tracePath(ctx, parsePathData(group.clipPathD), group.x ?? 0, group.y ?? 0)
+    if (group.clipPathD !== undefined) tracePath(ctx, parsePathData(group.clipPathD), group.x ?? 0, group.y ?? 0)
     else ctx.rect(0, 0, plotW, plotH)
     ctx.clip()
     renderMark(type, measured(group), ctx, scene, opts)
@@ -1293,8 +1294,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
       }
       return
     }
-    case 'shape':
-    case 'geoshape': {
+    case 'shape': {
       // (a shape's geo path, the engine's own text, goes to the context as it is, its arcs as arcs)
       for (const it of group.items ?? []) {
         if (!it.path) continue

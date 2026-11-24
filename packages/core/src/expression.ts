@@ -424,10 +424,30 @@ function projectionScale(p: ProjectionLike): unknown {
   return scale
 }
 
+/**
+ * What `copy('projection')` gives: vega's is a copy of the projection, which `scale`, `invert` and the geo functions take in place of
+ * a name. Here it is an opaque, frozen handle on the projection as it was (a projection is never changed once built: new parameters
+ * build a new one), which those functions alone resolve; it is no function, so the sandbox's rule that a built-in is never handed a
+ * function holds, and nothing a spec writes can pose as one.
+ */
+const PROJECTION_COPIES = new WeakMap<object, ProjectionLike>()
+
+/** The projection a name or a `copy()` of one stands for (vega's `getScale` over projections), or undefined. */
+export function projectionOf(runtime: { projection?: (name: string) => unknown }, ref: unknown): unknown {
+  if (typeof ref === 'string') return runtime.projection?.(ref)
+  return typeof ref === 'object' && ref !== null ? PROJECTION_COPIES.get(ref) : undefined
+}
+
 function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unknown> {
-  // (vega keeps a view's projections among its scales: `scale('projection', [lon, lat])` is the projected point)
+  // (vega keeps a view's projections among its scales: `scale('projection', [lon, lat])` is the projected point; a copy of one
+  // stands for it too)
   const scaleObject = (name: unknown): Record<string, unknown> | undefined => {
-    const s = runtime.scale(String(name)) ?? runtime.projection?.(String(name))
+    // (vega's getScale: a name is looked up; anything else that is no copy of a projection names nothing)
+    if (typeof name !== 'string') {
+      const copied = typeof name === 'object' && name !== null ? PROJECTION_COPIES.get(name) : undefined
+      return copied ? (projectionScale(copied) as Record<string, unknown>) : undefined
+    }
+    const s = runtime.scale(name) ?? runtime.projection?.(name)
     return (isProjection(s) ? projectionScale(s) : s) as unknown as Record<string, unknown> | undefined
   }
   return {
@@ -607,7 +627,13 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     },
     bandspace: (count: number, paddingInner?: number, paddingOuter?: number) =>
       bandSpace(count || 0, paddingInner || 0, paddingOuter || 0),
-    copy: (name: string) => {
+    copy: (name: unknown) => {
+      const projection = projectionOf(runtime, name)
+      if ((typeof name !== 'string' || runtime.scale(name) === undefined) && isProjection(projection)) {
+        const copied = Object.freeze(Object.create(null) as object)
+        PROJECTION_COPIES.set(copied, projection)
+        return copied
+      }
       const s = scaleObject(name)
       return s && s.copy ? (s.copy as () => unknown)() : undefined
     },
