@@ -4,22 +4,20 @@
  * contours are in `raster-grid.ts`, the polygons in `contour.ts`. Loaded by the transforms addon; `isocontour`
  * needs the geo addon.
  */
-import { isArray } from './util.js'
+import { accessorFields, accessorName, isArray } from './util.js'
 import { fieldOf } from './transform-agg.js'
-import { compileExprTransform, contourQuantize } from './transform.js'
+import { contourQuantize } from './transform.js'
 import { densityGrid, placeContours, type RasterGrid } from './raster-grid.js'
-import { accessorOf as fieldAccessor, densitySettings, type DensitySettings, type Get } from './raster-params.js'
+import { densitySettings, type DensitySettings, type Get } from './raster-params.js'
 import type { Row, TransformContext } from './transform.js'
 import { allot, meterTick } from './limits.js'
 import { geoRegistry, requireGeo } from './registry.js'
-import { parseExpression, type AstNode } from './expr-parser.js'
 import { rgbConvert, type Rgb } from './color.js'
 import { RasterImage } from './raster-image.js'
 
 type Params = Record<string, unknown>
 
 /** A `field`-typed parameter: a field name, or an `{expr}` evaluated over the tuple. */
-const accessorOf = (f: unknown, ctx: TransformContext): Get => fieldAccessor(f, (expr) => compileExprTransform(expr, ctx) as Get)
 
 /** The density grid of one group of points (`kde2d`). */
 function densityOf(data: Row[], x: Get, y: Get, weight: Get | null, settings: DensitySettings, counts: boolean): RasterGrid {
@@ -38,11 +36,12 @@ function densityOf(data: Row[], x: Get, y: Get, weight: Get | null, settings: De
 /** A density grid for each group of the points (all of them when there is no `groupby`). */
 export function kde2dRows(rows: Row[], t: Params, ctx: TransformContext): Row[] {
   const settings = densitySettings(t)
-  const x = accessorOf(t.x, ctx)
-  const y = accessorOf(t.y, ctx)
-  const weight = t.weight != null ? accessorOf(t.weight, ctx) : null
+  const x = fieldOf(t.x) as Get
+  const y = fieldOf(t.y) as Get
+  const weight = t.weight != null ? (fieldOf(t.weight) as Get) : null
   const groupby = t.groupby != null ? ([] as unknown[]).concat(t.groupby).map((g) => fieldOf(g) as Get) : null
-  const names = groupby ? ([] as unknown[]).concat(t.groupby).map((g) => String(g)) : []
+  // (each group's key is written under its field's name: `as` of a `{field, as}`, none for an `{expr}`)
+  const names = groupby ? groupby.map((g) => String(accessorName(g))) : []
   const as = (t.as as string | undefined) || 'grid'
 
   // partition the points into groups (by the String of the key tuple, in first-appearance order)
@@ -77,7 +76,7 @@ const max = (values: ArrayLike<number>): number | undefined => {
 
 /** The level sets of each input grid, one tuple per level (the source's fields copied on). */
 export function isocontourRows(rows: Row[], t: Params, ctx: TransformContext): Row[] {
-  const field: Get = t.field == null ? (r) => r : accessorOf(t.field, ctx)
+  const field: Get = t.field == null ? (r) => r : (fieldOf(t.field) as Get)
   const smooth = t.smooth !== false
   const contourRun = geoRegistry.contourRun
   if (!contourRun) requireGeo() // throws: the geo addon is not loaded
@@ -89,10 +88,8 @@ export function isocontourRows(rows: Row[], t: Params, ctx: TransformContext): R
   if (!tz) tz = t.resolve !== 'shared' ? quantize : quantize(rows.map((r) => max((field(r) as RasterGrid).values) as number))
   const as = t.as === null ? null : (t.as as string | undefined) || 'contour'
 
-  const exprValue = (v: unknown, row: Row): unknown => {
-    const e = exprOf(v)
-    return e === undefined ? v : compileExprTransform(e, ctx)(row)
-  }
+  // (a `scale` or `translate` given as `{expr}` / `{field}` is a function of the row, vega's `isFunction(s) ? s(datum, _)`)
+  const exprValue = (v: unknown, row: Row): unknown => (typeof v === 'function' ? (v as Get)(row) : v)
 
   const out: Row[] = []
   for (const r of rows) {
@@ -117,33 +114,6 @@ export function isocontourRows(rows: Row[], t: Params, ctx: TransformContext): R
   return out
 }
 
-/**
- * The fields of `datum` an expression names (`datum.$x`, `datum['$value']`): what vega's code generator collects, and so what
- * it calls "depends on the pixel". A use it cannot see by name (`datum[name]`, `datum` handed to a function) is not one.
- */
-function datumFieldsOf(expr: string): Set<string> {
-  const names = new Set<string>()
-  const visit = (n: unknown): void => {
-    if (n === null || typeof n !== 'object') return
-    if (Array.isArray(n)) { for (const x of n) visit(x); return }
-    const node = n as AstNode
-    if (node.type === 'MemberExpression') {
-      const obj = node.object as AstNode
-      const prop = node.property as AstNode
-      if (obj.type === 'Identifier' && obj.name === 'datum') {
-        if (!node.computed && prop.type === 'Identifier') names.add(String(prop.name))
-        else if (node.computed && prop.type === 'Literal') names.add(String(prop.value))
-      }
-    }
-    for (const k of Object.keys(node)) if (k !== 'type') visit(node[k])
-  }
-  visit(parseExpression(expr))
-  return names
-}
-
-const exprOf = (v: unknown): string | undefined =>
-  v !== null && typeof v === 'object' && typeof (v as { expr?: unknown }).expr === 'string' ? (v as { expr: string }).expr : undefined
-
 /** What a heatmap parameter sees of a pixel: its position and cell value, and the grid's (or all grids') maximum. */
 interface Pixel { $x: number; $y: number; $value: number; $max: number | undefined; [k: string]: unknown }
 
@@ -155,27 +125,21 @@ interface PixelParam<T> {
   at(pixel: Pixel): T
 }
 
-const readsPixel = (expr: string): boolean => {
-  const fields = datumFieldsOf(expr)
-  return PIXEL_FIELDS.some((f) => fields.has(f))
+/** vega's `dependency`: a function of the pixel that names one of the pixel's own fields is evaluated per pixel. */
+const readsPixel = (f: Get): boolean => (accessorFields(f) ?? []).some((name) => PIXEL_FIELDS.includes(name))
+
+function colorParam(t: Params): PixelParam<Rgb> {
+  const color = t.color
+  if (typeof color !== 'function') return { perPixel: false, at: () => rgbConvert(color || '#888') }
+  return { perPixel: readsPixel(color as Get), at: (pixel) => rgbConvert((color as Get)(pixel as never)) }
 }
 
-function colorParam(t: Params, ctx: TransformContext): PixelParam<Rgb> {
-  const expr = exprOf(t.color)
-  if (expr === undefined) return { perPixel: false, at: () => rgbConvert(t.color || '#888') }
-  const evaluate = compileExprTransform(expr, ctx)
-  return { perPixel: readsPixel(expr), at: (pixel) => rgbConvert(evaluate(pixel as never)) }
-}
-
-function opacityParam(t: Params, ctx: TransformContext): PixelParam<number> {
-  const expr = exprOf(t.opacity)
-  if (expr !== undefined) {
-    const evaluate = compileExprTransform(expr, ctx)
-    return { perPixel: readsPixel(expr), at: (pixel) => evaluate(pixel as never) as number }
-  }
+function opacityParam(t: Params): PixelParam<number> {
+  const opacity = t.opacity
+  if (typeof opacity === 'function') return { perPixel: readsPixel(opacity as Get), at: (pixel) => (opacity as Get)(pixel as never) as number }
   // no opacity, or a falsy one, is the gradient from 0 to the maximum
-  if (!t.opacity) return { perPixel: true, at: (pixel) => (pixel.$value / (pixel.$max as number)) || 0 }
-  return { perPixel: false, at: () => +(t.opacity as number) }
+  if (!opacity) return { perPixel: true, at: (pixel) => (pixel.$value / (pixel.$max as number)) || 0 }
+  return { perPixel: false, at: () => +(opacity as number) }
 }
 
 const constant = <T,>(value: T) => (): T => value
@@ -220,10 +184,10 @@ function paintGrid(grid: RasterGrid, pixel: Pixel, color: PixelParam<Rgb>, opaci
 /** Each tuple's raster grid drawn as an image: colour from `color`, alpha from `opacity`, `resolve` choosing the maximum they see. */
 export function heatmapRows(rows: Row[], t: Params, ctx: TransformContext): Row[] {
   const shared = t.resolve === 'shared'
-  const field: Get = t.field == null ? (r) => r : accessorOf(t.field, ctx)
+  const field: Get = t.field == null ? (r) => r : (fieldOf(t.field) as Get)
   const as = (t.as as string | undefined) || 'image'
-  const color = colorParam(t, ctx)
-  const opacity = opacityParam(t, ctx)
+  const color = colorParam(t)
+  const opacity = opacityParam(t)
 
   const sharedMax = shared ? max(rows.map((r) => max((field(r) as RasterGrid).values) as number)) : 0
   return rows.map((r) => {

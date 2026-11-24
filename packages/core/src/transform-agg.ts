@@ -419,7 +419,8 @@ export function planMeasures(
   params: ReadonlyArray<unknown>,
 ): MeasureSet {
   const counts: string[] = []
-  const byField = new Map<string | null, { get: Accessor | null | undefined; measures: Measure[] }>()
+  // (keyed by the field's name, as vega keys its measures: two fields with no name -- two `{expr}`s -- are the first one)
+  const byField = new Map<string | null | undefined, { get: Accessor | null | undefined; measures: Measure[] }>()
   for (let i = 0; i < ops.length; i++) {
     const op = ops[i]!
     const get = fields[i]
