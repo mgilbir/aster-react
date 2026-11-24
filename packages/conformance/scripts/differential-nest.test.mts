@@ -17,6 +17,7 @@ import '@aster-charts/core/transforms'
 import { compileChart, datasetsOfScene, evaluateChart } from '@aster-charts/core'
 import { enc } from './differential-util.mts'
 import { makeRng, scaled, type Rng } from './differential-gen.mts'
+import { expectEveryKnownDifferenceCompared, expectKnownDifference } from './known-differences.mts'
 
 type Spec = Record<string, unknown>
 
@@ -97,7 +98,7 @@ describe('nest matches vega', () => {
       const rows = Array.from({ length: r.pick([0, 1, 2, 5, 9, 14]) }, (_, i) => rowOf(r, i))
       const generate = r.chance(0.5)
       // (with no keys and `generate`, Vega's root row holds the dataset's own array as `values`, itself among it: a cycle that
-      // is compared nowhere here)
+      // cannot be compared as rows; the next test compares what it holds, and names the difference in the expected-differences table)
       const keys = Array.from({ length: r.between(generate ? 1 : 0, 3) }, () => r.pick(KEY_PATHS))
       const layout = r.pick(LAYOUTS)(r)
       const links = r.chance(0.2) ? [{ type: 'treelinks' }] : []
@@ -136,5 +137,32 @@ describe('nest matches vega', () => {
     expect(generated).toBeGreaterThan(scaled(1500) * 0.25)
     expect(withLayout).toBeGreaterThan(scaled(1500) * 0.3)
     expect(refused).toBeLessThan(scaled(1500) * 0.2)
+  })
+
+  // `nest` with `generate` and no keys: the tree is one root row over every row. Vega gives that root the dataset's OWN output
+  // array as `values`, and the root is a row of that array, so it holds itself (length rows + 1); Aster's root holds the rows
+  // (length rows) and nothing cyclic. The difference is Vega's aliasing, not a behaviour a chart can observe; it is a case of
+  // the expected-differences table and must still differ (C470).
+  it('generate with no keys: the root row\'s values', async () => {
+    // (over no rows both sides give no rows at all: nothing to compare, nothing to list)
+    for (const n of [1, 2, 5]) {
+      const rows = Array.from({ length: n }, (_, i) => ({ id: i, v: i * 2 }))
+      const spec: Spec = { data: [{ name: 'src', values: rows }, { name: 'out', source: 'src', transform: [{ type: 'nest', keys: [], generate: true }] }] }
+      // the root row is the last row, and the only one that has `values`
+      const shape = (out: unknown[] | undefined): unknown => {
+        const root = (out ?? []).at(-1) as { values?: unknown[] } | undefined
+        return { rows: out?.length, rootValues: root?.values?.length ?? null, rootHoldsItself: root?.values ? root.values.includes(root) : null }
+      }
+      const want = shape((await onVega(spec)).rows)
+      const got = shape(onAster(spec).rows)
+      // both sides, pinned: what each holds, so that a change on either side shows up here and not only as "still differs"
+      expect(want).toEqual({ rows: n + 1, rootValues: n + 1, rootHoldsItself: true })
+      expect(got).toEqual({ rows: n + 1, rootValues: n, rootHoldsItself: false })
+      expectKnownDifference('differential-nest', `generate with no keys over ${n} rows`, want, got)
+    }
+  })
+
+  it('every known difference of this file was compared', () => {
+    expectEveryKnownDifferenceCompared('differential-nest')
   })
 })
