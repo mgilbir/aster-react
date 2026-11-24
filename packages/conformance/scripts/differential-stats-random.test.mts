@@ -255,8 +255,9 @@ function compareRows(got: unknown[], want: unknown[], what: string): void {
     const g = got[i] as Record<string, unknown>
     const w = want[i] as Record<string, unknown>
     if ('$' in w) { expect(g.$, `${what}: throw`).toBe('throw'); expect(String(g.message)).toContain(String(w.message)); continue }
-    const keys = Object.keys(w).filter((k) => k !== 'Symbol(vega_id)')
-    expect(Object.keys(g), `${what}: keys of row ${i}`).toEqual(expect.arrayContaining(keys))
+    // the keys, exactly and in order (vega's tuple id is a symbol: `Object.keys` never lists it, on either side)
+    const keys = Object.keys(w)
+    expect(Object.keys(g), `${what}: keys of row ${i}`).toEqual(keys)
     for (const k of keys) expect(enc(g[k]), `${what}: row ${i}.${k}`).toEqual(enc(w[k]))
   }
 }
@@ -311,6 +312,8 @@ describe('regression and loess over random data vs the real vega transforms', { 
 
 describe('the generated regression / loess cases are not vacuous', () => {
   it('most cases produce fitted rows, and a minority refuse or are empty', () => {
+    // (the counts are filled by the cases above: a run narrowed with `-t` that skipped them all has nothing to count)
+    if (seen.cases === 0) return
     expect(seen.cases).toBeGreaterThan(1000)
     expect(seen.rows).toBeGreaterThan(30_000)
     expect(seen.throws).toBeLessThan(seen.cases * 0.1)
