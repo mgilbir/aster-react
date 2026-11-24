@@ -90,8 +90,9 @@ function loadCorpus(): Entry[] {
   return entries
 }
 
-// No entry is skipped: one whose ORACLE output is undefined is compared like the others and listed, with the evidence, in the
-// expected-differences table (scripts/lib/expected-differences.mjs), which requires it to still differ.
+// No entry is skipped: every corpus entry (including URL data and images) is compared. One whose ORACLE output is undefined is compared
+// like the others and listed, with the evidence, in the expected-differences table (scripts/lib/expected-differences.mjs), which requires
+// it to still differ (none today: `area-gradient` was one while its fill was the string 'gradient'; it now holds a real gradient object).
 const synthetic: Entry[] = [
   {
     name: 'canvas-custom-font',
