@@ -67,6 +67,14 @@ export const EXTENSIONS = [
     },
   },
   {
+    why: 'an `align` on an hconcat or a vconcat: vega-lite normalizes them to a concat with the other keys kept, and lays the grid out by the align; its schema lists `align` on a concat only',
+    pinnedBy: 'conformance/test/vl-encoding-differential.test.ts (hconcat / vconcat align)',
+    example: { data: { values: [] }, hconcat: [{ mark: 'point' }, { mark: 'point' }], align: 'all' },
+    patch: (d) => {
+      for (const k of ['TopLevelHConcatSpec', 'TopLevelVConcatSpec', 'HConcatSpec<GenericSpec>', 'VConcatSpec<GenericSpec>']) d[k].properties.align = structuredClone(d['ConcatSpec<GenericSpec>'].properties.align)
+    },
+  },
+  {
     why: 'a longitude / latitude is projected whatever its definition says: vega-lite reads any `type` and ignores `bin` and a `value` there, and ignores `bin` on a secondary channel (x2, y2, theta2 ...)',
     pinnedBy: 'conformance/test/vl-geo-channels.test.ts, vl-mark-channels.test.ts; vl/test/readme-refusals.test.ts',
     example: { data: { values: [] }, mark: 'point', encoding: { longitude: { field: 'a', type: 'nominal', bin: true }, latitude: { field: 'b', type: 'quantitative' } } },

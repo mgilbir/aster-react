@@ -53,7 +53,7 @@ const REFUSED: Array<[string, Record<string, unknown>, RegExp]> = [
   ['a GeoJSON shape on any other mark', unit('point', { x: q('b'), shape: { field: 'g', type: 'geojson' } }), /only applies to the geoshape mark/],
   ['channel-level `band`', unit('bar', { x: { field: 'd', type: 'temporal', timeUnit: 'month', band: 0.5 } }), /`band` is not supported/],
   ['a condition that gives a field or a datum on a position channel', unit('point', { x: { condition: { test: 'datum.b > 1', field: 'c', type: 'quantitative' }, value: 1 }, y: q('b') }), /on a position channel/],
-  ['the positional mark-def constants', unit({ type: 'bar', x: 5 }, { y: q('b') }), /positional mark-def constants/],
+  ['`order` given as a\n  list', unit('line', { x: q('b'), y: q('c'), order: [{ field: 'a', type: 'nominal' }] }), /order given as a list/],
   ['`width` / `height: "container"` on a composition', { data, width: 'container', hconcat: [{ mark: 'point', encoding: { x: q('b') } }] }, /"container" is only supported/],
   ['a\n  `{"repeat": ...}` reference in a transform', { data, repeat: ['b'], spec: { transform: [{ filter: { field: { repeat: 'repeat' }, gt: 1 } }], mark: 'point', encoding: { x: q('b') } } }, /reference in a transform is not supported/],
   ['repeat\'s `row` / `column` given as a string', { data, repeat: { row: 'b' }, spec: { mark: 'point', encoding: { x: { field: { repeat: 'row' }, type: 'quantitative' } } } }, /reads the string "b" as the list of its characters/],

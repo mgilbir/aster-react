@@ -16,7 +16,6 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['an errorbar with no continuous axis', unit({ mark: 'errorbar', encoding: { x: cn, y: cn } }), /continuous x or y axis/],
   ['an errorbar with both errors', unit({ mark: 'errorbar', encoding: { x: xq, y: yq, xError: { field: 'x' }, yError: { field: 'y' } } }), /both xError and yError/],
   ['an unknown mark property', unit({ mark: { type: 'point', sparkle: true } }), /unknown mark property "sparkle"/],
-  ['an unsupported mark property', unit({ mark: { type: 'bar', x: 2 } }), /positional mark-def constants/],
   ['config nested in a child spec', { data: DATA, hconcat: [unit({ config: {} })] }, /config is only allowed at the top level/],
   ['an unsupported config key', unit({ config: { fontSize: { xs: 3 } } }), /config\.fontSize/],
   ['an unknown projection type', unit({ mark: 'geoshape', projection: { type: 'robinson' } }), /unknown projection type/],
