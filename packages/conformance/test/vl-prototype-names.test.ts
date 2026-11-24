@@ -13,65 +13,12 @@ import { describe, it, expect } from 'vitest'
 import * as vl from 'vega-lite'
 import { compile, VLCompileError } from '@aster-charts/vl'
 import { renderWithVegaChecked } from '../src/render-vega.js'
+import { NAME_PLACES } from './vl-name-places.js'
 
 type Spec = Record<string, unknown>
-type Row = Record<string, unknown>
 const NAMES = Object.getOwnPropertyNames(Object.prototype)
 const plain = (v: unknown): any => JSON.parse(JSON.stringify(v))
 const quiet = { level: () => quiet, warn: () => quiet, info: () => quiet, debug: () => quiet, error: () => quiet }
-
-const num = (N: string): Row[] => [{ [N]: 4, k: 'a', t: '2020-01-05' }, { [N]: 6, k: 'b', t: '2020-02-05' }, { [N]: 9, k: 'a', t: '2020-03-05' }]
-const str = (N: string): Row[] => [{ [N]: 'A', k: 1, t: '2020-01-05' }, { [N]: 'B', k: 3, t: '2020-02-05' }]
-const date = (N: string): Row[] => [{ [N]: '2020-01-05', k: 1 }, { [N]: '2020-03-05', k: 3 }]
-const CONTEXTS: Record<string, (N: string) => Spec> = {
-  'x nominal': (N) => ({ data: { values: str(N) }, mark: 'bar', encoding: { x: { field: N, type: 'nominal' }, y: { field: 'k', type: 'quantitative' } } }),
-  'y quantitative': (N) => ({ data: { values: num(N) }, mark: 'point', encoding: { x: { field: 'k', type: 'nominal' }, y: { field: N, type: 'quantitative' } } }),
-  'color nominal': (N) => ({ data: { values: str(N) }, mark: 'point', encoding: { x: { field: 'k', type: 'quantitative' }, color: { field: N, type: 'nominal' } } }),
-  'tooltip': (N) => ({ data: { values: num(N) }, mark: 'point', encoding: { x: { field: 'k', type: 'nominal' }, tooltip: { field: N, type: 'quantitative' } } }),
-  'detail': (N) => ({ data: { values: str(N) }, mark: 'line', encoding: { x: { field: 'k', type: 'quantitative' }, y: { field: 'k', type: 'quantitative' }, detail: { field: N, type: 'nominal' } } }),
-  'text': (N) => ({ data: { values: str(N) }, mark: 'text', encoding: { x: { field: 'k', type: 'quantitative' }, text: { field: N, type: 'nominal' } } }),
-  'aggregate sum': (N) => ({ data: { values: num(N) }, mark: 'bar', encoding: { x: { field: 'k', type: 'nominal' }, y: { field: N, type: 'quantitative', aggregate: 'sum' } } }),
-  'bin': (N) => ({ data: { values: num(N) }, mark: 'bar', encoding: { x: { field: N, type: 'quantitative', bin: true }, y: { aggregate: 'count', type: 'quantitative' } } }),
-  'timeUnit channel': (N) => ({ data: { values: date(N) }, mark: 'point', encoding: { x: { field: N, type: 'temporal', timeUnit: 'month' }, y: { field: 'k', type: 'quantitative' } } }),
-  'temporal channel': (N) => ({ data: { values: date(N) }, mark: 'point', encoding: { x: { field: N, type: 'temporal' }, y: { field: 'k', type: 'quantitative' } } }),
-  'sort by field': (N) => ({ data: { values: num(N) }, mark: 'bar', encoding: { x: { field: 'k', type: 'nominal', sort: { field: N, op: 'sum' } }, y: { field: N, type: 'quantitative' } } }),
-  'timeUnit transform': (N) => ({ data: { values: date(N) }, transform: [{ timeUnit: 'month', field: N, as: 'm' }], mark: 'point', encoding: { x: { field: 'm', type: 'temporal' }, y: { field: 'k', type: 'quantitative' } } }),
-  'calculate as': (N) => ({ data: { values: num('v') }, transform: [{ calculate: 'datum.v * 2', as: N }], mark: 'point', encoding: { x: { field: 'k', type: 'nominal' }, y: { field: N, type: 'quantitative' } } }),
-  'filter field': (N) => ({ data: { values: str(N) }, transform: [{ filter: { field: N, equal: 'A' } }], mark: 'point', encoding: { x: { field: 'k', type: 'quantitative' }, y: { field: 'k', type: 'quantitative' } } }),
-  'aggregate transform field': (N) => ({ data: { values: num(N) }, transform: [{ aggregate: [{ op: 'sum', field: N, as: 's' }], groupby: ['k'] }], mark: 'bar', encoding: { x: { field: 'k', type: 'nominal' }, y: { field: 's', type: 'quantitative' } } }),
-  'aggregate transform as': (N) => ({ data: { values: num('v') }, transform: [{ aggregate: [{ op: 'sum', field: 'v', as: N }], groupby: ['k'] }], mark: 'bar', encoding: { x: { field: 'k', type: 'nominal' }, y: { field: N, type: 'quantitative' } } }),
-  'fold': (N) => ({ data: { values: num(N) }, transform: [{ fold: [N] }], mark: 'bar', encoding: { x: { field: 'key', type: 'nominal' }, y: { field: 'value', type: 'quantitative' } } }),
-  'window as': (N) => ({ data: { values: num('v') }, transform: [{ window: [{ op: 'rank', as: N }] }], mark: 'point', encoding: { x: { field: 'v', type: 'quantitative' }, y: { field: N, type: 'quantitative' } } }),
-  'bin transform field': (N) => ({ data: { values: num(N) }, transform: [{ bin: true, field: N, as: 'b' }], mark: 'bar', encoding: { x: { field: 'b', type: 'quantitative' }, y: { aggregate: 'count', type: 'quantitative' } } }),
-  'joinaggregate field': (N) => ({ data: { values: num(N) }, transform: [{ joinaggregate: [{ op: 'sum', field: N, as: 's' }] }], mark: 'point', encoding: { x: { field: 'k', type: 'nominal' }, y: { field: 's', type: 'quantitative' } } }),
-  'lookup key': (N) => ({ data: { values: str(N) }, transform: [{ lookup: N, from: { data: { values: [{ [N]: 'A', w: 5 }, { [N]: 'B', w: 7 }] }, key: N, fields: ['w'] } }], mark: 'point', encoding: { x: { field: 'k', type: 'quantitative' }, y: { field: 'w', type: 'quantitative' } } }),
-  'size': (N) => ({ data: { values: num(N) }, mark: 'point', encoding: { x: { field: 'k', type: 'nominal' }, size: { field: N, type: 'quantitative' } } }),
-  'opacity': (N) => ({ data: { values: num(N) }, mark: 'point', encoding: { x: { field: 'k', type: 'nominal' }, opacity: { field: N, type: 'quantitative' } } }),
-  'shape': (N) => ({ data: { values: str(N) }, mark: 'point', encoding: { x: { field: 'k', type: 'quantitative' }, shape: { field: N, type: 'nominal' } } }),
-  'x2': (N) => ({ data: { values: num(N) }, mark: 'bar', encoding: { y: { field: 'k', type: 'nominal' }, x: { field: 'v', type: 'quantitative' }, x2: { field: N } } }),
-  'theta': (N) => ({ data: { values: num(N) }, mark: 'arc', encoding: { theta: { field: N, type: 'quantitative' }, color: { field: 'k', type: 'nominal' } } }),
-  'row facet': (N) => ({ data: { values: str(N) }, mark: 'point', encoding: { x: { field: 'k', type: 'quantitative' }, row: { field: N, type: 'nominal' } } }),
-  'order': (N) => ({ data: { values: num(N) }, mark: 'line', encoding: { x: { field: 'k', type: 'nominal' }, y: { field: 'k', type: 'nominal' }, order: { field: N, type: 'quantitative' } } }),
-  'condition field': (N) => ({ data: { values: str(N) }, params: [{ name: 'p', select: 'point' }], mark: 'point', encoding: { x: { field: 'k', type: 'quantitative' }, color: { condition: { param: 'p', field: N, type: 'nominal' }, value: 'grey' } } }),
-  'bin color': (N) => ({ data: { values: num(N) }, mark: 'point', encoding: { x: { field: 'k', type: 'nominal' }, color: { field: N, type: 'quantitative', bin: true } } }),
-  'timeUnit transform as': (N) => ({ data: { values: date('d') }, transform: [{ timeUnit: 'month', field: 'd', as: N }], mark: 'point', encoding: { x: { field: N, type: 'temporal' }, y: { field: 'k', type: 'quantitative' } } }),
-  'window field': (N) => ({ data: { values: num(N) }, transform: [{ window: [{ op: 'sum', field: N, as: 's' }] }], mark: 'point', encoding: { x: { field: 'k', type: 'nominal' }, y: { field: 's', type: 'quantitative' } } }),
-  'pivot': (N) => ({ data: { values: str(N) }, transform: [{ pivot: N, value: 'k' }], mark: 'point', encoding: { x: { field: 'A', type: 'quantitative' } } }),
-  'impute': (N) => ({ data: { values: num(N) }, transform: [{ impute: N, key: 'k', value: 0 }], mark: 'point', encoding: { x: { field: 'k', type: 'nominal' }, y: { field: N, type: 'quantitative' } } }),
-  'density': (N) => ({ data: { values: num(N) }, transform: [{ density: N }], mark: 'area', encoding: { x: { field: 'value', type: 'quantitative' }, y: { field: 'density', type: 'quantitative' } } }),
-  'regression': (N) => ({ data: { values: [{ [N]: 4, v: 1 }, { [N]: 6, v: 2 }, { [N]: 9, v: 4 }] }, transform: [{ regression: N, on: 'v' }], mark: 'line', encoding: { x: { field: 'v', type: 'quantitative' }, y: { field: N, type: 'quantitative' } } }),
-  'quantile': (N) => ({ data: { values: num(N) }, transform: [{ quantile: N }], mark: 'point', encoding: { x: { field: 'prob', type: 'quantitative' }, y: { field: 'value', type: 'quantitative' } } }),
-  'flatten': (N) => ({ data: { values: [{ [N]: [1, 2], k: 'a' }] }, transform: [{ flatten: [N] }], mark: 'point', encoding: { x: { field: 'k', type: 'nominal' }, y: { field: N, type: 'quantitative' } } }),
-  'stack transform': (N) => ({ data: { values: num(N) }, transform: [{ stack: N, groupby: ['k'], as: ['s0', 's1'] }], mark: 'bar', encoding: { x: { field: 'k', type: 'nominal' }, y: { field: 's0', type: 'quantitative' }, y2: { field: 's1' } } }),
-  'lookup as': (N) => ({ data: { values: str('c') }, transform: [{ lookup: 'c', from: { data: { values: [{ c: 'A', w: 5 }] }, key: 'c', fields: ['w'] }, as: [N] }], mark: 'point', encoding: { x: { field: 'k', type: 'quantitative' }, y: { field: N, type: 'quantitative' } } }),
-  'parse key': (N) => ({ data: { values: num(N), format: { parse: { [N]: 'number' } } }, mark: 'point', encoding: { x: { field: 'k', type: 'nominal' }, y: { field: N, type: 'quantitative' } } }),
-  'repeat': (N) => ({ data: { values: num(N) }, repeat: [N], spec: { mark: 'point', encoding: { x: { field: 'k', type: 'nominal' }, y: { field: { repeat: 'repeat' }, type: 'quantitative' } } } }),
-  'extent param': (N) => ({ data: { values: num('v') }, transform: [{ extent: 'v', param: N }], mark: 'point', encoding: { x: { field: 'k', type: 'nominal' }, y: { field: 'v', type: 'quantitative' } } }),
-  'dataset name': (N) => ({ datasets: { [N]: num('v') }, data: { name: N }, mark: 'point', encoding: { x: { field: 'k', type: 'nominal' }, y: { field: 'v', type: 'quantitative' } } }),
-  'param name': (N) => ({ data: { values: num('v') }, params: [{ name: N, value: 5 }], mark: 'point', encoding: { x: { field: 'k', type: 'nominal' }, y: { field: 'v', type: 'quantitative' }, size: { value: { expr: `${N} * 20` } } } }),
-  'selection name': (N) => ({ data: { values: num('v') }, params: [{ name: N, select: 'point' }], mark: 'point', encoding: { x: { field: 'k', type: 'nominal' }, y: { field: 'v', type: 'quantitative' }, color: { condition: { param: N, value: 'red' }, value: 'grey' } } }),
-  'selection fields': (N) => ({ data: { values: str(N) }, params: [{ name: 'p', select: { type: 'point', fields: [N] } }], mark: 'point', encoding: { x: { field: 'k', type: 'quantitative' }, y: { field: N, type: 'nominal' }, color: { condition: { param: 'p', value: 'red' }, value: 'grey' } } }),
-}
 
 /** The spec with the name `from` (a whole string, or a parameter in an expression) replaced by `to`. */
 const sub = (spec: Spec, from: string, to: string): Spec => JSON.parse(JSON.stringify(spec).replaceAll(`"${from}"`, `"${to}"`).replaceAll(`${from} *`, `${to} *`))
@@ -109,7 +56,7 @@ async function vegaLite0(spec: Spec): Promise<{ svg: string; data: string } | { 
 const prototypeKeys = (): string => Reflect.ownKeys(Object.prototype).map(String).sort().join(',')
 
 describe('a name that is a member of Object.prototype is refused where vega-lite\'s chart is wrong, and drawn as vega-lite draws it elsewhere', () => {
-  for (const [place, make] of Object.entries(CONTEXTS)) {
+  for (const [place, make] of Object.entries(NAME_PLACES)) {
     it(place, async () => {
       const problems: string[] = []
       for (const N of NAMES) {

@@ -9512,8 +9512,9 @@ function prepareUnitSelections(
     fieldDef: (channel) => {
       const f = fieldOf(channel)
       if (!f) return undefined
-      if (f.flatExpr !== undefined) {
-        throw new VLCompileError(`encoding.${channel}: a selection cannot be projected over the nested or escaped field "${f.source}"`)
+      // (an escaped field is a column of the row the selection tests; a nested one is not, it is flattened into a copy)
+      if (f.flatExpr !== undefined && splitAccessPath(f.source).length !== 1) {
+        throw new VLCompileError(`encoding.${channel}: a selection cannot be projected over the nested field "${f.source}"`)
       }
       return { field: f.field, source: f.source, aggregate: f.aggregate, bin: !!f.bin, ...(f.tu ? { timeUnit: f.tu } : {}) }
     },

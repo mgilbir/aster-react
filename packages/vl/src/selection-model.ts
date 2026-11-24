@@ -7,7 +7,7 @@
  * signals and its mark name are asked of the unit as they are needed.
  */
 import type { StreamDef } from './event-selector.js'
-import { dict } from './names.js'
+import { dict, replacePathInField } from './names.js'
 
 export type Obj = Record<string, unknown>
 export const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -65,8 +65,12 @@ export function canonicalJson(v: unknown): string | undefined {
   return `{${entries.join(',')}}`
 }
 
-/** A field name as a Vega `field:` access path: the characters that would step into the datum are escaped. */
-export const escapeFieldPath = (path: string): string => path.replace(/\\/g, '\\\\').replace(/\./g, '\\.').replace(/\[/g, '\\[').replace(/\]/g, '\\]')
+/**
+ * A stored field (a field path as the spec writes it, or a generated name) as the tuples' `fields` entry and the selection's own
+ * signal write it: vega-lite's replacePathInField, the path's pieces with their dots, brackets and quotes escaped (`a\.b` stays
+ * `a\.b`, the nested `o.v` is `o\.v`), so the runtime's selection test reads the datum's key.
+ */
+export const escapeFieldPath = (path: string): string => replacePathInField(path)
 
 // --- what a selection stores ---------------------------------------------------------------------------------------------------
 

@@ -11,6 +11,12 @@ import { pushAll, genSignal, safeKey, splitAccessPath, VLCompileError, datumPath
 import { predicateExpr, paramLeaves } from './predicate.js'
 import { normalizeTimeUnit, timeUnitTransform } from './timeunit.js'
 
+/** vega-util `field(f).fname`: the name of the column a field accessor reads, a one-piece path unescaped, a nested path as written. */
+const accessorName = (f: string): string => {
+  const parts = splitAccessPath(f)
+  return parts.length === 1 ? parts[0]! : f
+}
+
 /**
  * The `extent` transforms that publish a parameter (`{extent, param}`): the signal is the user's parameter, global to the spec, so a
  * composition never renames it as a view's own (vega-lite ExtentTransformNode assembles `signal: param`).
@@ -385,7 +391,8 @@ export function translateTransform(t: Obj, ctx: TransformContext, st: TranslateS
     // vega-lite 6.4.3 forwards `default` only when truthy (a 0/''/false default is dropped upstream)
     if (t.default) lt.default = t.default
     out.push(lt)
-    derived((lt.as as string[] | undefined) ?? ((from.fields as string[] | undefined) ?? []))
+    // (without `as`, Vega names each output after its field's accessor: the one-piece path unescaped, `x\\y` writes `x\y`)
+    derived((lt.as as string[] | undefined) ?? ((from.fields as string[] | undefined) ?? []).map(accessorName))
   } else if (t.density !== undefined) {
     const as = asPair(t.as, 'value', 'density')
     const { density, as: _as, resolve, ...rest } = t
