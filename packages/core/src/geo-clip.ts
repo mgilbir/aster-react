@@ -158,14 +158,18 @@ function rejoin(
   for (const crossing of boundary) crossing.entering = startInside = !startInside
   const first = subject[0]!
   // bounded: every pass marks at least one crossing visited, and stops when all are: at most the crossings
+  // (every crossing before where the last search stopped has been passed through, so the next search starts there: the same
+  // crossing as a search from the first, in time linear in the crossings rather than quadratic)
+  let from = first
   for (;;) {
     // the next crossing no ring has passed through yet
-    let current = first
+    let current = from
     let onSubject = true
     while (current.visited) {
       meterTick('geo rejoin')
       if ((current = current.next) === first) return
     }
+    from = current
     let points = current.piece
     out.mark(LINE_START, src)
     // bounded: every step marks a crossing visited and stops at one already visited: at most the crossings

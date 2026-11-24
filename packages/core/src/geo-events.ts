@@ -12,7 +12,7 @@
  * parts of the albersUsa composite) be interleaved again in the order the input events arrived.
  */
 
-import { allot } from './limits.js'
+import { allot, meterCoords } from './limits.js'
 
 export const POINT = 0
 export const LINE_START = 1
@@ -77,6 +77,10 @@ export class Events {
   private grow(atLeast = 0): void {
     // (a buffer grows with what a stage makes of a shape, resampling included: bounded before it is allocated)
     const capacity = allot('vertices', Math.max(this.op.length * 2, atLeast), 'geo events')
+    // (the events one geometry makes are a spec's to multiply: a projection's precision resamples a segment into thousands, a
+    // graticule's step makes lines by the thousand. They are also counted as positions against the ceiling on generated positions, or
+    // the limits that replace it, as they grow; under limits each growth also samples the clock)
+    meterCoords(capacity - this.op.length, 'geo positions', capacity)
     const op = new Uint8Array(capacity)
     const x = new Float64Array(capacity)
     const y = new Float64Array(capacity)
