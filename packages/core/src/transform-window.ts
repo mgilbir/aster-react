@@ -7,7 +7,7 @@
  */
 import { accessorName, array, error } from './util.js'
 import { orderOf } from './tuple-order.js'
-import { meterTick } from './limits.js'
+import { copiedRows, meterTick } from './limits.js'
 import {
   compareOf, fieldOf, lcg, MeasureGroup, outputName, partitionRows, planMeasures, SEED, stableSortBy,
   type Compare, type MeasureSet, type Row,
@@ -192,7 +192,7 @@ function upperBound(rows: Row[], target: Row, compare: Compare): number {
  * stretch reads a row that is not there and the transform fails with a TypeError; here the frame is simply left as the offsets put it.
  */
 export function windowRows(rows: readonly Row[], p: WindowParams, random: () => number = lcg(SEED), owned = false): Row[] {
-  const out = owned ? rows.slice() : rows.map((r) => ({ ...r }))
+  const out = owned ? rows.slice() : copiedRows(rows, 'window')
   const sort = compareOf(p.sort) as Compare | null
   const plan = planWindow(p)
   const [from, to] = (Array.isArray(p.frame) ? p.frame : [null, 0]) as [number | null, number | null]

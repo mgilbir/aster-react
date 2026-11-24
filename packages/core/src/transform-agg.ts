@@ -16,8 +16,8 @@
  * Deviations from Vega, both on purpose: the input rows are never written (the transforms that write onto their rows in Vega write
  * onto copies, or onto rows the pipeline owns), and group tables hold no inherited names, so a group called `constructor` is a group.
  */
-import { accessor, accessorFields, accessorName, array, ascending, error, sortData, type Accessor } from './util.js'
-import { allotUpTo, meterTick } from './limits.js'
+import { accessor, accessorFields, accessorName, array, ascending, error, type Accessor } from './util.js'
+import { allotUpTo, copiedRows, meterTick, sortMetered } from './limits.js'
 import { recorded, recordingFor, type GroupsByproduct } from './step-byproduct.js'
 import { quantileSorted } from './arr.js'
 
@@ -679,7 +679,7 @@ export function aggregateGroups(rows: readonly Row[], p: AggregateParams, random
  * `values`, `argmin` and `argmax` return), or the rows themselves when the pipeline owns them.
  */
 export function joinAggregateRows(rows: readonly Row[], p: AggregateParams, random: () => number = lcg(SEED), owned = false): Row[] {
-  const out = owned ? rows.slice() : rows.map((r) => ({ ...r }))
+  const out = owned ? rows.slice() : copiedRows(rows, 'joinaggregate')
   // Vega's JoinAggregate declares no `aggregate_params`, `drop` or `cross`: they are not read (an exponential gets no ratio)
   const g = groupingFor({ groupby: p.groupby, fields: p.fields, ops: p.ops, as: p.as, key: p.key }, random)
   const record = recordingFor(rows)
@@ -725,12 +725,13 @@ export function pivotRows(rows: readonly Row[], p: PivotParams, random: () => nu
   const op = ((p.op === 'count' ? '__count__' : p.op) as string) || 'sum'
   const seen = new Set<string>()
   const spellings: unknown[] = []
-  for (const row of rows) {
-    const spelling = pivotOf(row)
+  for (let i = 0; i < rows.length; i++) {
+    const spelling = pivotOf(rows[i])
     const text = String(spelling)
     if (!seen.has(text)) { seen.add(text); spellings.push(spelling) }
+    if ((i & 1023) === 1023) meterTick('pivot', 1024)
   }
-  sortData(spellings, ascending)
+  sortMetered(spellings, ascending, 'pivot')
   const limit = (p.limit as number) || 0
   const columns = limit ? spellings.slice(0, limit) : spellings
   meterTick('pivot', columns.length)

@@ -19,7 +19,7 @@ import { lexedText } from './expr-text.js'
 import { isEngineNode, noteEngineScene } from './scene-registry.js'
 import { parseExpressionCached, type Expr } from './expr-parser.js'
 import { datasetsReadIn, identifiersIn, scalesReadIn, dependencyKey, fieldsWritten, namesIn, pipelineReadsOf, reuse, runsOf, stepCounts, stepReadsOf, type StepReads, type StepRecord } from './step-reuse.js'
-import { activeMeter, withLimits, allot, checkItemCount, checkRowCount, checkChartRegex, meterTick, AsterLimitError } from './limits.js'
+import { activeMeter, withLimits, allot, copiedRows, checkItemCount, checkRowCount, checkChartRegex, meterTick, AsterLimitError } from './limits.js'
 import { getTextMetricsProvider, withTextMetricsProvider } from './text-metrics.js'
 import { AsterUrlError } from './url-policy.js'
 import { SpecParseError } from './parse-error.js'
@@ -1072,7 +1072,7 @@ function makeSetdata(chart: CompiledChart, state: SetDataState): NonNullable<Exp
     // vega-dataflow enqueues an operator only once per run: a signal ranked after the dataset's input (it reads the dataset, or
     // something derived from it) calls setdata when the input has already run in this first pass, so its pulse is lost
     if (state.caller !== undefined && signalRanksAfterDatasetInput(chart, state.caller, name)) return 1
-    const rows = ingestRows((Array.isArray(tuples) ? tuples : tuples == null ? [] : [tuples]) as Row[], 0, undefined, { dataset: name, source: 'setdata' }).map((r) => ({ ...r }))
+    const rows = copiedRows(ingestRows((Array.isArray(tuples) ? tuples : tuples == null ? [] : [tuples]) as Row[], 0, undefined, { dataset: name, source: 'setdata' }), 'setdata')
     const have = state.rows.get(name)
     if (have === undefined || contentKey(have) !== contentKey(rows)) {
       state.rows.set(name, rows)
@@ -1096,7 +1096,7 @@ function makeTransformed(
 ): NonNullable<ExpressionRuntime['transformed']> {
   return (name, raw) => {
     const d = chart.data.find((x) => x.name === name)
-    const rows = d?.values != null ? readData(raw as never, d.format) : ingestRows(raw as Row[]).map((r) => ({ ...r }))
+    const rows = d?.values != null ? readData(raw as never, d.format) : copiedRows(ingestRows(raw as Row[]), 'transformed rows')
     if (!d?.transform.length) return rows
     return applyTransforms(rows, d.transform, { runtime, signals: engineParams(signalParams), hierarchies, projections }, name)
   }
@@ -4130,7 +4130,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
     const setRows = srcNames.length === 0 ? ctx.setData.rows.get(name) : undefined
     if (setRows !== undefined) {
       // `setdata(name, tuples)` replaced this dataset's input
-      rows = setRows.map((r) => ({ ...r }))
+      rows = copiedRows(setRows, 'setdata')
     } else if (srcNames.length > 1) {
       // several sources: their rows, one source after the other (each pulse adds its tuples in turn)
       rows = []
@@ -4293,7 +4293,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
     }
     // a dataset a `force` link force reads gets its link rows rewritten (their ends become the nodes): they are this
     // evaluation's own copies, never the spec's
-    if (forceLinkDatasets(ctx.chart).has(name)) rows = rows.map((r) => ({ ...r }))
+    if (forceLinkDatasets(ctx.chart).has(name)) rows = copiedRows(rows, 'dataset rows')
     markTuples(rows)
     ctx.datasets.set(name, rows)
     ctx.datasetPulses.set(name, outPulse)
@@ -4326,7 +4326,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
 
 const copyRows = (rows: readonly Row[]): Row[] => {
   stepCounts.copied += rows.length
-  const out = rows.map((r) => ({ ...r }))
+  const out = copiedRows(rows, 'dataset rows')
   markTuples(out)
   return out
 }
@@ -6501,7 +6501,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
       checkRowCount(rows?.length ?? sources.reduce((n, s) => n + (ctx.datasets.get(s)?.length ?? 0), 0), `dataset "${d.name}"`)
       const tctx = { runtime: ctx.runtime, signals: scopeParams, hierarchies: ctx.hierarchies, projections: ctx.projections }
       if (d.transform?.length) rows = runScopedData(ctx, `${markIdOf(mark)}/${path.join('.')}/${d.name}`, d.name, d.transform, sources, rows ?? gather, shared, tctx, scopeParams)
-      else if (shared) rows = gather().map((r) => ({ ...r }))
+      else if (shared) rows = copiedRows(gather(), 'dataset rows')
       else rows = rows ?? []
       savedData.push([d.name, ctx.datasets.get(d.name)])
       ctx.datasets.set(d.name, rows)

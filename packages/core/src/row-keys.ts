@@ -5,8 +5,8 @@
  * (engine-parts.ts), so what all of them share lives here, outside those parts.
  */
 import { orderOf, setOrder } from './tuple-order.js'
-import { accessor, accessorFields, array, ascending, error, field, sortData, type Accessor } from './util.js'
-import { AsterLimitError, allotUpTo, meterTick } from './limits.js'
+import { accessor, accessorFields, array, ascending, error, field, type Accessor } from './util.js'
+import { AsterLimitError, allotUpTo, meterTick, meteredCompare, sortMetered } from './limits.js'
 import { ascending as numericAscending, quantileSorted } from './arr.js'
 
 export type Row = Record<string, unknown>
@@ -97,8 +97,11 @@ export function sortBySpec<T>(items: readonly T[], spec: unknown, leaveOrder = f
   const m = keys.get.length
   const columns = keys.get.map((get) => {
     const column = new Array<unknown>(n)
-    // bounded: the spec's sort keys, a column each
-    for (let i = 0; i < n; i++) column[i] = get(items[i])
+    // bounded: the spec's sort keys, a column each; the rows tick
+    for (let i = 0; i < n; i++) {
+      column[i] = get(items[i])
+      if ((i & 1023) === 1023) meterTick('sort', 1024)
+    }
     return column
   })
   const order = new Array<number>(n)
@@ -107,16 +110,16 @@ export function sortBySpec<T>(items: readonly T[], spec: unknown, leaveOrder = f
   if (m === 1) {
     const column = columns[0]!
     const sign = keys.sign[0]!
-    sortData(order, (i, j) => compareValues(column[i], column[j]) * sign || (places ? places[i]! - places[j]! : 0) || i - j)
+    sortMetered(order, (i, j) => compareValues(column[i], column[j]) * sign || (places ? places[i]! - places[j]! : 0) || i - j, 'sort')
   } else {
-    sortData(order, (i, j) => {
+    sortMetered(order, (i, j) => {
       // bounded: the spec's sort keys
       for (let k = 0; k < m; k++) {
         const c = compareValues(columns[k]![i], columns[k]![j])
         if (c !== 0) return c * keys.sign[k]! || (places ? places[i]! - places[j]! : 0) || i - j
       }
       return (places ? places[i]! - places[j]! : 0) || i - j
-    })
+    }, 'sort')
   }
   const sorted = order.map((i) => items[i]!)
   onOrder?.(order)
@@ -161,7 +164,7 @@ export function stableSortBy<T>(items: readonly T[], compare: Compare | null, ma
   const n = items.length
   const order = new Array<number>(n)
   for (let i = 0; i < n; i++) order[i] = i
-  sortData(order, (i, j) => compare(items[i], items[j]) || (made ? made[i]! - made[j]! : 0) || i - j)
+  sortMetered(order, (i, j) => compare(items[i], items[j]) || (made ? made[i]! - made[j]! : 0) || i - j, 'sort')
   const sorted = new Array<T>(n)
   for (let i = 0; i < n; i++) sorted[i] = items[order[i]!]!
   return sorted
@@ -252,6 +255,7 @@ type Get = (d: unknown) => unknown
 export function numbersOf(values: ArrayLike<unknown>, get?: Get): number[] {
   const out: number[] = []
   for (let i = 0; i < values.length; i++) {
+    if ((i & 1023) === 1023) meterTick('quantile', 1024)
     const raw = get ? get(values[i]) : values[i]
     if (raw == null || raw === '') continue
     const x = +(raw as number)
@@ -262,7 +266,7 @@ export function numbersOf(values: ArrayLike<unknown>, get?: Get): number[] {
 
 /** Quantiles `probs` of the numbers in `values` (read through `get`); `undefined` where there is no number. */
 export function quantiles(values: ArrayLike<unknown>, probs: readonly number[], get?: Get): Array<number | undefined> {
-  const sorted = Float64Array.from(numbersOf(values, get)).sort(numericAscending)
+  const sorted = Float64Array.from(numbersOf(values, get)).sort(meteredCompare(numericAscending, 'quantile'))
   return probs.map((p) => quantileSorted(sorted, p))
 }
 

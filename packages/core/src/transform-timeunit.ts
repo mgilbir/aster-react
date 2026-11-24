@@ -10,12 +10,10 @@ import {
   durationDay, durationHour, durationMinute, durationMonth, durationSecond, durationWeek, durationYear,
   timeFloor, timeIntervalFor, timeUnits, utcFloor, utcIntervalFor,
 } from './time.js'
+import { meterTick, writableRow } from './limits.js'
 
 type Params = Record<string, unknown>
 type Read = (d: unknown) => unknown
-
-/** A row to write onto: the row itself when the pipeline owns it, otherwise a copy of it. */
-const writable = (row: Row, owned: boolean): Row => (owned ? row : { ...row })
 
 // ---------------------------------------------------------------------------
 // timeunit
@@ -112,7 +110,8 @@ function alignedGrains(dates: readonly Date[], utc: boolean): boolean[] {
 
 /** The coarsest grain every date in `rows` (read through `read`) is aligned to, as the units and step to bin by. */
 function detectTimeUnits(rows: Row[], read: Read, utc: boolean): { units: string[]; step: number } {
-  const dates = rows.map((row) => {
+  const dates = rows.map((row, i) => {
+    if ((i & 1023) === 1023) meterTick('timeunit', 1024)
     const v = read(row)
     const d = new Date(v as string)
     if (Number.isNaN(+d)) error(`Invalid date: ${v}`)
@@ -162,7 +161,7 @@ export function timeunitRows(rows: Row[], p: Params, publish?: (info: TimeUnitIn
   let first: number | Date = Infinity
   let last: number | Date = -Infinity
   const out = rows.map((row) => {
-    const t = writable(row, owned)
+    const t = writableRow(row, owned, 'timeunit')
     const v = read(row)
     if (v == null) {
       t[startName] = null

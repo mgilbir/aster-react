@@ -12,7 +12,7 @@
 import { accessorName, array, error, one, toNumber } from './util.js'
 import { compareOf, fieldOf, fieldsOf, flattenLength, lcg, numberRange, required, SEED, sortBySpec, stableSortBy, type Row } from './row-keys.js'
 import { quantile } from './arr.js'
-import { allotUpTo, meterTick } from './limits.js'
+import { allotUpTo, copiedRows, meterTick, writableRow } from './limits.js'
 export { numberRange, required } from './row-keys.js'
 import type { IdCounter } from './identifier-ids.js'
 import { orderOf } from './tuple-order.js'
@@ -21,11 +21,8 @@ import { recorded, recordingFor } from './step-byproduct.js'
 type Params = Record<string, unknown>
 type Read = (d: unknown) => unknown
 
-/** A row to write onto: the row itself when the pipeline owns it, otherwise a copy of it. */
-const writable = (row: Row, owned: boolean): Row => (owned ? row : { ...row })
-
 /** Rows to write onto: `rows` themselves (in a new array) when owned, copies otherwise. */
-const writableRows = (rows: readonly Row[], owned: boolean): Row[] => (owned ? rows.slice() : rows.map((r) => ({ ...r })))
+const writableRows = (rows: readonly Row[], owned: boolean, what: string): Row[] => (owned ? rows.slice() : copiedRows(rows, what))
 
 // ---------------------------------------------------------------------------
 // collect, sample
@@ -134,14 +131,15 @@ export function flattenRows(rows: Row[], p: Params): Row[] {
  * not: a row some result of an earlier transform holds must not take the fields a later transform writes.
  */
 export function projectRows(rows: Row[], p: Params): Row[] {
-  if (p.fields == null) return rows.map((row) => ({ ...row }))
+  if (p.fields == null) return copiedRows(rows, 'project')
   const fields = fieldsOf(p.fields)
   const given = array(p.as) as Array<string | null | undefined>
   const names = fields.map((f, i) => (given[i] || accessorName(f)) as string)
-  return rows.map((row) => {
+  return rows.map((row, r) => {
     const projected: Row = {}
     // bounded: the spec's fields
     for (let i = 0; i < fields.length; ++i) projected[names[i]!] = fields[i]!(row)
+    if ((r & 1023) === 1023) meterTick('project', 1024)
     return projected
   })
 }
@@ -156,8 +154,9 @@ export function extentOfField(rows: Row[], p: Params): [number | undefined, numb
   const read = fieldOf(p.field)
   let min = +Infinity
   let max = -Infinity
-  for (const row of rows) {
-    const v = toNumber(read(row))
+  for (let i = 0; i < rows.length; i++) {
+    if ((i & 1023) === 1023) meterTick('extent', 1024)
+    const v = toNumber(read(rows[i]))
     if (v != null) {
       // (NaN fails both comparisons and is skipped)
       if (v < min) min = v
@@ -225,7 +224,7 @@ export function lookupRows(rows: Row[], p: Params, source: readonly Row[], owned
     }
   }
   return rows.map((row) => {
-    const out = writable(row, owned)
+    const out = writableRow(row, owned, 'lookup')
     fill(out)
     return out
   })
@@ -351,7 +350,7 @@ interface StackGroup {
  * `normalize` scales each group to total 1. A `sort` orders the rows within a group, after its total has been summed in input order.
  */
 export function stackRows(rows: Row[], p: Params, owned = false): Row[] {
-  const out = writableRows(rows, owned)
+  const out = writableRows(rows, owned, 'stack')
   const order = orderOf(rows)
   const as = (p.as ?? ['y0', 'y1']) as string[]
   const lowName = as[0] as string
@@ -374,6 +373,7 @@ export function stackRows(rows: Row[], p: Params, owned = false): Row[] {
       if (!group) { byKey.set(key, (group = { rows: [], total: 0, made: order ? [] : undefined })); groups.push(group) }
       group.rows.push(row)
       group.made?.push(order![i]!)
+      if ((i & 1023) === 1023) meterTick('stack', 1024)
     }
   }
   let widest = 0
@@ -446,7 +446,7 @@ export function identifierRows(rows: Row[], p: Params, owned = false, ids?: IdCo
   const counter = ids ?? { value: 0 }
   const carry = counter.carry
   return rows.map((row, i) => {
-    const out = writable(row, owned)
+    const out = writableRow(row, owned, 'identifier')
     if (!out[name]) {
       const had = carry?.[i]
       if (had) {
@@ -558,7 +558,7 @@ export function binRows(rows: Row[], p: Params, publish?: (grid: BinGrid) => voi
   const endName = as[1] as string
   const lastStart = stop - step
   return rows.map((row) => {
-    const out = writable(row, owned)
+    const out = writableRow(row, owned, 'bin')
     const raw = read(row)
     const v = typeof raw === 'number' ? raw : toNumber(raw)
     // the start of the bin: ±Infinity outside the extent, the first or last bin at its ends, null for no value

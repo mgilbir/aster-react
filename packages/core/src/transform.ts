@@ -10,13 +10,13 @@ import type { CompiledTransform, SortSpec } from './types.js'
 import type { IdCounter } from './identifier-ids.js'
 import { exprRows, type ExpressionRuntime } from './expression.js'
 import { type ContourFeature, SHAPE_BOUNDS, geoRegistry, requireGeo, requireTransform } from './registry.js'
-import { isArray, sortData } from './util.js'
+import { isArray } from './util.js'
 import { densityGrid, placeContours } from './raster-grid.js'
 import { accessorOf, densitySettings } from './raster-params.js'
 import { PARAM_RULES, checkParams } from './param-rules.js'
 import { tickStep } from './arr.js'
 import { carryOrder, orderOf, placesAt } from './tuple-order.js'
-import { activeMeter, allot, meterTick } from './limits.js'
+import { activeMeter, allot, copiedRows, meterTick, sortMetered } from './limits.js'
 import { walkPostOrder, walkPreOrder } from './tree-walk.js'
 import { compareOf, fieldOf, numberRange, required, sortBySpec } from './row-keys.js'
 import type { AggregateParams } from './transform-agg.js'
@@ -134,7 +134,7 @@ export function applyTransformsToSharedRows(rows: Row[], transforms: CompiledTra
     reading++
   }
   let out = reading > 0 ? applyTransforms(rows, transforms.slice(0, reading), ctx, sourceName) : rows
-  if (shared) out = out.map((r) => ({ ...r }))
+  if (shared) out = copiedRows(out, 'dataset rows')
   // (the rows are now the pipeline's own: copies of the shared ones, or made by an aggregate)
   return reading < transforms.length ? applyTransforms(out, transforms.slice(reading), ctx, sourceName, true) : out
 }
@@ -221,7 +221,7 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
   switch (t.type) {
     case 'formula': {
       required('formula', t, 'expr', 'as')
-      const expr = exprRowPass(t.expr as string, ctx)
+      const expr = exprRowPass(t.expr as string, ctx, 'formula')
       const as = t.as as string
       if (owned && as !== '__proto__') {
         const out = rows.slice()
@@ -232,7 +232,7 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
     }
     case 'filter': {
       required('filter', t, 'expr')
-      const expr = exprRowPass(t.expr as string, ctx)
+      const expr = exprRowPass(t.expr as string, ctx, 'filter')
       return rows.filter((r) => expr(r))
     }
     case 'collect':
@@ -272,7 +272,8 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       const projection = projName != null ? ctx.projections?.get(String(projName)) : undefined
       if (projection != null && !geoRegistry.projectedPath) requireGeo() // throws: addon not loaded
       const pointRadius = geoPointRadius((t as { pointRadius?: unknown }).pointRadius, ctx)
-      return rows.map((r) => {
+      return rows.map((r, i) => {
+        if ((i & 1023) === 1023) meterTick('geoshape', 1024)
         // (a mark's transform runs on its items: the field is read off the item, `datum` -- the default -- being its data, and the
         // path is written on the item, which is the transform's own)
         const geo = getField(r, field == null ? 'datum' : String(field))
@@ -409,8 +410,17 @@ export function compileExprTransform(expr: string, ctx: TransformContext) {
  * loop only evaluates, and what the expression calls is checked: see `exprRows`). What every row reads alike is read once. Not
  * to be kept past that loop: the next pass prepares its own.
  */
-export function exprRowPass(expr: string, ctx: TransformContext): (datum: Row) => unknown {
-  return exprRows(ctx.runtime.expr(expr), ctx.signals)
+export function exprRowPass(expr: string, ctx: TransformContext, what = 'expression rows'): (datum: Row) => unknown {
+  const pass = exprRows(ctx.runtime.expr(expr), ctx.signals)
+  // Inside a limits scope every 1024 rows tick the clock: a formula or filter is a pass over the rows with an expression per row,
+  // which the budget must stop inside (C514). Outside one the pass is the expression itself.
+  const meter = activeMeter()
+  if (!meter) return pass
+  let count = 0
+  return (datum) => {
+    if (++count === 1024) { count = 0; meter.tick(what, 1024) }
+    return pass(datum)
+  }
 }
 
 /**
@@ -467,7 +477,7 @@ export function sortOrder(rows: Row[], sort?: SortSpec, limit = Infinity): numbe
   const order = rows.map((_, i) => i)
   const c = comparatorOf(sort)
   const places = c ? orderOf(rows) : null
-  if (c) sortData(order, (a, b) => c(rows[a]!, rows[b]!) || (places ? places[a]! - places[b]! : 0) || a - b)
+  if (c) sortMetered(order, (a, b) => c(rows[a]!, rows[b]!) || (places ? places[a]! - places[b]! : 0) || a - b, 'collect')
   return Number.isFinite(limit) ? order.slice(0, Math.max(0, limit)) : order
 }
 
@@ -781,6 +791,7 @@ export function buildStratifyTree(rows: Row[], key?: string, parentKey?: string)
   const parentIds: Array<string | null> = []
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i]!
+    if ((i & 1023) === 1023) meterTick('stratify', 1024)
     const node = mk(r, i)
     nodes.push(node)
     const id = idOf(r)
@@ -795,6 +806,7 @@ export function buildStratifyTree(rows: Row[], key?: string, parentKey?: string)
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i]!
     const pid = parentIds[i]
+    if ((i & 1023) === 1023) meterTick('stratify', 1024)
     if (pid != null) {
       const parent = byKey.get(pid)
       if (!parent) throw new Error(`[aster] stratify: missing: ${pid}`)

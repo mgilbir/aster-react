@@ -6,9 +6,9 @@
  * ones (geopoint, geopath, geojson, linkpath). Loaded by the `@aster-charts/core/transforms` addon; the core bundle keeps only
  * the transforms a plain chart uses. Shared internals come from transform.ts.
  */
-import { error, ownGet, sortData } from './util.js'
+import { error, ownGet } from './util.js'
 import { fieldOf } from './transform-agg.js'
-import { allot, allotUpTo, meterTick } from './limits.js'
+import { allot, allotUpTo, copiedRows, meterTick, sortMetered } from './limits.js'
 import type { HierNode, Row, TransformContext } from './transform.js'
 import { compileExprTransform, geoPointRadius, getField } from './transform.js'
 import type { GeoProjection } from './geo-projections.js'
@@ -231,7 +231,10 @@ function crossfilterRows(rows: Row[], t: Record<string, unknown>, ctx: Transform
   const query = ([] as unknown[]).concat(t.query ?? []) as Array<[unknown, unknown]>
   if (!fields.length) error('[aster] crossfilter requires "fields"')
   const m = query.length
-  const data = rows.map((r, i) => ({ ...r, _index: i }))
+  const data = rows.map((r, i) => {
+    if ((i & 1023) === 1023) meterTick('crossfilter', 1024)
+    return { ...r, _index: i }
+  })
   const n = data.length
   const curr = new Uint32Array(n)
   for (let d = 0; d < m; d++) {
@@ -301,9 +304,9 @@ function pieRows(rows: Row[], t: Record<string, unknown>): Row[] {
   const k = (stop - start) / values.reduce((acc, v) => acc + (+v || 0), 0)
   const index = Array.from({ length: n }, (_, i) => i)
   if (t.sort) {
-    sortData(index, (x, y) => values[x]! - values[y]!)
+    sortMetered(index, (x, y) => values[x]! - values[y]!, 'pie')
   }
-  const out = rows.map((r) => ({ ...r }))
+  const out = copiedRows(rows, 'pie')
   for (let i = 0; i < n; ++i) {
     const v = values[index[i]!]!
     out[index[i]!]![startAngleField] = a
@@ -422,9 +425,9 @@ function dotbinRows(rows: Row[], t: Record<string, unknown>, ctx: TransformConte
     groups.set('', rows.map((_, i) => i))
   }
   const sorted = rows.map((r, i) => ({ r, i }))
-  sortData(sorted, (p, q) => (values[p.i] as number) - (values[q.i] as number))
+  sortMetered(sorted, (p, q) => (values[p.i] as number) - (values[q.i] as number), 'dotbin')
   // compute bins per group over the sorted indices
-  const out = rows.map((r) => ({ ...r }))
+  const out = copiedRows(rows, 'dotbin')
   const groupIndices = new Map<string, number[]>()
   for (const { i } of sorted) {
     // bounded: the spec's groupby fields
@@ -469,7 +472,8 @@ function geopointRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCon
   const lon = geoAccessor(fields[0], ctx)
   const lat = geoAccessor(fields[1], ctx)
   const as = (t.as as [string, string]) ?? ['x', 'y']
-  return rows.map((r) => {
+  return rows.map((r, i) => {
+    if ((i & 1023) === 1023) meterTick('geopoint', 1024)
     const xy = projection.project(lon(r) as number, lat(r) as number)
     return xy ? { ...r, [as[0]!]: xy[0], [as[1]!]: xy[1] } : { ...r, [as[0]!]: undefined, [as[1]!]: undefined }
   })
@@ -494,7 +498,10 @@ function geopathRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCont
   const field = t.field == null ? (r: Row): unknown => r : geoAccessor(t.field, ctx)
   const as = (t.as as string | undefined) || 'path'
   const radius = t.pointRadius != null ? (geoPointRadius(t.pointRadius, ctx) as PointRadius) : undefined
-  return rows.map((r) => ({ ...r, [as]: path.draw(field(r), radius) }))
+  return rows.map((r, i) => {
+    if ((i & 1023) === 1023) meterTick('geopath', 1024)
+    return { ...r, [as]: path.draw(field(r), radius) }
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -602,7 +609,10 @@ function linkpathRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCon
   const shape = (t.shape as string | undefined) ?? 'line'
   const path = ownGet(LINK_PATHS, shape + '-' + orient) ?? ownGet(LINK_PATHS, shape)
   if (!path) throw new Error(`[aster] linkpath unsupported type: ${shape}${t.orient ? '-' + orient : ''}`)
-  return rows.map((r) => ({ ...r, [as]: path(sx(r) as number, sy(r) as number, tx(r) as number, ty(r) as number) }))
+  return rows.map((r, i) => {
+    if ((i & 1023) === 1023) meterTick('linkpath', 1024)
+    return { ...r, [as]: path(sx(r) as number, sy(r) as number, tx(r) as number, ty(r) as number) }
+  })
 }
 
 // -- addon registration ------------------------------------------------------

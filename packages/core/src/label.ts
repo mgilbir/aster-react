@@ -20,12 +20,11 @@
  *
  * Registered by `@aster-charts/core/transforms`. The rest of the engine reaches it through the transform registry.
  */
-import { sortData } from './util.js'
 import { AlphaCanvas } from './raster.js'
 import { drawMark } from './label-draw.js'
 import { itemMarkOf, transformRegistry } from './registry.js'
 import { compareRows, resolveSizeParam, type Row, type TransformContext } from './transform.js'
-import { allot, meterTick } from './limits.js'
+import { allot, copiedRows, meterTick, sortMetered } from './limits.js'
 import { itemTextWidth } from './text-metrics.js'
 import type { SceneGroup, SortSpec } from './types.js'
 
@@ -563,7 +562,7 @@ function layOut(items: Rec[], p: Params): Label[] {
   if (!(inArea && method === 'naive')) {
     if (p.sort) {
       const sort = p.sort
-      sortData(labels, (a, b) => compareRows(a.item as Row, b.item as Row, sort))
+      sortMetered(labels, (a, b) => compareRows(a.item as Row, b.item as Row, sort), 'label')
     }
     // a label may go inside its mark: it is tested against the outline of the mark, not the interior
     const inside = spots.some((s) => s.inside)
@@ -629,7 +628,7 @@ function labelRows(rows: Row[], t: Rec, ctx: TransformContext): Row[] {
   })
 
   // a mark's items are written in place (they are the tuples); a dataset's rows are copied
-  const out = ctx.inPlace ? rows : rows.map((r) => ({ ...r }))
+  const out = ctx.inPlace ? rows : copiedRows(rows, 'label')
   const copyOf = ctx.inPlace ? null : new Map<Rec, Row>(rows.map((r, i) => [r, out[i]!]))
   for (const label of labels) {
     const target = copyOf === null ? label.item : copyOf.get(label.item)!

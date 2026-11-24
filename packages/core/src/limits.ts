@@ -603,6 +603,56 @@ export function meterTick(what: string, cost = 1): void {
   if (active) active.tick(what, cost)
 }
 /**
+ * A writable copy of each row (`{ ...row }`), ticking the clock every 1024 rows. Copying the rows a host gave, or a transform's
+ * input before it writes, is a pass over data the size of the input with an allocation per row: about a millisecond per thousand
+ * rows, so a time budget must be able to stop it inside (C514). Every copy of a row array goes through here.
+ */
+export function copiedRows<T extends object>(rows: readonly T[], what: string): T[] {
+  const n = rows.length
+  const out = new Array<T>(n)
+  if (!active) {
+    for (let i = 0; i < n; i++) out[i] = { ...rows[i]! }
+    return out
+  }
+  for (let i = 0; i < n; i++) {
+    out[i] = { ...rows[i]! }
+    if ((i & 1023) === 1023) active.tick(what, 1024)
+  }
+  return out
+}
+
+let rowsWritten = 0
+/**
+ * The row a transform writes its output onto, one row at a time: the row itself when the pipeline owns it, otherwise a copy. Inside
+ * a limits scope every 1024 rows tick the clock, so the per-row transforms (`bin`, `timeunit`, `identifier`, `lookup`) are stopped
+ * by a time budget inside their pass (C514).
+ */
+export function writableRow<T extends object>(row: T, owned: boolean, what: string): T {
+  if (active && (++rowsWritten & 1023) === 0) active.tick(what, 1024)
+  return owned ? row : { ...row }
+}
+
+/**
+ * {@link sortData} under the clock: inside a limits scope every 1024 comparisons tick it, so a sort of data-sized arrays (n log n
+ * comparisons in one native call) is stopped by a time budget inside, not after (C514). The comparisons, and so the order, are the
+ * native sort's own; without a scope it is the plain sort.
+ */
+export function sortMetered<T>(array: T[], compare: (a: T, b: T) => number, what: string): T[] {
+  return sortData(array, meteredCompare(compare, what))
+}
+
+/** `compare` ticking the clock every 1024 comparisons inside a limits scope (for a sort of data-sized arrays); itself outside one. */
+export function meteredCompare<T>(compare: (a: T, b: T) => number, what: string): (a: T, b: T) => number {
+  const meter = active
+  if (!meter) return compare
+  let count = 0
+  return (a, b) => {
+    if (++count === 1024) { count = 0; meter.tick(what, 1024) }
+    return compare(a, b)
+  }
+}
+
+/**
  * Account coordinates about to be decoded. `decoded` is the running total of the caller's own decode, which is what the
  * built-in ceiling applies to when there is no limits scope to accumulate it.
  */
@@ -690,7 +740,7 @@ export function regExpOf(pattern?: unknown, flags?: unknown): RegExp {
 
 import { part } from './engine-parts.js'
 import { dataInputOf, specList } from './spec-structure.js'
-import { ownGet } from './util.js'
+import { ownGet, sortData } from './util.js'
 
 /** What a node of the pre-flight walk is: the spec's own structure, a `values` array, one of its rows, or inside a row. */
 const SPEC = 0
