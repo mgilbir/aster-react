@@ -289,7 +289,8 @@ function pieRows(rows: Row[], t: Record<string, unknown>): Row[] {
   const startAngleField = as[0]!
   const endAngleField = as[1]!
   const field = t.field ? fieldOf(t.field) : null
-  const start = (t.startAngle as number | undefined) ?? 0
+  // (vega-encode Pie: `_.startAngle || 0`, `_.endAngle != null ? _.endAngle : 2π`)
+  const start = (t.startAngle as number | undefined) || 0
   const stop = (t.endAngle as number | undefined) != null ? (t.endAngle as number) : 2 * Math.PI
   const values = rows.map((r) => (field ? (field(r) as number) : 1))
   const n = values.length

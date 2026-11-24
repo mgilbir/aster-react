@@ -162,9 +162,10 @@ export function applyTransforms(
     carryOrder(t.type, input, out)
     if (meter) {
       // Whatever a transform produced is a dataset like any other: it may not
-      // exceed maxRows, and rows beyond the input count as generated.
+      // exceed maxRows, and the rows it made beyond the rows IT was given count as generated (once: a later step that keeps
+      // them makes none)
       meter.checkRows(out.length, `transform ${t.type}`)
-      meter.generated(out.length - rows.length, `transform ${t.type}`)
+      meter.generated(out.length - input.length, `transform ${t.type}`)
     }
   }
   return out
