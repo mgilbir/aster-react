@@ -11,7 +11,7 @@
  * and the format layer (`./locale.js`).
  */
 import { currentLocale, type Locale } from './locale.js'
-import { activeMeter, allot, HARD_CAPS, metering, meterTick, checkRegexInput, checkRegexObject, regExpOf } from './limits.js'
+import { activeMeter, allot, HARD_CAPS, metering, meterTick, checkRegexObject, checkRegexRun, regExpOf } from './limits.js'
 import { bandSpace, scaleGradient, type Scale } from './scale.js'
 import { part } from './engine-parts.js'
 import { parseExpressionCached } from './expr-parser.js'
@@ -292,6 +292,17 @@ export function substitution(repl: string, matched: string, position: number, st
 function replaceBounded(str: string, pattern: string | RegExp, repl: unknown): string {
   const text = String(repl)
   const cap = stringCap()
+  // (a replacement with no `$` is itself, at most once per match, and a match per position at most: when even that bound fits the
+  // cap, the native replace makes the same text)
+  if (!text.includes('$')) {
+    const once = typeof pattern === 'string' || !(pattern.global)
+    const most = str.length + (once ? 1 : str.length + 1) * text.length
+    if (most <= cap) {
+      const out = str.replace(pattern as RegExp, text)
+      allot('bytes', out.length, 'replace')
+      return out
+    }
+  }
   let total = str.length
   const out = str.replace(pattern as RegExp, (...args: unknown[]) => {
     const named = typeof args[args.length - 1] === 'object' && args[args.length - 1] !== null
@@ -335,7 +346,7 @@ function testRe(pattern: unknown, text: unknown): boolean {
   // limits. This does NOT stop catastrophic backtracking (docs/LIMITS.md).
   const re = regExpOf(pattern)
   const input = String(text)
-  checkRegexInput(input)
+  checkRegexRun(re, input)
   return re.test(input)
 }
 
@@ -665,13 +676,13 @@ function builtinTable(runtime: ExpressionRuntime): Record<string, unknown> {
       // (vega-functions replace: the pattern must be a string or a regular expression; the replacement is passed as given)
       if (!isString(pattern) && !isRegExp(pattern)) throw new Error('Please pass a string or RegExp argument to replace.')
       const str = String(value)
-      if (isRegExp(pattern)) { checkRegexObject(pattern as RegExp); checkRegexInput(str) }
+      if (isRegExp(pattern)) { checkRegexObject(pattern as RegExp); checkRegexRun(pattern as RegExp, str) }
       return metering ? replaceBounded(str, pattern as string | RegExp, repl) : str.replace(pattern as string | RegExp, repl as string)
     },
     // `split` and `substring` are the string methods called on `String(value)` with the remaining arguments as given
     split: (value: unknown, ...rest: unknown[]) => {
       const str = String(value)
-      if (isRegExp(rest[0])) { checkRegexObject(rest[0] as RegExp); checkRegexInput(str) }
+      if (isRegExp(rest[0])) { checkRegexObject(rest[0] as RegExp); checkRegexRun(rest[0] as RegExp, str) }
       return splitBounded(str, rest)
     },
     substring: (value: unknown, ...rest: unknown[]) => built((String(value).substring as (...a: unknown[]) => string)(...rest), 'substring'),

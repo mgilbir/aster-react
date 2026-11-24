@@ -392,10 +392,16 @@ export const REGEX_MAX_PATTERN = 1024
 /** Default cap on the input of one regex call under limits (when `maxStringLength` is unset). */
 export const REGEX_MAX_INPUT = 10_000
 /**
- * The time one regular-expression run may take under limits without `maxTimeMs` (with it, `maxTimeMs` is the bound): the screen
- * accepts a pattern only if its run on the longest subject the limits allow fits (regex-screen.ts `regexHazard`).
+ * The time one regular-expression run may take under limits without `maxTimeMs` (with it, the time left is the bound): each run is
+ * checked against it, on its actual subject, before it starts ({@link checkRegexRun}).
  */
 export const REGEX_RUN_BUDGET_MS = 100
+/**
+ * Nanoseconds one unit of a pattern's cost (`work * n ** degree`, regex-screen.ts `RegexCost`) may take V8: the slowest measured
+ * over 130 generated and named shapes was 1.93 (`a+a{30}x`; `(\w?)+!` 1.80; the median 0.16) on a machine at load 5 to 10, and the
+ * gate runs under up to about 4 times that load, so a run the check allows finishes within its budget there too.
+ */
+export const REGEX_NS_PER_UNIT = 8
 
 export interface LimitMeter {
   readonly limits: SpecLimits
@@ -681,15 +687,31 @@ export function meterFilledCells(added: number, total: number, what: string): vo
   else overCeiling('filledCells', total, what)
 }
 
+/** A screened pattern: what a run of it costs (regex-screen.ts `RegexCost`) and its length (the pattern cap is the limits'). */
+interface Screened { readonly degree: number; readonly work: number; readonly length: number }
 /**
- * Regex guard (deviation from the oracle, for safety): under limits a pattern
- * longer than {@link REGEX_MAX_PATTERN} or an input longer than
- * `maxStringLength` (default {@link REGEX_MAX_INPUT}) is refused. This bounds
- * the work of linear patterns; it does NOT stop catastrophic backtracking,
- * which no cooperative check can interrupt.
+ * Each screened RegExp's screening, in a weak table (a property on the object would change its map, and V8 runs a RegExp whose map
+ * changed off its fast paths). The fresh copy of a literal an evaluation makes (C32) is read through its literal: the copy last
+ * made, and its literal, are kept aside, so the run that follows reads the literal's screening without adding an entry per copy.
  */
-export function checkRegexPattern(pattern: string, flags = ''): void {
-  if (!active) return
+const SCREENED = new WeakMap<RegExp, Screened>()
+let lastCopy: RegExp | null = null
+let lastLiteral: RegExp | null = null
+/** The RegExp `regexp()` / `test(text, ...)` made last, and its screening: the run that follows reads it without a table entry. */
+let lastMade: RegExp | null = null
+let lastMadeScreened: Screened | undefined
+const screenedOf = (re: RegExp): Screened | undefined =>
+  re === lastMade ? lastMadeScreened : SCREENED.get(re === lastCopy ? lastLiteral! : re)
+const keepScreened = (re: RegExp, s: Screened): void => { SCREENED.set(re === lastCopy ? lastLiteral! : re, s) }
+
+/**
+ * Regex guard (deviation from the oracle, for safety), when a pattern is made or handed to a run: under limits a pattern longer
+ * than {@link REGEX_MAX_PATTERN} is refused, and the static screen (docs/LIMITS.md) refuses what no subject length makes safe:
+ * exponential backtracking, more ways to match one input than it follows, a backreference in a repeat, a pattern it cannot read or
+ * analyse (fail closed). Any other pattern has a cost, which each run checks against its subject ({@link checkRegexRun}).
+ */
+function screenRegex(pattern: string, flags = ''): Screened | undefined {
+  if (!active) return undefined
   if (active.limits.regex === 'refuse') throw limitViolation(REGEX_REFUSED)
   // The pattern cap is fixed at REGEX_MAX_PATTERN; a maxStringLength below it lowers it. The refusal names the limit that set the
   // cap: one the host gave only where that is the lower (C655), else the fixed cap, which no limit raises.
@@ -699,19 +721,15 @@ export function checkRegexPattern(pattern: string, flags = ''): void {
   } else if (pattern.length > REGEX_MAX_PATTERN) {
     throw limitViolation(`regexSafety: pattern length ${pattern.length} > ${REGEX_MAX_PATTERN} (the fixed cap on a regular expression's length; no limit raises it)`)
   }
-  // (a spent deadline is reported as such before the pattern is judged against it)
+  // (a spent deadline is reported as such before the pattern is judged)
   active.clock.check('regular expression')
-  // Static screen (docs/LIMITS.md), applied to every pattern, including RegExp objects a spec built or wrote as literals: a pattern
-  // is accepted only if a run of it on the longest subject these limits let reach it finishes within the time a run may take,
-  // since nothing can interrupt a running RegExp. The screen is a part the React shells load on demand (engine-parts.ts): reading
-  // its slot throws when it is not loaded, so a pattern is refused, never run unscreened.
-  const subject = active.limits.maxStringLength ?? REGEX_MAX_INPUT
-  const hazard = part('regex').regexHazard(pattern, flags, subject, active.limits.maxTimeMs ?? REGEX_RUN_BUDGET_MS)
-  if (hazard) {
-    const shown = pattern.length > 80 ? pattern.slice(0, 80) + '...' : pattern
-    throw limitViolation(`regexSafety: ${hazard}: /${shown}/`)
-  }
+  // The screen is a part the React shells load on demand (engine-parts.ts): reading its slot throws when it is not loaded, so a
+  // pattern is refused, never run unscreened. (null: the RegExp constructor rejects the pattern, and says why itself)
+  const model = part('regex').regexModel(pattern, flags)
+  if (typeof model === 'string') throw limitViolation(`regexSafety: ${model}: /${shownPattern(pattern)}/`)
+  return model ? { degree: model.degree, work: model.work, length: pattern.length } : undefined
 }
+const shownPattern = (pattern: string): string => (pattern.length > 80 ? pattern.slice(0, 80) + '...' : pattern)
 
 /** The refusal of `limits.regex: 'refuse'`. */
 const REGEX_REFUSED = "regexSafety: regular expressions are disabled (limits.regex: 'refuse')"
@@ -737,10 +755,55 @@ export function checkChartRegex(chart: { regexSites?: readonly string[] }, limit
   throw new AsterLimitError(`${REGEX_REFUSED}: ${shown}`)
 }
 
+/** A fresh copy of a regular-expression literal (an evaluation's own `lastIndex`), screened as its literal is. */
+export function freshRegExp(literal: RegExp): RegExp {
+  const re = new RegExp(literal)
+  lastCopy = re
+  lastLiteral = literal
+  return re
+}
+
 /** Screen a RegExp object (a literal in an expression, or one built by `regexp()`); no-op without limits. */
 export function checkRegexObject(re: RegExp): void {
-  if (active) checkRegexPattern(re.source, re.flags)
+  if (!active) return
+  if (active.limits.regex === 'refuse') throw limitViolation(REGEX_REFUSED)
+  const kept = screenedOf(re)
+  if (kept !== undefined) {
+    const cap = Math.min(REGEX_MAX_PATTERN, active.limits.maxStringLength ?? REGEX_MAX_PATTERN)
+    if (kept.length > cap) over('maxStringLength', kept.length, cap, 'regular expression pattern')
+    return
+  }
+  const s = screenRegex(re.source, re.flags)
+  if (s !== undefined) keepScreened(re, s)
 }
+
+/**
+ * Before a run of `re` on `input`, under limits: the input is at most `maxStringLength` (default {@link REGEX_MAX_INPUT}), and the
+ * run's cost on it, `work * input.length ** degree` steps at {@link REGEX_NS_PER_UNIT}, fits the time left (`maxTimeMs`), else
+ * {@link REGEX_RUN_BUDGET_MS}: nothing can interrupt a running RegExp, so a run that would not fit is refused before it starts
+ * (`regexSafety: ...`), as the row and size caps refuse data. O(1), allocation-free unless it refuses.
+ */
+export function checkRegexRun(re: RegExp, input: string): void {
+  if (!active) return
+  const n = input.length
+  checkRegexInput(input)
+  let cost = screenedOf(re)
+  if (cost === undefined) {
+    checkRegexObject(re)
+    cost = screenedOf(re)
+    if (cost === undefined) return
+  }
+  const left = active.clock.remaining()
+  const budget = left === Infinity ? REGEX_RUN_BUDGET_MS : left
+  const ms = (cost.work * Math.max(1, n) ** cost.degree * REGEX_NS_PER_UNIT) / 1e6
+  if (ms > budget) {
+    const shape = cost.degree >= 2 ? `polynomial backtracking of degree ${cost.degree}` : 'a run'
+    const about = ms < 10 ? ms.toFixed(1) : String(Math.round(ms))
+    throw limitViolation(`regexSafety: ${shape}: about ${about} ms on ${n} characters, over the ${Math.round(budget)} ms a run may take: /${shownPattern(re.source)}/`)
+  }
+}
+
+/** The input of a run of one of the engine's own patterns: at most `maxStringLength` (default {@link REGEX_MAX_INPUT}). */
 export function checkRegexInput(input: string): void {
   if (!active) return
   const cap = active.limits.maxStringLength ?? REGEX_MAX_INPUT
@@ -750,8 +813,10 @@ export function checkRegexInput(input: string): void {
 
 /** `new RegExp(pattern, flags)` under the regex guard. */
 export function guardedRegExp(pattern: string, flags?: string): RegExp {
-  checkRegexPattern(pattern, flags)
-  return new RegExp(pattern, flags)
+  const cost = screenRegex(pattern, flags)
+  const re = new RegExp(pattern, flags)
+  if (cost !== undefined) { lastMade = re; lastMadeScreened = cost }
+  return re
 }
 
 /**

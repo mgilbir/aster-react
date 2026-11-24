@@ -3,7 +3,6 @@ import { describe, it, expect } from 'vitest'
 import { regexHazard, regexModel } from './regex-screen.js'
 import { compileExpr } from './expression.js'
 import { withLimits, AsterLimitError, REGEX_MAX_INPUT, REGEX_RUN_BUDGET_MS } from './limits.js'
-import { spawnSync } from 'node:child_process'
 import { attack, expectLimit, expectReturned } from './attack.testkit.js'
 
 /** Known catastrophic patterns from published ReDoS lists (OWASP, Davis et al. "The Impact of Regular Expression Denial of Service", regexlib). */
@@ -158,11 +157,11 @@ describe('the real attack (child process, hard kill)', () => {
 
 describe('polynomial backtracking (child process, hard kill)', () => {
   // 'a'.repeat(9000) against /a*a*a*a*a*b/ ran for over 20 s before the screen learnt the shape
-  it('/a*a*a*a*a*b/ on 9000 characters, with an empty limits object, is refused up front', async () => {
+  it('/a*a*a*a*a*b/ on 9000 characters, with an empty limits object, is refused before its run', async () => {
     const r = await attack(`
       core.renderSpec({ width: 10, height: 10, data: [{ name: 't', values: [{ s: 'a'.repeat(9000) }], transform: [{ type: 'formula', as: 'n', expr: 'test(/a*a*a*a*a*b/, datum.s)' }] }],
         marks: [{ type: 'rect', from: { data: 't' } }] }, { limits: {} })`)
-    expectLimit(r, /regexSafety: polynomial backtracking of degree \d+: about \d+ ms on 10000 characters/)
+    expectLimit(r, /regexSafety: polynomial backtracking of degree \d+: about \d+ ms on 9000 characters, over the 100 ms a run may take/)
     expect(r.cpuMs).toBeLessThan(500)
   }, 30_000)
 
@@ -171,7 +170,7 @@ describe('polynomial backtracking (child process, hard kill)', () => {
       core.renderSpec({ width: 10, height: 10, data: [{ name: 't', values: [{ s: ' '.repeat(4000) + 'x\\n\\nx' }], transform: [
         { type: 'formula', as: 'a', expr: "test(/^\\\\s*(.*?)\\\\s*$/, datum.s)" }] }],
         marks: [{ type: 'rect', from: { data: 't' } }] }, { limits: {} })`)
-    expectLimit(r, /regexSafety: polynomial backtracking of degree 3: about \d+ ms on 10000 characters/)
+    expectLimit(r, /regexSafety: polynomial backtracking of degree 3: about \d+ ms on 4004 characters, over the 100 ms a run may take/)
     expect(r.cpuMs).toBeLessThan(500)
     const ok = await attack(`
       const svg = core.renderSpec({ width: 10, height: 10, data: [{ name: 't', values: [{ s: ' '.repeat(10) + 'a'.repeat(8000) }], transform: [
@@ -196,17 +195,19 @@ describe('the screen terminates and is sound (child processes, hard kill)', () =
   }, 30_000)
 
   /**
-   * Every pattern the screen lets through, for a subject as long as the limits allow and a run budget, runs within that budget on
-   * inputs built to make it backtrack, at that length: each character the pattern names repeated to it, with no suffix and with
-   * suffixes that fail it. An absolute bound, since nothing can interrupt a running RegExp: the time a host is promised. Patterns
-   * are generated from a small grammar (seeded); V8 runs them in a child that the parent kills past its budget. Two limits: the
-   * default subject cap (10 000 characters: quadratic searches do not fit 100 ms there and are refused) and `maxStringLength: 1000`
-   * (they fit, and run).
+   * Every pattern the screen lets through (whatever the input: no exponential shape, nothing it cannot bound) is driven through the
+   * engine under limits, on inputs built to make it backtrack at the longest subject those limits allow: each character the pattern
+   * names repeated to that length, with no suffix and with suffixes that fail it. Each run either finishes within the time a run
+   * may take or is refused, before it starts, with the typed `regexSafety` error (its cost on that subject does not fit); never a
+   * slow run. An absolute bound, since nothing can interrupt a running RegExp. Patterns are generated from a small grammar
+   * (seeded); they run in children that the parent kills past 20 s. The screen reads each pattern once before its runs are timed:
+   * its analysis is bounded by its own step budget (`MAX_STEPS`), not by the run's (the slowest generated pattern took 272 ms). Two limits: the default (subjects up to 10 000 characters, a
+   * run 100 ms), where searched quadratic patterns are refused on such subjects, and `maxStringLength: 1000`, where they run.
    */
   it.each([
-    { subject: REGEX_MAX_INPUT, budget: REGEX_RUN_BUDGET_MS },
-    { subject: 1000, budget: REGEX_RUN_BUDGET_MS },
-  ])('generated patterns the screen accepts for $subject characters run within $budget ms on attack inputs of that length', ({ subject, budget }) => {
+    { limits: {}, subject: REGEX_MAX_INPUT },
+    { limits: { maxStringLength: 1000 }, subject: 1000 },
+  ])('generated patterns the screen accepts, on $subject-character attack inputs, run within the budget or are refused before they run', async ({ limits, subject }) => {
     let s = 0x5eed
     const rand = (): number => { s = (Math.imul(s, 1103515245) + 12345) >>> 0; return s / 4294967296 }
     const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)]!
@@ -223,33 +224,61 @@ describe('the screen terminates and is sound (child processes, hard kill)', () =
       return out
     }
     const accepted: string[] = []
-    let quadratic = 0
-    for (let n = 0; accepted.length < 300 && n < 40000; n++) {
+    for (let n = 0; accepted.length < 300 && n < 20000; n++) {
       const p = (rand() < 0.3 ? '^' : '') + gen(0) + (rand() < 0.5 ? pick(['$', '!', 'x$']) : '')
       try { new RegExp(p) } catch { continue }
-      if (regexHazard(p, '', subject, budget) === null) {
-        accepted.push(p)
-        const m = regexModel(p)
-        if (m !== null && typeof m === 'object' && m.degree >= 2) quadratic++
-      }
+      const m = regexModel(p)
+      if (m !== null && typeof m === 'object') accepted.push(p)
     }
     expect(accepted.length).toBe(300)
-    // (not vacuous: at 1000 characters the accepted patterns include searches that backtrack quadratically)
-    if (subject <= 1000) expect(quadratic).toBeGreaterThan(30)
-    const child = `
-      const [pats, subject, budget] = JSON.parse(process.argv[1]); const units = ['a', 'b', ' ', '1', 'x', 'ab', 'a ']; const tails = ['', '!', '\\n', 'b!']
-      for (const p of pats) {
-        const re = new RegExp(p)
-        for (const u of units) for (const t of tails) {
-          const s = u.repeat(Math.ceil(subject / u.length)).slice(0, subject - t.length) + t
-          process.stdout.write(JSON.stringify(p) + '\\n')
-          const t0 = performance.now(); re.test(s); const ms = performance.now() - t0
-          if (ms > budget) { process.stdout.write('SLOW ' + ms.toFixed(0) + ' ' + JSON.stringify([p, u, t]) + '\\n'); process.exit(3) }
+    let ran = 0, refused = 0, quadraticRan = 0
+    for (let at = 0; at < accepted.length; at += 50) {
+      const r = await attack(`
+        const pats = ${JSON.stringify(accepted.slice(at, at + 50))}
+        const limits = ${JSON.stringify(limits)}, subject = ${subject}, budget = ${REGEX_RUN_BUDGET_MS}
+        const rt = { scale: () => undefined, data: () => [], expr: (e) => core.compileExpr(e, rt) }
+        const f = core.compileExpr('test(regexp(datum.p), datum.s)', rt)
+        const units = ['a', 'b', ' ', '1', 'x', 'ab', 'a ']; const tails = ['', '!', '\\n', 'b!']
+        const out = { ran: 0, refused: 0, ranPatterns: [], slow: null, other: null }
+        for (const p of pats) {
+          // (the screen's analysis of the pattern, once per pattern and bounded by its own step budget, is not the run being timed)
+          try { core.withLimits(limits, () => f({ p, s: '' }, {})) } catch {}
+          let any = false
+          for (const u of units) for (const t of tails) {
+            const s = u.repeat(Math.ceil(subject / u.length)).slice(0, subject - t.length) + t
+            const t0 = performance.now()
+            try { core.withLimits(limits, () => f({ p, s }, {})); out.ran++; any = true } catch (e) {
+              if (e instanceof core.AsterLimitError && /regexSafety: .* ms on \\d+ characters, over the \\d+ ms a run may take/.test(e.message)) out.refused++
+              else { out.other = String(e && e.message).slice(0, 200) + ' ' + JSON.stringify([p, u, t]); return out }
+            }
+            const ms = performance.now() - t0
+            if (ms > budget) { out.slow = ms.toFixed(0) + ' ms ' + JSON.stringify([p, u, t]); return out }
+          }
+          if (any) out.ranPatterns.push(p)
         }
-      }
-      process.stdout.write('DONE\\n')`
-    const res = spawnSync(process.execPath, ['-e', child, JSON.stringify([accepted, subject, budget])], { timeout: 240_000, encoding: 'utf8', maxBuffer: 1 << 26 })
-    const lines = (res.stdout ?? '').trim().split('\n')
-    expect(lines[lines.length - 1], `killed or slow while running ${lines[lines.length - 1]}`).toBe('DONE')
-  }, 300_000)
+        return out`)
+      expect(r.killed, `patterns ${at}..: killed (a run that never finished)`).toBe(false)
+      expect(r.threw, JSON.stringify(r.threw)).toBeNull()
+      const v = r.value as { ran: number; refused: number; ranPatterns: string[]; slow: string | null; other: string | null }
+      expect(v.slow, 'a run slower than the budget').toBeNull()
+      expect(v.other, 'neither a run nor the typed refusal').toBeNull()
+      ran += v.ran
+      refused += v.refused
+      for (const p of v.ranPatterns) { const m = regexModel(p) as { degree: number }; if (m.degree >= 2) quadraticRan++ }
+    }
+    // (not vacuous: runs happen, refusals happen at the long subject, and quadratic patterns run at the short one)
+    expect(ran).toBeGreaterThan(1000)
+    if (subject === REGEX_MAX_INPUT) expect(refused).toBeGreaterThan(100)
+    else expect(quadraticRan).toBeGreaterThan(30)
+  }, 600_000)
+
+  it('`\\s+$` runs on a 1 000-character subject and is refused, before it runs, on a 10 000-character one', () => {
+    const rt = { scale: () => undefined, data: () => [], expr: () => { throw new Error('x') } }
+    const f = compileExpr('test(/\\s+$/, datum.s)', rt as never)
+    expect(withLimits({}, () => f({ s: ' '.repeat(999) + 'x' }, {}))).toBe(false)
+    expect(() => withLimits({}, () => f({ s: ' '.repeat(9999) + 'x' }, {})))
+      .toThrow(/regexSafety: polynomial backtracking of degree 2: about \d+ ms on 10000 characters, over the 100 ms a run may take: \/\\s\+\$\//)
+    // with more time, it runs
+    expect(withLimits({ maxTimeMs: 5000 }, () => f({ s: ' '.repeat(9999) + 'x' }, {}))).toBe(false)
+  })
 })
