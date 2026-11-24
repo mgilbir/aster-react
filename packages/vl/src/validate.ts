@@ -421,7 +421,7 @@ const CONFIG_KEYS = set(
   'autosize background padding axis axisBand axisX axisY axisLeft axisRight axisTop axisBottom legend header headerRow headerColumn headerFacet range ' +
     'mark arc area bar circle geoshape image line point rect rule square text tick trail view title font scale style projection ' +
     'aria countTitle fieldTitle lineBreak normalizedNumberFormat numberFormat timeFormat boxplot errorbar errorband concat facet tooltipFormat ' +
-    'customFormatTypes numberFormatType normalizedNumberFormatType timeFormatType selection',
+    'customFormatTypes numberFormatType normalizedNumberFormatType timeFormatType selection locale',
 )
 const CONFIG_SCALE_KEYS = set(
   'bandPaddingInner bandPaddingOuter barBandPaddingInner tickBandPaddingInner rectBandPaddingInner bandWithNestedOffsetPaddingInner bandWithNestedOffsetPaddingOuter offsetBandPaddingInner offsetBandPaddingOuter pointPadding continuousPadding round nice zero xReverse clamp useUnaggregatedDomain invalid minBandSize maxBandSize minFontSize maxFontSize minOpacity maxOpacity minSize maxSize minStrokeWidth maxStrokeWidth quantileCount quantizeCount framesPerSecond animationDuration',

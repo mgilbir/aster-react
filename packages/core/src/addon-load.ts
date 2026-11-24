@@ -17,6 +17,7 @@ import { feature as topoFeature, mesh as topoMesh, type MeshFilter } from './top
 import { dataFormatRegistry } from './registry.js'
 import { readData, type DataFormatSpec } from './data-format.js'
 import type { VgSpec } from './types.js'
+import { chartLocale, type LocaleDefinition } from './locale.js'
 import { dataInputOf, specList } from './spec-structure.js'
 import { compileExpr, type ExpressionRuntime } from './expression.js'
 import { parseExpression } from './expr-parser.js'
@@ -675,6 +676,8 @@ export async function loadSpecData<T extends VgSpec>(spec: T, opts: LoadOptions 
     }
     return p
   }
+  const config = (spec as { config?: unknown }).config as { locale?: unknown } | undefined
+  const specLocale = config?.locale != null && typeof config.locale === 'object' ? chartLocale(config.locale as LocaleDefinition) : undefined
   try {
     await untilAborted(Promise.all(
       tasks.map(async (task) => {
@@ -682,7 +685,8 @@ export async function loadSpecData<T extends VgSpec>(spec: T, opts: LoadOptions 
         if ((budget.bytes += bytes) > o.maxTotalBytes) throw new AsterLimitError(`maxTotalBytes ${budget.bytes} > ${o.maxTotalBytes} (dataset "${task.name}")`)
         // Parsing runs in the limits scope so the readers, topojson expansion and row counts are metered.
         const rows = withLimits(limitsNow(), () => {
-          const parsed = readData(text, { ...task.format, type: task.format?.type || 'json' })
+          // (a date pattern is parsed with the spec's `config.locale`, as vega parses loaded data with the view's locale)
+          const parsed = readData(text, { ...task.format, type: task.format?.type || 'json' }, false, undefined, specLocale)
           checkRowCount(parsed.length, `dataset "${task.name}"`)
           return parsed
         })

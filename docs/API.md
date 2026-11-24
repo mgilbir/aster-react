@@ -412,6 +412,10 @@ vega-format's; compiled formatters are kept per specifier in a bounded least-rec
   `timeFormatDefaultLocale(definition?)` read (no argument) or replace one half.
   The expression functions `format`, `timeFormat`, `utcFormat`, `timeParse`, `utcParse`, the guide captions and the `date:` / `utc:` patterns of a data `parse` read the default on every call, so a replacement takes effect at once. It is
   process-wide state: set it once at start-up.
+- A chart in a locale of its own says so in its spec: `config.locale: {number?, time?}` (Vega's, and Vega-Lite's, passed
+  through by `@aster-charts/vl`). Its axis and legend labels, their captions, the expression functions above, a text
+  `format` and its data's date patterns read that locale; a half it leaves out is the default one. The locale is the
+  chart's, not the process's: charts in different locales live side by side in one page or server.
 - `resetDefaultLocale()` puts both halves back to the built-in locale (a test seam).
 
 ```ts

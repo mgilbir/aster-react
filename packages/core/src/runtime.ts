@@ -32,7 +32,7 @@ import { implicit as implicitCategory } from './scale-discrete.js'
 /** Scale types whose domain is an ordered set of discrete values. */
 const DISCRETE_TYPES = new Set(['band', 'point', 'ordinal'])
 import { ITEM_MARK, geoRegistry, requireGeo } from './registry.js'
-import { formatEnvironmentKey, locale } from './locale.js'
+import { chartLocale, formatEnvironmentKey, type Locale } from './locale.js'
 import type {
   CompiledAxis,
   CompiledChart,
@@ -907,6 +907,8 @@ function prepareChartCtx(
       return root === undefined ? undefined : { root, rows: datasets.get(name) ?? [] }
     },
     ...(input.random ? { random: input.random } : {}),
+    // (the chart's own locale, `config.locale`, for `format`, `timeFormat`, `timeParse` ...)
+    ...(chart.locale ? { locale: () => chartLocale(chart.locale) } : {}),
     setdata: makeSetdata(chart, setData),
     containerSize: () => {
       const c = input.containerSize ?? input.measuredSize
@@ -1099,7 +1101,7 @@ function makeTransformed(
 ): NonNullable<ExpressionRuntime['transformed']> {
   return (name, raw) => {
     const d = chart.data.find((x) => x.name === name)
-    const rows = d?.values != null ? readData(raw as never, d.format) : ingestRows(raw as Row[]).map((r) => ({ ...r }))
+    const rows = d?.values != null ? readData(raw as never, d.format, false, undefined, dataLocale(chart)) : ingestRows(raw as Row[]).map((r) => ({ ...r }))
     if (!d?.transform.length) return rows
     return applyTransforms(rows, d.transform, { runtime, signals: engineParams(signalParams), hierarchies, projections }, name)
   }
@@ -3678,6 +3680,8 @@ function evaluateViewPass(chart: CompiledChart, hostInput: RuntimeInput, txn: Ev
   if (evaluatedUnder) (scene as unknown as { __limits?: unknown }).__limits = evaluatedUnder
   ;(scene as unknown as { __itemGen?: number }).__itemGen = txn.gen
   ;(scene as unknown as { __scales?: unknown }).__scales = sceneSnapshots(ctx)
+  // (the captions of the guides format with the chart's locale)
+  if (ctx.chart.locale) scene.__locale = ctx.chart.locale
   ;(scene as unknown as { __scaleMap?: unknown }).__scaleMap = ctx.scales
   Object.defineProperty(scene, '__datasets', { value: { rows: ctx.datasets, failed: ctx.failedDatasets }, enumerable: false, configurable: true })
   if (ctx._defs.length) scene.defs = ctx._defs
@@ -4158,7 +4162,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         // topojson feature extraction). The host's current values (input.data)
         // win over the spec's compiled-in ones.
         const given = ownGet(inputData, src)
-        rows = readData(given ?? inlineValues(ctx, srcDef.values), (d as { format?: DataFormatSpec }).format, given === undefined && valuesSignal(srcDef.values) !== undefined, { dataset: src, source: given === undefined ? 'values' : 'data' })
+        rows = readData(given ?? inlineValues(ctx, srcDef.values), (d as { format?: DataFormatSpec }).format, given === undefined && valuesSignal(srcDef.values) !== undefined, { dataset: src, source: given === undefined ? 'values' : 'data' }, dataLocale(ctx.chart))
         notePrimitiveTuples(ctx, rows)
         inPulse = ctx.inputPulses?.get(src) ?? null
       } else {
@@ -4178,13 +4182,13 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         // (rows that readData would pass through as they are -- an array of JSON rows, nothing to parse -- are only ingested)
         // (a session hands a dataset its spec's own inline rows this way too: those are named as inline values)
         const source = given === d.values ? 'values' : 'data'
-        rows = Array.isArray(given) && passesThroughRead(d.format, given) ? ingestHostRows(given as Row[], inPulse, name, source) : readData(given, d.format, false, { dataset: name, source, ...(inPulse?.changed ? { dataChanges: inPulse.changed } : {}) })
+        rows = Array.isArray(given) && passesThroughRead(d.format, given) ? ingestHostRows(given as Row[], inPulse, name, source) : readData(given, d.format, false, { dataset: name, source, ...(inPulse?.changed ? { dataChanges: inPulse.changed } : {}) }, dataLocale(ctx.chart))
         inputs = [given]
         raw = true
       } else {
         // vega-loader read semantics: object arrays pass through format.parse
         // coercion; string values are parsed by the registered reader.
-        rows = readData(inlineValues(ctx, d.values), d.format, valuesSignal(d.values) !== undefined, { dataset: name, source: 'values' })
+        rows = readData(inlineValues(ctx, d.values), d.format, valuesSignal(d.values) !== undefined, { dataset: name, source: 'values' }, dataLocale(ctx.chart))
         notePrimitiveTuples(ctx, rows)
       }
     } else {
@@ -6559,7 +6563,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
       if (!shared && d.values == null && d.url != null) throw unloadedUrlError(d.name, false)
       let rows: Row[] | undefined
       try {
-        rows = shared ? undefined : d.values != null ? readData(inlineValues(ctx, d.values), d.format, valuesSignal(d.values) !== undefined, { dataset: d.name, source: 'values' }) : []
+        rows = shared ? undefined : d.values != null ? readData(inlineValues(ctx, d.values), d.format, valuesSignal(d.values) !== undefined, { dataset: d.name, source: 'values' }, dataLocale(ctx.chart)) : []
       } catch (e) {
         // (vega inserts a group's inline rows into its dataset inside the run: a row that is not a tuple is logged there, not thrown)
         if (!isNotATupleError(e)) throw e
@@ -7301,7 +7305,7 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
   if (exponent == null && mult == null && offset == null && !enc.round) {
     if (tail !== undefined) return hasHead ? (head as number) + tail : tail
     if (!hasHead) return undefined
-    return enc.field != null && enc.scale == null && enc.format !== undefined && typeof head === 'number' ? formatValue(head, value) : head
+    return enc.field != null && enc.scale == null && enc.format !== undefined && typeof head === 'number' ? formatValue(head, value, ctx) : head
   }
 
   // from here the text is `value [pow] [*mult] [+offset]`, rounded as a whole
@@ -7322,7 +7326,7 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
   if (tail !== undefined) result = !hasHead ? tail : (result as number) + tail
   if (offset != null) result = (result as number) + (entryProperty(offset, datum, ctx, binding) as number)
   if (enc.round) result = Math.round(result as number)
-  if (enc.field != null && enc.scale == null && enc.format !== undefined && typeof result === 'number') result = formatValue(result, value)
+  if (enc.field != null && enc.scale == null && enc.format !== undefined && typeof result === 'number') result = formatValue(result, value, ctx)
   return result
 }
 
@@ -7337,12 +7341,15 @@ function calendarOf(scaleType: string | undefined, formatType: unknown): 'time' 
   return undefined
 }
 
-function formatValue(v: unknown, spec: EncodeValue): unknown {
+/** The locale a chart's data is parsed with (`format.parse` date patterns): its own, when its config has one. */
+const dataLocale = (chart: CompiledChart): Locale | undefined => (chart.locale ? chartLocale(chart.locale) : undefined)
+
+function formatValue(v: unknown, spec: EncodeValue, ctx: EvalContext): unknown {
   const format = (spec as { format?: unknown }).format
   const formatType = (spec as { formatType?: unknown }).formatType
   if (format === undefined) return v
   const fmt = format as string
-  const L = locale(undefined)
+  const L = chartLocale(ctx.chart.locale)
   const cal = calendarOf(undefined, formatType)
   if (cal === 'utc') return L.utcFormat(fmt)(v as Date)
   if (cal === 'time' || v instanceof Date) return L.timeFormat(fmt)(v as Date)
@@ -7504,7 +7511,7 @@ function makeLegend(legend: CompiledLegend, ctx: EvalContext, index: number): Sc
   // (the pass stopped in the encode of a mark that reads a late scale, in this very scope: a legend over a late scale is ranked after
   // that encode, and only what the legend's group and its title read of nothing late was made)
   let entriesFailed = cut?.lateScale === true && compareInstances(ctx.scope.path, cut.path) === 0 && scaleNamedIsLate(ctx.scope, channels[0]![1], ctx.chart)
-  const refusal = entriesFailed ? undefined : entriesRefusal({ type: legendType(spec, scaleType), scale: scale as never, count: tickCountRaw, minstep, values, formatSpecifier, formatType, locale: locale(undefined) })
+  const refusal = entriesFailed ? undefined : entriesRefusal({ type: legendType(spec, scaleType), scale: scale as never, count: tickCountRaw, minstep, values, formatSpecifier, formatType, locale: chartLocale(ctx.chart.locale) })
   if (refusal !== undefined) {
     if (lateLabels) {
       // (the entries of a gradient whose labels are ranked last: the pass stops there, after the rest of the scope, and the legend
@@ -7547,7 +7554,7 @@ function makeLegend(legend: CompiledLegend, ctx: EvalContext, index: number): Sc
       values, count: tickCountRaw, minstep,
       limit: +(guideScalar(ctx, spec.symbolLimit ?? config.symbolLimit) as number),
       formatSpecifier, formatType,
-      locale: locale(undefined), host, style: guideStyles(ctx), raw: !!ctx.rawGuides,
+      locale: chartLocale(ctx.chart.locale), host, style: guideStyles(ctx), raw: !!ctx.rawGuides,
       ...(ctx.passMemory !== undefined ? { relayout: legendMemory(ctx.passMemory, `l${ctx.scope.path.join('/')}:${index}`) } : {}),
       ...(entries !== undefined ? { entries } : {}),
       ...(lateLabels ? { lateLabels } : {}),
@@ -8319,6 +8326,6 @@ function axisLabelFormat(axis: CompiledAxis, scale: Scale, count: number, ctx: E
   // number format (`42` is a width, `NaN` is refused); a specifier the format refuses throws here, as it makes vega's AxisTicks throw.
   const formatType = paramValue(ctx, axis.formatType)
   const specifier = paramValue(ctx, axis.format)
-  return tickFormat(locale(undefined), scale, count, specifier, formatType as string | undefined, noSkip)
+  return tickFormat(chartLocale(ctx.chart.locale), scale, count, specifier, formatType as string | undefined, noSkip)
 }
 

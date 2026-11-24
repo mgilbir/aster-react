@@ -275,6 +275,38 @@ export function formatEnvironmentKey(): string {
   return `${localeStamp()}\u0001${hostTimeZone()}`
 }
 
+/** A chart's own locale (`config.locale`): a number half, a time half, or both, as vega-view reads `spec.locale`. */
+export interface LocaleDefinition {
+  number?: FormatLocaleDefinition
+  time?: TimeLocaleDefinition
+}
+
+/** The halves made of a chart's definitions, kept beside the definition (a definition is the compiled chart's, made once). */
+const CHART_HALVES = new WeakMap<object, { number?: NumberLocale; time?: TimeLocale; joined?: { number: NumberLocale; time: TimeLocale; locale: Locale } }>()
+
+/**
+ * The locale a chart formats and parses through: vega-view's `locale(spec.locale.number, spec.locale.time)`, scoped to the chart (no
+ * process-wide default is touched, so charts in different locales live side by side). A half the chart does not define is the
+ * default one, read now (a later `defaultLocale(...)` is honoured). Each half the chart defines is made once per definition, so its
+ * formatter tables last as long as the chart.
+ */
+export function chartLocale(definition: LocaleDefinition | undefined): Locale {
+  if (definition == null) return currentLocale()
+  let halves = CHART_HALVES.get(definition)
+  if (halves === undefined) {
+    halves = {
+      ...(definition.number ? { number: numberFormatLocale(definition.number) } : {}),
+      // (the time half is the engine's time part, read when a date is first formatted: a chart that formats none never needs it)
+      ...(definition.time ? { time: lazyTimeLocale((time) => time.timeFormatLocale(definition.time as TimeLocaleDefinition)) } : {}),
+    }
+    CHART_HALVES.set(definition, halves)
+  }
+  const number = halves.number ?? currentNumber
+  const time = halves.time ?? currentTime
+  if (halves.joined?.number !== number || halves.joined.time !== time) halves.joined = { number, time, locale: join(number, time) }
+  return halves.joined.locale
+}
+
 /**
  * With no arguments, the default locale; with both definitions, replace the defaults. One argument, or a definition that is not one
  * (`undefined`), is an error, and the call replaces nothing: both halves are made before either default is assigned, so a call that

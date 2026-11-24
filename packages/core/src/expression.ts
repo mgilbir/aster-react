@@ -10,7 +10,7 @@
  * (`./util.js`), the colour spaces (`./color.js`, the engine's colour part), the calendar (`./time.js`, the engine's time part: engine-parts.ts)
  * and the format layer (`./locale.js`).
  */
-import { currentLocale } from './locale.js'
+import { currentLocale, type Locale } from './locale.js'
 import { allot, allotArray, meterTick, checkRegexInput, checkRegexObject, regExpOf } from './limits.js'
 import { bandSpace, scaleGradient, type Scale } from './scale.js'
 import { part } from './engine-parts.js'
@@ -101,20 +101,21 @@ export interface ExpressionRuntime {
    * empty until its marks are built.
    */
   intersect?: (box: unknown, opt?: unknown, group?: unknown) => unknown[]
+  /**
+   * The locale `format`, `timeFormat`, `timeParse` ... read (vega's view locale): the chart's own when its config has a `locale`.
+   * Absent, the default locale.
+   */
+  locale?: () => Locale
 }
 
 export type CompiledExpr = (datum: unknown, params?: Record<string, unknown>, event?: unknown) => unknown
 
-// The default locale -- upstream's expression `format` goes through
-// vega-format's default locale (grouping included). It is read per call (not
-// snapshotted at import) so a later `defaultLocale(...)` is honoured.
-const L = {
-  format: (spec: string) => currentLocale().format(spec),
-  timeFormat: (spec: unknown) => currentLocale().timeFormat(spec),
-  utcFormat: (spec: unknown) => currentLocale().utcFormat(spec),
-  timeParse: (spec: string) => currentLocale().timeParse(spec),
-  utcParse: (spec: string) => currentLocale().utcParse(spec),
-}
+/**
+ * The locale an expression formats and parses through (vega-functions reads `this.context.dataflow.locale()`): the chart's
+ * (`config.locale`, see `chartLocale`) when its runtime says so, else the default one -- read per call (not snapshotted at import),
+ * so a later `defaultLocale(...)` is honoured.
+ */
+const localeOf = (runtime: ExpressionRuntime): Locale => runtime.locale?.() ?? currentLocale()
 
 function isValid(value: unknown): boolean {
   return value != null && value === value
@@ -125,29 +126,20 @@ function isValid(value: unknown): boolean {
 // locale. That the Date is kept is observable: a day past the end of a month (`dayFormat(30)` is January 32nd) carries the next
 // month name over to the following month, and a midnight the time zone skips moves the date back an hour into the day before.
 const nameDate = new Date(2000, 0, 1)
-function nameFormat(month: unknown, day: unknown, spec: string): string {
+function nameFormat(L: Locale, month: unknown, day: unknown, spec: string): string {
   if (!Number.isInteger(month) || !Number.isInteger(day)) return ''
   nameDate.setFullYear(2000)
   nameDate.setMonth(month as number)
   nameDate.setDate(day as number)
   return L.timeFormat(spec)(nameDate)
 }
-const monthFormatValue = (month: unknown): string => nameFormat(month, 1, '%B')
-const dayFormatValue = (day: unknown): string => nameFormat(0, 2 + (day as number), '%A')
 
 // --- numeric/time formatting (vega semantics: null -> "null") ---------------
 
-function fmtNumber(value: unknown, spec?: string): string {
-  // vega-functions wraps the locale's formatter but only maps *null* to "null"; undefined
-  // reaches the formatter and formats as NaN. The specifier is passed as given.
-  return value === null ? 'null' : L.format(spec as string)(value as number)
-}
-function fmtTime(value: unknown, spec?: string): string {
-  return value === null ? 'null' : L.timeFormat(spec)(value as Date)
-}
-function fmtUtc(value: unknown, spec?: string): string {
-  return value === null ? 'null' : L.utcFormat(spec)(value as Date)
-}
+// vega-functions wraps the locale's formatter but only maps *null* to "null"; undefined reaches the formatter and formats as NaN. The
+// specifier is passed as given.
+const formatting = (method: 'format' | 'timeFormat' | 'utcFormat' | 'timeParse' | 'utcParse', runtime: ExpressionRuntime) =>
+  (value: unknown, spec?: unknown): unknown => (value === null ? 'null' : (localeOf(runtime)[method] as (s: unknown) => (v: unknown) => unknown)(spec)(value))
 
 // --- date-time accessors -----------------------------------------------------
 
@@ -547,16 +539,16 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     quarter: quarterFn, week: weekFn, dayofyear: dayofyearFn,
     utcquarter: utcQuarterFn, utcweek: utcWeekFn, utcdayofyear: utcDayofyearFn,
     // formatting
-    format: (value: unknown, spec?: string) => fmtNumber(value, spec),
-    timeFormat: (value: unknown, spec?: string) => fmtTime(value, spec),
-    utcFormat: (value: unknown, spec?: string) => fmtUtc(value, spec),
-    timeParse: (value: unknown, spec: string) => (value === null ? 'null' : L.timeParse(spec)(value as string)),
-    utcParse: (value: unknown, spec: string) => (value === null ? 'null' : L.utcParse(spec)(value as string)),
+    format: formatting('format', runtime),
+    timeFormat: formatting('timeFormat', runtime),
+    utcFormat: formatting('utcFormat', runtime),
+    timeParse: formatting('timeParse', runtime),
+    utcParse: formatting('utcParse', runtime),
     timeUnitSpecifier: (units: unknown, specs?: unknown) => part('time').timeUnitSpecifier(units as never, specs as never),
-    monthFormat: monthFormatValue,
-    monthAbbrevFormat: (month: unknown) => nameFormat(month, 1, '%b'),
-    dayFormat: dayFormatValue,
-    dayAbbrevFormat: (day: unknown) => nameFormat(0, 2 + (day as number), '%a'),
+    monthFormat: (month: unknown) => nameFormat(localeOf(runtime), month, 1, '%B'),
+    monthAbbrevFormat: (month: unknown) => nameFormat(localeOf(runtime), month, 1, '%b'),
+    dayFormat: (day: unknown) => nameFormat(localeOf(runtime), 0, 2 + (day as number), '%A'),
+    dayAbbrevFormat: (day: unknown) => nameFormat(localeOf(runtime), 0, 2 + (day as number), '%a'),
     // colors
     // (the colour spaces are the engine's colour part: engine-parts.ts)
     rgb: (...args: number[] | [string]) => (part('color').rgb as unknown as (...a: unknown[]) => unknown)(...args),

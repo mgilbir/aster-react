@@ -6,7 +6,7 @@
  * which registers its readers in `dataFormatRegistry`; json is built in.
  */
 import { dataFormatRegistry, LOAD_ADDON_FORMATS } from './registry.js'
-import { currentLocale } from './locale.js'
+import { currentLocale, type Locale } from './locale.js'
 import { field, toBoolean, toDate, toNumber, toString, PRIMITIVE_TUPLE } from './util.js'
 
 /** The converter for each column type a `parse` entry can name. */
@@ -31,12 +31,14 @@ export interface DataFormatSpec {
 }
 
 /** The converter for one `parse` entry: a column type, or `date:<pattern>` / `utc:<pattern>` (the pattern may be quoted). */
-function converterFor(field: string, type: string): (v: unknown) => unknown {
+/** The two date parsers of a locale (vega-dataflow `parse`: `read(data, format, locale.timeParse, locale.utcParse)`). */
+export type DateParsing = Pick<Locale, 'timeParse' | 'utcParse'>
+
+function converterFor(field: string, type: string, locale: DateParsing): (v: unknown) => unknown {
   if (type && (type.startsWith('date:') || type.startsWith('utc:'))) {
     let pattern = type.slice(type.indexOf(':') + 1)
     const quote = pattern[0]
     if ((quote === "'" || quote === '"') && pattern[pattern.length - 1] === quote) pattern = pattern.slice(1, -1)
-    const locale = currentLocale()
     const parse = type.startsWith('utc:') ? locale.utcParse(pattern) : locale.timeParse(pattern)
     return (v) => parse(v as string)
   }
@@ -48,10 +50,10 @@ function converterFor(field: string, type: string): (v: unknown) => unknown {
  * Convert the columns `parse` names in every row (`'auto'`: every column of the first row, by the type its values
  * suggest). A date pattern turns a cell into a Date, or null where it does not match. The rows are copied.
  */
-export function coerceRows(rows: Record<string, unknown>[], parse: Record<string, string> | string): Record<string, unknown>[] {
+export function coerceRows(rows: Record<string, unknown>[], parse: Record<string, string> | string, locale: DateParsing = currentLocale()): Record<string, unknown>[] {
   if (!rows.length) return rows
   const types = parse === 'auto' ? inferTypes(rows, Object.keys(rows[0]!)) : parse
-  const columns = Object.entries(types).map(([field, type]) => [field, converterFor(field, type)] as const)
+  const columns = Object.entries(types).map(([field, type]) => [field, converterFor(field, type, locale)] as const)
   return rows.map((row) => {
     const out = { ...row }
     for (const [field, convert] of columns) out[field] = convert(out[field])
@@ -107,7 +109,7 @@ export function inferTypes(data: unknown[], fields: string[]): Record<string, st
  * parsed by the registered reader for the type (json is built in; csv/tsv/
  * dsv/topojson come from the `@aster-charts/core/load` addon).
  */
-export function readData(data: unknown, format?: DataFormatSpec, dynamic = false, origin?: RowOrigin): Record<string, unknown>[] {
+export function readData(data: unknown, format?: DataFormatSpec, dynamic = false, origin?: RowOrigin, locale?: DateParsing): Record<string, unknown>[] {
   const schema = format ?? {}
   const type = schema.type || 'json'
   // vega-loader.read always dispatches by format.type; the readers themselves
@@ -137,7 +139,8 @@ export function readData(data: unknown, format?: DataFormatSpec, dynamic = false
     if (rows === data) rows = rows.slice()
     else delete (rows as { columns?: unknown }).columns
   }
-  if (schema.parse) rows = coerceRows(rows, schema.parse)
+  // (a date pattern is parsed with the chart's locale, `config.locale`: the default one when it has none)
+  if (schema.parse) rows = coerceRows(rows, schema.parse, locale ?? currentLocale())
   // (rows a signal makes are ingested as vega's dynamic loader does: a primitive stays the primitive, see PRIMITIVE_TUPLE)
   return dynamic ? boxPrimitiveRows(rows) : ingestRows(rows, 0, undefined, origin)
 }
