@@ -8,11 +8,17 @@
  * string is replaced everywhere by a benign name that sorts where the hostile one sorts (`<hostile>Q`). When that spec compiles, the
  * hostile name in the same places must compile too, write nothing to any built-in prototype, and give the same Vega with the
  * benign name swapped back: the compiler may not treat a name differently because of what an object's prototype holds.
+ *
+ * One exception, and only for the names of Object.prototype's own members (`__proto__`, `constructor`, `hasOwnProperty`; never
+ * `prototype`): where Vega mistakes such a field, dataset or parameter for the prototype's member, vega-lite's chart fails or is wrong,
+ * and compile refuses it with a VLCompileError naming it (C442; conformance/test/vl-prototype-names.test.ts holds every place to
+ * vega-lite). Refused, it still writes nothing.
  */
 import { describe, it, expect } from 'vitest'
-import { compile } from '../src/index.js'
+import { compile, VLCompileError } from '../src/index.js'
 
 const HOSTILE = ['__proto__', 'constructor', 'prototype', 'hasOwnProperty'] as const
+const PROTOTYPE_MEMBERS: ReadonlySet<string> = new Set(Object.getOwnPropertyNames(Object.prototype))
 
 const V = [{ a: 'A', b: 28, c: 'x', t: '2020-01-01' }, { a: 'B', b: 55, c: 'y', t: '2020-02-01' }]
 type Spec = Record<string, unknown>
@@ -305,11 +311,15 @@ describe('names that a plain object treats specially are names like any other', 
             }
             compared++
             const want = expected.split(benign).join(hostile)
+            if (error instanceof VLCompileError && PROTOTYPE_MEMBERS.has(hostile) && error.message.includes(`named ${JSON.stringify(hostile)} is not supported: Vega keeps names in plain objects`)) {
+              continue
+            }
             if (got !== want) failures.push(`${name} -> ${hostile}: ${error ? `throws ${String(error)}` : `compiles to different Vega ${firstDifference(got!, want)}`}`)
           }
         }
       }
       expect(prototypeState()).toBe(before)
+      // (a refused position is checked too: refused by name, for a member's name only, writing nothing)
       expect(compared, 'positions compared').toBeGreaterThan(20)
       expect(failures).toEqual([])
     }, 120_000)
