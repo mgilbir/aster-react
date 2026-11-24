@@ -17,6 +17,9 @@ import { diffAppend, diffScene, marksOf, type Diff } from './geometry-differenti
 import { applyOp, genSpec, inputOf, int, mulberry32, OPS, pick, rowOf, type World } from './scene-fuzz.testlib.js'
 import { randomScene } from './geometry-scenes.testlib.js'
 import { CORPUS_UNLOADABLE, isDataNotLoaded, vegaCorpusFiles } from './corpus.testlib.js'
+import { buildHitIndex } from './hit.js'
+import { renderSceneToSvg } from './render.js'
+import { diffStats } from './geometry-differential.testlib.js'
 import { sceneIntersect } from './scene-intersect.js'
 import { AsterLimitError } from './limits.js'
 
@@ -184,4 +187,34 @@ describe('sceneIntersect on non-finite scenes', () => {
       expect(found, 'items found').toBeGreaterThan(100)
     }, 60_000)
   }
+})
+
+describe('a trail with a negative size', () => {
+  // A trail's size is a radius, and a negative radius is an error in d3-path and in vega (`negative radius: -1`): every renderer and
+  // the hit index throw it, as `vega.toSVG` does (the audit ran both: scratch negative-trail.mjs). It is a plain Error, listed in
+  // docs/ERRORS.md. The generated scenes keep their trail sizes non-negative; this is the one place it is exercised.
+  const spec = (sizes: number[]): never => ({
+    width: 100, height: 100, autosize: 'none', padding: 0,
+    data: [{ name: 't', values: sizes.map((s, i) => ({ i, s })) }],
+    scales: [{ name: 'x', type: 'linear', domain: [0, 4], range: 'width' }],
+    marks: [{ type: 'trail', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'i' }, y: { value: 50 }, size: { field: 's' }, fill: { value: 'red' } } } }],
+  }) as never
+  it('throws "negative radius" out of the SVG, not an [aster] error', () => {
+    expect(() => renderSceneToSvg(evaluateChart(compileChart(spec([6, -2, 4])), {}))).toThrow(/^negative radius: -1$/)
+  })
+  it('throws it out of the hit index too, and answers when every size is not negative', () => {
+    const bad = evaluateChart(compileChart(spec([6, -2, 4])), {})
+    expect(() => buildHitIndex(bad)).toThrow(/^negative radius: -1$/)
+    const good = evaluateChart(compileChart(spec([6, 0, 4])), {})
+    expect(renderSceneToSvg(good)).toContain('<path')
+    expect(buildHitIndex(good).size()).toBeGreaterThan(0)
+  })
+})
+
+describe('the differential compares values, not error messages', () => {
+  it('fewer than 0.5% of its consumer calls had both implementations throw', () => {
+    // (diffStats counts this whole file's runs so far: the scenes above are the corpus, the random specs and the hand-built scenes)
+    expect(diffStats.scenes, 'scenes compared').toBeGreaterThan(500)
+    expect(diffStats.bothThrew, `of ${diffStats.calls} calls`).toBeLessThan(diffStats.calls * 0.005)
+  })
 })
