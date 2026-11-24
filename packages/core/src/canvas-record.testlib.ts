@@ -10,8 +10,8 @@
 import type { CanvasLike, GradientLike } from './canvas.js'
 
 export interface PaintRecord {
-  op: 'fill' | 'stroke' | 'text'
-  /** Absolute geometry (current path, or the text anchor). */
+  op: 'fill' | 'stroke' | 'text' | 'strokeText' | 'image'
+  /** Absolute geometry (current path, or the text anchor, or the image's box). */
   geom: string
   /** Paint state: colour, alpha, line style, font; plus the active clip. */
   style: string
@@ -39,6 +39,8 @@ interface State {
   textAlign: string
   textBaseline: string
   dash: number[]
+  dashOffset: number
+  blend: string
   clip: string[]
 }
 
@@ -56,7 +58,7 @@ export function makeRecorder(): { ctx: CanvasLike; records: PaintRecord[] } {
   const records: PaintRecord[] = []
   let st: State = {
     m: [1, 0, 0, 1, 0, 0], fillStyle: '#000', strokeStyle: '#000', globalAlpha: 1, lineWidth: 1, lineCap: 'butt',
-    lineJoin: 'miter', miterLimit: 10, font: '10px sans-serif', textAlign: 'start', textBaseline: 'alphabetic', dash: [], clip: [],
+    lineJoin: 'miter', miterLimit: 10, font: '10px sans-serif', textAlign: 'start', textBaseline: 'alphabetic', dash: [], dashOffset: 0, blend: 'source-over', clip: [],
   }
   const stack: State[] = []
   let path: string[] = []
@@ -77,12 +79,15 @@ export function makeRecorder(): { ctx: CanvasLike; records: PaintRecord[] } {
     lastX = x; lastY = y
   }
   const pt = (x: number, y: number): string => `${r3(st.m[0] * x + st.m[2] * y + st.m[4])},${r3(st.m[1] * x + st.m[3] * y + st.m[5])}`
-  const styleKey = (kind: 'fill' | 'stroke' | 'text'): string => {
-    const paint = kind === 'stroke' ? paintName(st.strokeStyle) : paintName(st.fillStyle)
+  // (the whole linear part of the matrix is in a text's and an image's key: a path's rotation is in its geometry, a text's anchor is
+  // one point, so the angle it is set at is only in the matrix)
+  const styleKey = (kind: 'fill' | 'stroke' | 'text' | 'strokeText' | 'image'): string => {
+    const stroked = kind === 'stroke' || kind === 'strokeText'
+    const paint = stroked ? paintName(st.strokeStyle) : paintName(st.fillStyle)
     const sx = Math.hypot(st.m[0], st.m[1])
-    const line = kind === 'stroke' ? `|w${r3(st.lineWidth * sx)}|d${st.dash.map((d) => r3(d * sx)).join(',')}|${st.lineCap}|${st.lineJoin}|${r3(st.miterLimit)}` : ''
-    const font = kind === 'text' ? `|${st.font}|${st.textAlign}|${st.textBaseline}` : ''
-    return `${paint}|a${r3(st.globalAlpha)}${line}${font}|clip:${st.clip.join(';')}`
+    const line = stroked ? `|w${r3(st.lineWidth * sx)}|d${st.dash.map((d) => r3(d * sx)).join(',')}|do${r3(st.dashOffset * sx)}|${st.lineCap}|${st.lineJoin}|${r3(st.miterLimit)}` : ''
+    const font = kind === 'text' || kind === 'strokeText' ? `|${st.font}|${st.textAlign}|${st.textBaseline}|m${st.m.slice(0, 4).map(r3).join(',')}` : kind === 'image' ? `|m${st.m.slice(0, 4).map(r3).join(',')}` : ''
+    return `${kind === 'image' ? '' : paint}|a${r3(st.globalAlpha)}|b${st.blend}${line}${font}|clip:${st.clip.join(';')}`
   }
   const ctx: CanvasLike = {
     save() { stack.push({ ...st, m: [...st.m] as M, dash: [...st.dash], clip: [...st.clip] }) },
@@ -126,6 +131,9 @@ export function makeRecorder(): { ctx: CanvasLike; records: PaintRecord[] } {
     fillRect(x, y, w, h) { records.push({ op: 'fill', geom: `R${pt(x, y)},${pt(x + w, y)},${pt(x + w, y + h)},${pt(x, y + h)}`, style: styleKey('fill') }) },
     setLineDash(d) { st.dash = [...d] },
     fillText(text, x, y) { records.push({ op: 'text', geom: `${JSON.stringify(text)}@${pt(x, y)}`, style: styleKey('text') }) },
+    strokeText(text, x, y) { records.push({ op: 'strokeText', geom: `${JSON.stringify(text)}@${pt(x, y)}`, style: styleKey('strokeText') }) },
+    // (the bitmap itself is not recorded: a scene's image is one object, and where and how it is drawn is what differs)
+    drawImage(_image, dx, dy, dw, dh) { records.push({ op: 'image', geom: `${pt(dx, dy)},${r3(dw ?? 0)}x${r3(dh ?? 0)}`, style: styleKey('image') }) },
     createLinearGradient(x0, y0, x1, y1): GradientLike {
       const stops: string[] = []
       const g = { addColorStop(o: number, c: string) { stops.push(`${r3(o)}:${c}`) }, get stops() { return stops.join('/') } }
@@ -158,6 +166,10 @@ export function makeRecorder(): { ctx: CanvasLike; records: PaintRecord[] } {
     set textAlign(v) { st.textAlign = v },
     get textBaseline() { return st.textBaseline },
     set textBaseline(v) { st.textBaseline = v },
+    get lineDashOffset() { return st.dashOffset },
+    set lineDashOffset(v) { st.dashOffset = v },
+    get globalCompositeOperation() { return st.blend },
+    set globalCompositeOperation(v) { st.blend = v },
   }
   return { ctx, records }
 }
