@@ -9,8 +9,8 @@
  * from its text, exactly as before; what is computed is kept on the geometry object.
  */
 import { ArcPathWriter, ArcSegWriter } from './shape.js'
-import { drawnPathCommands, parsePathData, renderSvgPath, tracePath, type PathCommand, type PathSeg } from './path-data.js'
-import { Flattener, type Poly } from './path-flatten.js'
+import { drawnPathCommands, parsePathData, parseSvgPathData, renderSvgPath, tracePath, type PathCommand, type PathSeg } from './path-data.js'
+import { Flattener, held, type Poly } from './path-flatten.js'
 import type { ArcGeometry, CurveGeometry, PathData, SymbolGeometry } from './geometry.js'
 
 /** The four calls a line or an area makes (`PathWriter`'s commands). */
@@ -90,6 +90,15 @@ function placed(e: { hitLocal?: Poly[]; hitPlacement?: Placement }, local: () =>
   return polys
 }
 
+/** {@link placed} for a canvas's reading of an outline that is not all numbers (`canvasHitLocal`: kept apart from the SVG's). */
+function placedCanvas(e: { canvasHitLocal?: Poly[]; canvasHitPlacement?: Placement }, local: () => Poly[], tx: number, ty: number): Poly[] {
+  const p = e.canvasHitPlacement
+  if (p !== undefined && Object.is(p.tx, tx) && Object.is(p.ty, ty)) return p.polys
+  const polys = place(e.canvasHitLocal ??= local(), tx, ty)
+  e.canvasHitPlacement = { tx, ty, polys }
+  return polys
+}
+
 // --- lines and areas -----------------------------------------------------------------------------------------------------
 
 /** The recorded numbers are all finite: its text reads back as numbers (rounding is not involved: these readers are full precision). */
@@ -115,13 +124,22 @@ export function drawCurveExact(g: CurveGeometry, s: CurveSink): void {
 }
 
 /** The hit index's polygons of a line or area (of its full-precision text, as the canvas draws it) placed at (tx, ty). */
-export function curvePolys(g: CurveGeometry, tx: number, ty: number): Poly[] {
+export function curvePolys(g: CurveGeometry, tx: number, ty: number, canvas = false): Poly[] {
+  // (vega's canvas draws the path with calls, which leave out the ones that have a number they cannot hold; its SVG has the text,
+  // which a browser reads up to the first thing that is no number)
+  if (canvas && !canvasHolds(g)) {
+    return placedCanvas(g, () => {
+      const f = new Flattener(IDENTITY)
+      g.draw(new AsText(f))
+      return f.polys
+    }, tx, ty)
+  }
   return placed(g, () => {
     const f = new Flattener(IDENTITY)
     const t = new AsText(f)
     g.draw(t)
-    if (t.finite) return f.polys
-    return flattenSegs(parsePathData(g.exactText()))
+    if (t.finite && canvasHolds(g)) return f.polys
+    return flattenSegs(parseSvgPathData(g.exactText()))
   }, tx, ty)
 }
 
@@ -145,22 +163,47 @@ export const arcLocalPolys = (g: ArcGeometry): Poly[] => (g.local ??= flattenSeg
  * throws for a negative radius, as writing the text does.
  */
 export function arcExactSegs(g: ArcGeometry): PathSeg[] {
-  if (g.digits === null) return arcSegs(g)
   if (g.exactSegCache === undefined) {
     const w = new ArcSegWriter(null)
     g.outline.replay(w)
-    if (w.finite) g.exactSegCache = w.segs as PathSeg[]
+    if (w.finite && canvasHolds(g)) g.exactSegCache = w.segs as PathSeg[]
     else {
       const t = new ArcPathWriter(null)
       g.outline.replay(t)
-      g.exactSegCache = parsePathData(t.d)
+      g.exactSegCache = parseSvgPathData(t.d)
     }
   }
   return g.exactSegCache
 }
 
 /** The hit index's polygons of a trail or an arc (of its full-precision text) placed at (tx, ty). */
-export const arcPolys = (g: ArcGeometry, tx: number, ty: number): Poly[] => placed(g, () => flattenSegs(arcExactSegs(g)), tx, ty)
+export function arcPolys(g: ArcGeometry, tx: number, ty: number, canvas = false): Poly[] {
+  // (an outline whose numbers are not all finite: vega's canvas draws it with calls, which leave out the ones that have a number they
+  // cannot hold; its SVG has the text, which a browser reads up to the first thing that is no number)
+  if (canvas && !canvasHolds(g)) {
+    return placedCanvas(g, () => {
+      const f = new Flattener(IDENTITY)
+      g.outline.replay(f)
+      return f.polys
+    }, tx, ty)
+  }
+  return placed(g, () => flattenSegs(arcExactSegs(g)), tx, ty)
+}
+
+/** Whether every number the calls of an outline carry is one a canvas takes (finite, within single precision): else it leaves that call out. */
+export function canvasHolds(g: { outline: { args: number[] }; canvasHeld?: boolean }): boolean {
+  return (g.canvasHeld ??= g.outline.args.every(held))
+}
+
+/** The polygons of an arc's or trail's outline as a canvas reads it, untransformed (intersect() draws on one). */
+export function arcCanvasLocalPolys(g: ArcGeometry): Poly[] {
+  if (canvasHolds(g)) return arcLocalPolys(g)
+  return placedCanvas(g, () => {
+    const f = new Flattener(IDENTITY)
+    g.outline.replay(f)
+    return f.polys
+  }, 0, 0)
+}
 
 // --- path data: rects, symbols, the frame ----------------------------------------------------------------------------------
 
@@ -227,6 +270,25 @@ export function pathPolys(d: string): Poly[] {
 
 /** A path mark's polygons by scale (`${scaleX},${scaleY}`), kept as long as the parse cache keeps the commands. */
 const PATH_MARK_POLYS = new WeakMap<PathCommand[], Map<string, Poly[]>>()
+
+/**
+ * The polygons of a path mark's text as vega's canvas draws it with the item's own `x` and `y` as the offset (`pathRender(context, path,
+ * x, y, sx, sy)`): each coordinate is `x + l`, `y + t` in JavaScript's arithmetic, so a numeric string for `l` or `t` is joined to
+ * the number before it (`10 + "106"` is `"10106"`), and the canvas reads the result as a number. Not cached: only an item whose
+ * position is not a number is read so (a number is `pathMarkPolys` moved).
+ */
+export function pathMarkPolysAt(d: string, sx: number, sy: number, l: unknown, t: unknown): Poly[] {
+  const f = new Flattener(IDENTITY)
+  const n = (v: number): number => +v
+  renderSvgPath({
+    moveTo: (x, y) => { f.moveTo(n(x), n(y)) },
+    lineTo: (x, y) => { f.lineTo(n(x), n(y)) },
+    bezierCurveTo: (a, b, c, e, x, y) => { f.bezierCurveTo(n(a), n(b), n(c), n(e), n(x), n(y)) },
+    quadraticCurveTo: (a, b, x, y) => { f.quadraticCurveTo(n(a), n(b), n(x), n(y)) },
+    closePath: () => { f.closePath() },
+  }, drawnPathCommands(d), l as number, t as number, sx, sy)
+  return f.polys
+}
 
 /**
  * The polygons of a path mark's text, scaled by (sx, sy) about its origin as vega draws it (path-data.ts `renderSvgPath`: the scale

@@ -920,7 +920,7 @@ export function eachMarkBounds(
 }
 
 /** Two nodes of a scene are items of one group mark: group items of the same mark, which sit next to each other. */
-const sameGroupMark = (a: Record<string, unknown>, b: Record<string, unknown>): boolean =>
+export const sameGroupMark = (a: Record<string, unknown>, b: Record<string, unknown>): boolean =>
   b._scope === true && a.name === b.name && a.markIndex === b.markIndex && a.markClip === b.markClip
 
 /**

@@ -135,6 +135,10 @@ export class CurveGeometry {
   /** (geometry-read.ts: the hit index's polygons) */
   hitLocal?: Poly[]
   hitPlacement?: Placement
+  /** (geometry-read.ts) the same for a canvas, where a command that has a number it cannot hold is left out */
+  canvasHitLocal?: Poly[]
+  canvasHitPlacement?: Placement
+  canvasHeld?: boolean
   /** `cols`: x and y of a line; top x, top y and the baseline of an area (a horizontal area's bottom x, a vertical one's bottom y). */
   constructor(
     readonly curve: Curve,
@@ -307,6 +311,10 @@ export class ArcGeometry {
   exactSegCache?: PathSeg[]
   hitLocal?: Poly[]
   hitPlacement?: Placement
+  /** (geometry-read.ts) the same for a canvas, where a command that has a number it cannot hold is left out */
+  canvasHitLocal?: Poly[]
+  canvasHitPlacement?: Placement
+  canvasHeld?: boolean
   local?: Poly[]
   constructor(readonly outline: Outline, readonly digits: number | null, readonly key: Float64Array) {}
 
