@@ -25,7 +25,7 @@ const SHAPES: Array<[string, (v: View, name: string) => View]> = [
   ['a repeat\'s spec', (v, name) => ({ data, name: 'r', repeat: ['b', 'd'], spec: { ...v, name, encoding: { ...(v.encoding as object), y: { field: { repeat: 'repeat' }, type: 'quantitative' } } } })],
 ]
 const quiet = { level: () => quiet, warn: () => quiet, info: () => quiet, debug: () => quiet, error: () => quiet }
-const vlSvg = async (spec: View): Promise<string> => canonicalizeSvg((await renderWithVegaChecked((vl as any).compile(JSON.parse(JSON.stringify(spec)), { logger: quiet }).spec)).svg)
+const vlSvg = async (spec: View): Promise<string> => JSON.stringify(canonicalizeSvg((await renderWithVegaChecked((vl as any).compile(JSON.parse(JSON.stringify(spec)), { logger: quiet }).spec)).svg))
 
 describe('a view named as the root view', () => {
   for (const [shName, shape] of SHAPES) {

@@ -18,7 +18,7 @@ type View = Record<string, unknown>
 const cases: Array<[string, View]> = []
 // a variable parameter named as a compiler-made name
 for (const name of ['unit', 'x_step', 'y_step', 'width', 'height', 'brush_tuple', 'brush_x', 'brush_modify', 'cursor', 'data_0', 'childWidth']) {
-  cases.push([caseName(`a parameter named ${name}`, 'beside an interval brush on a bar'), { data, params: [{ name, value: 1 }], ...bar, ...{ params: [{ name, value: 1 }, { name: 'brush', select: 'interval' }] } }])
+  cases.push([caseName(`a parameter named ${name}`, 'beside an interval brush on a bar'), { data, ...bar, params: [{ name, value: 1 }, { name: 'brush', select: 'interval' }] }])
   cases.push([caseName(`a parameter named ${name}`, 'on a plain bar'), { data, params: [{ name, value: 1 }], ...bar }])
 }
 // one selection name in several views
