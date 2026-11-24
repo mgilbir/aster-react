@@ -74,6 +74,8 @@ describe('canvas append paint equals a full repaint', () => {
     const next = s.flush()!.scene
     const rec = makeRecorder()
     const ok = renderSceneToCanvasAppend(snap, next, rec.ctx, { dpr: 1, batchSymbols: false })
+    // (declined: an item of the OTHER group moved in place, which an append cannot paint)
+    expect(ok).toBe(false)
     painted = ok ? painted.concat(rec.records) : full(next)
     const fresh = evaluateChart(compileChart(twoDatasets as never), { data: { a: [{ x: 10 }, { x: 20 }, { x: 50 }], b: [{ x: 30 }, { x: 45 }] } })
     expect(diffPaintMultisets(full(fresh), painted)).toBeNull()
