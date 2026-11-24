@@ -10,7 +10,6 @@ import { allot } from './limits.js'
 import type { EncodeValue, SceneGroup, SceneItem } from './types.js'
 import { Bounds, boundLeaf, boundLegendGroup, boundStroke, multiLineOffset } from './bounds.js'
 import { placeGrid } from './trellis.js'
-import { LEGEND_SCALES } from './legend-scales.js'
 import { rectItemPath, symbolPath } from './render.js'
 import { boundFailure } from './bound-failure.js'
 import type { Locale } from './locale.js'
@@ -28,7 +27,6 @@ import {
 type Rec = Record<string, unknown>
 type Scale = ((v: unknown) => unknown) & Rec
 
-export { LEGEND_SCALES }
 
 /** What kind of legend a spec makes (spec-structure.ts, the one definition). */
 export { legendType }
