@@ -45,8 +45,25 @@ describe('group items', () => {
     expect((g.items![0] as unknown as { path: string }).path).toBe('M0.5,0.5h20v10h-20Z')
   })
 
+  /** The error messages an evaluation logs, and the positions of the groups the grid would have placed. */
+  const logged = (s: VgSpec): { errors: string[]; positions: Array<[unknown, unknown]> } => {
+    const errors: string[] = []
+    const logger = { error: (...a: unknown[]) => { errors.push(a.join(' ')) }, warn: () => {}, info: () => {}, debug: () => {} }
+    const scene = evaluateChart(compileChart(s), { logger } as never)
+    const positions: Array<[unknown, unknown]> = []
+    for (const m of scene.items) if (m.role === 'scope') positions.push([m.x, m.y])
+    return { errors, positions }
+  }
+  // (vega 6.3.1 on the same specs, scratch gl.mjs: it logs `RangeError: Invalid array length`, from the grid's Array(columns), once, and
+  // leaves every group with no x or y: the cells are not laid out)
   it('a layout the grid cannot take is dropped (vega logs the error and renders the cells unlaid-out)', () => {
+    const { errors, positions } = logged(spec({ layout: { columns: 2.5, padding: 5 } }))
+    expect(errors).toEqual(['RangeError: Invalid array length'])
+    expect(positions).toHaveLength(5)
+    expect(new Set(positions.map((p) => JSON.stringify(p))).size, 'every cell at the same place: none laid out').toBe(1)
     expect(() => renderSpec(spec({ layout: { columns: 2.5, padding: 5 } }))).not.toThrow()
+    // and a valid layout of the same spec does lay them out (the control: the positions differ)
+    expect(new Set(logged(spec()).positions.map((p) => JSON.stringify(p))).size).toBeGreaterThan(1)
   })
 
   it('a group-level layout the grid cannot take is dropped too (the sweep sets columns on a group)', () => {
@@ -58,8 +75,25 @@ describe('group items', () => {
       ] }],
     }
     expect(() => renderSpec(s as unknown as VgSpec)).not.toThrow()
+    const inner = (spec: Record<string, unknown>): { errors: string[]; xs: unknown[] } => {
+      const errors: string[] = []
+      const logger = { error: (...a: unknown[]) => { errors.push(a.join(' ')) }, warn: () => {}, info: () => {}, debug: () => {} }
+      const scene = evaluateChart(compileChart(spec as unknown as VgSpec), { logger } as never)
+      // the inner cells are the scope groups after the outer one: the grid sets their x and y
+      const scopes: SceneGroup[] = []
+      for (const top of scene.items) walk(top, (g) => { if (g.role === 'scope') scopes.push(g) })
+      return { errors, xs: scopes.slice(1).map((g) => g.x) }
+    }
+    // (vega 6.3.1: `RangeError: Invalid array length` for each of them, and the inner groups left where they are)
+    expect(inner(s).errors).toEqual(['RangeError: Invalid array length'])
+    expect(new Set(inner(s).xs).size).toBe(1)
     ;(s.marks as Array<Record<string, unknown>>)[0]!.layout = { columns: 0.5, padding: 5 }
     expect(() => renderSpec(s as unknown as VgSpec)).not.toThrow()
+    expect(inner(s).errors).toEqual(['RangeError: Invalid array length'])
+    expect(new Set(inner(s).xs).size).toBe(1)
+    ;(s.marks as Array<Record<string, unknown>>)[0]!.layout = { columns: 2, padding: 5 }
+    expect(inner(s).errors).toEqual([])
+    expect(new Set(inner(s).xs).size, 'the control: a valid layout places the two cells apart').toBe(2)
   })
 
   it('group items count against maxItems, and the clock runs inside the group loop', () => {

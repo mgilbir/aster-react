@@ -170,10 +170,15 @@ interface Verdict {
  * compiled again), and is neither parsed nor walked a second time. Two generations bound it: a text read in the young one is
  * found there; one found in the old one moves up; when the young one is full it becomes the old one and the old one goes.
  */
-const GENERATION = 4096
+/** Texts a generation holds; the check keeps at most twice this many. */
+export const EXPRESSION_CHECK_GENERATION = 4096
+const GENERATION = EXPRESSION_CHECK_GENERATION
 let young = new Map<string, Verdict>()
 let old = new Map<string, Verdict>()
 const NO_NAMES: readonly string[] = []
+
+/** Texts the check holds now (for tests). @internal */
+export const expressionCheckCacheSize = (): number => young.size + old.size
 
 function verdictOf(text: string): Verdict {
   const registry = expressionRegistryEpoch()

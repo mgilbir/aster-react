@@ -233,10 +233,10 @@ describe('what a mark inside a group item reads besides its rows', () => {
     { what: 'its group item through a field reference', spec: facet({ x: { field: { parent: 'count' } } }, {}, false), step: (w) => ({ ...w, t: [...w.t, r('a', 1)] }), all: true },
     { what: 'its group item\'s box', spec: facet({ x: { field: { group: 'x' } } }), step: (w) => ({ ...w, t: [...w.t, r('a', 1)] }), all: true },
     // (a mark's transform runs on its items: a row removed renumbers the rows after it)
-    { what: 'its own transform over its items', spec: { ...facet({ x: { field: 'rn' } }), marks: [{
+    { what: 'its own transform over its items (the window\'s row number is what the mark reads)', spec: { ...facet({}), marks: [{
       type: 'group', from: { facet: { name: 'part', data: 't', groupby: 'g' } },
       encode: { update: { width: { value: 60 }, height: { value: 40 } } },
-      marks: [{ type: 'symbol', name: 'm', from: { data: 'part' }, transform: [{ type: 'window', ops: ['row_number'], as: ['rn'] }], encode: { update: { size: counter('m'), x: { field: 'v' } } } }],
+      marks: [{ type: 'symbol', name: 'm', from: { data: 'part' }, transform: [{ type: 'window', ops: ['row_number'], as: ['rn'] }], encode: { update: { size: counter('m'), x: { field: 'rn' } } } }],
     }] } as unknown as VgSpec, step: (w) => ({ ...w, t: w.t.filter((x, i) => !(i === 1 && x.g === 'a')) }), all: true },
     { what: 'a dataset its expression reads by name', spec: facet({ opacity: { signal: "length(data('store')) ? 0.5 : 1" } }), step: (w) => ({ ...w, store: [{ s: 1 }] }), all: true },
   ]
