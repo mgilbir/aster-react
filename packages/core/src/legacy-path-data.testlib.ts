@@ -1,6 +1,8 @@
-// A frozen copy of path-data.ts as it was on stack/3-expr, the base perf/geometry-once lands on: the behaviour the geometry
-// differentials (geometry-differential.test.ts) compare the new code against. Test-only; not built, not shipped.
-// Delete it with the differential once that guard is no longer wanted.
+// A copy of path-data.ts as it was on stack/3-expr, amended in 06e1a76 (its tokenizer reads `NaN` / `Infinity` words as the
+// current reader does), and since to follow the fixes of `tracePath` (C415, C455: a close returns the current point to the
+// subpath's start; an arc too small for its chord is drawn at the radius that reaches it) -- not frozen. What still reads it: the canvas baseline of geometry-differential.test.ts (legacy-canvas,
+// its `tracePath`) and path-reader-vs-vega.test.ts ("the reader before the merge read these texts so too"). Test-only; not built,
+// not shipped. Its own bezier arcs (`arcs: 'bezier'`) had one caller, the path painter replaced in 06e1a76: removed.
 /**
  * SVG path-data parsing and replay, shared by the canvas renderer (canvas.ts) and the hit index (hit.ts).
  *
@@ -188,84 +190,21 @@ export interface PathSink {
   closePath(): void
 }
 
-/**
- * vega-scenegraph path/arc.js (Inkscape svgtopdf): an SVG endpoint arc as cubic beziers of at most a quarter turn each. vega's canvas
- * draws an arc of a path string -- a path mark, a custom symbol shape -- this way, so does `tracePath` with `arcs: 'bezier'`.
- * Returns six numbers per bezier (c1x, c1y, c2x, c2y, x, y), absolute.
- */
-export function arcBeziers(ox: number, oy: number, rx: number, ry: number, rotateX: number, large: number, sweep: number, x: number, y: number): number[] {
-  const th = (rotateX * Math.PI) / 180
-  const sinTh = Math.sin(th)
-  const cosTh = Math.cos(th)
-  rx = Math.abs(rx)
-  ry = Math.abs(ry)
-  const px = cosTh * (ox - x) * 0.5 + sinTh * (oy - y) * 0.5
-  const py = cosTh * (oy - y) * 0.5 - sinTh * (ox - x) * 0.5
-  let pl = (px * px) / (rx * rx) + (py * py) / (ry * ry)
-  if (pl > 1) {
-    pl = Math.sqrt(pl)
-    rx *= pl
-    ry *= pl
-  }
-  const a00 = cosTh / rx
-  const a01 = sinTh / rx
-  const a10 = -sinTh / ry
-  const a11 = cosTh / ry
-  const x0 = a00 * ox + a01 * oy
-  const y0 = a10 * ox + a11 * oy
-  const x1 = a00 * x + a01 * y
-  const y1 = a10 * x + a11 * y
-  const d = (x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0)
-  let sfactorSq = 1 / d - 0.25
-  if (sfactorSq < 0) sfactorSq = 0
-  let sfactor = Math.sqrt(sfactorSq)
-  // eslint-disable-next-line eqeqeq
-  if (sweep == large) sfactor = -sfactor
-  const xc = 0.5 * (x0 + x1) - sfactor * (y1 - y0)
-  const yc = 0.5 * (y0 + y1) + sfactor * (x1 - x0)
-  const th0 = Math.atan2(y0 - yc, x0 - xc)
-  const th1 = Math.atan2(y1 - yc, x1 - xc)
-  let thArc = th1 - th0
-  const Tau = 2 * Math.PI
-  if (thArc < 0 && sweep === 1) thArc += Tau
-  else if (thArc > 0 && sweep === 0) thArc -= Tau
-  const segs = Math.ceil(Math.abs(thArc / (Math.PI / 2 + 0.001)))
-  const out: number[] = []
-  const b00 = cosTh * rx
-  const b01 = -sinTh * ry
-  const b10 = sinTh * rx
-  const b11 = cosTh * ry
-  for (let i = 0; i < segs; ++i) {
-    const t0 = th0 + (i * thArc) / segs
-    const t1 = th0 + ((i + 1) * thArc) / segs
-    const thHalf = 0.5 * (t1 - t0)
-    const sinThH2 = Math.sin(thHalf * 0.5)
-    const t = ((8 / 3) * sinThH2 * sinThH2) / Math.sin(thHalf)
-    const cos0 = Math.cos(t0), sin0 = Math.sin(t0), cos1 = Math.cos(t1), sin1 = Math.sin(t1)
-    const bx1 = xc + cos0 - t * sin0
-    const by1 = yc + sin0 + t * cos0
-    const bx3 = xc + cos1
-    const by3 = yc + sin1
-    const bx2 = bx3 + t * sin1
-    const by2 = by3 - t * cos1
-    out.push(b00 * bx1 + b01 * by1, b10 * bx1 + b11 * by1, b00 * bx2 + b01 * by2, b10 * bx2 + b11 * by2, b00 * bx3 + b01 * by3, b10 * bx3 + b11 * by3)
-  }
-  return out
-}
 
 /**
  * Replay parsed segments onto a canvas context, offset by (tx, ty). An arc is a canvas arc (a circular one) by default; with
- * `arcs: 'bezier'` it is vega's bezier approximation of an SVG arc (see {@link arcBeziers}).
+ * (an arc is a canvas arc).
  */
-export function tracePath(ctx: PathSink, segs: PathSeg[], tx = 0, ty = 0, arcs: 'exact' | 'bezier' = 'exact'): void {
+export function tracePath(ctx: PathSink, segs: PathSeg[], tx = 0, ty = 0): void {
   // Track the current point and the last cubic/quadratic control point for
   // S/T smoothing, mirroring the SVG path semantics.
   let cx = 0, cy = 0
+  let sx = 0, sy = 0
   let lastC: { x: number; y: number } | null = null
   let lastQ: { x: number; y: number } | null = null
   for (const s of segs) {
     switch (s.cmd) {
-      case 'M': ctx.moveTo(s.x + tx, s.y + ty); cx = s.x; cy = s.y; lastC = lastQ = null; break
+      case 'M': ctx.moveTo(s.x + tx, s.y + ty); cx = sx = s.x; cy = sy = s.y; lastC = lastQ = null; break
       case 'L': ctx.lineTo(s.x + tx, s.y + ty); cx = s.x; cy = s.y; lastC = lastQ = null; break
       case 'H': ctx.lineTo(s.x + tx, cy + ty); cx = s.x; lastC = lastQ = null; break
       case 'V': ctx.lineTo(cx + tx, s.y + ty); cy = s.y; lastC = lastQ = null; break
@@ -294,15 +233,6 @@ export function tracePath(ctx: PathSink, segs: PathSeg[], tx = 0, ty = 0, arcs: 
         break
       }
       case 'A': {
-        if (arcs === 'bezier') {
-          // vega path/render.js drawArc: the arc's beziers, from the current point (a zero radius is a line there too)
-          const b = s.rx === 0 || s.ry === 0 || (cx === s.x && cy === s.y) ? [] : arcBeziers(cx, cy, s.rx, s.ry, s.rot, s.large, s.sweep, s.x, s.y)
-          if (!b.length) ctx.lineTo(s.x + tx, s.y + ty)
-          for (let k = 0; k < b.length; k += 6) ctx.bezierCurveTo(b[k]! + tx, b[k + 1]! + ty, b[k + 2]! + tx, b[k + 3]! + ty, b[k + 4]! + tx, b[k + 5]! + ty)
-          cx = s.x; cy = s.y
-          lastC = lastQ = null
-          break
-        }
         // Convert the SVG endpoint arc to canvas arc parameters.
         const x1 = cx, y1 = cy
         const x2 = s.x, y2 = s.y
@@ -317,7 +247,7 @@ export function tracePath(ctx: PathSink, segs: PathSeg[], tx = 0, ty = 0, arcs: 
           const x1p = cosP * dx + sinP * dy
           const y1p = -sinP * dx + cosP * dy
           const lambda = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry)
-          const scale = lambda > 1 ? Math.sqrt(lambda) : 1
+          const scale = lambda > 1 + 1e-12 ? Math.sqrt(lambda) : 1
           const rxp = rx * scale, ryp = ry * scale
           const sign = s.large !== s.sweep ? 1 : -1
           const denom = rxp * rxp * y1p * y1p + ryp * ryp * x1p * x1p
@@ -347,18 +277,18 @@ export function tracePath(ctx: PathSink, segs: PathSeg[], tx = 0, ty = 0, arcs: 
           const start = theta1 + phi
           const end = start + dTheta
           if (Math.abs(rx - ry) < 1e-9) {
-            ctx.arc(ccx + tx, ccy + ty, rx, start, end, dTheta < 0)
+            ctx.arc(ccx + tx, ccy + ty, rxp, start, end, dTheta < 0)
           } else {
             // Elliptical arc: approximate with an ellipse transform via
             // bezier segments (rare; our marks emit circular arcs).
-            traceEllipse(ctx, ccx + tx, ccy + ty, rxp, ryp, phi, start, end)
+            traceEllipse(ctx, ccx + tx, ccy + ty, rxp, ryp, phi, theta1, theta1 + dTheta)
           }
         }
         cx = x2; cy = y2
         lastC = lastQ = null
         break
       }
-      case 'Z': ctx.closePath(); break
+      case 'Z': ctx.closePath(); cx = sx; cy = sy; lastC = lastQ = null; break
     }
   }
 }
@@ -376,7 +306,6 @@ function traceEllipse(ctx: PathSink, cx: number, cy: number, rx: number, ry: num
     const ex = rx * Math.cos(a), ey = ry * Math.sin(a)
     const x = cx + ex * cosP - ey * sinP
     const y = cy + ex * sinP + ey * cosP
-    if (i === 0) ctx.moveTo(x, y)
-    else ctx.lineTo(x, y)
+    ctx.lineTo(x, y)
   }
 }

@@ -402,11 +402,13 @@ export function tracePath(ctx: PathSink, segs: PathSeg[], tx = 0, ty = 0, arcs: 
   // Track the current point and the last cubic/quadratic control point for
   // S/T smoothing, mirroring the SVG path semantics.
   let cx = 0, cy = 0
+  // (where the current subpath began: a close returns the current point there, as SVG's and a canvas's `Z` do)
+  let sx = 0, sy = 0
   let lastC: { x: number; y: number } | null = null
   let lastQ: { x: number; y: number } | null = null
   for (const s of segs) {
     switch (s.cmd) {
-      case 'M': ctx.moveTo(s.x + tx, s.y + ty); cx = s.x; cy = s.y; lastC = lastQ = null; break
+      case 'M': ctx.moveTo(s.x + tx, s.y + ty); cx = sx = s.x; cy = sy = s.y; lastC = lastQ = null; break
       case 'L': ctx.lineTo(s.x + tx, s.y + ty); cx = s.x; cy = s.y; lastC = lastQ = null; break
       case 'H': ctx.lineTo(s.x + tx, cy + ty); cx = s.x; lastC = lastQ = null; break
       case 'V': ctx.lineTo(cx + tx, s.y + ty); cy = s.y; lastC = lastQ = null; break
@@ -458,7 +460,9 @@ export function tracePath(ctx: PathSink, segs: PathSeg[], tx = 0, ty = 0, arcs: 
           const x1p = cosP * dx + sinP * dy
           const y1p = -sinP * dx + cosP * dy
           const lambda = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry)
-          const scale = lambda > 1 ? Math.sqrt(lambda) : 1
+          // (radii too small for the chord grow to reach it, SVG's rule; a ratio over 1 by rounding alone -- an arc written at half its
+          // chord, a trail's cap -- keeps the radius written)
+          const scale = lambda > 1 + 1e-12 ? Math.sqrt(lambda) : 1
           const rxp = rx * scale, ryp = ry * scale
           const sign = s.large !== s.sweep ? 1 : -1
           const denom = rxp * rxp * y1p * y1p + ryp * ryp * x1p * x1p
@@ -488,26 +492,27 @@ export function tracePath(ctx: PathSink, segs: PathSeg[], tx = 0, ty = 0, arcs: 
           const start = theta1 + phi
           const end = start + dTheta
           if (Math.abs(rx - ry) < 1e-9) {
-            ctx.arc(ccx + tx, ccy + ty, rx, start, end, dTheta < 0)
+            // (the radius the arc is drawn at: grown to reach the end point when the one written is too small for the chord)
+            ctx.arc(ccx + tx, ccy + ty, rxp, start, end, dTheta < 0)
           } else {
-            // Elliptical arc: approximate with an ellipse transform via
-            // bezier segments (rare; our marks emit circular arcs).
-            traceEllipse(ctx, ccx + tx, ccy + ty, rxp, ryp, phi, start, end)
+            // an elliptical arc: sampled along the ellipse, from its start angle in the ellipse's own frame (the frame's turn is phi)
+            traceEllipse(ctx, ccx + tx, ccy + ty, rxp, ryp, phi, theta1, theta1 + dTheta)
           }
         }
         cx = x2; cy = y2
         lastC = lastQ = null
         break
       }
-      case 'Z': ctx.closePath(); break
+      case 'Z': ctx.closePath(); cx = sx; cy = sy; lastC = lastQ = null; break
     }
   }
 }
 
-/** Draw an elliptical arc segment as an ellipse-transformed arc. */
+/**
+ * An elliptical arc segment, sampled as short lines: the points at the angles from `start` to `end` of the ellipse of radii (rx, ry)
+ * about (cx, cy) turned by `phi`. It goes on from the current point (the arc's start), as the arc it stands for does.
+ */
 function traceEllipse(ctx: PathSink, cx: number, cy: number, rx: number, ry: number, phi: number, start: number, end: number): void {
-  // Sample the ellipse as small line segments (fallback path; not used by
-  // vega marks, which emit circular arcs).
   const steps = 64
   const span = end - start
   const n = Math.max(2, Math.ceil((Math.abs(span) / (2 * Math.PI)) * steps))
@@ -517,7 +522,6 @@ function traceEllipse(ctx: PathSink, cx: number, cy: number, rx: number, ry: num
     const ex = rx * Math.cos(a), ey = ry * Math.sin(a)
     const x = cx + ex * cosP - ey * sinP
     const y = cy + ex * sinP + ey * cosP
-    if (i === 0) ctx.moveTo(x, y)
-    else ctx.lineTo(x, y)
+    ctx.lineTo(x, y)
   }
 }

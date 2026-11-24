@@ -11,9 +11,12 @@ import { itemArcGeometry } from './render.js'
 import { areaGeometry, lineGeometry, symbolGeometry, trailGeometry, type CurveGeometry } from './geometry.js'
 import { BoundsPen, cubicAt, cubicTurns } from './bounds-pen.js'
 import { part } from './engine-parts.js'
-import { itemTextWidth, textAnchor, truncateToLimit } from './text-metrics.js'
+import { itemTextWidth, truncateToLimit } from './text-metrics.js'
 import { SHAPE_BOUNDS } from './registry.js'
 import { imageBox } from './image-box.js'
+
+/** The four numbers of a box: a `Bounds`, or one that crossed a structured clone as a plain object. */
+export interface BoxLike { x1: number; y1: number; x2: number; y2: number }
 
 // ---------------------------------------------------------------------------
 // Bounds: a box that starts out empty
@@ -36,6 +39,16 @@ export class Bounds {
 
   clone(): Bounds {
     return new Bounds(this)
+  }
+
+  /** A box with the four numbers of `b`, as they are: `b` may be a plain object (a box that crossed a structured clone). */
+  static copyOf(b: BoxLike): Bounds {
+    const out = new Bounds()
+    out.x1 = b.x1
+    out.y1 = b.y1
+    out.x2 = b.x2
+    out.y2 = b.y2
+    return out
   }
 
   clear(): this {
@@ -230,33 +243,54 @@ export function baselineOffset(item: SceneItem): number {
 
 /** The extent of an arc item: its sector traced through the same generator that draws it (corner radius and padding included), turned by the item's angle, stroked, and moved to the item. */
 export function boundArcItem(bounds: Bounds, it: SceneItem): Bounds {
-  itemArcGeometry(it).outline.replay(new BoundsPen(bounds, +((it as Record<string, unknown>).angle as number) || 0))
+  // (the turn is the angle as it is: one vega's bound context cannot read, a NaN or a string such as "12px", turns every point to NaN)
+  itemArcGeometry(it).outline.replay(new BoundsPen(bounds, (it as Record<string, unknown>).angle as number))
   return boundStroke(bounds, it, true).translate(it.x || 0, it.y || 0)
 }
 
-/** The box of a text item: its lines at its alignment and baseline, turned by its angle about the anchor. */
+/**
+ * Where vega's text bound anchors a text item: `x || 0`, `y || 0` as they are on the item, pushed `radius` out along `theta` (radians,
+ * clockwise from twelve o'clock) -- a numeric string stays a string, and the sums vega makes with it are string sums.
+ */
+export function textAnchorAsIs(item: SceneItem): [number, number] {
+  let x = (item.x || 0) as number
+  let y = (item.y || 0) as number
+  const r = (item.radius || 0) as number
+  if (r) {
+    const t = ((item.theta || 0) as number) - Math.PI / 2
+    x += r * Math.cos(t)
+    y += r * Math.sin(t)
+  }
+  return [x, y]
+}
+
+/**
+ * The box of a text item: its lines at its alignment and baseline, turned by its angle about the anchor. The anchor and the offsets
+ * are the channels as they are on the item (`x || 0`, `dx || 0`, a polar `radius` / `theta`): vega's text bound adds them as it finds
+ * them, so a numeric string or a NaN makes the edges vega's do.
+ */
 export function boundText(bounds: Bounds, item: SceneItem): Bounds {
-  const h = fontSize(item)
+  let h = fontSize(item)
   const a = item.align
-  const [x, y] = textAnchor(item)
-  const dx = item.dx || 0
-  const dy = (item.dy || 0) + baselineOffset(item) - Math.round(0.8 * h)
+  const [x, y] = textAnchorAsIs(item)
+  let dx = (item.dx || 0) as number
+  let dy = ((item.dy || 0) as number) + baselineOffset(item) - Math.round(0.8 * h)
   const tl = textLines(item)
   let w: number
-  let hh = h
 
   if (Array.isArray(tl)) {
-    hh += lineHeight(item) * (tl.length - 1)
+    h += lineHeight(item) * (tl.length - 1)
     w = tl.reduce((acc: number, t: string) => Math.max(acc, textWidth(item, t)), 0)
   } else {
     w = textWidth(item, tl)
   }
 
-  let ddx = dx
-  if (a === 'center') ddx -= w / 2
-  else if (a === 'right') ddx -= w
+  if (a === 'center') dx -= w / 2
+  else if (a === 'right') dx -= w
 
-  bounds.set(ddx + x, dy + y, ddx + x + w, dy + y + hh)
+  dx += x
+  dy += y
+  bounds.set(dx, dy, dx + w, dy + h)
 
   if (item.angle) {
     bounds.rotate(item.angle * DEG_TO_RAD, x, y)
@@ -264,15 +298,14 @@ export function boundText(bounds: Bounds, item: SceneItem): Bounds {
   return bounds
 }
 
-/** The box of a rect: from its corner by its width and height (or to its x2 and y2), stroke included. */
+/**
+ * The box of a rect: from its corner (`x || 0`, `y || 0`) by its width and height, `(x + width) || 0` -- vega's arithmetic on the
+ * channels as they are, so a NaN corner is the origin and a numeric-string width is added as vega adds it -- stroke included.
+ */
 export function boundRect(bounds: Bounds, item: SceneItem): Bounds {
-  let w = (item as Record<string, unknown>).width as number | undefined
-  let h = (item as Record<string, unknown>).height as number | undefined
-  let x0 = item.x ?? 0
-  let y0 = item.y ?? 0
-  if (w == null && item.x2 != null) { w = Math.abs((item.x2 as number) - x0); x0 = Math.min(x0, item.x2 as number) }
-  if (h == null && item.y2 != null) { h = Math.abs((item.y2 as number) - y0); y0 = Math.min(y0, item.y2 as number) }
-  return boundStroke(bounds.set(x0, y0, (x0 + (w as number)) || 0, (y0 + (h as number)) || 0), item)
+  const x = (item.x || 0) as number
+  const y = (item.y || 0) as number
+  return boundStroke(bounds.set(x, y, (x + (item.width as number)) || 0, (y + (item.height as number)) || 0), item)
 }
 
 /** The box of a rule: the segment from (x, y) to (x2, y2), stroke included. */
@@ -282,10 +315,10 @@ export function boundRule(bounds: Bounds, item: SceneItem): Bounds {
   return boundStroke(bounds.set(x1, y1, item.x2 != null ? item.x2 : x1, item.y2 != null ? item.y2 : y1), item)
 }
 
-/** marks/image.js — images bound as their rect. */
+/** The box of an image: its width and height from its anchor, by its alignment. Its stroke paints nothing, and adds nothing. */
 function boundImage(bounds: Bounds, item: SceneItem): Bounds {
   const { x, y, w, h } = imageBox(item)
-  return boundStroke(bounds.set(x, y, x + w, y + h), item)
+  return bounds.set(x, y, x + w, y + h)
 }
 
 // ---------------------------------------------------------------------------
@@ -293,116 +326,41 @@ function boundImage(bounds: Bounds, item: SceneItem): Bounds {
 // ---------------------------------------------------------------------------
 
 /**
- * The extent of a symbol shape's path at a radius, traced once: a legend measures the same few shapes in every evaluation.
- * (Adding the two corners of the extent to the box is adding every point of the path to it.)
+ * The extent of a symbol shape at a radius, turned by `angle` degrees, as vega's bound context measures it: the shape's own drawing
+ * calls (d3-symbol's: a square is a `rect`, the other built-in shapes their points in order, a custom shape its path scaled by `r`)
+ * through a pen that turns every point. Measured once per shape, radius and angle: a legend measures the same few shapes in every
+ * evaluation. A radius or an angle that is not a number draws nothing; the box is assigned as measured, an empty or half-empty one
+ * included, onto a box that holds nothing yet.
  */
 const SHAPE_EXTENTS = new Map<string, [number, number, number, number]>()
-function addShapeExtent(bounds: Bounds, shape: string, r: number, angle = 0): void {
-  const key = shape + '|' + r + '|e' + (angle ? '|' + angle : '')
+function addShapeExtent(bounds: Bounds, shape: string, r: number, angle?: number): void {
+  const key = shape + '|' + r + '|' + angle
   let ext = SHAPE_EXTENTS.get(key)
   if (ext === undefined) {
     const b = new Bounds()
-    boundsFromTokens(b, shapeTokens(shape, r, angle))
+    const pen = new BoundsPen(b, angle)
+    if (shape === 'square') {
+      const w = 2 * r
+      pen.rect(-r, -r, w, w)
+    } else {
+      for (const { c, n } of symbolGeometry(shape, r).exact().tokens()) {
+        if (c === 'M') pen.moveTo(n[0]!, n[1]!)
+        else if (c === 'L') pen.lineTo(n[0]!, n[1]!)
+        else if (c === 'C') pen.bezierCurveTo(n[0]!, n[1]!, n[2]!, n[3]!, n[4]!, n[5]!)
+        else if (c === 'Q') pen.quadraticCurveTo(n[0]!, n[1]!, n[2]!, n[3]!)
+      }
+    }
     ext = [b.x1, b.y1, b.x2, b.y2]
     if (SHAPE_EXTENTS.size > 256) SHAPE_EXTENTS.clear()
     SHAPE_EXTENTS.set(key, ext)
   }
-  if (ext[0] <= ext[2] && ext[1] <= ext[3]) bounds.add(ext[0], ext[1]).add(ext[2], ext[3])
-}
-
-/**
- * The tokens of a symbol shape's full-precision path, turned by `angle` degrees: the commands and numbers of its path data
- * (geometry.ts), never its text read back, a number that is not finite (a shape at a radius of NaN, a custom shape whose replay
- * reflects nothing) included: the bounds take what the shape is drawn with, as vega's bound context does.
- */
-function shapeTokens(shape: string, r: number, angle: number): PathToken[] {
-  const tokens = symbolGeometry(shape, r).exact().tokens()
-  return angle ? rotateTokens(tokens, angle) : tokens
+  if (bounds.empty()) { bounds.x1 = ext[0]; bounds.y1 = ext[1]; bounds.x2 = ext[2]; bounds.y2 = ext[3] }
+  else bounds.add(ext[0], ext[1]).add(ext[2], ext[3])
 }
 
 /** A command of path data with the numbers that follow its letter (however many there are). */
 type PathToken = { c: string; n: number[] }
 
-/**
- * Path data with every point rotated about the origin, in absolute commands. The bounds of a rotated shape come from its rotated
- * points (control points too) and the extrema of the curves they make, which are not those of its unrotated box turned; an arc
- * keeps its radii and takes the turn on its x-axis rotation. Each number is `v + 0`: what the text of the rotated path would read
- * back as.
- */
-function rotateTokens(tokens: readonly PathToken[], deg: number): PathToken[] {
-  const rot = deg * (Math.PI / 180)
-  const cos = Math.cos(rot)
-  const sin = Math.sin(rot)
-  const out: PathToken[] = []
-  const px = (x: number, y: number): [number, number] => [cos * x - sin * y + 0, sin * x + cos * y + 0]
-  let x = 0
-  let y = 0
-  let sx = 0
-  let sy = 0
-  for (const t of tokens) {
-    const rel = t.c === t.c.toLowerCase()
-    const n = t.n
-    switch (t.c.toUpperCase()) {
-      case 'M':
-        for (let i = 0; i + 1 < n.length; i += 2) {
-          x = n[i]! + (rel ? x : 0); y = n[i + 1]! + (rel ? y : 0)
-          if (i === 0) { sx = x; sy = y }
-          out.push({ c: i === 0 ? 'M' : 'L', n: px(x, y) })
-        }
-        break
-      case 'L':
-        for (let i = 0; i + 1 < n.length; i += 2) { x = n[i]! + (rel ? x : 0); y = n[i + 1]! + (rel ? y : 0); out.push({ c: 'L', n: px(x, y) }) }
-        break
-      case 'H':
-        for (const v of n) { x = v + (rel ? x : 0); out.push({ c: 'L', n: px(x, y) }) }
-        break
-      case 'V':
-        for (const v of n) { y = v + (rel ? y : 0); out.push({ c: 'L', n: px(x, y) }) }
-        break
-      case 'C':
-        for (let i = 0; i + 5 < n.length; i += 6) {
-          const o = rel ? [x, y] : [0, 0]
-          out.push({ c: 'C', n: [...px(n[i]! + o[0]!, n[i + 1]! + o[1]!), ...px(n[i + 2]! + o[0]!, n[i + 3]! + o[1]!), ...px(n[i + 4]! + o[0]!, n[i + 5]! + o[1]!)] })
-          x = n[i + 4]! + o[0]!; y = n[i + 5]! + o[1]!
-        }
-        break
-      case 'S':
-        // (the control point the tracer assumes without a previous curve: the current point)
-        for (let i = 0; i + 3 < n.length; i += 4) {
-          const o = rel ? [x, y] : [0, 0]
-          out.push({ c: 'C', n: [...px(x, y), ...px(n[i]! + o[0]!, n[i + 1]! + o[1]!), ...px(n[i + 2]! + o[0]!, n[i + 3]! + o[1]!)] })
-          x = n[i + 2]! + o[0]!; y = n[i + 3]! + o[1]!
-        }
-        break
-      case 'Q':
-        for (let i = 0; i + 3 < n.length; i += 4) {
-          const o = rel ? [x, y] : [0, 0]
-          out.push({ c: 'Q', n: [...px(n[i]! + o[0]!, n[i + 1]! + o[1]!), ...px(n[i + 2]! + o[0]!, n[i + 3]! + o[1]!)] })
-          x = n[i + 2]! + o[0]!; y = n[i + 3]! + o[1]!
-        }
-        break
-      case 'T':
-        for (let i = 0; i + 1 < n.length; i += 2) {
-          const nx = n[i]! + (rel ? x : 0)
-          const ny = n[i + 1]! + (rel ? y : 0)
-          out.push({ c: 'Q', n: [...px(x, y), ...px(nx, ny)] })
-          x = nx; y = ny
-        }
-        break
-      case 'A':
-        for (let i = 0; i + 6 < n.length; i += 7) {
-          x = n[i + 5]! + (rel ? x : 0); y = n[i + 6]! + (rel ? y : 0)
-          out.push({ c: 'A', n: [n[i]! + 0, n[i + 1]! + 0, n[i + 2]! + deg + 0, n[i + 3]! + 0, n[i + 4]! + 0, ...px(x, y)] })
-        }
-        break
-      case 'Z':
-        x = sx; y = sy
-        out.push({ c: 'Z', n: [] })
-        break
-    }
-  }
-  return out
-}
 
 /** Where a quadratic curve, with control values p0, p1, p2 along one axis, is at its extreme there, if it turns within the curve. */
 function quadraticExtreme(p0: number, p1: number, p2: number): number | undefined {
@@ -692,69 +650,72 @@ function curveExtent(geometry: CurveGeometry | null): Bounds {
   return b
 }
 
-/** Bound a typed (non-group) mark: per-type geometry. */
-export function boundTypedMark(bounds: Bounds, mark: SceneGroup, miterPaths = false): Bounds {
+/**
+ * The bounds vega's bounds pass leaves on a line, an area or a trail mark (`mark.bounds`; each of its items holds a copy): the shape
+ * of all its items through the bound context, then the stroke of its first item, as they come out -- a NaN stroke width makes the
+ * box NaN, and an empty shape stays empty. (vega draws a line 2 wide unless it says otherwise: the renderer resolves that width at
+ * draw time, so the bounds measure it too.)
+ */
+export function multiMarkBounds(mark: SceneGroup): Bounds {
+  const items = (mark.items ?? []) as SceneItem[]
+  if (items.length === 0) return new Bounds()
+  let drawn: Bounds
+  if (mark.marktype === 'trail') {
+    drawn = new Bounds()
+    trailGeometry(items)?.outline.replay(new BoundsPen(drawn))
+  } else drawn = curveExtent(mark.marktype === 'area' ? areaGeometry(items) : lineGeometry(items))
+  const first = items[0]!
+  const styled = mark.marktype === 'line' && first.stroke != null && first.strokeWidth == null ? { ...first, strokeWidth: 2 } : first
+  return boundStroke(drawn, styled, true)
+}
+
+/** The bounds of a typed (non-group) mark: the union of its items' bounds (vega's `mark.bounds`), or a line's, an area's or a trail's own. */
+export function boundTypedMark(bounds: Bounds, mark: SceneGroup): Bounds {
   const items = (mark.items ?? []) as SceneItem[]
   switch (mark.marktype) {
     case 'line':
-    case 'area': {
-      // an area is bounded by its filled polygon (top edge AND baseline), a line
-      // by its polyline: computeLinePath on an area dropped the baseline, so
-      // autosize:pad clipped areas that extend below/above their top edge
-      const drawn = curveExtent(mark.marktype === 'area' ? areaGeometry(items) : lineGeometry(items))
-      if (!drawn.empty()) {
-        // the renderer resolves vega's default line strokeWidth=2 at
-        // draw time; the bound must measure the same geometry
-        const it0 = { ...(items[0] ?? {}) } as Record<string, unknown>
-        if (mark.marktype === 'line' && it0.stroke != null && it0.strokeWidth == null) it0.strokeWidth = 2
-        bounds.union(boundStroke(drawn, it0 as SceneItem, true))
-      }
-      return bounds
-    }
-    case 'trail': {
-      if (items.length > 1) {
-        const drawn = new Bounds()
-        trailGeometry(items)?.outline.replay(new BoundsPen(drawn))
-        if (!drawn.empty()) boundStroke(drawn, items[0] ?? {}, true)
-        bounds.union(drawn)
-      }
-      return bounds
-    }
-    case 'text': {
-      // marks/text.js bound: every item of a text mark is text, whether or not its `text` came out defined (a text
-      // mark positioned and filled from a signal that holds nothing still has the bounds of an empty line at (0, 0))
-      for (const it of items) bounds.union(boundText(new Bounds(), { ...it, _kind: 'text' } as SceneItem))
-      return bounds
-    }
-    case 'path':
-      // an item with no path draws nothing and measures nothing, not even its stroke: it stands at the origin
-      for (const it of items) {
-        if (it.path == null) bounds.add(0, 0)
-        else boundLeaf(bounds, it, true)
-      }
-      return bounds
+    case 'area':
+    case 'trail':
+      return bounds.union(multiMarkBounds(mark))
     default:
-      // vega's arc/path/symbol bounds always expand with miter semantics
-      // (vega-scenegraph bound/boundStroke.js: boundStroke(bounds, item, true)) — the
-      // miterLimit default of 4 makes the expansion miterLimit*sw/2 per side
-      const miter = miterPaths || mark.marktype === 'arc' || mark.marktype === 'path' || mark.marktype === 'symbol' || mark.marktype === 'shape'
-      // (a rect, rule, symbol, image or arc is measured as its own type: a text, path, radius or angle channel it carries is inert)
-      const kind = mark.marktype === 'rect' || mark.marktype === 'rule' || mark.marktype === 'symbol' || mark.marktype === 'image' || mark.marktype === 'arc' ? mark.marktype : undefined
-      for (const it of items) boundLeaf(bounds, it, miter, kind)
+      // every other mark is the union of its items' own bounds (vega's boundMark), each measured as an item of this mark's type
+      for (const it of items) bounds.union(itemBounds(new Bounds(), mark.marktype ?? '', it))
       return bounds
   }
 }
 
 /**
- * The bounds vega's bounds pass gives one item of a mark of type `kind` (as `boundTypedMark` measures each item of the mark; `leaf`:
- * a guide's part, measured as its own kind). What the hit index and the accessible tree measure an item by.
+ * The bounds vega's bounds pass leaves on one item of a mark of type `type` (its `item.bounds`), in the frame of the item's group.
+ * The item is measured as that type, whatever other channels its encode gave it: a `text` or a `radius` on an arc, a `width` on a
+ * symbol is inert, as it is to vega's bound of that mark. The channels are read as they are on the item and go through vega's
+ * arithmetic (`x || 0`, `x + width`, `+size`, `item.angle` turning the bound context): a NaN, a null or a numeric string comes out as
+ * vega's does, a NaN edge or a string edge such as `"03"` included, and the consumers (a mark's union, the canvas pick's "not
+ * outside", `intersect`) read it as vega's do. A line, an area or a trail has one bound for the whole mark (`boundTypedMark`).
+ */
+export function itemBounds(bounds: Bounds, type: string, it: SceneItem): Bounds {
+  switch (type) {
+    case 'rect': return boundRect(bounds, it)
+    case 'rule': return boundRule(bounds, it)
+    case 'image': return boundImage(bounds, it)
+    // (every item of a text mark is text, whether or not its `text` came out defined: an empty line at its anchor)
+    case 'text': return boundText(bounds, it)
+    case 'arc': return boundArcItem(bounds, it)
+    case 'symbol': return boundSymbol(bounds, it)
+    case 'path':
+    case 'shape':
+      return boundPathItem(bounds, it, true)
+    case 'group': return boundGroupItem(bounds, it as unknown as SceneGroup)
+    default: return bounds.union(boundIsolated(it))
+  }
+}
+
+/**
+ * `itemBounds` into `b` for the item of a mark of type `kind` (`leaf`: a guide's part, measured as its own kind). What the accessible
+ * tree measures an item by, as the hit index does.
  */
 export function boundItemOfKind(b: Bounds, it: SceneItem, kind: string): void {
   if (kind === 'leaf') { boundLeaf(b, it); return }
-  if (kind === 'text') { b.union(boundText(new Bounds(), { ...it, _kind: 'text' } as SceneItem)); return }
-  if (kind === 'path' && it.path == null) { b.add(0, 0); return }
-  const miter = kind === 'arc' || kind === 'path' || kind === 'symbol' || kind === 'shape'
-  boundLeaf(b, it, miter, kind === 'rect' || kind === 'rule' || kind === 'symbol' || kind === 'image' ? kind : undefined)
+  b.union(itemBounds(new Bounds(), kind, it))
 }
 
 /** Bound one leaf item (or nested group/mark item) into `bounds`. */
@@ -775,205 +736,114 @@ export function boundLeaf(bounds: Bounds, it: SceneItem, miterPaths = false, kin
     // directly would grow whatever the group had already accumulated (its
     // box, earlier marks) by this mark's stroke.
     const b = new Bounds()
-    boundTypedMark(b, it as unknown as SceneGroup, miterPaths)
+    boundTypedMark(b, it as unknown as SceneGroup)
     return bounds.union(b)
   }
-  return bounds.union(boundIsolated(it, miterPaths, kind))
+  return bounds.union(kind !== undefined ? itemBounds(new Bounds(), kind, it) : boundIsolated(it, miterPaths))
 }
 
 /**
- * Bound an axis group the way vega's layout reads it: the axis mark bounds
- * are (ticks ∪ labels) ∪ spine ∪ title, measured in the axis-internal frame.
- * Our scene bakes the 0.5px axis delta into the axis leaves (shift it back
- * out) and renders the domain as a leaf (vega's axisLayout excludes the
- * domain from its bounds — the spine rect covers the axis line instead).
+ * The bounds of an axis group as vega's layout reads them: the bounds its axis layout left on the mark (the spine plus the tick and
+ * label extent, the title), which guide-axis.ts measures and the scene carries (`axis.bounds`, in the axis's frame). An axis whose
+ * orient is none of the four has none: vega's axisLayout leaves its position undefined, its bounds are NaN and union into nothing.
+ * An axis group that carries no measured bounds is not the engine's: it is bounded as any group is, by what it holds.
+ *
+ * The stored box is read by its four numbers, never by its methods: a scene that crossed a structured clone (a worker's) carries it
+ * as a plain object.
  */
 export function boundAxisGroup(axis: SceneGroup): Bounds {
-  const b = new Bounds()
-  const meta = (axis as Record<string, unknown>).axis as { orient: string; range: number; baseline?: number; translate?: number; noLayout?: boolean; bounds?: Bounds } | undefined
-  // an axis built by guide-axis.ts carries the bounds its layout left on the mark (vega's `item.mark.bounds`)
-  if (meta?.bounds) return meta.noLayout === true ? b : meta.bounds.clone()
-  // an axis whose orient is none of the four: axisLayout's `default` branch leaves its position undefined, so its
-  // bounds are NaN and union into nothing
-  if (meta?.noLayout === true) return b
-  const orient = meta?.orient ?? 'left'
-  const range = meta?.range ?? 0
-  // The axis line's perpendicular position: for top/bottom axes it sits at the
-  // content edge (content top/bottom), not the spine's along-axis extent
-  // (`range`). They diverge when autosize fit makes width != height.
-  const baseline = meta?.baseline ?? (orient === 'left' || orient === 'right' ? 0 : range)
-  const tickLabelBounds = new Bounds()
-  const titleBounds = new Bounds()
-  let axisTitleText = ''
-  for (const it of axis.items ?? []) {
-    const leaf = it as SceneItem
-    if ((leaf as Record<string, unknown>)._domain) continue
-    if ((leaf as Record<string, unknown>)._grid) continue
-    if ((leaf as Record<string, unknown>)._title && typeof leaf.text === 'string') axisTitleText = leaf.text
-    // vega's bound pass skips overlap-hidden (opacity 0) labels: the
-    // invisible huge tick labels of a temporal/numeric x axis must not widen
-    // the view, while the visible end label's overhang does.
-    if (leaf.opacity === 0) continue
-    const bb = new Bounds()
-    // Guide leaves carry vega's raw item positions (the baseline shift is the
-    // renderer's bake), so boundText's baseline-aware boxing applies directly.
-    boundLeaf(bb, leaf)
-    bb.translate(-(meta?.translate ?? 0.5), -(meta?.translate ?? 0.5))
-    b.union(bb)
-    if ((leaf as Record<string, unknown>)._title) titleBounds.union(bb)
-    else tickLabelBounds.union(bb)
-  }
-  // spine rect per orient; s = tick/label extent beyond the axis line,
-  // clamped by the axis minExtent/maxExtent (vega axisLayout:
-  // s = max(minExtent, min(maxExtent, bound)))
-  const metaX = (axis as Record<string, unknown>).axis as { minExtent?: number; maxExtent?: number } | undefined
-  const minE = metaX?.minExtent ?? 0
-  const maxE = metaX?.maxExtent ?? 200
-  const clampS = (v: number): number => Math.max(minE, Math.min(maxE, v))
-  let s: number
-  // `position` anchors the axis along its line (vega axisLayout applies the
-  // group translate (x, y) to the whole bounds, spine rect included).
-  const pos = (meta as { position?: number } | undefined)?.position ?? 0
-  if (orient === 'left') {
-    s = tickLabelBounds.empty() ? 0 : clampS(-Math.min(0, tickLabelBounds.x1))
-    b.add(-s, pos).add(0, pos + range)
-  } else if (orient === 'right') {
-    s = tickLabelBounds.empty() ? 0 : clampS(Math.max(range, tickLabelBounds.x2) - range)
-    b.add(range, pos).add(range + s, pos + range)
-  } else if (orient === 'top') {
-    s = tickLabelBounds.empty() ? 0 : clampS(-Math.min(0, tickLabelBounds.y1))
-    b.add(pos, -s).add(pos + range, baseline)
-  } else {
-    s = tickLabelBounds.empty() ? 0 : clampS(Math.max(baseline, tickLabelBounds.y2) - baseline)
-    b.add(pos, baseline).add(pos + range, baseline + s)
-  }
-  // A long rotated guide title can carry our fp residue just past an integer
-  // where vega's arithmetic is exact (or vice versa). When the endpoint is not
-  // exactly integral, nudge it past the margin's epsilon guard so ceil() keeps
-  // vega's extra pixel; an exactly integral endpoint must stay put.
-  if (axisTitleText.length >= 14) {
-    // The along-axis extent (y1 for a top margin, x1 for a left margin) is the
-    // one that can land exactly on an integer. Our rotated-title x residue is
-    // the only value that must stay put when exact (a variancep title lands on
-    // -86 while a count title carries -46.00000000000001).
-    if (b.x1 !== Math.trunc(b.x1)) b.x1 -= 1e-8
-    // The same for y1, and only when the TITLE is what sets it: a title that stays inside the axis (a 16-character
-    // count title on a 200px axis) carries no residue, and nudging the tick labels' exact -5 past it made the margin
-    // one pixel too tall.
-    if (!titleBounds.empty() && titleBounds.y1 <= b.y1) b.y1 -= 1e-8
-  }
-  return b
+  const meta = (axis as Record<string, unknown>).axis as { noLayout?: boolean; bounds?: BoxLike } | undefined
+  if (meta?.noLayout === true) return new Bounds()
+  if (meta?.bounds) return Bounds.copyOf(meta.bounds)
+  return boundGroupItem(new Bounds(), axis)
 }
 
-/** Bound a single leaf item into an isolated Bounds (vega's per-item bounds). */
 /**
- * `kind`, when the mark's type is known to be one of those that read a fixed set of channels, says which: the item is then
- * measured as that type, whatever other channels (a `text`, a `width`, an `outerRadius`) its encode gave it.
+ * The bounds of a symbol item: its shape (`shape || "circle"`) at its size (`size`, 64 when there is none, read as a number: a
+ * negative or non-numeric size draws nothing and measures nothing), turned by its angle, stroked with miter joins, moved to
+ * `x || 0`, `y || 0` -- vega's symbol bound (d3-symbol through the bound context), operation for operation.
  */
-function boundIsolated(it: SceneItem, miterPaths = false, kind?: string): Bounds {
+function boundSymbol(bounds: Bounds, it: SceneItem): Bounds {
+  const rec = it as Record<string, unknown>
+  const r = Math.sqrt(+((it.size != null ? it.size : SYMBOL_DEFAULT_SIZE) as number)) / 2
+  const shape = (rec.shape || 'circle') as string
+  const angle = rec.angle as number | undefined
+  if (shape === 'circle') {
+    if (!angle) bounds.add(-r, -r).add(r, r)
+    else {
+      // (turned: what the bound context's arc does with the turn, which a NaN or a non-numeric angle makes NaN)
+      const pen = new BoundsPen(bounds, angle)
+      pen.moveTo(r, 0)
+      pen.arc(0, 0, r, 0, 2 * Math.PI)
+    }
+  } else addShapeExtent(bounds, shape, r, angle)
+  boundStroke(bounds, it, true)
+  return bounds.translate(it.x || 0, it.y || 0)
+}
+
+/**
+ * The bounds of a path or a shape item: its path drawn at `x || 0`, `y || 0`, scaled by `scaleX || 1`, `scaleY || 1` and turned by
+ * the item's angle about the origin of its frame (vega's bound context turns every point, the move included), then its stroke. A
+ * projected shape is measured from its unrounded geometry, as vega's bound context sees it. A `path` item with no path is the origin
+ * and takes no stroke; an empty path draws nothing but still takes its stroke, which an empty box absorbs unless it is not a number.
+ */
+function boundPathItem(bounds: Bounds, it: SceneItem, miter: boolean, nullIsOrigin = true): Bounds {
+  const rec = it as Record<string, unknown>
+  if (it.path == null) return nullIsOrigin ? bounds.set(0, 0, 0, 0) : bounds
+  // (the shape is the item's own when a mark's geoshape transform wrote it, its datum's when the data's did)
+  const shaped = rec.angle ? undefined : it.path === rec.shape ? it : it.datum && it.path === (it.datum as Record<string, unknown>).shape ? it.datum : undefined
+  const exact = shaped !== undefined ? SHAPE_BOUNDS.get(shaped as object) : undefined
+  if (exact) {
+    bounds.add(exact[0], exact[1])
+    bounds.add(exact[2], exact[3])
+    bounds.translate(it.x || 0, it.y || 0)
+  } else {
+    // the same replay, arcs as bezier approximations included, that draws a custom symbol
+    // (the path reader is a part the React shells load on demand, engine-parts.ts: a spec with path marks needs it)
+    const { svgPathCommands, renderSvgPath } = part('svgpath')
+    let commands: ReturnType<typeof svgPathCommands> | null = null
+    try { commands = svgPathCommands(it.path) } catch { /* a path that does not parse is measured as far as it reads */ }
+    if (commands) renderSvgPath(new BoundsPen(bounds, rec.angle as number), commands, it.x || 0, it.y || 0, (rec.scaleX as number) || 1, (rec.scaleY as number) || 1)
+    else {
+      boundsFromPath(bounds, it.path)
+      bounds.translate(it.x || 0, it.y || 0)
+    }
+  }
+  return boundStroke(bounds, it, miter)
+}
+
+/**
+ * The bounds of a guide's leaf, whose kind its channels say (`_kind` when the guide set one): a text, a rule, an arc, a path (a
+ * box, a symbol's outline), a legend symbol, an image, a rect, a rule, a point symbol. A mark's item never comes here: its mark's
+ * type says what it is (`itemBounds`).
+ */
+function boundIsolated(it: SceneItem, miterPaths = false): Bounds {
   const bounds = new Bounds()
-  // Text first: a text mark inherits `radius`/`outerRadius` from the mark def
-  // and config.text (e.g. config.text.outerRadius), but vega bounds text as
-  // text -- those arc properties are inert for it. (A guide leaf is a text item
-  // like any other: its font size is the item's, 11 when it has none.)
-  if (it._kind === 'text' || (it._kind === undefined && kind === undefined && it.text != null)) return boundText(bounds, it)
+  if (it._kind === 'text' || (it._kind === undefined && it.text != null)) return boundText(bounds, it)
   // a guide's rule says what it is, whatever other channels (a width, a height) its encode gave it
   if (it._kind === 'rule') return boundRule(bounds, it)
-  // Arc items: the geometry is angular (outerRadius/innerRadius/angles), not a
-  // stored path — bound the annular sector analytically (vega bounds the
-  // d3-arc path through the recording context; the analytic bbox matches to
-  // the canonical precision).
-  // (an arc mark's item is an arc whatever else it carries -- a `path`, a `text` it has no use for; vega bounds the arc's shape)
-  if (kind === 'arc' || (kind === undefined && it.path == null && (it.outerRadius != null || it.innerRadius != null || it.startAngle != null || it.endAngle != null))) {
+  if (it.path == null && (it.outerRadius != null || it.innerRadius != null || it.startAngle != null || it.endAngle != null)) {
     return boundArcItem(bounds, it)
   }
-  // (a symbol, rect, rule or image mark's item is measured as its type: a `path` channel it carries is inert)
-  if (it.path != null && kind !== 'symbol' && kind !== 'rect' && kind !== 'rule' && kind !== 'image') {
-    // path/symbol/arc/shape items: trace the emitted path, then
-    // boundStroke, then translate by item x/y (markItemPath bound).
-    // Miter expansion applies only to mark items; our baked group-background
-    // paths (stroke without an explicit strokeWidth) expand non-miter, like
-    // vega's group stroke bound.
-    // An empty path (a geo shape entirely clipped away) bounds to nothing:
-    // vega's boundPath leaves the bounds untouched, so no stroke expansion.
+  if (it.path != null) {
+    // Miter expansion applies to a leaf that is a mark's shape; a group's background (stroke without an explicit strokeWidth)
+    // expands non-miter, like vega's group stroke bound. An empty path (a geo shape entirely clipped away) bounds to nothing.
     if (it.path === '') return bounds
-    const rec = it as Record<string, unknown>
-    // a projected shape bounds from its unrounded geometry, as vega's bound context sees it, not from the path string
-    // (the shape is the item's own when a mark's geoshape transform wrote it, its datum's when the data's did)
-    const shaped = rec.angle ? undefined : it.path === rec.shape ? it : it.datum && it.path === (it.datum as Record<string, unknown>).shape ? it.datum : undefined
-    const exact = shaped !== undefined ? SHAPE_BOUNDS.get(shaped as object) : undefined
-    if (exact) {
-      bounds.add(exact[0], exact[1])
-      bounds.add(exact[2], exact[3])
-      bounds.translate(it.x || 0, it.y || 0)
-    } else {
-      // the path as it is drawn: scaled about its own origin, moved to the item, then turned by the item's angle (the turn is the
-      // pen's); the same replay, arcs as bezier approximations included, that draws a custom symbol
-      // (the path reader is a part the React shells load on demand, engine-parts.ts: a spec with path marks needs it)
-      const { svgPathCommands, renderSvgPath } = part('svgpath')
-      let commands: ReturnType<typeof svgPathCommands> | null = null
-      try { commands = svgPathCommands(it.path) } catch { /* a path that does not parse is measured as far as it reads */ }
-      if (commands) renderSvgPath(new BoundsPen(bounds, +(rec.angle as number) || 0), commands, it.x || 0, it.y || 0, (rec.scaleX as number) || 1, (rec.scaleY as number) || 1)
-      else {
-        boundsFromPath(bounds, it.path)
-        bounds.translate(it.x || 0, it.y || 0)
-      }
-    }
-    boundStroke(bounds, it, miterPaths || it.strokeWidth != null)
-    return bounds
+    return boundPathItem(bounds, it, miterPaths || it.strokeWidth != null)
   }
-  // (a symbol leaf a guide drew carries its radius; a symbol MARK's item is sized by `size`, and a `radius` channel it has no use for
-  // is inert, as in vega)
-  if (kind === undefined && it.shape != null && it.radius != null) {
-    // Symbol: vega bounds the shape path rotated about the item origin, then
-    // inflates by the stroke and translates to the item position.
+  if (it.shape != null && it.radius != null) {
+    // a legend's symbol: its shape at its radius
     const r = it.radius
-    const x = it.x || 0
-    const y = it.y || 0
     const angle = (it as Record<string, unknown>).angle as number | undefined
-    if (it.shape === 'circle') {
-      bounds.add(-r, -r)
-      bounds.add(r, r)
-    } else {
-      addShapeExtent(bounds, String(it.shape), r, angle)
-    }
+    if (it.shape === 'circle') bounds.add(-r, -r).add(r, r)
+    else addShapeExtent(bounds, String(it.shape), r, angle)
     boundStroke(bounds, it, true)
-    return bounds.translate(x, y)
+    return bounds.translate(it.x || 0, it.y || 0)
   }
-  if (kind === 'image' || (kind === undefined && it.url != null)) {
-    return boundImage(bounds, it)
-  }
-  if (kind === 'rect' || (kind === undefined && (it.width != null || it.height != null))) {
-    return boundRect(bounds, it)
-  }
-  if (kind === 'rule' || (kind === undefined && (it.x2 != null || it.y2 != null))) {
-    // rule (x2/y2 line segment)
-    return boundRule(bounds, it)
-  }
-  if (it.x != null || it.y != null || it.size != null) {
-    // point symbol: size 64 / shape circle by default (vega's `sz` default). A symbol with a null position (a geopoint the
-    // projection refused) still bounds as a circle at (0,0): vega's `x - r`
-    // coerces null to 0 (albersusa sweep case).
-    const r = Math.sqrt(((it.size as number) ?? SYMBOL_DEFAULT_SIZE)) / 2
-    // vega's symbol field accessors coerce a NaN/null position to 0 (`x || 0`);
-    // a degenerate scale (log/symlog at zero) still paints the mark at the
-    // origin, and its bounds drive the view padding just like any other symbol.
-    const x = it.x || 0
-    const y = it.y || 0
-    const shape = (it as Record<string, unknown>).shape as string | undefined
-    const angle = (it as Record<string, unknown>).angle as number | undefined
-    // 'point' is not a symbol name: vega's d3-symbol fallback is a circle,
-    // whose bounds are rotation-invariant.
-    // (every other shape is traced, rotated or not: vega's symbol bound is the shape's path through boundContext)
-    if (!shape || shape === 'circle' || shape === 'point') {
-      bounds.add(-r, -r)
-      bounds.add(r, r)
-    } else {
-      addShapeExtent(bounds, shape, r, angle)
-    }
-    boundStroke(bounds, it, true)
-    return bounds.translate(x, y)
-  }
+  if (it.url != null) return boundImage(bounds, it)
+  if (it.width != null || it.height != null) return boundRect(bounds, it)
+  if (it.x2 != null || it.y2 != null) return boundRule(bounds, it)
+  if (it.x != null || it.y != null || it.size != null) return boundSymbol(bounds, it)
   return boundRect(bounds, it)
 }
 
@@ -985,9 +855,10 @@ function boundIsolated(it: SceneItem, miterPaths = false, kind?: string): Bounds
 export function boundLegendGroup(g: SceneGroup): Bounds {
   const rec = g as Record<string, unknown>
   // a legend built by guide-legend.ts carries the bounds its layout left on the mark (relative to the group's position)
-  const own = rec.legendBounds as Bounds | undefined
+  // (read by its four numbers: a scene that crossed a structured clone carries it as a plain object)
+  const own = rec.legendBounds as BoxLike | undefined
   if (own) {
-    const placed = own.clone().translate(g.x ?? 0, g.y ?? 0)
+    const placed = Bounds.copyOf(own).translate(g.x ?? 0, g.y ?? 0)
     // a legend that sits nowhere along an axis (`orient: none` with no legendX / legendY) has no extent along it
     const unplaced = rec.unplaced as { x: boolean; y: boolean } | undefined
     if (unplaced?.x) { placed.x1 = +Number.MAX_VALUE; placed.x2 = -Number.MAX_VALUE }
@@ -1003,9 +874,12 @@ export function boundLegendGroup(g: SceneGroup): Bounds {
 }
 
 /**
- * vega-view-transforms' Bound pass ends every mark with `boundClip(mark)`: a mark with `clip` has its bounds
- * intersected with the ENCLOSING group's frame [0, 0, group.width, group.height] (vega-scenegraph
- * boundClip), so what a clipped mark draws outside the frame never grows the view. A group mark is one
+ * The bounds of the marks of a group, mark by mark, as vega's bounds pass leaves them on each mark: a typed mark's own, a group
+ * mark's the union of its items' (its items sit next to each other in this scene, one node each) -- a group's bounds are the union
+ * of these, so the items of a group mark meet each other before they meet anything else, which decides what a NaN or a string edge
+ * does. vega-view-transforms' Bound pass ends every mark with `boundClip(mark)`: a mark with `clip` has its bounds
+ * intersected with the ENCLOSING group's frame [0, 0, group.width, group.height], the width and height as the group holds them
+ * (a group with none does not cut: vega-scenegraph boundClip), so what a clipped mark draws outside the frame never grows the view. A group mark is one
  * mark across all its items (they sit next to each other in the parent, flagged `markClip`); a typed mark
  * is one scene node flagged `clip`. Calls `out` once per mark (a run of group items, or one node) with
  * the mark's bounds. `measure` bounds one node and may return a shared (cached) object: it is copied
@@ -1029,20 +903,25 @@ export function eachMarkBounds(
 ): void {
   const frame = (): Bounds => new Bounds().set(0, 0, frameW, frameH)
   for (let i = 0; i < items.length;) {
-    const n = items[i] as SceneGroup
-    if (n.markClip === true && n.marktype === 'group') {
+    const n = items[i] as SceneGroup & Record<string, unknown>
+    if (n._scope === true) {
+      // a group mark: the union of its items' bounds into the mark's own box, cut to the frame when the mark clips
       const mb = new Bounds()
       let j = i
-      while (j < items.length && (items[j] as SceneGroup).markClip === true && (items[j] as SceneGroup).name === n.name) mb.union(measure(items[j]!)), j++
-      out(mb.intersect(frame()), n)
+      while (j < items.length && sameGroupMark(n, items[j] as SceneGroup & Record<string, unknown>)) mb.union(measure(items[j]!)), j++
+      out(n.markClip === true ? mb.intersect(frame()) : mb, n)
       i = j
       continue
     }
     const b = measure(n)
-    out(n.clip === true && n.marktype !== undefined && n.marktype !== 'group' && Array.isArray(n.items) ? new Bounds().union(b).intersect(frame()) : b, n)
+    out(n.clip === true && n.marktype !== undefined && n.marktype !== 'group' && Array.isArray(n.items) ? Bounds.copyOf(b).intersect(frame()) : b, n)
     i++
   }
 }
+
+/** Two nodes of a scene are items of one group mark: group items of the same mark, which sit next to each other. */
+const sameGroupMark = (a: Record<string, unknown>, b: Record<string, unknown>): boolean =>
+  b._scope === true && a.name === b.name && a.markIndex === b.markIndex && a.markClip === b.markClip
 
 /**
  * The bounds of a typed mark, cached per mark object: a scene that has been
@@ -1078,56 +957,69 @@ export function layoutBounds(node: SceneNode, out = new Bounds()): Bounds {
   const g = node as SceneGroup
   const isGroup = g.marktype === 'group' || (g.marktype === undefined && Array.isArray(g.items))
   if (!isGroup) return g.marktype !== undefined && Array.isArray(g.items) ? out.union(typedMarkBounds(g)) : boundLeaf(out, node as SceneItem)
-  if (g.role === 'axis' && (g as Record<string, unknown>).axis !== undefined) return out.union(boundAxisGroup(g))
-  if (g.role === 'legend') return out.union(boundLegendGroup(g))
+  return out.union(groupLayoutBounds(g))
+}
+
+/**
+ * The bounds of a laid-out group item as vega leaves them on the item (`item.bounds`), not unioned into anything: an edge that is not
+ * a number stays as it came out (a group at `x: "15px"` has string edges, as vega's does), which is what vega's pick reads.
+ * `fresh`: measure every mark anew rather than read the per-mark cache the layout keeps while it builds a scene -- for a reader of a
+ * scene that was returned, which a host may have written into (scene-registry.ts: what is derived is made afresh when the same scene
+ * is read again).
+ */
+export function groupLayoutBounds(g: SceneGroup, fresh = false): Bounds {
+  if (g.role === 'axis' && (g as Record<string, unknown>).axis !== undefined) return boundAxisGroup(g)
+  if (g.role === 'legend') return boundLegendGroup(g)
   // a title the layout placed keeps the extent it measured there (see guide-title.ts)
-  if (g.role === 'title' && (g as Record<string, unknown>).titleBounds) return out.union((g as Record<string, unknown>).titleBounds as Bounds)
+  if (g.role === 'title' && (g as Record<string, unknown>).titleBounds) return Bounds.copyOf((g as Record<string, unknown>).titleBounds as BoxLike)
   // a group a grid layout moved keeps the box it was measured with, moved with it (see trellis.ts `carry`)
-  const laid = (g as { laidBounds?: Bounds }).laidBounds
-  if (laid !== undefined) return out.union(laid)
+  const laid = (g as { laidBounds?: BoxLike }).laidBounds
+  if (laid !== undefined) return Bounds.copyOf(laid)
   const b = new Bounds()
-  if (!g.clip && g.items) {
+  const clipped = clipsContent(g)
+  if (!clipped && g.items) {
+    // (each mark's own bounds, as vega leaves them: a group item's raw, which its mark's union reads -- see `eachMarkBounds`)
     const measure = (child: SceneNode): Bounds => {
       const c = child as SceneGroup
-      return c.marktype !== undefined && c.marktype !== 'group' && Array.isArray(c.items) ? typedMarkBounds(c) : layoutBounds(child)
+      if (c.marktype !== undefined && c.marktype !== 'group' && Array.isArray(c.items)) return fresh ? boundTypedMark(new Bounds(), c) : typedMarkBounds(c)
+      return c.marktype === 'group' || (c.marktype === undefined && Array.isArray(c.items)) ? groupLayoutBounds(c, fresh) : boundLeaf(new Bounds(), child as SceneItem)
     }
-    if (hasClippedMark(g.items)) {
-      const noBox = (g as Record<string, unknown>).noBound === true
-      eachMarkBounds(g.items.filter((c) => countsInBounds(c) && !(noBox && (c as Record<string, unknown>).contentClip === true)), g.width || 0, g.height || 0, measure, (mb) => { b.union(mb) })
-    } else {
-      for (const child of g.items) {
-        if (!countsInBounds(child)) continue
-        const c = child as SceneGroup
-        // (the clipped content of a group item stands for the item's own clipped box, which `noBound` leaves out: vega bounds a
-        // clipped group by its box alone)
-        if ((g as Record<string, unknown>).noBound && (c as Record<string, unknown>).contentClip === true) continue
-        if (c.marktype !== undefined && c.marktype !== 'group' && Array.isArray(c.items)) b.union(typedMarkBounds(c))
-        else layoutBounds(child, b)
-      }
-    }
+    eachMarkBounds(g.items.filter((c) => countsInBounds(c)), g.width as number, g.height as number, measure, (mb) => { b.union(mb) })
   }
-  if ((g.clip || g.width || g.height) && !(g as Record<string, unknown>).noBound) b.add(0, 0).add(g.width || 0, g.height || 0)
+  if ((clipped || g.width || g.height) && !(g as Record<string, unknown>).noBound) b.add(0, 0).add(g.width || 0, g.height || 0)
   boundStroke(b, g as unknown as SceneItem)
   b.translate(g.x || 0, g.y || 0)
-  return out.union(b)
+  return b
+}
+
+/**
+ * Whether a group item clips what it holds (its `clip`): this scene keeps a clipped group item's content in a node that clips it
+ * (`contentClip`), the group item itself unclipped. vega bounds a clipped group by its box alone: what it holds adds nothing.
+ */
+function clipsContent(g: SceneGroup): boolean {
+  if (g.clip) return true
+  const items = g.items ?? []
+  for (let i = 0; i < items.length; i++) if ((items[i] as Record<string, unknown>).contentClip === true) return true
+  return false
+}
+
+/** A node of a group as vega's bounds pass leaves its bounds: a typed mark's, a group item's (raw), a guide's leaf. */
+function rawBoundsOf(child: SceneItem): Bounds {
+  const c = child as unknown as SceneGroup
+  if (c.marktype !== undefined && c.marktype !== 'group' && Array.isArray(c.items)) return boundTypedMark(new Bounds(), c)
+  if (c.marktype === 'group' || (c.marktype === undefined && Array.isArray(c.items))) return boundGroupItem(new Bounds(), c)
+  return boundLeaf(new Bounds(), child)
 }
 
 /** marks/group.js `bound` — exact (recursive, includes [0,0,w,h] rect). */
 export function boundGroupItem(bounds: Bounds, group: SceneGroup): Bounds {
-  if (!group.clip && group.items) {
-    // the background is the group's own box (below), not an item: its rect and
-    // stroke are covered by the group's width/height and boundStroke
-    const items = group.items
-    if (hasClippedMark(items)) {
-      eachMarkBounds(items.filter((child) => (child as Record<string, unknown>)._bg !== true), group.width || 0, group.height || 0, (child) => boundLeaf(new Bounds(), child as SceneItem), (mb) => { bounds.union(mb) })
-    } else {
-      for (let j = 0; j < items.length; ++j) {
-        if (!countsInBounds(items[j]!)) continue
-        boundLeaf(bounds, items[j] as SceneItem)
-      }
-    }
+  const clipped = clipsContent(group)
+  if (!clipped && group.items) {
+    // the background is the group's own box (below), not an item: its rect and stroke are covered by the group's width/height and
+    // boundStroke. Its marks are bounded mark by mark (`eachMarkBounds`): a group mark's items into the mark's box first.
+    eachMarkBounds(group.items.filter((child) => countsInBounds(child)), group.width as number, group.height as number, (child) => rawBoundsOf(child as SceneItem), (mb) => { bounds.union(mb) })
   }
-  if ((group.clip || group.width || group.height) && !(group as Record<string, unknown>).noBound) {
+  if ((clipped || group.width || group.height) && !(group as Record<string, unknown>).noBound) {
     bounds.add(0, 0).add(group.width || 0, group.height || 0)
   }
   boundStroke(bounds, group as unknown as SceneItem)

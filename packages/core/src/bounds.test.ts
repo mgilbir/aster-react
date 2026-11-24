@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Bounds, boundAxisGroup, boundLeaf, boundsFromPath } from './bounds.js'
+import { compileChart } from './compiler.js'
+import { evaluateChart } from './evaluate.js'
 import type { SceneGroup } from './types.js'
 
 /**
@@ -57,22 +59,23 @@ describe('vega-exact bounds', () => {
     expect([b.x1, b.y1, b.x2, b.y2]).toEqual([-2.7386, -2.7386, 2.7386, 2.7386])
   })
 
-  it('bounds an axis group as (ticks ∪ labels) ∪ spine ∪ title', () => {
-    // vega's Y-axis mark bounds: spine [−s, 0, 0, range] with s = tick/label
-    // extent, unioned with the shifted tick/label bounds
-    const axis: SceneGroup = {
-      marktype: 'group',
-      role: 'axis',
-      axis: { orient: 'left', range: 300 },
-      items: [
-        { x: 0.5, y: 0.5, x2: -4.5, y2: 0.5, stroke: '#888', strokeWidth: 1 },
-        { x: -6.5, y: 0.5, text: '55', align: 'right', baseline: 'middle', fontSize: 10, fill: '#000' },
-      ],
-    } as unknown as SceneGroup
+  it('bounds an axis group by what its layout measured (C552), read by its numbers (C39)', () => {
+    // (the engine's axes carry the bounds guide-axis.ts measured -- vega's axisLayout, compared with vega in
+    // guides-layout-vs-vega.test.ts -- and those are the axis's bounds, a plain object's as well: a worker's scene)
+    const scene = evaluateChart(compileChart({
+      width: 100, height: 60, scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }], axes: [{ orient: 'bottom', scale: 'x', title: 'a long title' }],
+    } as never), {})
+    const axis = scene.items.find((g) => g.role === 'axis') as SceneGroup
+    const measured = (axis as unknown as { axis: { bounds: Bounds } }).axis.bounds
     const b = boundAxisGroup(axis)
-    // ticks shifted (−0.5): [-5.5, -0.5, 0.5, 0.5]; label raw: [-23, -5, -6.5, 5.5]
-    // spine: s = 23 → [-23, 0, 0, 300]
-    expect([b.x1, b.y1, b.x2, b.y2]).toEqual([-23, -5, 0.5, 300])
+    expect([b.x1, b.y1, b.x2, b.y2]).toEqual([measured.x1, measured.y1, measured.x2, measured.y2])
+    const plain = JSON.parse(JSON.stringify(axis)) as SceneGroup
+    const c = boundAxisGroup(plain)
+    expect([c.x1, c.y1, c.x2, c.y2]).toEqual([measured.x1, measured.y1, measured.x2, measured.y2])
+    // an axis group with no measured bounds is not the engine's: it is bounded as any group, by what it holds
+    const hand = { marktype: 'group', role: 'axis', axis: { orient: 'left' }, items: [{ x: 0.5, y: 0.5, x2: -4.5, y2: 0.5, stroke: '#888', strokeWidth: 1 }] } as unknown as SceneGroup
+    const d = boundAxisGroup(hand)
+    expect([d.x1, d.y1, d.x2, d.y2]).toEqual([-5, 0, 1, 1])
   })
 
   it('keeps empty-union semantics for cleared bounds', () => {

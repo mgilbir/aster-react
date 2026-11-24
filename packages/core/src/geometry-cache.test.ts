@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 /**
  * The geometry caches (geometry.ts): an unchanged mark is generated once however many times it is drawn, by whichever
- * consumer; every input the generators read, changed in place on the very same objects, misses the cache (and the output is
- * the old implementation's for the changed scene).
+ * consumer; every input the generators read, changed in place on the very same objects, misses the cache: the SVG, DOM and canvas
+ * output is the refactor baseline's for the changed scene (`diffScene`), and the hit index, the bounds and `intersect()` answer as
+ * they do on a fresh copy of the changed scene, whose objects no cache has seen (`coldVsWarm`).
  */
 import { describe, expect, it } from 'vitest'
 import { compileChart } from './compiler.js'
@@ -13,11 +14,12 @@ import { renderSceneToSvg } from './render.js'
 import { patchSceneDom, renderSceneToDomElement, sceneToDomDesc } from './dom.js'
 import { renderSceneToCanvas } from './canvas.js'
 import { renderSceneToCanvas as legacyCanvas } from './legacy-canvas.testlib.js'
-import { buildHitIndex } from './hit.js'
+import { buildHitIndex, type HitTarget } from './hit.js'
 import { Bounds, boundTypedMark } from './bounds.js'
 import { setTextMetricsProvider } from './text-metrics.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
-import { diffScene, loggingContext, marksOf } from './geometry-differential.testlib.js'
+import { diffScene, loggingContext, marksOf, probePoints } from './geometry-differential.testlib.js'
+import { sceneIntersect } from './scene-intersect.js'
 import { mulberry32 } from './scene-fuzz.testlib.js'
 
 type Counts = typeof geometryCounts
@@ -43,6 +45,65 @@ const SPEC = {
     { type: 'symbol', from: { data: 't' }, encode: { enter: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, size: { signal: 'datum.s * 20' }, shape: { value: 'diamond' }, fill: { value: 'purple' } } } },
     { type: 'rule', encode: { update: { x: { signal: 'hover' }, x2: { signal: 'hover' }, y: { value: 0 }, y2: { value: 200 }, stroke: { value: '#000' } } } },
   ],
+}
+
+
+/** A copy of a scene's data, every object new (functions and the evaluation's runtime left out): no cache has seen any of it. */
+function freshCopy<T>(v: T): T {
+  if (Array.isArray(v)) return v.map(freshCopy) as T
+  if (v === null || typeof v !== 'object') return v
+  const out: Record<string, unknown> = {}
+  for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+    if (typeof x === 'function' || k === 'runtime' || k === 'compiled') continue
+    out[k] = k === 'datum' ? x : freshCopy(x)
+  }
+  return out as T
+}
+
+/** Every object of a scene named by its place (the indices from the root), so two copies can be compared item for item. */
+function places(scene: SceneRoot): Map<object, string> {
+  const out = new Map<object, string>()
+  const walk = (v: unknown, path: string): void => {
+    if (v === null || typeof v !== 'object') return
+    if (out.has(v)) return
+    out.set(v, path)
+    const items = (v as { items?: unknown[] }).items
+    if (Array.isArray(items)) items.forEach((c, i) => walk(c, `${path}/${i}`))
+  }
+  walk(scene, '')
+  return out
+}
+
+/**
+ * The hit index (both renderers' picks), the bounds of every mark and `intersect()` on `scene` -- its caches warm -- against the same
+ * on a fresh copy of it: the differences (empty: the cached geometry is the geometry of the scene as it is now).
+ */
+function coldVsWarm(scene: SceneRoot, r: () => number): string[] {
+  const copy = freshCopy(scene)
+  const out: string[] = []
+  const answers = (s: SceneRoot): string[] => {
+    const name = places(s)
+    const t = (h: HitTarget | null): string => (h === null ? 'null' : `${h.marktype}:${h.kind}:${name.get(h.item) ?? '?'}`)
+    const res: string[] = []
+    for (const renderer of ['svg', 'canvas'] as const) {
+      const ix = buildHitIndex(s, undefined, { renderer })
+      for (const [x, y] of probePoints(scene, mulberry32(3))) res.push(`${renderer} ${x},${y}: ${t(ix.query(x, y))} ${t(ix.queryMark(x, y))} ${t(ix.pick(x, y))} ${t(ix.tooltip(x, y))}`)
+    }
+    for (const { mark } of marksOf(s)) { const b = boundTypedMark(new Bounds(), mark); res.push(`bounds ${name.get(mark)}: ${[b.x1, b.y1, b.x2, b.y2].map(String)}`) }
+    return res
+  }
+  const a = answers(scene)
+  const b = answers(copy)
+  for (let i = 0; i < Math.max(a.length, b.length); i++) if (a[i] !== b[i]) { out.push(`warm ${a[i]} / fresh ${b[i]}`); break }
+  for (let k = 0; k < 6; k++) {
+    const x = r() * 300, y = r() * 200
+    const box = [[x, y], [x + r() * 200, y + r() * 150]]
+    const na = places(scene), nb = places(copy)
+    const wa = sceneIntersect(scene, box, null, null).map((it) => na.get(it) ?? '?').join(' ')
+    const wb = sceneIntersect(copy, box, null, null).map((it) => nb.get(it) ?? '?').join(' ')
+    if (wa !== wb) out.push(`intersect ${JSON.stringify(box)}: warm [${wa}] / fresh [${wb}]`)
+  }
+  return out
 }
 
 describe('work counts: an unchanged mark is generated once', () => {
@@ -115,7 +176,8 @@ const MUTATIONS: Mutation[] = [
   ['trail size', 'trail', 'trail', (its) => { its[6]!.size = 30 }],
   ['trail defined', 'trail', 'trail', (its) => { its[6]!.defined = false }],
   ['arc outerRadius', 'arc', 'arc', (its) => { its[1]!.outerRadius = 70 }],
-  ['arc radius (no outerRadius)', 'arc', 'arc', (its) => { delete its[1]!.outerRadius; its[1]!.radius = 33 }],
+  // (an arc reads `outerRadius` alone, as vega's does: `radius` is a text item's channel)
+  ['arc outerRadius removed', 'arc', 'arc', (its) => { delete its[1]!.outerRadius }],
   ['arc innerRadius', 'arc', 'arc', (its) => { its[1]!.innerRadius = 5 }],
   ['arc startAngle', 'arc', 'arc', (its) => { its[1]!.startAngle = 0.5 }],
   ['arc endAngle', 'arc', 'arc', (its) => { its[1]!.endAngle = 3 }],
@@ -131,12 +193,14 @@ describe('invalidation: an input changed in place misses the cache', () => {
       const scene = evaluateChart(compileChart(structuredClone(SPEC) as never), {})
       if (prepare) prepare(marksOf(scene).find((m) => m.mark.marktype === marktype)!.mark.items as SceneItem[])
       // draw everything once: every cache is warm
-      expect(diffScene(scene, mulberry32(1))).toEqual([])
+      expect(diffScene(scene)).toEqual([])
+      expect(coldVsWarm(scene, mulberry32(1))).toEqual([])
       const { mark } = marksOf(scene).find((m) => m.mark.marktype === marktype)!
       mutate(mark.items as SceneItem[], mark)
       const before = snapshot()
       // the same objects, drawn again: the old implementation draws the changed scene from scratch
-      expect(diffScene(scene, mulberry32(2))).toEqual([])
+      expect(diffScene(scene)).toEqual([])
+      expect(coldVsWarm(scene, mulberry32(2))).toEqual([])
       const d = delta(before)
       expect(kind === 'line' ? d.lineTrace : kind === 'area' ? d.areaTrace : d[kind]).toBeGreaterThan(0)
     })
@@ -144,12 +208,14 @@ describe('invalidation: an input changed in place misses the cache', () => {
 
   it('a mark moved by its group (the hit placement) and a context at another pixel ratio', () => {
     const scene = evaluateChart(compileChart(structuredClone(SPEC) as never), {})
-    expect(diffScene(scene, mulberry32(1))).toEqual([])
+    expect(diffScene(scene)).toEqual([])
+      expect(coldVsWarm(scene, mulberry32(1))).toEqual([])
     const facet = (scene.items as SceneGroup[]).find((g) => g.marktype === 'group')!
     const cell = facet.items![0] as SceneGroup
     cell.x = (cell.x ?? 0) + 13
     cell.y = (cell.y ?? 0) - 4
-    expect(diffScene(scene, mulberry32(2))).toEqual([])
+    expect(diffScene(scene)).toEqual([])
+    expect(coldVsWarm(scene, mulberry32(2))).toEqual([])
     // (diffScene compared the legacy renderer at dpr 1 and 2, drawing the scene as it caches its geometry: a context at 3 must draw
     // what the legacy renderer draws at 3 on the scene warmed at the other ratios, and the same again)
     const warm = loggingContext()
@@ -170,10 +236,12 @@ describe('invalidation: an input changed in place misses the cache', () => {
   it('a new text-metrics provider is seen by every consumer (nothing here caches text)', () => {
     const spec = { width: 100, height: 50, marks: [{ type: 'text', encode: { enter: { x: { value: 10 }, y: { value: 20 }, text: { value: 'hello world' }, fill: { value: '#000' } } } }] }
     const scene = evaluateChart(compileChart(spec as never), {})
-    expect(diffScene(scene, mulberry32(1))).toEqual([])
+    expect(diffScene(scene)).toEqual([])
+      expect(coldVsWarm(scene, mulberry32(1))).toEqual([])
     setTextMetricsProvider({ measureWidth: (text: string) => text.length * 13 } as never)
     try {
-      expect(diffScene(scene, mulberry32(2))).toEqual([])
+      expect(diffScene(scene)).toEqual([])
+      expect(coldVsWarm(scene, mulberry32(2))).toEqual([])
     } finally {
       setTextMetricsProvider(null)
     }

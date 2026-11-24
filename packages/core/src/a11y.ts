@@ -31,7 +31,7 @@ import { hash53 } from './svg-defs.js'
 import { withSceneOutput } from './scene-output.js'
 import type { SceneGroup, SceneItem, SceneNode, SceneRoot } from './types.js'
 import { axisLabel, guideTitleText, legendLabel, scalesFromSnapshots } from './guide-caption.js'
-import { pushAll } from './util.js'
+import { drawnOffset, pushAll } from './util.js'
 import { isEngineNode, keptInto } from './scene-registry.js'
 
 export type A11yKind = 'mark' | 'axis' | 'legend' | 'legend-entry' | 'title' | 'group'
@@ -419,8 +419,10 @@ function treeOf(scene: SceneRoot, scales: Map<string, unknown>, options: A11yOpt
   const rest: { count: number; marks: number; box: Bounds | null } = { count: 0, marks: 0, box: null }
   const walk = (node: SceneNode, tx: number, ty: number, scopeScales: Map<string, unknown>): void => {
     const group = node as SceneGroup
-    const gx = tx + (group.x ?? 0)
-    const gy = ty + (group.y ?? 0)
+    // (where the renderers draw the group's content: a group item's position is the value its encode wrote, see `drawnOffset`)
+    const [ox, oy] = drawnOffset(group)
+    const gx = tx + ox
+    const gy = ty + oy
     const role = group.role
     if (role === 'axis' || role === 'legend' || role === 'title') {
       const n = guideNode(group, `guide-${seq++}`, tx, ty, scopeScales, scene.__locale)

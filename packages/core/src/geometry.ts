@@ -411,13 +411,13 @@ const ARCS = new WeakMap<SceneItem, ArcGeometry>()
 
 /**
  * An arc item's six numbers (outer and inner radius, start and end angle, corner radius, pad angle), as the arc mark's
- * accessors read them: missing, null, NaN or 0 reads as 0 (`outerRadius` standing in with the older `radius`), anything else
- * is taken as a number.
+ * accessors read them: missing, null, NaN or 0 reads as 0, anything else
+ * is taken as a number. (`radius` is a text item's channel: an arc does not read it.)
  */
 export function arcNumbers(it: SceneItem): Float64Array {
   const rec = it as Record<string, unknown>
   return Float64Array.of(
-    +((it.outerRadius ?? it.radius) as number || 0), +(it.innerRadius as number || 0), +(it.startAngle as number || 0),
+    +(it.outerRadius as number || 0), +(it.innerRadius as number || 0), +(it.startAngle as number || 0),
     +(it.endAngle as number || 0), +(rec.cornerRadius as number || 0), +(rec.padAngle as number || 0),
   )
 }
@@ -654,21 +654,18 @@ export function symbolGeometry(shape: string | undefined, r: number): SymbolGeom
 // --- rects -------------------------------------------------------------------------------------------------------------------
 
 /**
- * A rect item's path data. Vega renders rect marks as paths: an undefined, null or NaN position is 0 (`item.x || 0`), so is a
- * missing or non-finite width or height (an unsized rect is a zero-size path at its origin). Corner radii (vega's rectangle
- * builder): each corner falls back to `cornerRadius`, is clamped to min(w, h) / 2, a falsy one is 0 and anything else is read
+ * A rect item's path data, as vega's rectangle builder makes it: each of x, y, width and height is `+(channel || 0)` (a missing,
+ * null or NaN one is 0, a numeric string is its number, `"30px"` is NaN, an infinity stays one), and the text is d3-path's: a
+ * width that is not a number is written as it is (`hNaN`, `hInfinity`), which a browser's SVG and a canvas draw nothing for.
+ * Corner radii: each corner falls back to `cornerRadius`, is clamped to min(w, h) / 2, a falsy one is 0 and anything else is read
  * with unary plus (a non-numeric radius is NaN, which is NOT "no corner": the rounded path, in NaNs); the quarter arcs are
  * cubics with C = 0.448084975506.
  */
 export function rectData(it: SceneItem): PathData {
-  let w = it.width
-  let h = it.height
-  const x0 = (it.x as number | undefined) || 0
-  const y0 = (it.y as number | undefined) || 0
-  if (w == null) w = 0
-  if (h == null) h = 0
-  if (!Number.isFinite(w)) w = 0
-  if (!Number.isFinite(h)) h = 0
+  const w = +((it.width || 0) as number)
+  const h = +((it.height || 0) as number)
+  const x0 = +((it.x || 0) as number)
+  const y0 = +((it.y || 0) as number)
   const rec = it as Record<string, unknown>
   const cr = rec.cornerRadius
   const s = Math.min(w, h) / 2
