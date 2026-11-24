@@ -368,13 +368,29 @@ function member(object: Run, property: Expr, computed: Run | undefined, mode: Mo
 
 const refuse = (name: string): never => { throw new Error(`Function argument refused: ${name}`) }
 
+/** Aster's built-ins that run a regular expression argument and do not return it. */
+const REGEX_CONSUMERS: ReadonlySet<string> = new Set(['test', 'replace', 'split'])
+/** Whether `name` resolves, in this host table, to Aster's own built-in. */
+function ownBuiltin(host: Record<string, unknown>, name: string): boolean {
+  const table = BUILTIN_TABLES.get(host)
+  const fn = host[name] || DefaultFunctions[name]
+  return table !== undefined && typeof fn === 'function' && Object.hasOwn(table.builtins, name) && table.builtins[name] === fn
+}
+
 function call(node: Extract<Expr, { type: 'CallExpression' }>, c: Compiling): Run {
   const callee = node.callee
   // only a bare name is callable; anything else reads `.startsWith` off the missing name, as the oracle does
   if (callee.type !== 'Identifier') return () => (undefined as unknown as string).startsWith('_')
   // `_name` is the encoders' spelling of `name`
   const name = callee.name.startsWith('_') ? callee.name.slice(1) : callee.name
-  let argv = node.arguments.map((a) => compile(a, c))
+  // A regular-expression literal handed straight to one of Aster's own `test`, `replace` or `split` is used there and never
+  // escapes the call, so its copy per evaluation (vega's code generator writes the literal into the code) can only differ from the
+  // literal itself in `lastIndex`, which only a `g` or `y` expression reads and writes: those are copied, the others shared.
+  const consumesRegex = c.mode.engine && REGEX_CONSUMERS.has(name) && ownBuiltin(c.host, name)
+  let argv = node.arguments.map((a) => {
+    const v = a.type === 'Literal' ? (a as { value: unknown }).value : undefined
+    return consumesRegex && v instanceof RegExp && !v.global && !v.sticky ? () => v : compile(a, c)
+  })
 
   // `if` evaluates only the branch it takes
   if (name === 'if') {
