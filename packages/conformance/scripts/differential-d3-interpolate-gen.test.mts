@@ -73,6 +73,16 @@ function sample(make: () => unknown, positions: number[], extra?: (g: any) => un
   return { out, extra: extra ? enc(extra(g)) : undefined, type: typeof g }
 }
 
+/**
+ * A `sample` worth comparing: some position gave a finite number, a non-empty string or a date. A call that threw, gave NaN or
+ * nothing is a result too (and is compared), but it is not what the floors of these tests count: `sample` always returns an object,
+ * so counting "not null" counted every case, a throwing constructor included.
+ */
+const usable = (v: unknown): boolean => {
+  const out = (v as { out?: unknown[] } | null)?.out
+  return Array.isArray(out) && out.some((e) => (typeof e === 'number' ? Number.isFinite(e) : typeof e === 'string' ? e !== '' && !/NaN/.test(e) : (e as { $?: unknown } | null)?.$ === 'date' || (Array.isArray(e) && e.length > 0) || (!!e && typeof e === 'object' && !('threw' in e) && !('$' in e) && Object.keys(e).length > 0)))
+}
+
 /** `ASTER_DIFF_MESSAGES=1` compares the engine's own wording of a TypeError too (it quotes variables of the library that raised it). */
 const STRICT = !!process.env.ASTER_DIFF_MESSAGES
 
@@ -140,9 +150,10 @@ describe('interp.ts vs d3-interpolate 3.0.1 (generated)', () => {
         label: `${name} ${pos}`,
         oracle: () => sample(() => D3.lib[name](a(D3), b(D3)), pos),
         aster: () => sample(() => ASTER.lib[name](a(ASTER), b(ASTER)), pos),
+        informative: usable,
       }
     })
-    expect(out.informative).toBeGreaterThan(3000)
+    expect(out.informative, 'cases whose oracle gave a number').toBeGreaterThan(out.cases * 0.45)
   })
 
   it('string', () => {
@@ -190,9 +201,9 @@ describe('interp.ts vs d3-interpolate 3.0.1 (generated)', () => {
         if (gamma !== undefined) f = f.gamma(gamma)
         return f(a(side), b(side))
       }
-      return { label: `${name} gamma=${gamma} ${pos}`, oracle: () => sample(() => make(D3), pos), aster: () => sample(() => make(ASTER), pos) }
+      return { label: `${name} gamma=${gamma} ${pos}`, oracle: () => sample(() => make(D3), pos), aster: () => sample(() => make(ASTER), pos), informative: usable }
     })
-    expect(out.informative).toBeGreaterThan(8000)
+    expect(out.informative, 'cases whose oracle gave a colour').toBeGreaterThan(out.cases * 0.45)
   })
 
   it('colour interpolators called again at earlier positions (no state kept between calls)', () => {
@@ -326,9 +337,10 @@ describe('interp.ts vs d3-interpolate 3.0.1 (generated)', () => {
         label: `${name} ${pos}`,
         oracle: () => sample(() => lib(D3)(a(D3), b(D3)), pos),
         aster: () => sample(() => lib(ASTER)(a(ASTER), b(ASTER)), pos),
+        informative: usable,
       }
     })
-    expect(out.informative).toBeGreaterThan(5000)
+    expect(out.informative, 'cases whose oracle gave a value').toBeGreaterThan(out.cases * 0.45)
   })
 
   it('piecewise (explicit interpolator and the default)', () => {
