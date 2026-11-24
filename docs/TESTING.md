@@ -85,7 +85,21 @@ and fails when a script named in a `package.json` does not call `cli()`, so a ne
   `renderToString` and (for the strict no-replacement guarantee) `hydrateChart`.
 - **Conformance**: add a minimal spec to `packages/conformance/corpus/*.vg.json` or
   `*.vl.json`. Most entries set explicit numeric `width`/`height` and `autosize: 'none'` so layout is deterministic, but nothing
-  requires it; a case that needs another autosize or a container size may set it.
+  requires it; a case that needs another autosize or a container size may set it. A composite (concat, facet, repeat) has no root size
+  of its own: under `autosize: 'none'` it draws into a 10 px root, so composites keep the default (`pad`) and size themselves by their cells.
+- **The corpus is a set of distinct checks.** A spec's name says what it tests, and the spec contains it: delete the property the name
+  gives and the oracle's SVG changes (a property that is the default, written out, says so in its `description`). Two entries whose real-Vega
+  renders are the same compare the same thing twice, so `pnpm conformance` refuses a new such pair (`packages/conformance/src/corpus-distinct.ts`),
+  and refuses a spec whose own marks draw no item unless it is listed with its reason. The two tables that hold the exceptions,
+  `packages/conformance/corpus-identical.json` (groups still to be made distinct) and `corpus-no-items.json` (guide-only specs, by
+  design), are exact in both directions: an entry that is fixed has to be removed, so they only shrink. Where a spec is the default
+  written out (a stack offset `zero`, an align `0.5`), it is kept for that, next to specs where the property bites.
+- **What the corpus cannot see.** The SVG carries no tooltip, so `pnpm conformance-vl` compares the tooltip of every item of real Vega's
+  scenegraph on the Vega that `@aster-charts/vl` emits against the one it gets from vega-lite's. It compares the first frame of an
+  animation (the timer's selection is empty and `filter: {param}` keeps every row), so the `vlx-anim-*` specs pin the compile; the
+  stepped clock is `pnpm conformance:signals` (the `anim-*` cases). A Vega-Lite `line` ignores the animation filter (it facets the
+  unfiltered data). A `"container"` size takes the Node fallback in `pnpm conformance-vl`; `pnpm conformance:browser` renders those specs in
+  a host of a given size. A bound input (`bind`) leaves no trace in a static render; the selection and signal gates drive it.
 
 ## Reproducers
 
@@ -168,31 +182,31 @@ such gate narrowed, with `--plant-difference` and narrowed to nothing ([scripts/
 
 | What | Command | Result |
 |---|---|---|
-| Corpus size | `ls packages/conformance/corpus \| wc -l`; `... \| grep -c '\.vg\.json$'`; `... \| grep -c '\.vl\.json$'` | 1076 specs: 399 raw Vega, 677 Vega-Lite |
+| Corpus size | `ls packages/conformance/corpus \| wc -l`; `... \| grep -c '\.vg\.json$'`; `... \| grep -c '\.vl\.json$'` | 1120 specs: 437 raw Vega, 683 Vega-Lite |
 | Unit, React, script and vector tests | `pnpm test` | 319 files, 33665 tests passed |
 | Time-zone matrix | `pnpm test:tz` | `[tz] all zones passed` (zone-sensitive vitest suites under America/New_York, Asia/Kolkata and Australia/Lord_Howe; `corpus-tz` under UTC and those three) |
-| SVG corpus vs real Vega | `pnpm conformance` | 1076/1076 passed |
-| Vega-Lite corpus through `@aster-charts/vl` | `pnpm conformance-vl` | 677 passed, 0 failed, 0 errored / 677 |
-| Scene differential | `pnpm scene-diff` | 1076/1076 scenes match; 8211 items (61584 channel values, 1978 marks, 667 group items) and 2164 scales compared, 11 specs whose oracle drew no item |
+| SVG corpus vs real Vega | `pnpm conformance` | 1120/1120 passed |
+| Vega-Lite corpus through `@aster-charts/vl` | `pnpm conformance-vl` | 683 passed, 0 failed, 0 errored / 683 |
+| Scene differential | `pnpm scene-diff` | 1120/1120 scenes match |
 | Incremental vs fresh evaluation (no oracle) | `pnpm conformance:diff` | 0 differential mismatches, 0 skipped |
-| Guide captions vs Vega `aria-label` | `pnpm a11y-parity` | 1076/1076 caption sets match |
-| Transform option combinations | `pnpm transform-matrix` | 76/76 match (75 in Node; the wordcloud, whose oracle needs a real canvas, in Chromium) |
-| Vega schema sweep | `pnpm sweep-vega -- --floor 7760 --min-ok 7738 --max-node-error 3` | 7738 ok, 9 both-refused, 2 node-error (the oracle crashes), 0 engine-error, 11 differ / 7760 (the 11: REVEALED, see the lane notes) |
-| Vega-Lite schema sweep | `pnpm sweep-vl -- --floor 31505 --min-ok 30789 --max-node-error 17 --vega-check` | 30789 ok, 123 both-refused, 282 node-error, 242 engine-error, 69 differ, 0 vega-differ / 31505 (the non-ok: REVEALED) |
-| Value sweep | `pnpm sweep-values -- --floor 525 --min-ok 525 --max-node-error 0` | 525 ok, 0 both-refused, 0 node-error, 0 engine-error, 0 differ / 525 |
+| Guide captions vs Vega `aria-label` | `pnpm a11y-parity` | 1120/1120 caption sets match |
+| Transform option combinations | `pnpm transform-matrix` | 77/78 match (1 browser-only case skipped here, run by `conformance:browser`) |
+| Vega schema sweep | `pnpm sweep-vega -- --floor 7549 --min-ok 7538 --max-node-error 3` | 7538 ok, 9 both-refused, 2 node-error (the oracle crashes), 0 engine-error, 0 differ / 7549 |
+| Vega-Lite schema sweep | `pnpm sweep-vl -- --floor 27513 --min-ok 27452 --max-node-error 17 --vega-check` | 27452 ok, 47 both-refused, 14 node-error, 0 engine-error, 0 differ, 0 vega-differ / 27513 |
+| Value sweep | `pnpm sweep-values -- --floor 500 --min-ok 500 --max-node-error 0` | 500 ok, 0 both-refused, 0 node-error, 0 engine-error, 0 differ / 500 |
 | Signals sweep | `pnpm sweep-signals -- --floor 166 --min-ok 103 --max-node-error 2 --max-retained 60` | 103 ok, 60 retained, 1 both-refused, 2 node-error, 0 differ / 166 |
 | Gap probes (a failing probe documents a gap only when listed in `scripts/lib/expected-differences.mjs`, which requires it to still fail) | `pnpm probe -- --min-pass 2` | 2/2 pass (floor 2) |
 | Fuzz reproducers | `pnpm fuzz:replay` | 2/2 pass |
-| Corpus in Chromium, live text metrics | `pnpm conformance:browser` | 1076/1076 passed |
+| Corpus in Chromium, live text metrics | `pnpm conformance:browser` | 1120/1120 passed |
 | Canvas pixels vs Vega's canvas | `pnpm conformance:canvas` | chromium: 1068 entries compared with ink on both sides (17 blank on both, named), 150 gradients call by call, 46 gradient refusals; `area-gradient` an expected difference that still differs; append painting: 120 scenarios, 309 append frames; signal moves: 160 scenarios, 414 frames painted nothing for; symbol runs: 548 cases, 432 through Path2D |
-| Batched (dense) SVG vs per-item SVG pixels | `pnpm conformance:batch` | 13/13 generated entries (511 to 100k symbols), 10 of them batched; sub-path counts equal |
-| Signal event streams vs real Vega, on its svg and its canvas renderer | `pnpm conformance:signals` | 75/75 cases agree on each renderer (group scopes among them); the pointer phase's answers of Aster's canvas that are vega's svg renderer's where its canvas renderer differs: 2 (Chromium's stroker bulging a canvas arc's stroke), ceiling 2 |
-| Vega-Lite selections vs real Vega (same native input, signals/stores/SVG -- or canvas pixels -- compared per step, on vega's svg and canvas renderers against `<Chart renderer>`) | `pnpm conformance:selections` | 55/55 cases agree on each renderer (concat, facet and repeat views, geographic interval selections and the chart-bench survival tooltip among them; steps counted as `retained` ([INTERACTION.md](INTERACTION.md#signals)): 16 on svg, ceiling 16; 12 on canvas, ceiling 12; 3 and 2 of them the temporal `bind: "scales"` case's) |
-| `intersect()` (vega-lite's geo interval selections) over every mark type, seeded boxes, by mark name / type, and within a group item's, a data item's and `group()`'s mark, vs real vega in Chromium | `pnpm conformance:intersect` | 27710/27710 cases agree (2771 per search and renderer), directly and through the event loop |
+| Batched (dense) SVG vs per-item SVG pixels | `pnpm conformance:batch` | 61/61 passed |
+| Signal event streams vs real Vega, on its svg and its canvas renderer | `pnpm conformance:signals` | 77/78 cases agree on each renderer (group scopes among them; the one that does not, `anim-time-unit-year`, is an engine difference found by stepping the clock: vega's selection test rewrites the dates a timer selection stores as numbers in place, and Aster keeps the dates); the pointer phase's answers of Aster's canvas that are vega's svg renderer's where its canvas renderer differs: 2 (Chromium's stroker bulging a canvas arc's stroke), ceiling 2 |
+| Vega-Lite selections vs real Vega (same native input, signals/stores/SVG -- or canvas pixels -- compared per step, on vega's svg and canvas renderers against `<Chart renderer>`) | `pnpm conformance:selections` | 54/54 cases agree on each renderer (concat, facet and repeat views, geographic interval selections and the chart-bench survival tooltip among them; steps counted as `retained` ([INTERACTION.md](INTERACTION.md#signals)): 13 on svg, ceiling 13; 10 on canvas, ceiling 10) |
+| `intersect()` (vega-lite's geo interval selections) over every mark type, seeded boxes, by mark name / type, vs real vega in Chromium | `pnpm conformance:intersect` | every (box, scope) pair agrees (2771), on each renderer, directly and through the event loop |
 | `<Chart>` interaction in Chromium | `pnpm --filter @aster-charts/react run test:browser` | all checks passed |
 | Incremental gate | `pnpm bench:incremental -- --points=10000 --reps=30` | append 15.8x–18.3x (floor 8x), whole-array replace 12.7x–17.1x (floor 8x), DOM patch 3.3x–5.4x (floor 1.6x), dense 100k-symbol append patch vs mount 249x–254x (floor 200x) over three runs (2026-11-05, docs/PERFORMANCE.md) |
 | Bundle shaking | `pnpm check:bundle` | every documented import pattern still works after tree-shaking (`--blanket-false` must fail) |
-| Bundle budgets | `pnpm --filter @aster-charts/benchmarks run budget` | all 13 import-pattern rows pass (sizes in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)) |
+| Bundle budgets | `pnpm --filter @aster-charts/benchmarks run budget` | all 19 import-pattern rows pass (sizes in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)) |
 
 ## React component tests: the variant matrix
 
