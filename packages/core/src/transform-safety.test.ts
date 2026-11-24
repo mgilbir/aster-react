@@ -5,6 +5,7 @@
  * spread) over data-sized arrays: 300k rows must not overflow the stack.
  */
 import { describe, it, expect, afterAll } from 'vitest'
+import ts from 'typescript'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -46,20 +47,73 @@ function workspaceSrcDirs(root: string): string[] {
     .map((d) => join(d, 'src'))
 }
 
-/** `file:line` of every Math.min/max(...x) and push/unshift(...x) in the non-test sources under `dirs`. */
-function spreadOffenders(dirs: string[]): string[] {
+/**
+ * A spread in the arguments of a call (`f(...xs)`, `Math.max(0, ...xs)`, `xs.push(...ys)`, `xs.splice(0, 0, ...ys)`, `new F(...xs)`)
+ * puts every element on the stack: with a data-sized array it throws a RangeError (about 120k elements and up). The call may be
+ * any, so the scan reads the syntax, not a list of function names. Exempt without being listed: a spread of the REST PARAMETER of
+ * the function around it (`(...args) => f(...args)` forwards the arguments it was called with, a number the call site wrote).
+ * Every other spread is listed here, by file and call, with the bound that makes it safe; an unlisted one is an offender.
+ */
+interface AllowedSpread { file: string; call: RegExp; why: string }
+const SPREAD_ALLOWED: AllowedSpread[] = [
+  { file: 'packages/core/src/dom.ts', call: /replaceChildren\(\.\.\.desc\.children\.map/, why: 'a dense mark container: its few hundred chunk elements, never one per item' },
+  { file: 'packages/core/src/legacy-dom.testlib.ts', call: /replaceChildren\(\.\.\.desc\.children\.map/, why: 'the frozen copy of the dom patcher above' },
+  { file: 'packages/core/src/runtime.ts', call: /logger\[level\]\?\.\(\.\.\.args\)/, why: 'the arguments of one logged message' },
+  { file: 'packages/conformance/src/gallery/virtual-clock.ts', call: /due\.fn\(\.\.\.due\.args\)/, why: 'the arguments a timer was scheduled with' },
+  { file: 'packages/core/src/raster-image.ts', call: /fromCharCode\(\.\.\.png\.subarray\(i, i \+ 0x8000\)\)/, why: 'a 32 KiB slice' },
+  { file: 'packages/core/src/expr-interpreter.ts', call: /direct\(\.\.\.values\(f\)\)|vega\[f\]!\(\.\.\.args\)|m\.apply\(obj, args\.slice\(1\)\)/, why: 'the arguments of one expression call: as many as the expression text writes' },
+  { file: 'packages/core/src/runtime.ts', call: /texts\.push\(\.\.\.\[u\.expr, u\.signal\]/, why: 'two elements' },
+  { file: 'packages/core/src/scale.ts', call: /register\(.*\.\.\.NUMERIC/, why: 'a module constant of scale type names' },
+  { file: 'packages/core/src/scales.ts', call: /zoomed\(domain as number\[\], factor, \.\.\.(logSpace|powerSpace|symlogSpace)\(/, why: 'a pair' },
+  { file: 'packages/core/src/scale-warped.ts', call: /plainDomain\(\.\.\.v\)/, why: 'a scale domain: two numbers (or a short piecewise list the spec writes)' },
+  { file: 'packages/core/src/scene-fuzz.testlib.ts', call: /splice\(at\(t\.length \+ 1\), 0, \.\.\.Array\.from\(\{ length: 1 \+ at\(3\) \}/, why: 'at most three generated rows' },
+  { file: 'packages/vl/src/compile.ts', call: /g\.casts\.push\(\.\.\.d\.casts\)/, why: 'the casts of one dataset: a field per type the spec casts' },
+  { file: 'packages/vl/src/compile.ts', call: /sizeSignals\.splice\(0, 0, \.\.\.(unitContainer|container)\.signals\)/, why: 'the container size signals of one view: a handful' },
+  { file: 'packages/vl/src/compile.ts', call: /fieldsTitle\(titled\(def\), \.\.\.\(def2/, why: 'one or two field definitions' },
+  { file: 'packages/vl/src/predicate.ts', call: /Date\.UTC\(\.\.\.args\)|new Date\(\.\.\.args\)/, why: 'the date parts of one time unit: at most seven' },
+  { file: 'packages/vl/src/scaleprops.ts', call: /only\(\.\.\.(CONTINUOUS|BANDED)/, why: 'module constants of scale type names' },
+  { file: 'packages/vl/src/titles.ts', call: /fieldsTitle\(\.\.\.a\.fields, \.\.\.b\.fields\)/, why: 'the fields of two titles the spec writes' },
+  { file: 'packages/conformance/src/run.ts', call: /entries\.splice\(0, entries\.length, \.\.\.entries\.filter/, why: 'the corpus entries on disk (about a thousand)' },
+  { file: 'packages/conformance/src/gallery/run.ts', call: /swapResults\.push\(\.\.\.\(await runSwap/, why: 'the gallery swap results: one per gallery spec' },
+  { file: 'packages/conformance/src/raster-shapes.ts', call: /cmds\.push\(\['beginPath'\]/, why: 'the fixed command lists of one generated shape' },
+]
+
+/** True when `name` is a rest parameter (`...name`) of a function that contains `node`. */
+function isRestParameterOf(node: ts.Node, name: string): boolean {
+  for (let n: ts.Node | undefined = node.parent; n; n = n.parent) {
+    if (ts.isFunctionLike(n) && n.parameters.some((p) => p.dotDotDotToken !== undefined && ts.isIdentifier(p.name) && p.name.text === name)) return true
+  }
+  return false
+}
+
+/** `file:line` of every spread in the arguments of a call in the non-test sources under `dirs`, but the rest-parameter forwards and the listed ones. */
+function spreadOffenders(dirs: string[], allowed: readonly AllowedSpread[] = SPREAD_ALLOWED): string[] {
   const offenders: string[] = []
   const walk = (dir: string): void => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, e.name)
       if (e.isDirectory()) { if (e.name !== 'node_modules' && e.name !== 'dist') walk(p) }
       else if (/\.(ts|tsx)$/.test(e.name) && !/\.test\.|\.testkit\./.test(e.name)) {
-        readFileSync(p, 'utf8').split('\n').forEach((line, i) => {
-          if (/^\s*(\*|\/\/|\/\*)/.test(line) || /\.\.\.args\b/.test(line)) return // comments; builtin argument lists
-          if (/Math\.(min|max)\(\s*(0,\s*)?\.\.\./.test(line)) offenders.push(`${p}:${i + 1}`)
-          // the only allowlisted spreads: @aster-charts/vl cast lists (small, spec-bounded; that package is another lane)
-          else if (/\.(push|unshift)\(\s*\.\.\.[A-Za-z_]/.test(line) && !/\.\.\.(d\.casts|pre)\b/.test(line)) offenders.push(`${p}:${i + 1}`)
-        })
+        const sf = ts.createSourceFile(p, readFileSync(p, 'utf8'), ts.ScriptTarget.Latest, true, p.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
+        const visit = (n: ts.Node): void => {
+          if ((ts.isCallExpression(n) || ts.isNewExpression(n)) && n.arguments) {
+            // `Math.max.apply(null, big)` is the same spread under another name
+            if (ts.isCallExpression(n) && /\.apply$/.test(n.expression.getText(sf)) && n.arguments.length === 2 && !ts.isArrayLiteralExpression(n.arguments[1]!)
+              && !(ts.isIdentifier(n.arguments[1]!) && isRestParameterOf(n, n.arguments[1].text))
+              && !allowed.some((x) => p.endsWith(x.file) && x.call.test(n.getText(sf).replace(/\s+/g, ' ')))) {
+              offenders.push(`${p}:${sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1}`)
+            }
+            for (const a of n.arguments) {
+              if (!ts.isSpreadElement(a)) continue
+              if (ts.isIdentifier(a.expression) && isRestParameterOf(n, a.expression.text)) continue
+              const call = n.getText(sf).replace(/\s+/g, ' ')
+              if (allowed.some((x) => p.endsWith(x.file) && x.call.test(call))) continue
+              offenders.push(`${p}:${sf.getLineAndCharacterOfPosition(a.getStart(sf)).line + 1}`)
+            }
+          }
+          ts.forEachChild(n, visit)
+        }
+        visit(sf)
       }
     }
   }
@@ -237,7 +291,7 @@ describe('data-sized arrays never go through argument spread', () => {
     expect(sink.length).toBe(N)
   })
 
-  it('the source has no Math.min/max(...x) or push(...x) left in the workspace packages\' src', () => {
+  it('the source has no spread in the arguments of a call over an array that could be data-sized, in the workspace packages\' src', () => {
     const root = join(here, '..', '..', '..')
     const dirs = workspaceSrcDirs(root)
     for (const pkg of ['core', 'react', 'vl', 'conformance', 'benchmarks']) expect(dirs, pkg).toContain(join(root, 'packages', pkg, 'src')) // the scan is not vacuous
@@ -276,13 +330,38 @@ describe('data-sized arrays never go through argument spread', () => {
       expect(spreadOffenders(dirs)).toEqual([])
     })
 
-    it('still bites on a planted spread in a workspace package', () => {
+    it('still bites on a planted spread in a workspace package: every shape of it, in any argument position, and nothing else', () => {
       const root = fixture()
-      writeFileSync(join(root, 'packages', 'a', 'src', 'bad.ts'), 'export const m = Math.max(...big)\nconst o: number[] = []\no.push(...big)\n')
-      expect(spreadOffenders(workspaceSrcDirs(root)).map((o) => o.slice(root.length + 1))).toEqual([
-        join('packages', 'a', 'src', 'bad.ts') + ':1',
-        join('packages', 'a', 'src', 'bad.ts') + ':3',
-      ])
+      const lines = [
+        'export const m = Math.max(...big)',                        // 1
+        'export const o: number[] = []',                            // 2 (not a call)
+        'o.push(...big)',                                           // 3
+        'export const w = Math.max(-1, ...big.map((d) => d.n))',    // 4 a spread after other arguments
+        'o.push(0, ...big)',                                        // 5
+        'o.splice(0, 0, ...big)',                                   // 6
+        'o.concat(...big)',                                         // 7
+        'Math.max.apply(null, big)',                                // 8 the same hazard, spelt apply
+        'o.push(...(big as number[]))',                             // 9 a parenthesised operand
+        'new Set(...big)',                                          // 10
+        // not offenders: a rest parameter forwarded, an array literal, an object literal, fixed arguments, apply with a literal list
+        'export const f = (...args: number[]) => Math.max(...args)',
+        'export const g = [...big, ...big]',
+        'export const h = { ...big }',
+        'Math.max(1, 2, 3)',
+        'Math.max.apply(null, [1, 2])',
+      ]
+      writeFileSync(join(root, 'packages', 'a', 'src', 'bad.ts'), lines.join('\n') + '\n')
+      expect(spreadOffenders(workspaceSrcDirs(root)).map((o) => o.slice(root.length + 1))).toEqual(
+        [1, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => join('packages', 'a', 'src', 'bad.ts') + ':' + n),
+      )
+    })
+
+    it('an allowlisted call is let through only in its file', () => {
+      const root = fixture()
+      writeFileSync(join(root, 'packages', 'a', 'src', 'bad.ts'), 'o.push(...cells)\n')
+      const allowed = [{ file: 'packages/a/src/bad.ts', call: /o\.push\(\.\.\.cells\)/, why: 'test' }]
+      expect(spreadOffenders(workspaceSrcDirs(root), allowed)).toEqual([])
+      expect(spreadOffenders(workspaceSrcDirs(root), [{ ...allowed[0]!, file: 'packages/a/src/other.ts' }])).toHaveLength(1)
     })
   })
 

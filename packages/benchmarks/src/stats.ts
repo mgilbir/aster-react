@@ -22,7 +22,7 @@ export function row(values: string[], widths: number[]): string {
 
 export function table(title: string, header: string[], rows: string[][]): string {
   const widths = header.map((hh, i) =>
-    Math.max(hh.length, ...rows.map((r) => (r[i] ?? '').length)),
+    rows.reduce((m, r) => Math.max(m, (r[i] ?? '').length), hh.length),
   )
   const lines = [title, row(header.map((hh) => hh.toUpperCase()), widths), '-'.repeat(widths.reduce((a, b) => a + b + 3, 0))]
   for (const r of rows) lines.push(row(r, widths))
