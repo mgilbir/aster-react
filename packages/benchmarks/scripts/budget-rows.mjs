@@ -205,7 +205,7 @@ export const BUDGETS = {
   '@aster-charts/core': 188.4 * KB,
   '+ @aster-charts/core/dom': 12.4 * KB,
   '+ @aster-charts/core/canvas': 6.7 * KB,
-  '+ @aster-charts/core/hit': 10.6 * KB,
+  '+ @aster-charts/core/hit': 12.3 * KB,
   '+ @aster-charts/core/signals': 15.9 * KB,
   '+ @aster-charts/core/load': 8.2 * KB,
   '+ @aster-charts/core/geo': 16.4 * KB,

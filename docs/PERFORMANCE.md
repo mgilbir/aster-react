@@ -390,7 +390,7 @@ source is gone) all fail. Measured 2026-11-23 with `pnpm --filter @aster-charts/
 | `@aster-charts/react/ssr` | `import { renderChartToStaticMarkup, hydrateChart } from '@aster-charts/react/ssr'` | 210.6 | 272.2 |
 | `+ @aster-charts/core/dom` | core + `@aster-charts/core/dom` (marginal) | 11.9 |  |
 | `+ @aster-charts/core/canvas` | core + `@aster-charts/core/canvas` (marginal) | 6.2 |  |
-| `+ @aster-charts/core/hit` | core + `@aster-charts/core/hit` (marginal) | 10.1 |  |
+| `+ @aster-charts/core/hit` | core + `@aster-charts/core/hit` (marginal) | 11.8 |  |
 | `+ @aster-charts/core/signals` | core + `@aster-charts/core/signals` (marginal) | 15.4 |  |
 | `+ @aster-charts/core/load` | core + `@aster-charts/core/load` (marginal) | 7.7 |  |
 | `+ @aster-charts/core/geo` | core + `@aster-charts/core/geo` (marginal) | 15.9 |  |
