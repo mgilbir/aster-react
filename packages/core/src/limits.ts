@@ -671,8 +671,14 @@ export function meterCoords(n: number, what: string, decoded = n): void {
 export function checkRegexPattern(pattern: string, flags = ''): void {
   if (!active) return
   if (active.limits.regex === 'refuse') throw limitViolation(REGEX_REFUSED)
-  const cap = Math.min(REGEX_MAX_PATTERN, active.limits.maxStringLength ?? REGEX_MAX_PATTERN)
-  if (pattern.length > cap) over('maxStringLength', pattern.length, cap, 'regular expression pattern')
+  // The pattern cap is fixed at REGEX_MAX_PATTERN; a maxStringLength below it lowers it. The refusal names the limit that set the
+  // cap: one the host gave only where that is the lower (C655), else the fixed cap, which no limit raises.
+  const maxString = active.limits.maxStringLength
+  if (maxString != null && maxString < REGEX_MAX_PATTERN) {
+    if (pattern.length > maxString) over('maxStringLength', pattern.length, maxString, 'regular expression pattern')
+  } else if (pattern.length > REGEX_MAX_PATTERN) {
+    throw limitViolation(`regexSafety: pattern length ${pattern.length} > ${REGEX_MAX_PATTERN} (the fixed cap on a regular expression's length; no limit raises it)`)
+  }
   // Static screen for catastrophic-backtracking shapes (heuristic; docs/LIMITS.md).
   // Applied to every pattern, including RegExp objects a spec built or wrote as literals. The screen is a part the React shells load
   // on demand (engine-parts.ts): reading its slot throws when it is not loaded, so a pattern is refused, never run unscreened.
