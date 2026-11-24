@@ -109,7 +109,7 @@ async function main(gate: Gate): Promise<void> {
 await runGate({
   name: 'a11y-parity',
   counters: {
-    specs: { floor: 1063, what: 'corpus specs whose guide captions were compared' },
+    specs: { floor: 1071, what: 'corpus specs whose guide captions were compared' },
     captions: { floor: 2076, what: 'guide captions of vega compared' },
   },
   partial: Boolean(filter),

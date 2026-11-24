@@ -147,7 +147,7 @@ async function main(gate: Gate): Promise<void> {
 
 await runGate({
   name: 'browser-conformance',
-  counters: { compared: { floor: 1063, what: 'corpus entries compared in Chromium with live text metrics' } },
+  counters: { compared: { floor: 1071, what: 'corpus entries compared in Chromium with live text metrics' } },
   partial: Boolean(FILTER) || LIMIT > 0,
   run: main,
 })

@@ -1,0 +1,108 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 160,
+  "height": 110,
+  "padding": 5,
+  "autosize": "none",
+  "background": "white",
+  "data": [
+    {
+      "name": "f",
+      "values": [
+        {
+          "k": "a",
+          "x": 40,
+          "y": 40,
+          "z": 2,
+          "v": 1
+        },
+        {
+          "k": "b",
+          "x": 62,
+          "y": 50,
+          "z": -1,
+          "v": 2
+        },
+        {
+          "k": "a",
+          "x": 84,
+          "y": 60,
+          "z": 0,
+          "v": 3
+        },
+        {
+          "k": "c",
+          "x": 52,
+          "y": 72,
+          "z": 1,
+          "v": 4
+        }
+      ]
+    }
+  ],
+  "scales": [
+    {
+      "name": "col",
+      "type": "ordinal",
+      "domain": [
+        "a",
+        "b",
+        "c"
+      ],
+      "range": [
+        "#d62728",
+        "#1f77b4",
+        "#2ca02c"
+      ]
+    },
+    {
+      "name": "seq",
+      "type": "linear",
+      "domain": [
+        1,
+        4
+      ],
+      "range": [
+        "#ffffcc",
+        "#800026"
+      ]
+    }
+  ],
+  "marks": [
+    {
+      "type": "symbol",
+      "from": {
+        "data": "f"
+      },
+      "encode": {
+        "update": {
+          "x": {
+            "field": "x"
+          },
+          "y": {
+            "field": "y"
+          },
+          "size": {
+            "value": 1800
+          },
+          "fill": {
+            "color": {
+              "h": {
+                "field": "x"
+              },
+              "c": {
+                "value": 40
+              },
+              "l": {
+                "value": 60
+              }
+            }
+          },
+          "stroke": {
+            "value": "#000000"
+          }
+        }
+      }
+    }
+  ]
+}
