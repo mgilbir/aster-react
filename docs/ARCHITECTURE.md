@@ -616,6 +616,7 @@ Aster matches Vega's output wherever the oracle can be run; where it deliberatel
 | Voronoi cells of points with missing or non-numeric coordinates, or with coordinates beyond 1e150 | the call ends and answers once per row; the orientation test is exact | the reference loops forever on some such inputs, and its orientation predicate overflows past 1e150 | no spec may hang the host; the cells of finite coordinates are character-for-character the reference's (`differential-voronoi`, `differential-delaunay`) |
 | Decoded topojson positions of a topology without `transform` | fresh arrays | the topology's own position arrays | the output may be modified without changing the topology |
 | `dsv` quoting on write with a delimiter that is a regular expression class character (`-`, `]`, `\`, `^`) | quotes correctly | builds a character class from the raw delimiter, which throws or misquotes | do not reproduce an upstream crash |
+| Two clipped groups with the same clip rectangle (Vega-Lite's `b1_brush_bg` and `b1_brush`) | one `<clipPath>` (clip ids are content-addressed), and a transparent mark carries `pointer-events="visible"` | one `<clipPath>` per clipped group (`clip1`, `clip2`), and the string renderer writes no `pointer-events` on a transparent item | the clipped output is the same, and equal clip rectangles need one definition; the canonicalizer resolves clip paths to their content, so the comparison passes (found by `vlx-sel-config-selection`) |
 
 ## Known Limitations / Roadmap
 

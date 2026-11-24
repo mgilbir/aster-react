@@ -91,8 +91,9 @@ and fails when a script named in a `package.json` does not call `cli()`, so a ne
   gives and the oracle's SVG changes (a property that is the default, written out, says so in its `description`). Two entries whose real-Vega
   renders are the same compare the same thing twice, so `pnpm conformance` refuses a new such pair (`packages/conformance/src/corpus-distinct.ts`),
   and refuses a spec whose own marks draw no item unless it is listed with its reason. The two tables that hold the exceptions,
-  `packages/conformance/corpus-identical.json` (groups still to be made distinct) and `corpus-no-items.json` (guide-only specs, by
-  design), are exact in both directions: an entry that is fixed has to be removed, so they only shrink. Where a spec is the default
+  `packages/conformance/corpus-identical.json` (groups still to be made distinct: none today) and `corpus-no-items.json` (specs whose own marks draw nothing, by
+  design, each with its reason), are exact in both directions: an entry that is fixed has to be removed, so they only shrink. `pnpm conformance-vl` prints, under an entry,
+  the data warnings real vega raises on vega-lite's own output (an `Infinite extent` is a scale built from no value). Where a spec is the default
   written out (a stack offset `zero`, an align `0.5`), it is kept for that, next to specs where the property bites.
 - **What the corpus cannot see.** The SVG carries no tooltip, so `pnpm conformance-vl` compares the tooltip of every item of real Vega's
   scenegraph on the Vega that `@aster-charts/vl` emits against the one it gets from vega-lite's. It compares the first frame of an
@@ -159,7 +160,9 @@ time passes there). The `tz-matrix` gate (`pnpm test:tz`) re-runs the zone-aware
 (`*.tz.test.ts`), the live scale-spec differential (every case also runs in each zone inside the test) and
 `packages/conformance/corpus-tz` (raw Vega specs rendered by vega and Aster in the same zone)
 under `America/New_York`, `Asia/Kolkata` and `Australia/Lord_Howe` (a half-hour daylight-saving offset the other two cannot catch; `ZONES` in `scripts/test-tz.mjs`; the corpus also runs in UTC). Add a case to `corpus-tz` when a fix depends on
-the zone.
+the zone. The main corpus runs under UTC only, where a `utc*` time unit and its local twin are the same, so the `timeunit-*-boundaries` cases of `corpus-tz` (timestamps within an hour of a month and a year boundary) are where `utcmonth`, `utcyearmonth` and `{unit, utc: true}` differ from `month` and `yearmonth`.
+
+Three corpus specs are off the Vega-Lite schema on purpose, and say so in their name or here: `vlx-tr-aggregate-default-as` and `vlx-tr-stack-default-as` leave out `as` (the schema requires it; vega-lite names the outputs `max_v`, `min_y`, `v_start`, `v_end`), and the `*-offschema-signal-element` geo specs put a `{signal}` where the schema allows a number (the schema-valid forms are the `*-expr` specs).
 
 ## Reference results
 
@@ -171,14 +174,14 @@ result is the summary line it prints. They change with the code: re-run before q
 
 | What | Command | Result |
 |---|---|---|
-| Corpus size | `ls packages/conformance/corpus \| wc -l`; `... \| grep -c '\.vg\.json$'`; `... \| grep -c '\.vl\.json$'` | 1112 specs: 429 raw Vega, 683 Vega-Lite |
+| Corpus size | `ls packages/conformance/corpus \| wc -l`; `... \| grep -c '\.vg\.json$'`; `... \| grep -c '\.vl\.json$'` | 1121 specs: 429 raw Vega, 692 Vega-Lite |
 | Unit, React, script and vector tests | `pnpm test` | 319 files, 33665 tests passed |
 | Time-zone matrix | `pnpm test:tz` | `[tz] all zones passed` (zone-sensitive vitest suites under America/New_York, Asia/Kolkata and Australia/Lord_Howe; `corpus-tz` under UTC and those three) |
-| SVG corpus vs real Vega | `pnpm conformance` | 1112/1112 passed |
-| Vega-Lite corpus through `@aster-charts/vl` | `pnpm conformance-vl` | 683 passed, 0 failed, 0 errored / 683 |
-| Scene differential | `pnpm scene-diff` | 1112/1112 scenes match |
+| SVG corpus vs real Vega | `pnpm conformance` | 1121/1121 passed |
+| Vega-Lite corpus through `@aster-charts/vl` | `pnpm conformance-vl` | 692 passed, 0 failed, 0 errored / 692 |
+| Scene differential | `pnpm scene-diff` | 1121/1121 scenes match |
 | Incremental vs fresh evaluation (no oracle) | `pnpm conformance:diff` | 0 differential mismatches, 0 skipped |
-| Guide captions vs Vega `aria-label` | `pnpm a11y-parity` | 1112/1112 caption sets match |
+| Guide captions vs Vega `aria-label` | `pnpm a11y-parity` | 1121/1121 caption sets match |
 | Transform option combinations | `pnpm transform-matrix` | 75/76 match (1 browser-only case skipped here, run by `conformance:browser`) |
 | Vega schema sweep | `pnpm sweep-vega -- --floor 7549 --min-ok 7538 --max-node-error 3` | 7538 ok, 9 both-refused, 2 node-error (the oracle crashes), 0 engine-error, 0 differ / 7549 |
 | Vega-Lite schema sweep | `pnpm sweep-vl -- --floor 27513 --min-ok 27452 --max-node-error 17 --vega-check` | 27452 ok, 47 both-refused, 14 node-error, 0 engine-error, 0 differ, 0 vega-differ / 27513 |
@@ -186,7 +189,7 @@ result is the summary line it prints. They change with the code: re-run before q
 | Signals sweep | `pnpm sweep-signals -- --floor 166 --min-ok 103 --max-node-error 2 --max-retained 60` | 103 ok, 60 retained, 1 both-refused, 2 node-error, 0 differ / 166 |
 | Gap probes (a probe that passes keeps passing; a failing one documents a gap) | `pnpm probe -- --min-pass 2` | 2/2 pass (floor 2) |
 | Fuzz reproducers | `pnpm fuzz:replay` | 2/2 pass |
-| Corpus in Chromium, live text metrics | `pnpm conformance:browser` | 1112/1112 passed |
+| Corpus in Chromium, live text metrics | `pnpm conformance:browser` | 1121/1121 passed |
 | Canvas pixels vs Vega's canvas | `pnpm conformance:canvas` | chromium 1284/1284 passed; append painting vs full repaint: 120 scenarios, 309 append frames, 0 failing |
 | Batched (dense) SVG vs per-item SVG pixels | `pnpm conformance:batch` | 61/61 passed |
 | Signal event streams vs real Vega, on its svg and its canvas renderer | `pnpm conformance:signals` | 75/76 cases agree on each renderer (group scopes among them; the one that does not, `anim-time-unit-year`, is an engine difference found by stepping the clock: vega's selection test rewrites the dates a timer selection stores as numbers in place, and Aster keeps the dates); the pointer phase's answers of Aster's canvas that are vega's svg renderer's where its canvas renderer differs: 2 (Chromium's stroker bulging a canvas arc's stroke), ceiling 2 |
