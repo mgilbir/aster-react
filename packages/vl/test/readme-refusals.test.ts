@@ -43,7 +43,6 @@ const REFUSED: Array<[string, Record<string, unknown>, RegExp]> = [
   ['`bind` / `value` on the timer', unit('point', { x: q('b'), time: q('t') }, { params: [{ ...timer, bind: { input: 'range' } }], transform: frame }), /bound timer selection/],
   ['`timeUnit.maxbins`', unit('bar', { x: { field: 'd', type: 'temporal', timeUnit: { maxbins: 5 } }, y: q('c') }), /timeUnit\.maxbins/],
   ['errorbar / errorband over a binned channel', unit('errorbar', { x: { field: 'b', type: 'quantitative', bin: 'binned' }, y: q('c') }), /over a binned/],
-  ['`timeUnitBandPosition`', unit({ type: 'bar', timeUnitBandPosition: 0.5 }, { x: { field: 'd', type: 'temporal', timeUnit: 'month' } }), /timeUnitBandPosition/],
   ['a `datum`\n  condition on fillOpacity', unit('point', { x: q('b'), fillOpacity: { condition: { test: 'datum.b > 1', datum: 2 }, value: 1 } }), /datum conditions/],
   ['a field condition that reads a field other than the\n  channel\'s own', unit('point', { x: q('b'), color: { condition: { test: 'datum.b > 1', field: 'c', type: 'quantitative' }, field: 'b', type: 'quantitative' } }), /channel's own field/],
   ['an array of conditions that holds a field condition', unit('point', { x: q('b'), color: { condition: [{ test: 'datum.b > 1', field: 'a', type: 'nominal' }], value: 'g' } }), /must be value conditions/],

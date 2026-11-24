@@ -32,6 +32,9 @@ const listed = new Set<string>()
   }
 }
 
+/** Properties vega-lite reads of a rect-like mark only in some chart shapes (a binned position, a sized band): ignored in the others, and then never refused. */
+const CONTEXTUAL = new Set(['binSpacing', 'align', 'baseline'])
+
 type Out = { json: string } | { refused: unknown }
 function aster(spec: unknown): Out {
   try {
@@ -77,6 +80,7 @@ describe('@aster-charts/vl does with each mark-definition property what vega-lit
         const ours = aster(c.spec)
         if ('refused' in ours) {
           if (!(ours.refused instanceof VLCompileError)) failures.push(`${where}: threw ${String(ours.refused)}`)
+          else if (CONTEXTUAL.has(c.prop) && c.mark in { bar: 1, rect: 1, tick: 1 } && c.effect === 'ignored' && !/places no (horizontal|vertical) position/.test((ours.refused as Error).message)) failures.push(`${where}: refused, but vega-lite reads it only where the chart bins or sizes a band, and ignores it here: ${(ours.refused as Error).message}`)
           else if (listed.has(`${c.mark} ${c.prop}`)) failures.push(`${where}: refused, but vega-lite ${c.effect === 'used' ? 'uses' : 'ignores or forwards'} it here and the table lists it: ${(ours.refused as Error).message}`)
           continue
         }

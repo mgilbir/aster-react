@@ -38,6 +38,7 @@ const ROWS = [
 const q = (field) => ({ field, type: 'quantitative' })
 const n = (field) => ({ field, type: 'nominal' })
 const tm = (field) => ({ field, type: 'temporal' })
+const tmu = (field) => ({ field, type: 'temporal', timeUnit: 'yearmonth' })
 const bin = (field) => ({ field, type: 'quantitative', bin: true })
 
 /**
@@ -51,6 +52,9 @@ const XY = [
   ['q x, q y', { x: q('w'), y: q('v') }],
   ['t x, q y', { x: tm('t'), y: q('v') }],
   ['q x, t y', { x: q('v'), y: tm('t') }],
+  ['timeUnit x, q y', { x: tmu('t'), y: q('v') }],
+  ['q x, timeUnit y', { x: q('v'), y: tmu('t') }],
+  ['timeUnit x, count y', { x: tmu('t'), y: { aggregate: 'count', type: 'quantitative' } }],
   ['bin x, count y', { x: bin('v'), y: { aggregate: 'count', type: 'quantitative' } }],
   ['bin y, count x', { y: bin('v'), x: { aggregate: 'count', type: 'quantitative' } }],
   ['stacked by colour', { x: n('t'), y: q('v'), color: n('c') }],
