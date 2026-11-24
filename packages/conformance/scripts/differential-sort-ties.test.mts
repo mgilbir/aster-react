@@ -7,6 +7,11 @@
  * do something to the rows and sort again, with scales whose domain is sorted by a count, run in real Vega and in Aster: every
  * dataset, row by row, and every scale domain must be the same.
  *
+ * One shape is drawn apart: a dataset made from another that OPENS with a sorting `collect`. Vega sorts the rows of its source in
+ * place (its own aliasing), so every reader of the source sees them re-ordered, a line over it included; Aster sorts a copy. That is
+ * a deviation (docs/ARCHITECTURE.md, Deviations from Vega), kept in the expected-differences table and compared on every run: the
+ * generated programs below put a step before the first sort of a derived dataset, which is the same pipeline minus the aliasing.
+ *
  * Not covered, by design: ties after rows were added to a view that has run. Vega keeps the tuples it has made and makes the new
  * ones last, and keeps the new rows of a dataset after its old ones wherever an upstream sort would put them; a view here is
  * evaluated again from its inputs, so both orders are the order of the sorted inputs.
@@ -15,7 +20,9 @@ import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
 import { createChartSession } from '../../core/src/session.ts'
 import { datasetsOfScene } from '../../core/src/runtime.ts'
+import { renderSpec } from '@aster-charts/core'
 import { makeRng, scaled, type Rng } from './differential-gen.mts'
+import { expectEveryKnownDifferenceCompared, expectKnownDifference } from './known-differences.mts'
 
 type Row = Record<string, unknown>
 type Spec = Record<string, unknown>
@@ -50,8 +57,8 @@ function genProgram(rng: Rng): Program {
       const first = rng.between(0, i - 1)
       d.source = rng.chance(0.25) && i > 1 ? [`d${first}`, `d${(first + 1) % i}`] : `d${first}`
     }
-    // (a dataset made from another that opens with a sort sorts the rows of its source in place: vega's own aliasing, which is not
-    // reproduced; a step before the sort avoids it)
+    // (a dataset made from another that opens with a sort sorts the rows of its source in place in vega: a known difference, compared
+    // in its own describe below; a step before the sort is the same pipeline without the aliasing)
     if (d.source) (d.transform as Spec[]).unshift({ type: 'formula', expr: 'datum.n', as: 'z' })
     if (inline[name]) d.values = structuredClone(inline[name])
     data.push(d)
@@ -91,5 +98,58 @@ describe('rows that tie in a sort keep the order they were made in (Aster vs rea
       const p = genProgram(rng)
       expect(runAster(p), JSON.stringify(p.spec.data)).toEqual(await runVega(p))
     }
+  })
+})
+
+describe('a derived dataset that opens with a sorting collect (a known difference: vega sorts its source in place)', { timeout: 120_000 }, () => {
+  const rows = [{ x: 0, y: 90, k: 3 }, { x: 50, y: 10, k: 1 }, { x: 100, y: 50, k: 2 }]
+  const specOf = (derived: boolean, mark: Spec): Spec => ({
+    width: 100, height: 100, padding: 0,
+    data: [{ name: 'd0', values: structuredClone(rows) }, ...(derived ? [{ name: 'sorted', source: 'd0', transform: [{ type: 'collect', sort: { field: 'k' } }] }] : [])],
+    marks: [mark],
+  })
+  const line: Spec = { type: 'line', from: { data: 'd0' }, encode: { update: { x: { field: 'x' }, y: { field: 'y' }, stroke: { value: 'black' } } } }
+  const text: Spec = { type: 'text', from: { data: 'd0' }, encode: { update: { x: { field: 'x' }, y: { field: 'y' }, text: { field: 'k' } } } }
+  const paths = (svg: string): string => [...svg.matchAll(/ d="([^"]*)"/g)].map((m) => m[1]!).filter((d) => d && !d.endsWith('Z')).join(' ; ')
+  const labels = (svg: string): string => [...svg.matchAll(/<text[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]).join(',')
+  const vegaSvg = async (spec: Spec): Promise<string> => {
+    const view = new vega.View(vega.parse(structuredClone(spec) as never), { renderer: 'none', logLevel: vega.None })
+    try { await view.runAsync(); return await view.toSVG() } finally { view.finalize() }
+  }
+
+  it('without the derived dataset both draw the rows in their own order', async () => {
+    expect(paths(renderSpec(specOf(false, line) as never))).toBe(paths(await vegaSvg(specOf(false, line))))
+    expect(labels(renderSpec(specOf(false, text) as never))).toBe(labels(await vegaSvg(specOf(false, text))))
+  })
+
+  it('a line over the source: vega draws the sorted rows, Aster the rows as given', async () => {
+    const want = paths(await vegaSvg(specOf(true, line)))
+    const got = paths(renderSpec(specOf(true, line) as never))
+    expect(want, 'vega: the source re-ordered by k').toBe('M50,10L100,50L0,90')
+    expect(got, 'Aster: the source untouched').toBe('M0,90L50,10L100,50')
+    expectKnownDifference('differential-sort-ties', 'a line over the source of a sorting derived dataset', want, got)
+  })
+
+  it('a text mark over the source: vega draws the sorted rows, Aster the rows as given', async () => {
+    const want = labels(await vegaSvg(specOf(true, text)))
+    const got = labels(renderSpec(specOf(true, text) as never))
+    expect(want).toBe('1,2,3')
+    expect(got).toBe('3,1,2')
+    expectKnownDifference('differential-sort-ties', 'a text mark over the source of a sorting derived dataset', want, got)
+  })
+
+  it('the derived dataset itself is sorted alike in both', async () => {
+    const spec = specOf(true, text)
+    const view = new vega.View(vega.parse(structuredClone(spec) as never), { renderer: 'none', logLevel: vega.None })
+    await view.runAsync()
+    const want = (view.data('sorted') as Row[]).map((r) => r.k)
+    view.finalize()
+    const got = (datasetsOfScene(createChartSession().evaluate(structuredClone(spec) as never, {})).get('sorted') as Row[]).map((r) => r.k)
+    expect(got).toEqual(want)
+    expect(got).toEqual([1, 2, 3])
+  })
+
+  it('every known difference of this file was compared', () => {
+    expectEveryKnownDifferenceCompared('differential-sort-ties')
   })
 })

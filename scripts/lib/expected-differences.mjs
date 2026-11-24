@@ -104,4 +104,22 @@ export const EXPECTED_DIFFERENCES = Object.freeze([
       + "inherited member and its count is garbage; Aster counts such tokens as data (a null-prototype table), which is the "
       + "count anyone would expect (C748).",
   },
+  {
+    gate: 'test',
+    case: 'differential-sort-ties: a line over the source of a sorting derived dataset',
+    reason:
+      "a dataset made from another whose first transform is a collect with a sort: vega's collect sorts the array it shares with its "
+      + "source in place, so every reader of the source (a line over it) sees the rows re-ordered, and the order depends on "
+      + "which other dataset happens to be derived from it. Aster sorts a copy: the source keeps the order it was given "
+      + "(docs/ARCHITECTURE.md, Deviations from Vega; C380).",
+  },
+  {
+    gate: 'test',
+    case: 'differential-sort-ties: a text mark over the source of a sorting derived dataset',
+    reason:
+      "a dataset made from another whose first transform is a collect with a sort: vega's collect sorts the array it shares with its "
+      + "source in place, so every reader of the source (a text mark over it) sees the rows re-ordered, and the order depends on "
+      + "which other dataset happens to be derived from it. Aster sorts a copy: the source keeps the order it was given "
+      + "(docs/ARCHITECTURE.md, Deviations from Vega; C380).",
+  },
 ])
