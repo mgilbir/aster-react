@@ -182,6 +182,10 @@ Every conformance gate prints its verdict last, as `[<gate>] PASS: <counter> <n>
 included) and holds each counter of what was COMPARED to its floor; the known differences a gate tolerates live in one table,
 `scripts/lib/expected-differences.mjs`, whose entries must still differ. `scripts/gate-self-test.test.mjs` runs every
 such gate narrowed, with `--plant-difference` and narrowed to nothing ([scripts/gates.mjs](../scripts/gates.mjs), `verdict`).
+The vitest differentials (`packages/conformance/scripts/differential-*.test.mts`) use the same table through the gate `test`: a difference they
+cannot make agree is an entry `differential-<file>: <case>`, compared on every run through `known-differences.mts`, which fails when
+the case agrees (`FIXED-GAP`) or is no longer compared (`STALE-GAP`). Their counts are floors too (`Case.informative`, `compareWithFloors`),
+and what vega itself dies on (a tick count of 2^32, a bin step of 1e-9) is held as Aster's refusal by `ceiling-inputs.test.mts`, in a child process.
 
 | What | Command | Result |
 |---|---|---|
