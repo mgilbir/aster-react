@@ -128,7 +128,7 @@ export function renderSceneToSvg(scene: SceneRoot): string {
     clipRefAttrs(frameClipId, w)
     out += `<g${w.s}>`
   } else out += '<g>'
-  out += serializeNodes(childNodes(scene.items, plotW, plotH, { snaps: scene.__scales }, clips), clips)
+  out += serializeNodes(childNodes(scene.items, plotW, plotH, { snaps: scene.__scales, ...(scene.__locale ? { locale: scene.__locale } : {}) }, clips), clips)
   out += '</g>'
   out += '<path class="foreground" aria-hidden="true" d="" display="none"/>'
   out += '</g></g></g>'
@@ -1523,6 +1523,8 @@ export function ariaItemAttrs(it: Pick<SceneItem, 'description' | 'aria' | 'aria
 export interface GuideScope {
   snaps: ScaleSnapshots | undefined
   map?: Map<string, unknown>
+  /** The chart's own locale (`config.locale`) the captions format with; absent, the default one. */
+  locale?: import('./locale.js').LocaleDefinition
 }
 /**
  * The caption implementation. guide-caption.ts installs it when it is loaded (the SVG and DOM renderers and the accessible
@@ -1530,15 +1532,15 @@ export interface GuideScope {
  * guide gets no caption, and so no ARIA role, like a guide whose caption vega could not build.
  */
 export interface GuideCaptions {
-  axis(group: SceneGroup, scales: Map<string, unknown>): string | undefined
-  legend(group: SceneGroup, scales: Map<string, unknown>): string | undefined
+  axis(group: SceneGroup, scales: Map<string, unknown>, locale: GuideScope['locale']): string | undefined
+  legend(group: SceneGroup, scales: Map<string, unknown>, locale: GuideScope['locale']): string | undefined
   titleText(group: SceneGroup): string | undefined
-  scales(snaps: ScaleSnapshots): Map<string, unknown>
+  scales(snaps: ScaleSnapshots, locale: GuideScope['locale']): Map<string, unknown>
 }
 let captions: GuideCaptions | null = null
 export function installGuideCaptions(c: GuideCaptions): void { captions = c }
 
-const scopeScales = (scope: GuideScope): Map<string, unknown> => (scope.map ??= captions ? captions.scales(scope.snaps ?? []) : new Map())
+const scopeScales = (scope: GuideScope): Map<string, unknown> => (scope.map ??= captions ? captions.scales(scope.snaps ?? [], scope.locale) : new Map())
 
 /** vega-scenegraph titleCaption: the text of the title item, lines joined by a space. */
 function titleText(group: SceneGroup): string {
@@ -1562,9 +1564,9 @@ function guideCaption(group: SceneGroup, role: string, scope: GuideScope): strin
   switch (role) {
     // (an axis that draws nothing, a guide whose scale is unknown, and a mark that is no guide have no generated caption:
     // vega's ariaGuide fails to build one and writes no ARIA at all)
-    case 'axis': return isGuide && captions && unwrapAxis(group).parts.length > 0 && scopeScales(scope).has(group.scale ?? '') ? captions.axis({ ...group, title: captions.titleText(group) }, scopeScales(scope)) : undefined
+    case 'axis': return isGuide && captions && unwrapAxis(group).parts.length > 0 && scopeScales(scope).has(group.scale ?? '') ? captions.axis({ ...group, title: captions.titleText(group) }, scopeScales(scope), scope.locale) : undefined
     // (a legend that made none of its marks -- its group's encode threw -- has none either)
-    case 'legend': return isGuide && captions && group.madeMarks?.length !== 0 && scopeScales(scope).has(group.legendScale ?? '') ? captions.legend({ ...group, title: captions.titleText(group) }, scopeScales(scope)) : undefined
+    case 'legend': return isGuide && captions && group.madeMarks?.length !== 0 && scopeScales(scope).has(group.legendScale ?? '') ? captions.legend({ ...group, title: captions.titleText(group) }, scopeScales(scope), scope.locale) : undefined
     // (a title caption needs an item to read)
     case 'title-text': return first ? `Title text '${titleText(group)}'` : undefined
     case 'title-subtitle': return first ? `Subtitle text '${titleText(group)}'` : undefined
@@ -1790,7 +1792,7 @@ function groupItem(g: SceneGroup, frameW: number, frameH: number, scope: GuideSc
   const gw = g.width ?? frameW
   const gh = g.height ?? frameH
   // (a group's own scales; the ones of the scopes around it stay in reach, as a nested axis may read them)
-  const inner: GuideScope = g.__scales ? { snaps: [...(scope.snaps ?? []), ...g.__scales] } : scope
+  const inner: GuideScope = g.__scales ? { snaps: [...(scope.snaps ?? []), ...g.__scales], ...(scope.locale ? { locale: scope.locale } : {}) } : scope
   const items = (g.items ?? []) as SceneItem[]
   // group items hold [background, content..., foreground?]: the boxes the runtime drew (`_bg`)
   const bg = items.length > 0 && flag(items[0]!, '_bg') ? items[0]! : null

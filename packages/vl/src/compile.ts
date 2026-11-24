@@ -3719,6 +3719,8 @@ export function assembleConfig(spec: VLSpec): Record<string, unknown> | undefine
     if (isObject(user[k])) out[k] = user[k]
   }
   for (const k of ['aria', 'fieldTitle', 'lineBreak']) if (user[k] !== undefined) out[k] = user[k]
+  // (the chart's number and time locale is Vega's own config, passed through as vega-lite passes it)
+  if (user.locale !== undefined) out.locale = user.locale
   if (isObject(user.mark)) out.mark = strip(user.mark)
   for (const t of MARK_TYPE_BLOCKS) {
     if (isObject(user[t])) style[t] = strip(user[t])
