@@ -3,7 +3,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
-import { ZONES, isKnownZone } from './test-tz.mjs'
+import { isKnownZone } from './test-tz.mjs'
+import { ZONES } from './lib/tz-zones.mjs'
 import { spawnAsync } from './lib/spawn-async.mjs'
 
 const script = join(dirname(fileURLToPath(import.meta.url)), 'test-tz.mjs')
