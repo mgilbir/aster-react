@@ -569,24 +569,36 @@ export function geoJSONPath(geo: unknown): string | undefined {
 
 const GEO_EPSILON = 1e-6
 
-/** d3-geo graticuleX: latitude samples along a meridian (step 90, clipped). */
+/**
+ * The steps of a graticule line: `start, start + step, ...` below `stop`, as d3-array's `range` counts them (a count that is not a
+ * positive number, from a zero or NaN step, is none). The length is checked against the limits before it is allocated.
+ */
+function graticuleRange(start: number, stop: number, step: number): number[] {
+  return (Math.max(0, Math.ceil((stop - start) / step)) | 0) > 0 ? numberRange(start, stop, step) : []
+}
+
+/** The latitude samples along a meridian (every 90 degrees, clipped to the extent). */
 function graticuleX(y0: number, y1: number, dy: number): (x: number) => number[][] {
-  const y = numberRange(y0, y1 - GEO_EPSILON, dy).concat(y1)
+  const y = graticuleRange(y0, y1 - GEO_EPSILON, dy).concat(y1)
   return (x) => y.map((yy) => [x, yy])
 }
 
-/** d3-geo graticuleY: longitude samples along a parallel (precision spacing). */
+/** The longitude samples along a parallel (every `precision` degrees). */
 function graticuleY(x0: number, x1: number, dx: number): (y: number) => number[][] {
-  const x = numberRange(x0, x1 - GEO_EPSILON, dx).concat(x1)
+  const x = graticuleRange(x0, x1 - GEO_EPSILON, dx).concat(x1)
   return (yy) => x.map((xx) => [xx, yy])
 }
 
 /**
- * The vega `graticule` transform: generate a single GeoJSON MultiLineString
- * geometry of latitude/longitude grid lines (d3-geo `geoGraticule` algorithm).
- * Reproduced operation-for-operation so the generated coordinates (and the
- * identity-projected SVG paths rendered from them) match the oracle to the bit.
+ * The vega `graticule` transform: a single GeoJSON MultiLineString of latitude/longitude grid lines, as d3-geo's `geoGraticule`
+ * draws them, with the same arithmetic so the coordinates match to the bit. What is fixed by the output: the parameters are applied
+ * in the order of vega's definition (extent, extentMajor, extentMinor, step, stepMajor, stepMinor, precision), not the spec's; each value is read as a number (`'45'` is 45, a list of strings is a list of numbers); an extent
+ * given west-east or north-south the wrong way round is swapped; a step or precision of zero (or NaN) gives a line no samples
+ * between its ends, as d3's range does.
  */
+/** The graticule's parameters, in the order vega-geo's Graticule definition lists them. */
+const GRATICULE_PARAMS = ['extent', 'extentMajor', 'extentMinor', 'step', 'stepMajor', 'stepMinor', 'precision'] as const
+
 function graticuleRows(t: Record<string, unknown>): Row[] {
   let x0 = -180, x1 = 180, X0 = -180, X1 = 180
   let y0 = -80 - GEO_EPSILON, y1 = 80 + GEO_EPSILON
@@ -594,49 +606,60 @@ function graticuleRows(t: Record<string, unknown>): Row[] {
   let dx = 10, dy = 10, DX = 90, DY = 360
   let precision = 2.5
 
-  const recompute = () => {
-    X = graticuleX(Y0, Y1, 90)
-    Y = graticuleY(X0, X1, precision)
-    x = graticuleX(y0, y1, 90)
-    y = graticuleY(x0, x1, precision)
-  }
   let X: (v: number) => number[][] = () => []
   let Y: (v: number) => number[][] = () => []
   let x: (v: number) => number[][] = () => []
   let y: (v: number) => number[][] = () => []
+  const setPrecision = (p: unknown) => {
+    precision = +(p as number)
+    x = graticuleX(y0, y1, 90)
+    y = graticuleY(x0, x1, precision)
+    X = graticuleX(Y0, Y1, 90)
+    Y = graticuleY(X0, X1, precision)
+  }
 
-  const extentMajor = (e: number[][]) => {
-    X0 = e[0]![0]!, X1 = e[1]![0]!, Y0 = e[0]![1]!, Y1 = e[1]![1]!
-    recompute()
+  type Corners = ArrayLike<ArrayLike<unknown>>
+  const extentMajor = (e: Corners) => {
+    X0 = +(e[0]![0] as number), X1 = +(e[1]![0] as number)
+    Y0 = +(e[0]![1] as number), Y1 = +(e[1]![1] as number)
+    if (X0 > X1) [X0, X1] = [X1, X0]
+    if (Y0 > Y1) [Y0, Y1] = [Y1, Y0]
+    setPrecision(precision)
   }
-  const extentMinor = (e: number[][]) => {
-    x0 = e[0]![0]!, x1 = e[1]![0]!, y0 = e[0]![1]!, y1 = e[1]![1]!
-    recompute()
+  const extentMinor = (e: Corners) => {
+    x0 = +(e[0]![0] as number), x1 = +(e[1]![0] as number)
+    y0 = +(e[0]![1] as number), y1 = +(e[1]![1] as number)
+    if (x0 > x1) [x0, x1] = [x1, x0]
+    if (y0 > y1) [y0, y1] = [y1, y0]
+    setPrecision(precision)
   }
-  const stepMajor = (s: number[]) => { DX = s[0]!, DY = s[1]! }
-  const stepMinor = (s: number[]) => { dx = s[0]!, dy = s[1]! }
+  const stepMajor = (s: ArrayLike<unknown>) => { DX = +(s[0] as number), DY = +(s[1] as number) }
+  const stepMinor = (s: ArrayLike<unknown>) => { dx = +(s[0] as number), dy = +(s[1] as number) }
 
   // d3-geo geoGraticule default configuration
   extentMajor([[-180, -90 + GEO_EPSILON], [180, 90 - GEO_EPSILON]])
   extentMinor([[-180, -80 - GEO_EPSILON], [180, 80 + GEO_EPSILON]])
 
-  // Apply spec parameters in key order (as vega's Graticule.transform does).
-  for (const key of Object.keys(t)) {
+  // Apply the parameters in the order of the transform's definition, whatever order the spec writes them in (vega's parser builds
+  // the parameters from the definition, and its Graticule applies them in that order)
+  for (const key of GRATICULE_PARAMS) {
+    if (!Object.hasOwn(t, key)) continue
     const v = t[key]
-    if (key === 'extent' && Array.isArray(v)) { extentMajor(v as number[][]); extentMinor(v as number[][]) }
-    else if (key === 'extentMajor' && Array.isArray(v)) extentMajor(v as number[][])
-    else if (key === 'extentMinor' && Array.isArray(v)) extentMinor(v as number[][])
-    else if (key === 'step' && Array.isArray(v)) { stepMajor(v as number[]); stepMinor(v as number[]) }
-    else if (key === 'stepMajor' && Array.isArray(v)) stepMajor(v as number[])
-    else if (key === 'stepMinor' && Array.isArray(v)) stepMinor(v as number[])
-    else if (key === 'precision' && typeof v === 'number') { precision = v; recompute() }
+    if (v === undefined) continue
+    if (key === 'extent') { extentMajor(v as Corners); extentMinor(v as Corners) }
+    else if (key === 'extentMajor') extentMajor(v as Corners)
+    else if (key === 'extentMinor') extentMinor(v as Corners)
+    else if (key === 'step') { stepMajor(v as ArrayLike<unknown>); stepMinor(v as ArrayLike<unknown>) }
+    else if (key === 'stepMajor') stepMajor(v as ArrayLike<unknown>)
+    else if (key === 'stepMinor') stepMinor(v as ArrayLike<unknown>)
+    else if (key === 'precision') setPrecision(v)
   }
 
   const lines = (): number[][][] =>
-    numberRange(Math.ceil(X0 / DX) * DX, X1, DX).map(X)
-      .concat(numberRange(Math.ceil(Y0 / DY) * DY, Y1, DY).map(Y))
-      .concat(numberRange(Math.ceil(x0 / dx) * dx, x1, dx).filter((xx) => Math.abs(xx % DX) > GEO_EPSILON).map(x))
-      .concat(numberRange(Math.ceil(y0 / dy) * dy, y1, dy).filter((yy) => Math.abs(yy % DY) > GEO_EPSILON).map(y))
+    graticuleRange(Math.ceil(X0 / DX) * DX, X1, DX).map(X)
+      .concat(graticuleRange(Math.ceil(Y0 / DY) * DY, Y1, DY).map(Y))
+      .concat(graticuleRange(Math.ceil(x0 / dx) * dx, x1, dx).filter((xx) => Math.abs(xx % DX) > GEO_EPSILON).map(x))
+      .concat(graticuleRange(Math.ceil(y0 / dy) * dy, y1, dy).filter((yy) => Math.abs(yy % DY) > GEO_EPSILON).map(y))
 
   return [{ type: 'MultiLineString', coordinates: lines() }]
 }
