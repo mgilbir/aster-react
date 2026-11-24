@@ -119,8 +119,17 @@
   },
   "encoding": {
     "theta": {
-      "field": "v",
-      "type": "quantitative"
+      "field": "x",
+      "type": "quantitative",
+      "scale": {
+        "domain": [
+          0,
+          10
+        ]
+      }
+    },
+    "theta2": {
+      "field": "y"
     },
     "color": {
       "field": "c",

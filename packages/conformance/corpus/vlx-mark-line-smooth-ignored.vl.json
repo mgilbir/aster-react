@@ -1,5 +1,6 @@
 {
   "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "description": "smooth is an image property: a line carries it into its encode, where nothing reads it",
   "padding": 5,
   "autosize": "none",
   "data": {
