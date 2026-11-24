@@ -223,7 +223,7 @@ handlers can do is bounded as follows; each point is enforced in one place and t
   listen to) and no selector source. A spec cannot read the page's keystrokes or its form fields, and cannot listen to an
   element outside the chart; its own `config.events` can only narrow the host's policy, never widen it. A blocked listener
   is reported once (`Blocked window keydown event listener ...`, then vega's `Can not resolve event source: window`).
-  A host that renders trusted specs only can pass `eventSources: { window: true, selector: true }`. Where a host permits a
+  A host that renders trusted specs only can pass `eventSources: { window: true, selector: true }` (to `bindSceneSignals`, or as the `eventSources` prop of `<Chart>` and `<SvgChart interaction>`, which compares it by content). Where a host permits a
   source, the chart behaves exactly as vega does there: the browser parity gate (`conformance:signals`) runs its window
   cases (`window:keydown` / `keyup`, a press that bubbles to `window:mousedown`, a merged stream with a window source) with a
   policy that permits them and requires vega's signals, and runs the same sources under the default policy requiring that
