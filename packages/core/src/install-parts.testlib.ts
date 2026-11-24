@@ -2,8 +2,11 @@
  * Every part of the engine in its slot, by a call rather than by bare imports: for pages that bundle core's sources (the canvas
  * gate's oracles), where the manifest's `sideEffects` (dist paths) does not cover the source modules and a bundler drops their bare
  * imports. See engine-parts.ts.
+ *
+ * `PARTS` is typed as a record over every `EnginePart`, so a part added to `EngineParts` without being listed here is a type error,
+ * and `installAllParts` installs `ENGINE_PARTS` in order from it (install-parts.test.ts checks every slot is filled).
  */
-import { installPart } from './engine-parts.js'
+import { ENGINE_PARTS, installPart, type EnginePart, type EngineParts } from './engine-parts.js'
 import { part as aggregate } from './part-aggregate.js'
 import { part as window } from './part-window.js'
 import { part as reshape } from './part-reshape.js'
@@ -23,23 +26,12 @@ import { part as timer } from './part-timer.js'
 import { part as canvas } from './part-canvas.js'
 import { part as signals } from './part-signals.js'
 
+const PARTS: { readonly [K in keyof EngineParts]: EngineParts[K] } = {
+  aggregate, window, reshape, time, curves, color, scales, legend, layout, pulse, selections, regex, svgpath, intersect, modify, timer, canvas, signals,
+}
+
+const put = <K extends EnginePart>(name: K): void => installPart(name, PARTS[name])
+
 export function installAllParts(): void {
-  installPart('aggregate', aggregate)
-  installPart('window', window)
-  installPart('reshape', reshape)
-  installPart('time', time)
-  installPart('curves', curves)
-  installPart('color', color)
-  installPart('scales', scales)
-  installPart('legend', legend)
-  installPart('layout', layout)
-  installPart('pulse', pulse)
-  installPart('selections', selections)
-  installPart('regex', regex)
-  installPart('svgpath', svgpath)
-  installPart('intersect', intersect)
-  installPart('modify', modify)
-  installPart('timer', timer)
-  installPart('canvas', canvas)
-  installPart('signals', signals)
+  for (const name of ENGINE_PARTS) put(name)
 }
