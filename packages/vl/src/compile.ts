@@ -8920,7 +8920,7 @@ function literalBody(text: string): string {
 
 /** tooltip / href / description fields (vega-lite mark/encode/tooltip.ts, text.ts). */
 function applyTextualChannels(update: Record<string, unknown>, spec: VLSpec, fields: FieldDef[], normalizedStack: (d: FieldDef) => boolean = () => false): void {
-  const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
+  const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
   const tooltipTitle = (d: FieldDef): string => {
     // tooltip.ts add(): `fieldDef.title || defaultTitle(fieldDef)` - an empty or null title falls back to the default
     const t = channelTitle(d.title ? d : { ...d, title: undefined })
