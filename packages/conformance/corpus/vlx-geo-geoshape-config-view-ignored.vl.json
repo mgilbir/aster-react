@@ -1,5 +1,6 @@
 {
   "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "description": "vega-lite gives a geo unit (no x/y) a group style that config.view does not reach, so the config is ignored: an engine that paints the view background fails",
   "padding": 5,
   "autosize": "none",
   "width": 400,
@@ -195,5 +196,8 @@
   "projection": {
     "type": "mercator"
   },
-  "mark": "geoshape"
+  "mark": {
+    "type": "geoshape",
+    "fill": "seagreen"
+  }
 }

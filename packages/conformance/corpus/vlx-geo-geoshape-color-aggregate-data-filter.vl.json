@@ -192,13 +192,25 @@
   "transform": [
     {
       "filter": "datum.properties.value > 2"
+    },
+    {
+      "joinaggregate": [
+        {
+          "op": "sum",
+          "field": "properties.value",
+          "as": "cat_total"
+        }
+      ],
+      "groupby": [
+        "properties.cat"
+      ]
     }
   ],
   "mark": "geoshape",
   "encoding": {
     "color": {
-      "field": "properties.cat",
-      "type": "nominal"
+      "field": "cat_total",
+      "type": "quantitative"
     }
   }
 }
