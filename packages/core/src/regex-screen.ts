@@ -17,14 +17,17 @@
  *   1. EXPONENTIAL ambiguity: a position from which two distinct paths come back to it on the same input (`(a+)+`, `(a|a)*`,
  *      `(\w+\s?){1,50}`, `((a|a))*`), found as a strongly connected component of the automaton squared that holds a diagonal pair
  *      and a step where the two paths differ.
- *   2. POLYNOMIAL ambiguity of degree 3 or more: a chain of three loops each of which can hand the same input on to the next
- *      (`a*a*a*b`, `\s*.*x` searched, `.*foo.*bar`, `^\s*(.*?)\s*$`), the search's loop included. Degree 2 is allowed (`a*b`
- *      searched, `\s+$`: about 10^8 steps on the 10 000-character default input cap, a fraction of a second). A loop from which the
- *      match can always end at once is no hazard (`\s*.*`, `\d+\.?\d*`): the first path to reach it succeeds.
- *   3. too many live paths: more than 4096 ways to have matched one input so far (`(a|a)(a|a)...`), a loop absorbing any length of
- *      it; or, next to a degree-2 chain, more than 16 transitions tried per character from those paths (a bounded run after a loop
- *      over the same characters, `a*[ab]{0,20}x`, multiplies the quadratic search by its length).
- *   4. a backreference inside a group that repeats.
+ *   2. too many live paths: more than 4096 ways to have matched one input so far (`(a|a)(a|a)...`), a loop absorbing any length of
+ *      it.
+ *   3. a backreference inside a group that repeats.
+ * Otherwise the pattern has a COST (`RegexCost`): `degree`, the longest chain of loops each of which can hand the same input on to
+ * the next, the search's loop included (`a*b` searched and `\s+$` are 2, `a*a*a*b` 4, `\s*.*x` searched and the trim idiom
+ * `^\s*(.*?)\s*$` 3; a loop from which the match can always end at once is no link of a chain, `\s*.*`, `\d+\.?\d*`, but still reads
+ * the input: at least 1), and `work`, the transitions tried per character from the live paths of one start, counted on the whole
+ * automaton (a bounded run after a loop over the same characters, `a*[ab]{0,20}x`, is entered from every place the loop can stop).
+ * A run on `n` characters takes about `work * n ** degree` steps; `regexHazard` refuses the pattern when that, at
+ * REGEX_NS_PER_UNIT, exceeds the time a run may take on the longest subject the limits allow (limits.ts: `maxTimeMs`, else
+ * REGEX_RUN_BUDGET_MS; `maxStringLength`, else REGEX_MAX_INPUT). Nothing can interrupt a running RegExp: that time is the bound.
  * Bounded repeats of a single character set are expanded exactly up to 64; any other repeat that may run twice is read as
  * unbounded (`(a+){1,60}` is `(a+)+`, the exponential shape it has in practice). Lookaround bodies are screened as patterns of
  * their own (they run at every position the match tries). A Unicode property is read as "any character" (an upper bound), a
@@ -36,6 +39,7 @@
  */
 
 import { TextTable } from './util.js'
+import { REGEX_MAX_INPUT, REGEX_RUN_BUDGET_MS } from './limits.js'
 
 // --- character sets ---------------------------------------------------------------------------------
 
@@ -711,11 +715,6 @@ const EXPAND_SET = 64
 const MAX_STEPS = 4_000_000
 /** Live paths on one input above which a pattern is refused. */
 const MAX_AMBIGUITY = 4096
-/**
- * Transitions tried per input character, summed over the live paths of one start, above which a degree-2 pattern is refused:
- * the searched `a*x` tries 5, `a*a{1,3}x` 15, `[ab]*?[ab]{1,3}\s*?x$` 21; the quadratic run on the 10 000-character cap scales with it.
- */
-const MAX_WORK_POLY = 16
 
 class Automaton {
   readonly sets: Ranges[] = []
@@ -869,21 +868,37 @@ function backrefInRepeat(n: RNode, repeated: boolean): boolean {
   }
 }
 
-/** Screen one pattern tree (the pattern, or a lookaround body): the reason it is refused, or null. */
-function analyse(tree: RNode, unanchored: boolean, budget: { steps: number }): string | null {
+/**
+ * What one run of a pattern the screen does not refuse outright costs: about `work * n ** degree` steps of V8's matcher on an
+ * input of `n` characters (`degree`: the longest chain of loops that can hand the same input on to the next, the search's own loop
+ * counted; `work`: the transitions tried per character from the live paths of one start, at least 1).
+ */
+export interface RegexCost { readonly degree: number; readonly work: number }
+
+/** Screen one pattern tree (the pattern, or a lookaround body): the reason it is refused whatever its input, or its cost. */
+function analyse(tree: RNode, unanchored: boolean, budget: { steps: number }, searched = true): string | RegexCost {
   if (backrefInRepeat(tree, false)) return 'a backreference inside a repeated group'
   const A = new Automaton()
   let body = A.build(tree)
-  if (unanchored || !startAnchored(tree)) {
+  if (searched && (unanchored || !startAnchored(tree))) {
     // the search tries every start position in turn: a lazy loop over anything, in front of the pattern
     body = A.seq(A.build({ t: 'rep', n: { t: 'set', set: exactSet(FULL) }, min: 0, max: Infinity }), body)
   }
+  // (a lookaround runs at every step of the match that reaches it: its cost multiplies the pattern's)
+  let lookDegree = 0, lookWork = 0
   for (const look of A.looks) {
+    // (its hazards as a pattern searched from every position, where it runs; its cost as one run from the position it is at)
     const r = analyse(look, true, budget)
-    if (r) return r
+    if (typeof r === 'string') return r
+    const run = analyse(look, false, budget, false)
+    if (typeof run === 'string') return run
+    lookDegree = Math.max(lookDegree, run.degree)
+    lookWork += run.work
   }
+  const withLooks = (c: RegexCost): RegexCost =>
+    A.looks.length ? { degree: c.degree + lookDegree, work: c.work * Math.max(1, lookWork) } : c
   const m = A.sets.length
-  if (m === 0) return null
+  if (m === 0) return withLooks({ degree: 0, work: 1 })
   const step = (k = 1): void => {
     budget.steps -= k
     if (budget.steps < 0) throw new TooComplex('analysis budget')
@@ -993,7 +1008,6 @@ function analyse(tree: RNode, unanchored: boolean, budget: { steps: number }): s
       longest.set(c, best)
       degree = Math.max(degree, best)
     }
-    if (degree >= 3) return `a chain of ${degree} unbounded quantifiers can match the same input (polynomial backtracking of degree ${degree})`
   }
 
   // 3. finite ambiguity and the work of one character. The live paths of a match attempt are counted per input, on the whole
@@ -1046,25 +1060,33 @@ function analyse(tree: RNode, unanchored: boolean, budget: { steps: number }): s
         if (total > most) most = total
         if (w > work) work = w
         if (most > MAX_AMBIGUITY) return `more than ${MAX_AMBIGUITY} ways to match one input (exponential backtracking)`
-        if (degree >= 2 && work > MAX_WORK_POLY) {
-          return `${work} transitions tried per character next to a chain of unbounded quantifiers (polynomial backtracking)`
-        }
         const key = keyOf(nv)
         if (!seen.has(key)) { seen.add(key); queue.push(nv) }
       }
     }
+    // (a loop the match can always end from backtracks over nothing, but still reads up to the whole input: a run is linear)
+    let reads = degree
+    if (reads === 0) for (let p = 0; p < m; p++) if (looping(p)) { reads = 1; break }
+    return withLooks({ degree: reads, work: Math.max(1, work) })
   }
-  return null
 }
 
-const CACHE = new TextTable<string | null>('regex verdicts', 256, 1_000_000)
+const CACHE = new TextTable<string | RegexCost | null>('regex verdicts', 256, 1_000_000)
 
 /**
- * The reason a pattern is refused under limits, or null. A pattern the RegExp constructor rejects is null (its SyntaxError is
- * what surfaces); a valid one the screen cannot read, or cannot analyse within its budget, is refused (fail closed). Results are
- * cached by flags and pattern (bounded), since a pattern is usually screened again for every row.
+ * Nanoseconds one unit of {@link RegexCost} (`work * n ** degree`) may take V8: the slowest measured over 130 generated and named
+ * shapes was 1.93 (`a+a{30}x`; `(\w?)+!` 1.80; the median 0.16) on a machine at load 5 to 10, and the gate runs under up to about 4
+ * times that load, so a run the model allows finishes within its budget there too.
  */
-export function regexHazard(source: string, flags = ''): string | null {
+export const REGEX_NS_PER_UNIT = 8
+
+/**
+ * The screen's reading of a pattern whatever its input: the reason it is refused (exponential backtracking, an ambiguity too
+ * large, a backreference in a repeat, a pattern the screen cannot read or analyse: fail closed), or its {@link RegexCost}. A
+ * pattern the RegExp constructor rejects is null (its SyntaxError is what surfaces). Cached by flags and pattern (bounded), since a
+ * pattern is usually screened again for every row.
+ */
+export function regexModel(source: string, flags = ''): string | RegexCost | null {
   const key = `${flags}/${source}`
   const hit = CACHE.get(key)
   if (hit !== undefined) return hit
@@ -1074,14 +1096,34 @@ export function regexHazard(source: string, flags = ''): string | null {
   } catch {
     return null
   }
-  let reason: string | null
+  let verdict: string | RegexCost
   try {
-    reason = analyse(readPattern(source, flags), flags.includes('m'), { steps: MAX_STEPS })
+    verdict = analyse(readPattern(source, flags), flags.includes('m'), { steps: MAX_STEPS })
   } catch (e) {
-    if (e instanceof Unreadable) reason = 'the screen cannot read this pattern'
-    else if (e instanceof TooComplex) reason = 'the pattern is too complex to screen'
+    if (e instanceof Unreadable) verdict = 'the screen cannot read this pattern'
+    else if (e instanceof TooComplex) verdict = 'the pattern is too complex to screen'
     else throw e
   }
-  CACHE.set(key, reason)
-  return reason
+  CACHE.set(key, verdict)
+  return verdict
+}
+
+/** The time a run of a pattern of cost `c` may take on `n` characters (ms), by {@link REGEX_NS_PER_UNIT}. */
+export function regexRunMs(c: RegexCost, n: number): number {
+  return (c.work * Math.max(1, n) ** c.degree * REGEX_NS_PER_UNIT) / 1e6
+}
+
+/**
+ * The reason a pattern is refused for a run on `subject` characters within `budgetMs`, or null: its {@link regexModel} refusal, or a
+ * cost over the budget ("polynomial backtracking of degree d: about T ms on n characters"). No running RegExp can be interrupted,
+ * so this is the bound a host gets: an accepted pattern's run finishes within the budget (fail closed: what the model cannot bound
+ * is refused).
+ */
+export function regexHazard(source: string, flags = '', subject = REGEX_MAX_INPUT, budgetMs = REGEX_RUN_BUDGET_MS): string | null {
+  const m = regexModel(source, flags)
+  if (m === null || typeof m === 'string') return m
+  const ms = regexRunMs(m, subject)
+  if (ms <= budgetMs) return null
+  const shape = m.degree >= 2 ? `polynomial backtracking of degree ${m.degree}` : 'a run'
+  return `${shape}: about ${ms < 10 ? ms.toFixed(1) : Math.round(ms)} ms on ${subject} characters, over the ${budgetMs} ms a run may take`
 }

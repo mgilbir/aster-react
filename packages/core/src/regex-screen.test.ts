@@ -44,9 +44,14 @@ const BENIGN: Array<[string, string?]> = [
   ['a\\u{'], ['[\\u{]a'], ['a\\u{3}'], ['(\\d+\\.)*\\d+'], ['\\s+$'], ['a*b'],
   // adjacent quantifiers that are at worst quadratic, that do not overlap, or after which the match can always end
   ['\\s*.*'], ['\\d+\\.?\\d*'], ["[\\w']{3,}"], ['\\s*\\w+\\s*=\\s*\\d+'], ['a*b*c*'], ['^\\d+\\s*\\w*\\s*$'], ['^(?:[a-z]+\\s){2}[a-z]+$'], ['^\\p{L}+$', 'u'], ['^x*$'], ['[\\w-]+'], ['^(?<y>\\d{4})-(?<m>\\d{2})$'], ['(?:^|,)("[^"]*"|[^,]*)'.replace('*)', '{0,50})')], ['a{2,}b'],
-  // a short bounded run after a loop stays within the budget (`a*a{1,3}x`: 0.19 s on 10 000 characters)
-  ['a*a{1,3}x'], ['[a-z]+[0-9]{1,4}x'],
+  ['[a-z]+[0-9]{1,4}x'],
 ]
+/**
+ * The subject length the benign corpus is accepted at: a run may take REGEX_RUN_BUDGET_MS (100 ms), and a searched quadratic
+ * pattern fits it on about a thousand characters, by the screen's cost model (regexRunMs). At the default subject cap of the
+ * limits, 10 000 characters, none of the quadratic ones fits, and each is refused (below).
+ */
+const BENIGN_SUBJECT = 1000
 
 describe('static regex screen (heuristic)', () => {
   it('has a meaningful corpus', () => {
@@ -56,9 +61,24 @@ describe('static regex screen (heuristic)', () => {
   it.each(REDOS)('rejects %s', (src, flags) => {
     expect(regexHazard(src, flags ?? ''), src).not.toBeNull()
   })
-  it.each(BENIGN)('accepts %s', (src, flags) => {
-    expect(regexHazard(src, flags ?? ''), src).toBeNull()
+  it.each(BENIGN)('accepts %s on 1000 characters', (src, flags) => {
+    expect(regexHazard(src, flags ?? '', BENIGN_SUBJECT), src).toBeNull()
     new RegExp(src, flags) // the benign corpus really is valid syntax
+  })
+  it('accepts a pattern only for the subject length its run fits: the budget decides, not the shape alone', () => {
+    // linear runs fit any length the limits allow; a searched quadratic one fits a thousand characters and not ten thousand
+    expect(regexHazard('^\\d{4}-\\d{2}$', '', 1_000_000)).toBeNull()
+    expect(regexHazard('\\s+$', '', 1000)).toBeNull()
+    expect(regexHazard('\\s+$', '', 10_000)).toMatch(/polynomial backtracking of degree 2: about \d+ ms on 10000 characters, over the 100 ms/)
+    expect(regexHazard('\\s+$', '', 10_000, 5000)).toBeNull()
+    // a bounded run after a loop multiplies the work: it fits fewer characters
+    expect(regexHazard('a*a{1,3}x', '', 1000)).not.toBeNull()
+    expect(regexHazard('a*a{1,3}x', '', 500)).toBeNull()
+    // the cubic trim idiom fits only a short subject
+    expect(regexHazard('^\\s*(.*?)\\s*$', '', 100)).toBeNull()
+    expect(regexHazard('^\\s*(.*?)\\s*$', '', 1000)).not.toBeNull()
+    // exponential backtracking is refused at any length
+    expect(regexHazard('(a+)+$', '', 5)).toMatch(/nested quantifiers/)
   })
   it('names the problem', () => {
     expect(regexHazard('(a+)+')).toMatch(/nested quantifiers/)
@@ -142,7 +162,7 @@ describe('polynomial backtracking (child process, hard kill)', () => {
     const r = await attack(`
       core.renderSpec({ width: 10, height: 10, data: [{ name: 't', values: [{ s: 'a'.repeat(9000) }], transform: [{ type: 'formula', as: 'n', expr: 'test(/a*a*a*a*a*b/, datum.s)' }] }],
         marks: [{ type: 'rect', from: { data: 't' } }] }, { limits: {} })`)
-    expectLimit(r, /regexSafety: a chain of \d+ unbounded quantifiers/)
+    expectLimit(r, /regexSafety: polynomial backtracking of degree \d+: about \d+ ms on 10000 characters/)
     expect(r.cpuMs).toBeLessThan(500)
   }, 30_000)
 
@@ -151,7 +171,7 @@ describe('polynomial backtracking (child process, hard kill)', () => {
       core.renderSpec({ width: 10, height: 10, data: [{ name: 't', values: [{ s: ' '.repeat(4000) + 'x\\n\\nx' }], transform: [
         { type: 'formula', as: 'a', expr: "test(/^\\\\s*(.*?)\\\\s*$/, datum.s)" }] }],
         marks: [{ type: 'rect', from: { data: 't' } }] }, { limits: {} })`)
-    expectLimit(r, /regexSafety: a chain of 3 unbounded quantifiers/)
+    expectLimit(r, /regexSafety: polynomial backtracking of degree 3: about \d+ ms on 10000 characters/)
     expect(r.cpuMs).toBeLessThan(500)
     const ok = await attack(`
       const svg = core.renderSpec({ width: 10, height: 10, data: [{ name: 't', values: [{ s: ' '.repeat(10) + 'a'.repeat(8000) }], transform: [
