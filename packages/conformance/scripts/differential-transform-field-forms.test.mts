@@ -75,7 +75,7 @@ const BASES: Record<string, Base> = {
   geojsonGeo: { pipeline: [PT, { type: 'geojson', geojson: 'pt', signal: 'gj' }, { type: 'formula', expr: 'gj.features.length', as: 'n' }], at: 1 },
   geopath: { pipeline: [PT, { type: 'geopath', projection: 'p', field: 'pt', pointRadius: 3 }], alts: { pointRadius: [{ field: 'w' }, { expr: 'datum.coordinates[0] / 10 + 1' }, { signal: '2 + 2' }] } },
   geopoint: { pipeline: [{ type: 'geopoint', projection: 'p', fields: ['lon', 'lat'] }] },
-  geoshape: { pipeline: [PT, { type: 'geoshape', projection: 'p', field: 'pt', pointRadius: 3 }], alts: { pointRadius: [{ field: 'w' }, { expr: 'datum.coordinates[1] / 10 + 1' }, { signal: '5' }] } },
+  geoshape: { pipeline: [PT, { type: 'geoshape', projection: 'p', field: 'datum.pt', pointRadius: 3 }], alts: { pointRadius: [{ field: 'w' }, { expr: 'datum.coordinates[1] / 10 + 1' }, { signal: '5' }] } },
   heatmap: {
     pipeline: [{ type: 'kde2d', x: 'x', y: 'y', size: [3, 3], as: 'grid' }, { type: 'heatmap', field: 'grid', color: '#f00', opacity: 0.5 }],
     alts: { color: [{ field: 'c' }, { expr: "datum.$value > datum.$max / 2 ? 'red' : 'blue'" }, { expr: 'datum.c' }, { signal: "'green'" }], opacity: [{ field: 'w' }, { expr: 'datum.$x / 3' }, { signal: '0.25' }] },
@@ -397,6 +397,8 @@ function twinOf(v: unknown, field: boolean): unknown {
   if (typeof o.field === 'string') return field ? o.field : { expr: fieldExpr(o.field) }
   const text = (o.expr ?? o.signal) as string | undefined
   if (typeof text !== 'string') return v
+  // (a literal is the constant it spells, even one that holds the text `datum`: a geoshape's field is the path `datum.pt`)
+  if (/^\s*(["']).*\1\s*$/.test(text)) return JSON.parse(text.trim().replace(/'/g, '"'))
   if (/datum/.test(text)) return { expr: `(${text})` }
   return JSON.parse(text.replace(/'/g, '"'))
 }
