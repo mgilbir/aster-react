@@ -1,7 +1,7 @@
 /**
  * Vega-Lite compiler registry.
  *
- * The from-scratch VL compiler (`@aster-charts/vl`) is about 105 kB gzip
+ * The from-scratch VL compiler (`@aster-charts/vl`) is about 125 kB gzip
  * (the `Chart + VL` row of the bundle budget). Hosts that only
  * render Vega specs should not pay for it, so `<Chart>` no longer imports it
  * statically: `@aster-charts/react/vl` registers it as a side effect.

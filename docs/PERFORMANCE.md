@@ -359,7 +359,7 @@ about 4.8x; neither SVG variant holds a 16.7 ms frame at 100,000 points, canvas 
 288.7 kB gzip (832.2 kB minified, 239.9 kB brotli) and the official vega-embed tutorial 288.0 kB (830.5 kB minified, 239.6 kB brotli). The
 Aster rows are Vega only and count every chunk, the ones a browser build fetches on demand included (`<Chart>` is 190.6 kB of that up front,
 the table below). The react-vega and vega-embed bundles include Vega-Lite (about 731 kB of their source inputs), so the like-for-like
-comparison for a Vega-Lite app is `<Chart>` plus the Vega-Lite compiler: 296.9 kB gzip up front plus 137.3 kB loaded on demand (the `budget`
+comparison for a Vega-Lite app is `<Chart>` plus the Vega-Lite compiler: 314.2 kB gzip up front plus 120.0 kB loaded on demand (the `budget`
 rows below), 434.2 kB in all, which is above react-vega's 288.7 kB. The smaller figure holds for Vega specs only.
 
 `pnpm --filter @aster-charts/benchmarks run budget` bundles one tiny app per documented import pattern (esbuild, minify,
@@ -420,7 +420,7 @@ The `useChart` and `<Chart>` rows fail if the field is removed or widened; `scri
 that fault, and the opposite one (an import shaken out), and requires the budget to fail. The other direction (a list that is too narrow drops a registration) is
 caught by `pnpm check:bundle`, which bundles and executes each import pattern.
 
-The Vega-Lite compiler is 106.3 kB gzip on top of the base `<Chart>` (296.9 minus 190.6, measured 2026-11-23; 54.1 at the end of October,
+The Vega-Lite compiler is 123.6 kB gzip on top of the base `<Chart>` (314.2 minus 190.6, measured 2026-11-23; 54.1 at the end of October,
 before the selections, maps and animation work).
 
 ## Dated measurement notes

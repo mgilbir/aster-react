@@ -29,8 +29,8 @@ describe('scale types (vs real vega)', () => {
   it('registered types compile; any other is refused with vega\'s message', async () => {
     const diffs: string[] = []
     for (const t of NAMES) {
-      const want = await vegaOutcome(t)
-      const got = asterOutcome(t)
+      const want = await vegaOutcome(structuredClone(t))
+      const got = asterOutcome(structuredClone(t))
       // (vega's other refusals of a type it registers -- a missing range, a scheme -- are not this check's: only "refused or not")
       const same = want.startsWith('threw Unrecognized scale type') ? got === want : !got.startsWith('threw Unrecognized scale type')
       if (!same) diffs.push(`${JSON.stringify(t)}: vega ${want} | aster ${got}`)

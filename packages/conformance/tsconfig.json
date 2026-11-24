@@ -5,5 +5,5 @@
     "allowImportingTsExtensions": true,
     "allowJs": true
   },
-  "include": ["src", "corpus", "scripts", "test"]
+  "include": ["src", "corpus", "scripts", "test", "test-fixtures/**/*.ts"]
 }
