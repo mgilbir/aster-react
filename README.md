@@ -232,9 +232,9 @@ produced it, are in [docs/TESTING.md](docs/TESTING.md#reference-results) and
 - the SVG corpus (1076 specs: 399 Vega, 677 Vega-Lite) renders identically to real Vega under a strict
   canonicalizer: `pnpm conformance` (1076/1076);
 - the same 677 Vega-Lite specs compiled by `@aster-charts/vl` render identically to vega-lite's output: `pnpm conformance-vl` (677/677);
-- the schema sweeps (one chart per property/value of the schema) have no differences: Vega 7538 ok of 7549 (9 both-refused, 2 the oracle itself crashes on), Vega-Lite 27452 ok of 27513 (47 both-refused, 14 oracle crashes),
+- the schema sweeps (one chart per property/value of the schema) have no differences: Vega 7738 ok of 7760 (9 both-refused, 2 the oracle itself crashes on, 11 differ: REVEALED), Vega-Lite 30626 ok of 31334 (123 both-refused, 279 where upstream refuses and Aster compiles, 240 refused by Aster, 66 differ: REVEALED),
   signals 103 ok of 166 (60 `retained`, see [Known gaps](#known-gaps-and-differences-from-vega); 0 differ),
-  values 500 ok of 500 (the same specification with awkward cells: `null`, `""`, words, lists, `Infinity` written out; 0 differ);
+  values 525 ok of 525 (the same specification with awkward cells: `null`, `""`, words, lists, `Infinity` written out; 0 differ);
 - in real Chromium, the corpus matches Vega's string renderer (1076/1076), the canvas renderer matches Vega's canvas (1068 pixel comparisons with ink on both sides),
   and signal event streams match Vega on its svg and on its canvas renderer (75/75 cases), each case run on both.
 
