@@ -3,8 +3,10 @@
  * real Vega scenegraph for every corpus spec.
  *
  * The verdict is runGate's (scripts/lib/run-gate.mjs): `specs` counts the corpus specs whose scenes were compared, `items` the
- * scene items compared, `scales` the scales; each has a floor on a full run (today's numbers, they only ratchet up), and a
- * `--filter` that matches nothing fails. `--plant-difference` moves one item of Aster's scene by 7 px.
+ * scene items compared (at every depth: inside group marks and facets too), `attributes` the item channel values, `marks`,
+ * `groups` and `scales` what their names say; each has a floor on a full run (today's numbers, they only ratchet up), and a
+ * `--filter` that matches nothing fails. A spec whose oracle drew items of which none was compared fails. `--plant-difference`
+ * moves one item of Aster's scene by 7 px.
  *
  * Run after `pnpm build`: npx tsx scripts/scene-diff.mts [--filter substr] [--scales-only]
  */
@@ -49,6 +51,7 @@ async function main(gate: Gate): Promise<void> {
   const files = readdirSync(CORPUS).filter((f) => f.endsWith('.vg.json') || f.endsWith('.vl.json')).sort()
   let pass = 0
   let total = 0
+  let zeroItems = 0
   for (const f of files) {
     if (filter && !f.includes(filter)) continue
     total++
@@ -59,8 +62,14 @@ async function main(gate: Gate): Promise<void> {
         : raw
       const result = await sceneDiff(spec, gate.plant ? plant : undefined)
       gate.count('items', result.items)
+      gate.count('attributes', result.attributes)
+      gate.count('marks', result.marks)
+      gate.count('groups', result.groups)
       gate.count('scales', result.scales)
-      const diffs = scalesOnly ? result.diffs.filter((d) => d.includes(' scale ')) : result.diffs
+      if (result.items === 0) zeroItems++
+      const diffs = scalesOnly ? result.diffs.filter((d) => d.includes(' scale ')) : [...result.diffs]
+      // a spec whose oracle drew items of which none was compared has not been compared, whatever else agreed
+      if (!scalesOnly && result.oracleItems > 0 && result.items === 0) diffs.unshift(`the oracle drew ${result.oracleItems} item(s), none was compared`)
       if (diffs.length === 0) {
         pass++
         gate.agree(f)
@@ -73,14 +82,18 @@ async function main(gate: Gate): Promise<void> {
       gate.error(f, e instanceof Error ? e.message : String(e))
     }
   }
-  console.log(`\n[scene] ${pass}/${total} scenes match`)
+  console.log(`\n[scene] ${pass}/${total} scenes match; ${zeroItems} spec(s) with no item to compare (the oracle drew none either)`)
 }
 
 await runGate({
   name: 'scene-diff',
   counters: {
     specs: { floor: 1063, what: "corpus specs whose resolved scene was compared with vega's scenegraph" },
-    items: { floor: 5524, what: 'scene items compared' },
+    // (5524 before the comparison followed marks inside group marks, C62: 141 specs compared no item at all)
+    items: { floor: 8211, what: 'scene items compared (group items included)' },
+    attributes: { floor: 61584, what: 'item channel values compared' },
+    marks: { floor: 1978, what: 'marks compared' },
+    groups: { floor: 667, what: 'group items (scopes) compared' },
     scales: { floor: 2164, what: 'scales compared' },
   },
   partial: Boolean(filter) || scalesOnly,
