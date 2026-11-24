@@ -1,5 +1,6 @@
 {
   "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "description": "for a mark that is not a path, break-paths-filter-domains filters like the default does; break-paths-show-domains is the mode that differs",
   "padding": 5,
   "autosize": "none",
   "data": {
@@ -14,15 +15,15 @@
       {
         "c": "B",
         "x": 2,
-        "y": null,
+        "y": 5,
         "s": 5,
         "t": "2024-02-01"
       },
       {
         "c": "C",
-        "x": 3,
-        "y": 4,
-        "s": null,
+        "x": 9,
+        "y": null,
+        "s": 2,
         "t": "2024-03-01"
       },
       {
@@ -36,10 +37,7 @@
   },
   "width": 160,
   "height": 100,
-  "mark": {
-    "type": "text",
-    "invalid": "break-paths-filter-domains"
-  },
+  "mark": "text",
   "encoding": {
     "x": {
       "field": "x",
@@ -52,6 +50,11 @@
     "text": {
       "field": "y",
       "type": "quantitative"
+    }
+  },
+  "config": {
+    "mark": {
+      "invalid": "break-paths-filter-domains"
     }
   }
 }
