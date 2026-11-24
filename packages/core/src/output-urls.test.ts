@@ -245,10 +245,18 @@ describe('hand-made scenes: every channel of every mark holds a hostile text, an
         expect(namesAnotherDocument(shown)).toBe(false)
       }
     }
-    // the tracker shows what resolveCursor shows: over an item whose cursor is a url, none (a browser fetching nothing)
+    // the tracker never shows such a value: over an item whose cursor is a url the cursor stays as it was (as a browser ignores
+    // vega's assignment of a value it does not take), and a keyword item cursor is shown
     const seen: Array<string | null> = []
-    createCursorTracker({ pick: () => ({ item: { cursor: 'url(https://evil.test/c.png), auto' } }), user: () => undefined, onCursor: (c) => seen.push(c) }).move(1, 1)
-    expect(seen).toEqual([null])
+    let cursor = 'url(https://evil.test/c.png), auto'
+    const t = createCursorTracker({ pick: () => ({ item: { cursor } }), user: () => undefined, onCursor: (c) => seen.push(c) })
+    t.move(1, 1)
+    expect(seen).toEqual([])
+    cursor = 'pointer'
+    t.move(1, 1)
+    cursor = 'url(https://evil.test/c.png)'
+    t.move(1, 1)
+    expect(seen).toEqual(['pointer'])
     // control: a keyword is shown
     expect(resolveCursor('default', 'pointer')).toBe('pointer')
     expect(resolveCursor('Pointer', null)).toBe('pointer')
