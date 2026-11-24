@@ -124,8 +124,8 @@
       "type": "quantitative"
     },
     "size": {
-      "field": "v",
-      "type": "quantitative"
+      "field": "g",
+      "type": "ordinal"
     }
   },
   "config": {

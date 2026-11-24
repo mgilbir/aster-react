@@ -126,8 +126,7 @@
   },
   "config": {
     "scale": {
-      "barBandPaddingInner": 0.3,
-      "rectBandPaddingInner": 0.1
+      "barBandPaddingInner": 0.3
     }
   }
 }
