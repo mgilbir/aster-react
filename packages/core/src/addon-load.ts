@@ -156,7 +156,7 @@ export const TRUSTED_LOAD_OPTIONS: Readonly<Pick<LoadOptions, 'protocols' | 'all
  * An `allow` policy that permits exactly the given origins (`'https://data.example.com'`; a full URL stands for its
  * origin). Throws a TypeError for an entry that has no origin (a relative url, `data:`, `file:`).
  */
-export function allowOrigins(origins: Iterable<string>): (url: URL) => boolean {
+export function allowOrigins(origins: Iterable<string>): (url: HostUrl) => boolean {
   const allowed = new Set<string>()
   for (const entry of origins as Iterable<unknown>) {
     let origin = 'null'
@@ -166,7 +166,7 @@ export function allowOrigins(origins: Iterable<string>): (url: URL) => boolean {
     if (origin === 'null') throw new TypeError(`[aster] allowOrigins: ${JSON.stringify(entry)} is not an absolute URL with an origin (e.g. "https://data.example.com")`)
     allowed.add(origin)
   }
-  return (url: URL) => allowed.has(url.origin)
+  return (url: HostUrl) => allowed.has(url.origin)
 }
 
 // --- host classification -----------------------------------------------------
