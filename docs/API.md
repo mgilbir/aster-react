@@ -1076,12 +1076,16 @@ chart, so a `{signal}` url follows the host's signal value.
 `loadSpecDataResource(spec, options?)` is the promise `useSpecData` reads with `React.use`: one per load, so every render that asks
 for the same load gets the same promise, as Suspense needs (including the retries of a component that suspended before it ever
 committed, for which React keeps no state). It imports the load add-on lazily, so an app without URL datasets never bundles it.
-The cache follows the [identity rule](#streaming-components): the spec and the data options (`baseURL`, `protocols`, `timeoutMs`,
-`limits`, ...) are compared by content, `signal` by identity, and `fetch` / `allow` are called through a latest-ref, so an inline
-spec, an inline options object and an inline `allow` arrow are one load. The cache is shared by every component (and, on a
-server, by every request): functions with different code are never one load, but closures of the same code are, so a host that
-loads the same spec with, say, a per-user or per-request `fetch` gives each its own `cacheKey` (a string that is part of the key).
-A mounted reader keeps its load; the last 32 loads nothing mounted reads are kept for remounts and retries.
+The spec and the data options (`baseURL`, `protocols`, `timeoutMs`, `limits`, ...) are compared by content, so an inline spec and
+an inline options object are one load. `signal` and the function options (`fetch`, `allow`) are compared by IDENTITY: the cache is
+shared by every component (and, on a server, by every request), and two different functions -- two closures of one factory, say a
+per-request `fetch` carrying that request's credentials -- are never served one load. Hoist function options, or give a
+`cacheKey` (a string): with it the functions are not part of the key and the latest one given is called, which is the one way to
+share a load across function identities and the fix for an inline arrow. An inline function option without a `cacheKey` is a new
+function on every render, so each retry of the suspended component would start a new load: after at most 3 loads in flight,
+and fewer than 6 in all, the ask throws `AsterUnstableLoadOptionError`
+(`code: 'ASTER_UNSTABLE_LOAD_OPTION'`, `options` naming the function options that changed) to the error boundary instead of
+fetching again. A mounted reader keeps its load; the last 32 loads nothing mounted reads are kept for remounts and retries.
 **A failed load is thrown to the error boundary once and never retried by itself** (DECISIONS Q19): it is retried when an input
 changes, and after `resetSpecDataErrors()` (call it from the boundary's reset, e.g. react-error-boundary's
 `onReset={resetSpecDataErrors}`). The cache cannot detect a reset on its own: React can retry the failed render in a later task,

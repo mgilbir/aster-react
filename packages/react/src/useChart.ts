@@ -4,8 +4,8 @@ import { checkChartRows, checkSvgLength, createChartSession, renderSceneToSvg } 
 import { normalizeSpecResult, useStableContent, useStableSpec } from './spec.js'
 import { useDataInput, useStableLogger, useStablePolicy } from './inputs.js'
 import { useAddons } from './addons.js'
-import { acquireSpecData, retainSpecData, type SpecDataOptions } from './specData.js'
-export { resetSpecDataErrors } from './specData.js'
+import { acquireSpecData, isSpecDataWait, retainSpecData, type SpecDataOptions } from './specData.js'
+export { AsterUnstableLoadOptionError, resetSpecDataErrors } from './specData.js'
 
 /** The build's environment, as bundlers write it in (`process.env.NODE_ENV`); `process` may not exist at all (an unbundled import). */
 declare const process: { env: { NODE_ENV?: string } }
@@ -112,27 +112,31 @@ function given_(input: RuntimeInput): RuntimeInput {
  * (an allowlist), or a `baseURL` it is on; non-public hosts are refused unless
  * `allowPrivateNetwork` is set.
  *
- * Plus `cacheKey`: the host's own name for the load, part of the cache key. The
- * cache is shared by every component (and, on a server, by every request); the
- * spec and the data options are compared by content, but `fetch` / `allow` are
- * called through a latest-ref and only their code tells loads apart. Give a
- * `cacheKey` (a user id, a request id) when the same spec is loaded with
- * functions that close over different values, such as a per-user `fetch`.
+ * Plus `cacheKey`: the host's own name for the load. The cache is shared by every
+ * component (and, on a server, by every request): the spec and the data options
+ * are compared by content, and `fetch` / `allow` by IDENTITY, so two different
+ * functions (two closures of one factory included) are never served one load.
+ * With a `cacheKey` the functions are not part of the key and the latest one
+ * given is called: it is the way to share a load across function identities,
+ * and the fix for an inline arrow, which is a new function on every render.
  */
 export type UseSpecDataOptions = SpecDataOptions
 
 /**
  * The promise `useSpecData` reads: one per load, the same for every ask with the same inputs (see specData.ts for the key and
- * the lifetime). The spec and the data options are compared by content, `signal` by identity, and a function option by its code
- * and called through a latest-ref, so inline literals are safe. A rejected load stays the answer until an input changes or
- * `resetSpecDataErrors()` is called. The loader add-on is imported lazily: a host that never uses URL datasets never bundles the
+ * the lifetime). The spec and the data options are compared by content, so inline literals of them are safe; `signal` and the
+ * function options by identity, unless a `cacheKey` names the load (then the latest function is called). A function option that is
+ * new on every ask, without a `cacheKey`, throws `AsterUnstableLoadOptionError` after a bounded number of loads. A rejected load
+ * stays the answer until an input changes or `resetSpecDataErrors()` is called. The loader add-on is imported lazily: a host that never uses URL datasets never bundles the
  * csv/topojson readers.
  */
 export function loadSpecDataResource(
   spec: VgSpec,
   options: UseSpecDataOptions = {},
 ): Promise<VgSpec> {
-  return acquireSpecData(spec, options).promise
+  const load = acquireSpecData(spec, options)
+  // (a wait stand-in holds no data: ask again once it settles)
+  return isSpecDataWait(load) ? load.promise.then(() => loadSpecDataResource(spec, options)) : load.promise
 }
 
 /**
@@ -147,16 +151,24 @@ export function loadSpecDataResource(
  * // wrap in <Suspense fallback=…> and an error boundary
  * ```
  *
- * Inputs are compared as everywhere at the React boundary: an inline spec or options literal (an inline `allow` arrow included)
- * is the same load. A load that fails is thrown to the nearest error boundary, once: it is never retried by itself. It is tried
- * again when an input changes, and after `resetSpecDataErrors()`, which the boundary calls when it is reset:
+ * The spec and the data options are compared by content: an inline spec or options literal is the same load. Function options
+ * (`fetch`, `allow`) are compared by identity: hoist them, or give a `cacheKey` (then the latest function is called); an inline
+ * function without one throws `AsterUnstableLoadOptionError` after a bounded number of loads, instead of loading forever. A load
+ * that fails is thrown to the nearest error boundary, once: it is never retried by itself. It is tried again when an input
+ * changes, and after `resetSpecDataErrors()`, which the boundary calls when it is reset:
  *
  * ```tsx
  * <ErrorBoundary onReset={resetSpecDataErrors} fallbackRender={...}>
  * ```
  */
 export function useSpecData(spec: VgSpec, options: UseSpecDataOptions = {}): VgSpec {
-  const load = acquireSpecData(spec, options)
+  let load = acquireSpecData(spec, options)
+  // A wait stand-in (too many loads in flight for inputs that change identity on every render) holds no data: suspend on it, and
+  // ask again when it settles (React may replay this render with the settled stand-in, so its value is never used).
+  while (isSpecDataWait(load)) {
+    React.use(load.promise as Promise<VgSpec>)
+    load = acquireSpecData(spec, options)
+  }
   // (a mounted reader keeps its load in the cache; see specData.ts)
   React.useEffect(() => retainSpecData(load), [load])
   return React.use(load.promise as Promise<VgSpec>)

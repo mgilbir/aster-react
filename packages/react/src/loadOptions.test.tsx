@@ -57,15 +57,17 @@ describe('loader options are forwarded', () => {
     expect(loadSpecDataResource(spec, { fetch: f, allow: ANY, timeoutMs: 5000 })).toBe(a)
     const b = loadSpecDataResource(spec, { fetch: f, allow: ANY, timeoutMs: 6000 })
     expect(b).not.toBe(a)
-    // (C50: a function option is read through a latest-ref, so an inline arrow re-created by each render is the same option;
-    // what used to be asserted here -- a new identity is a new load -- is what made a suspended component reload forever.
-    // Functions with different code are still different loads, and `cacheKey` separates closures of the same code.)
+    // (functions are keyed by identity -- DECISIONS, later decisions: useSpecData function options -- and only a `cacheKey`
+    // shares a load across identities, with the latest function called)
     const allow = (): boolean => true
     const withAllow = loadSpecDataResource(spec, { fetch: f, allow })
-    expect(loadSpecDataResource(spec, { fetch: f, allow: (): boolean => true })).toBe(withAllow)
-    expect(loadSpecDataResource(spec, { fetch: f, allow: (): boolean => false })).not.toBe(withAllow)
-    expect(loadSpecDataResource(spec, { fetch: f, allow, cacheKey: 'other' })).not.toBe(withAllow)
-    await Promise.allSettled([a, b, withAllow])
+    expect(loadSpecDataResource(spec, { fetch: f, allow })).toBe(withAllow)
+    const other = loadSpecDataResource(spec, { fetch: f, allow: (): boolean => true })
+    expect(other).not.toBe(withAllow)
+    const named = loadSpecDataResource(spec, { fetch: f, allow, cacheKey: 'one' })
+    expect(named).not.toBe(withAllow)
+    expect(loadSpecDataResource(spec, { fetch: f, allow: (): boolean => true, cacheKey: 'one' })).toBe(named)
+    await Promise.allSettled([a, b, withAllow, other, named])
   })
 
   let variantRun = 0

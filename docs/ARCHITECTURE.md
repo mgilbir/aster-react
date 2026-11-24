@@ -497,8 +497,11 @@ the chart draws what it can. `Chart.error-channel.test.tsx` runs every way in on
 
 **Where a resource lives across renders.** React keeps no state for a component that suspended before it committed, so a
 Suspense resource must be found again from what the render passes. `useSpecData`'s cache (specData.ts) is keyed by the same
-rule: spec and data options by content, `signal` by identity, `fetch` / `allow` through a latest-ref (their code is part of the key
-as a guard; a host `cacheKey` separates closures of the same code). A rejected load stays the answer until an input changes or
+rule: spec and data options by content; `signal`, `fetch` and `allow` by identity, so closures of one factory (a per-request
+`fetch` with credentials) never share a load; a host `cacheKey` names a load, and then its functions are read through a latest-ref.
+An inline function without one would start a load per suspend retry: the cache counts such churn (a settled load never read again
+while the same inputs ask with new identities, and loads in flight nobody read again) and throws `AsterUnstableLoadOptionError`
+after a bounded number of loads. A rejected load stays the answer until an input changes or
 the error boundary's reset calls `resetSpecDataErrors()` (DECISIONS Q19): the cache cannot see a reset, and React can retry a
 failed render in a later task than the throw, so dropping a rejection by time refetches inside React's own retry.
 
