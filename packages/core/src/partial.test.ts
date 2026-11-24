@@ -28,14 +28,18 @@ describe('partial re-evaluation', () => {
     expect(a1).toBeTruthy()
     expect(b1).toBeTruthy()
 
-    const scene2 = evaluateChart(chart, { changedDatasets: ['b'] })
+    const newB = [{ x: 0, y: 70 }, { x: 1, y: 90 }]
+    const scene2 = evaluateChart(chart, { data: { b: newB }, changedDatasets: ['b'] })
     const [a2, b2] = scene2.items
     // a: untouched -> the SAME object identity (patcher-friendly)
     expect(a2).toBe(a1)
     // b: changed -> a new group
     expect(b2).not.toBe(b1)
-    // content correctness: b reflects the new values
-    expect(renderSceneToSvg(scene2)).toContain('blue')
+    // content correctness: the whole scene is the one a chart compiled afresh draws from the same data, and b's line is at the
+    // new values (red is a's, untouched, blue is b's)
+    const fresh = evaluateChart(compileChart(mkSpec(10, 20)), { data: { b: newB } })
+    expect(renderSceneToSvg(scene2)).toBe(renderSceneToSvg(fresh))
+    expect(renderSceneToSvg(scene2)).not.toBe(renderSceneToSvg(scene1))
   })
 
   it('full rebuild without changedDatasets (safe default)', () => {
@@ -48,14 +52,14 @@ describe('partial re-evaluation', () => {
 
   it('changed data actually re-encodes the affected mark', () => {
     const chart = compileChart(mkSpec(10, 20))
-    evaluateChart(chart)
     const chart2 = chart
+    const scene1 = evaluateChart(chart2)
     const scene2 = evaluateChart(chart2, {
       data: { b: [{ x: 0, y: 50 }, { x: 1, y: 50 }] },
       changedDatasets: ['b'],
     })
     // the reused group must still be the old object (identity)...
-    expect(scene2.items[0]).toBeTruthy()
+    expect(scene2.items[0]).toBe(scene1.items[0])
     // ...and the rebuilt group must carry the new data (y=50 -> mid-plot)
     const bGroup = scene2.items[1]
     const bLeaf = (bGroup as { items?: Array<{ y?: number }> }).items?.[0]
