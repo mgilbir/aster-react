@@ -6,6 +6,7 @@
  * then asked for its result. The arithmetic keeps the order of the reference d3-geo implementation
  * (compensated sums, terms added in event order) because path strings and measures are compared bit for bit.
  */
+import { meterTick } from './limits.js'
 import { Adder } from './arr.js'
 import {
   BATCH, Events, LINE_END, LINE_START, POINT, POLYGON_END, POLYGON_START, SPHERE, forEachChunk,
@@ -68,7 +69,10 @@ export class PathWriter implements PlanarSink {
   }
 
   add(ev: Events): void {
-    for (let i = 0, n = ev.length; i < n; i += BATCH) this.range(ev, i, Math.min(n, i + BATCH))
+    for (let i = 0, n = ev.length; i < n; i += BATCH) {
+      this.range(ev, i, Math.min(n, i + BATCH))
+      meterTick('geo path', BATCH)
+    }
   }
 
   private range(ev: Events, from: number, to: number): void {
@@ -147,7 +151,10 @@ export class ShapeBounds implements PlanarSink {
   }
 
   add(ev: Events): void {
-    for (let i = 0, n = ev.length; i < n; i += BATCH) this.range(ev, i, Math.min(n, i + BATCH))
+    for (let i = 0, n = ev.length; i < n; i += BATCH) {
+      this.range(ev, i, Math.min(n, i + BATCH))
+      meterTick('geo path', BATCH)
+    }
   }
 
   private range(ev: Events, from: number, to: number): void {
@@ -217,7 +224,10 @@ abstract class Walker implements PlanarSink {
   protected polygonEnd(): void {}
 
   add(ev: Events): void {
-    for (let i = 0, n = ev.length; i < n; i += BATCH) this.range(ev, i, Math.min(n, i + BATCH))
+    for (let i = 0, n = ev.length; i < n; i += BATCH) {
+      this.range(ev, i, Math.min(n, i + BATCH))
+      meterTick('geo path', BATCH)
+    }
   }
 
   private range(ev: Events, from: number, to: number): void {
@@ -292,7 +302,10 @@ export class BoundsBox implements PlanarSink {
   private y1 = -Infinity
 
   add(ev: Events): void {
-    for (let i = 0, n = ev.length; i < n; i += BATCH) this.range(ev, i, Math.min(n, i + BATCH))
+    for (let i = 0, n = ev.length; i < n; i += BATCH) {
+      this.range(ev, i, Math.min(n, i + BATCH))
+      meterTick('geo path', BATCH)
+    }
   }
 
   private range(ev: Events, from: number, to: number): void {

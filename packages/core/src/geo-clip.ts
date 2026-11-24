@@ -6,6 +6,7 @@
  * cut pieces are then re-joined into closed rings by walking along the clip boundary between the points
  * where pieces leave and re-enter (`rejoin`), so a polygon that crosses the boundary stays a polygon.
  */
+import { meterTick } from './limits.js'
 import {
   BATCH, Events, LINE_END, LINE_START, POINT, POLYGON_END, POLYGON_START, Run, SPHERE,
 } from './geo-events.js'
@@ -155,11 +156,16 @@ function rejoin(
   thread(boundary)
   for (const crossing of boundary) crossing.entering = startInside = !startInside
   const first = subject[0]!
+  // (every crossing before where the last search stopped has been passed through, so the next search starts there: the same
+  // crossing as a search from the first, in time linear in the crossings rather than quadratic)
+  let from = first
   for (;;) {
     // the next crossing no ring has passed through yet
-    let current = first
+    let current = from
     let onSubject = true
     while (current.visited) if ((current = current.next) === first) return
+    from = current
+    meterTick('geo clip')
     let points = current.piece
     out.mark(LINE_START, src)
     do {
@@ -580,7 +586,10 @@ class SphereClip {
 
   run(): Events {
     // in batches: a loop that runs long inside one call makes V8 compile it a second time for the loop alone
-    for (let i = 0, n = this.ev.length; i < n; i += BATCH) this.clipRange(i, Math.min(n, i + BATCH))
+    for (let i = 0, n = this.ev.length; i < n; i += BATCH) {
+      this.clipRange(i, Math.min(n, i + BATCH))
+      meterTick('geo clip', BATCH)
+    }
     return this.out
   }
 
@@ -916,7 +925,10 @@ class RectClip {
   }
 
   run(): Events {
-    for (let i = 0, n = this.ev.length; i < n; i += BATCH) this.rectRange(i, Math.min(n, i + BATCH))
+    for (let i = 0, n = this.ev.length; i < n; i += BATCH) {
+      this.rectRange(i, Math.min(n, i + BATCH))
+      meterTick('geo clip', BATCH)
+    }
     return this.out
   }
 

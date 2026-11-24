@@ -6,6 +6,7 @@
  * projection strays from the chord by more than the precision (or the arc spans a long angle, or the
  * midpoint is not near the middle of the chord), down to a bounded depth.
  */
+import { meterTick } from './limits.js'
 import { BATCH, Events, LINE_END, LINE_START, POINT, POLYGON_END, POLYGON_START } from './geo-events.js'
 import { EPSILON, RADIANS, asinClamped } from './geo-sphere.js'
 
@@ -100,7 +101,10 @@ class Resampler {
 
   run(ev: Events): Events {
     // in batches (see BATCH)
-    for (let i = 0, n = ev.length; i < n; i += BATCH) this.resampleRange(ev, i, Math.min(n, i + BATCH))
+    for (let i = 0, n = ev.length; i < n; i += BATCH) {
+      this.resampleRange(ev, i, Math.min(n, i + BATCH))
+      meterTick('geo resample', BATCH)
+    }
     return this.out
   }
 

@@ -12,6 +12,8 @@
  * parts of the albersUsa composite) be interleaved again in the order the input events arrived.
  */
 
+import { meterCoords } from './limits.js'
+
 export const POINT = 0
 export const LINE_START = 1
 export const LINE_END = 2
@@ -74,6 +76,10 @@ export class Events {
 
   private grow(atLeast = 0): void {
     const capacity = Math.max(this.op.length * 2, atLeast)
+    // (the events one geometry makes are a spec's to multiply: a projection's precision resamples a segment into thousands, a
+    // graticule's step makes lines by the thousand. Their storage is the built-in ceiling on generated positions, or the limits that
+    // replace it, counted as it grows, with or without limits; under limits each growth also samples the clock)
+    meterCoords(capacity - this.op.length, 'geo positions', capacity)
     const op = new Uint8Array(capacity)
     const x = new Float64Array(capacity)
     const y = new Float64Array(capacity)
