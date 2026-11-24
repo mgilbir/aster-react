@@ -2,7 +2,8 @@
  * A path, shape or geoshape mark is one `<path>` per item. An item whose path is empty (a GeoJSON geometry with no coordinates,
  * a `path` field that is '' or missing) is still drawn, with no `d` attribute and its fill and aria attributes. The picture of
  * `vega-lite/examples/specs/geo_choropleth` has 467 of them (counties whose geometry is an empty MultiPolygon).
- * Each spec runs in real vega and in the engine; the picture must be equal, and must really contain a `<path>` without `d`.
+ * Each spec runs in real vega and in the engine; the picture must be equal, and BOTH documents must really contain the `<path>`s without `d`
+ * -- the same ones, attribute for attribute: the canonicalizer drops a degenerate path, so the comparison of pictures alone cannot see them.
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
@@ -42,6 +43,15 @@ const CASES: Array<[string, Spec]> = [
   }],
 ]
 
+/** The `<path>` elements of a document that have no `d` (and are not a group's background or foreground), as sorted attribute lists. */
+function dless(svg: string): string[] {
+  return [...svg.matchAll(/<path\b([^>]*?)\/?>/g)]
+    .map((m) => m[1]!)
+    .filter((attrs) => !/\bd=/.test(attrs) && !/class="(background|foreground)"/.test(attrs))
+    .map((attrs) => [...attrs.matchAll(/([\w:-]+)="([^"]*)"/g)].map((a) => `${a[1]}=${a[2]}`).sort().join(' '))
+    .sort()
+}
+
 describe('items with an empty path are drawn without d (vs vega)', () => {
   for (const [name, spec] of CASES) {
     it(name, async () => {
@@ -50,6 +60,9 @@ describe('items with an empty path are drawn without d (vs vega)', () => {
       expect(/<path (?![^>]*\bd=)[^>]*role="graphics-symbol"/.test(want) || /<path (?![^>]*\bd=)[^>]*(fill|stroke)=/.test(want)).toBe(true)
       const got = renderSpec(structuredClone(spec) as never)
       expect(diffCanonical(canonicalizeSvg(want), canonicalizeSvg(got))).toEqual([])
+      // the d-less paths themselves, in the raw markup of both
+      expect(dless(want).length, 'vega draws d-less paths').toBeGreaterThan(0)
+      expect(dless(got), 'the engine draws the same d-less paths').toEqual(dless(want))
     })
   }
 })
