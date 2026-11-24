@@ -709,7 +709,9 @@
           "args": [
             {
               "$": "date",
-              "ms": null
+              "ms": {
+                "$": "nan"
+              }
             }
           ],
           "want": true
