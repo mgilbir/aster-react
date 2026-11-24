@@ -127,7 +127,7 @@
       "field": "g",
       "type": "nominal",
       "scale": {
-        "scheme": "tableau10"
+        "scheme": "set2"
       }
     }
   }

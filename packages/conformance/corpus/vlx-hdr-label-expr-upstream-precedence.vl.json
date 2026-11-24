@@ -1,7 +1,8 @@
 {
   "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "description": "vega-lite 6.4.3 substitutes datum.label into labelExpr without parentheses, so the ternary it emits binds last and the labels stay unchanged; pinned as upstream behaviour (the working form is vlx-hdr-label-expr-upper)",
   "padding": 5,
-  "autosize": "none",
+  "autosize": "pad",
   "data": {
     "name": "table",
     "values": [

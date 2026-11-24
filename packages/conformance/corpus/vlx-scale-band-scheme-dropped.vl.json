@@ -123,8 +123,9 @@
       }
     },
     "y": {
-      "field": "v",
-      "type": "quantitative"
+      "field": "y",
+      "type": "quantitative",
+      "aggregate": "sum"
     }
   }
 }
