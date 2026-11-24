@@ -28,7 +28,7 @@ import { join } from 'node:path'
 import { FETCH_COMMAND, readManifest, verifyCache } from './cache.js'
 import type { SwapOutcome } from './react.js'
 import { planSwap, swapGateProblems, type SwapPlan } from './swap-plan.js'
-import { GALLERY_DIR, listGallery, type GallerySpec, type Kind, type Outcome } from './lib.js'
+import { GALLERY_DIR, PINNED_DATASETS, datasetVersionMismatches, listGallery, nextPassingList, readSpec, type GallerySpec, type Kind, type Outcome } from './lib.js'
 import { cli } from '../../../../scripts/lib/cli.mjs'
 
 cli({ url: import.meta.url, flags: { path: 'eq', filter: 'eq', json: 'eq', 'print-passing': 'bool', 'regenerate-swap-pairs': 'bool' } })
@@ -118,6 +118,12 @@ await Promise.all(PATHS.filter((p) => p !== 'swap').map(runPath))
 // the swap path runs alone: it is the one that holds a chart across timers and a pointer drag, and the data loads of the other paths in flight would only add load-dependent timeouts to it
 if (PATHS.includes('swap')) await runPath('swap')
 
+// a spec that names another vega-datasets version than the pinned one is compared on the pinned bytes, in both engines: say so
+for (const g of specs) {
+  const other = datasetVersionMismatches(readSpec(g))
+  if (other.length) console.log(`DATA ${g.id}: asks for ${other.join(', ')}; both engines are given the pinned vega-datasets ${PINNED_DATASETS}`)
+}
+
 const kindOf = (id: string): Kind => (id.startsWith('vega/') ? 'vega' : 'vl')
 const dump: Record<string, Outcome[]> = {}
 for (const p of PATHS) {
@@ -145,10 +151,12 @@ for (const p of PATHS) {
   console.log(`-- failing on the ${p} path (${bad.length}), first diff each:`)
   for (const o of bad) console.log(`  ${o.status.toUpperCase().padEnd(5)} ${o.id}: ${o.reason ? `[${o.reason}] ` : ''}${o.first ?? ''}${o.firstContent && o.firstContent !== o.first ? `\n        -> ${o.firstContent}` : ''}`)
   if (!FILTER) {
-    const passed = new Set(out.filter((o) => o.status === 'pass').map((o) => o.id))
-    const regressed = passingList(p).filter((id) => !passed.has(id))
+    const { regressed, write } = nextPassingList(passingList(p), new Set(out.filter((o) => o.status === 'pass').map((o) => o.id)))
     if (regressed.length) problem(`${p}: ${regressed.length} spec(s) that passed at the recorded baseline no longer do: ${regressed.join(', ')}`)
-    if (PRINT_PASSING) writeFileSync(join(GALLERY_DIR, `passing-${p}.txt`), [...passed].sort().join('\n') + '\n')
+    // (the baseline is rewritten only by a run that lost nothing: a run that regressed would otherwise record its own loss as the
+    // new baseline, and from then on one new pass would cover it)
+    if (PRINT_PASSING && write === null) console.log(`  (--print-passing: passing-${p}.txt NOT rewritten, ${regressed.length} spec(s) regressed)`)
+    else if (PRINT_PASSING && write !== null) writeFileSync(join(GALLERY_DIR, `passing-${p}.txt`), write.join('\n') + '\n')
   }
 }
 if (PATHS.includes('swap') && !FILTER) {

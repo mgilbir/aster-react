@@ -112,16 +112,20 @@ identical outcomes for all 720 specs on both paths).
 
 ## The ratchet
 
-* `floors.json` - passing count per path and grammar (may only go up) and the unverifiable ceiling (may only go down). The one
-  exception so far: the React ceiling went from 7 / 10 to 11 / 12 when time-dependent oracles started to be measured
-  (`vega/clock`, `pacman`, `watch`, `donut-chart-labelled`, `vl/animated_gapminder`, `animated_hop`: each was a fail or an error
-  on that path, or hung; none was a pass). They are still checked on the static path, where the first frame is what is compared.
+* `floors.json` - passing count per path and grammar (may only go up) and the unverifiable ceiling (may only go down; see the
+  file for today's numbers).
 * `passing-static.txt`, `passing-react.txt` - the specs that pass today; each must still pass (a count floor alone lets a fix hide
   a regression).
 * the number of specs read must equal the manifest.
 
 When the numbers improve the gate says so: raise `floors.json` and regenerate the lists with
-`pnpm conformance:gallery --print-passing` (run it, review the diff, commit). Never lower a floor.
+`pnpm conformance:gallery --print-passing` (run it, review the diff, commit). Never lower a floor. A run in which any listed spec
+regressed does not rewrite its list (it would record the loss as the new baseline).
+
+A spec whose data URL names a vega-datasets version other than the pinned one (`manifest.json` `vegaDatasets`) is served the
+pinned file in both engines; the run prints a `DATA` line for each. Only `data/<file>` against the gallery's base URL and
+`cdn.jsdelivr.net/npm/vega-datasets[@<version>]/data/<file>` resolve; any other package, path or malformed escape is answered 404
+(the browser path aborts the request).
 
 It is **not** in `scripts/gates.mjs` (so `pnpm check` stays hermetic and needs no fetch): it takes about 90 s and needs the cache,
 so it runs in `.github/workflows/nightly.yml` after a cached fetch.
