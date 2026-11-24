@@ -22,6 +22,12 @@ export const UNITS: Array<[string, unknown]> = [
 
 /** Zones, and the offset (in minutes, behind UTC) each has on 1 July 2020: a zone that did not take effect fails the test, not passes it. */
 export const ZONES: Array<[string, number]> = [['UTC', 0], ['America/New_York', 240], ['Asia/Kolkata', -330], ['Australia/Lord_Howe', -630]]
+/** The offset the zone files expect of a zone, read from ZONES (a zone that is not in the list is an error, not a guess). */
+export const offsetOf = (zone: string): number => {
+  const found = ZONES.find(([z]) => z === zone)
+  if (found === undefined) throw new Error(`${zone} is not in ZONES`)
+  return found[1]
+}
 
 const VALUE = { field: 'v', type: 'quantitative' }
 type Make = (unit: unknown) => Record<string, unknown>

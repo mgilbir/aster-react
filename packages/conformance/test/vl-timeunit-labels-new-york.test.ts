@@ -6,7 +6,7 @@
  * cases are in vl-timeunit-labels-cases.ts; one file per zone lets the zones run side by side.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { FORMS, labelDifferences } from './vl-timeunit-labels-cases.js'
+import { FORMS, labelDifferences, offsetOf } from './vl-timeunit-labels-cases.js'
 
 const ZONE = 'America/New_York'
 let was: string | undefined
@@ -21,7 +21,7 @@ afterAll(() => {
 
 describe(`time-unit labels in ${ZONE}`, () => {
   it('the zone takes effect', () => {
-    expect(new Date('2020-07-01T00:00:00Z').getTimezoneOffset()).toBe(240)
+    expect(new Date('2020-07-01T00:00:00Z').getTimezoneOffset()).toBe(offsetOf(ZONE))
   })
   for (const [formName, make] of FORMS) {
     it(formName, async () => {
