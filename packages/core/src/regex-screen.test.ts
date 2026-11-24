@@ -1,8 +1,8 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest'
-import { regexHazard } from './regex-screen.js'
+import { regexHazard, regexModel } from './regex-screen.js'
 import { compileExpr } from './expression.js'
-import { withLimits, AsterLimitError } from './limits.js'
+import { withLimits, AsterLimitError, REGEX_MAX_INPUT, REGEX_RUN_BUDGET_MS } from './limits.js'
 import { spawnSync } from 'node:child_process'
 import { attack, expectLimit } from './attack.testkit.js'
 
@@ -197,19 +197,17 @@ describe('the screen terminates and is sound (child processes, hard kill)', () =
   }, 30_000)
 
   /**
-   * Every pattern the screen lets through runs promptly on inputs built to make it backtrack, at the default input cap: each
-   * character the pattern names repeated 10 000 times, with no suffix and with suffixes that fail it. Patterns are generated from a
-   * small grammar (seeded); V8 runs them in a child that the parent kills past its budget.
-   *
-   * "Promptly" is the screen's guarantee (docs/LIMITS.md): at most quadratic, at most WITHIN times the plain quadratic search of
-   * the same input (`[^]*\0`, every start position walking to the end and back), timed in the same process right before:
-   * V8's constant per step varies with the pattern's shape, which the screen's model does not see (measured against the
-   * reference: `(\dx*?)*x$` 3 to 5.5 times, `(\w?)+!` 7 to 15 times, `(\d)(\w?)+[^b]{2}!` 7 to 12.6 times, the screen's own
-   * bound `a*a{1,3}x` about 2.4 times), and the machine's load scales both (an absolute 1.5 s failed on `(\dx*?)*x$`, which
-   * runs 0.4 s on a quiet machine and 1.6 s in the gate), so an absolute time measures the machine. A slow answer is timed again,
-   * with the reference, before it counts. Patterns the screen refuses for the bounded run after a loop ran 137 to 180 times it.
+   * Every pattern the screen lets through, for a subject as long as the limits allow and a run budget, runs within that budget on
+   * inputs built to make it backtrack, at that length: each character the pattern names repeated to it, with no suffix and with
+   * suffixes that fail it. An absolute bound, since nothing can interrupt a running RegExp: the time a host is promised. Patterns
+   * are generated from a small grammar (seeded); V8 runs them in a child that the parent kills past its budget. Two limits: the
+   * default subject cap (10 000 characters: quadratic searches do not fit 100 ms there and are refused) and `maxStringLength: 1000`
+   * (they fit, and run).
    */
-  it('generated patterns the screen accepts run within 20 times the plain quadratic search on 10 000-character attack inputs', () => {
+  it.each([
+    { subject: REGEX_MAX_INPUT, budget: REGEX_RUN_BUDGET_MS },
+    { subject: 1000, budget: REGEX_RUN_BUDGET_MS },
+  ])('generated patterns the screen accepts for $subject characters run within $budget ms on attack inputs of that length', ({ subject, budget }) => {
     let s = 0x5eed
     const rand = (): number => { s = (Math.imul(s, 1103515245) + 12345) >>> 0; return s / 4294967296 }
     const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)]!
@@ -226,38 +224,32 @@ describe('the screen terminates and is sound (child processes, hard kill)', () =
       return out
     }
     const accepted: string[] = []
-    for (let n = 0; accepted.length < 300 && n < 20000; n++) {
+    let quadratic = 0
+    for (let n = 0; accepted.length < 300 && n < 40000; n++) {
       const p = (rand() < 0.3 ? '^' : '') + gen(0) + (rand() < 0.5 ? pick(['$', '!', 'x$']) : '')
       try { new RegExp(p) } catch { continue }
-      if (regexHazard(p) === null) accepted.push(p)
+      if (regexHazard(p, '', subject, budget) === null) {
+        accepted.push(p)
+        const m = regexModel(p)
+        if (m !== null && typeof m === 'object' && m.degree >= 2) quadratic++
+      }
     }
     expect(accepted.length).toBe(300)
+    // (not vacuous: at 1000 characters the accepted patterns include searches that backtrack quadratically)
+    if (subject <= 1000) expect(quadratic).toBeGreaterThan(30)
     const child = `
-      const pats = JSON.parse(process.argv[1]); const units = ['a', 'b', ' ', '1', 'x', 'ab', 'a ']; const tails = ['', '!', '\\n', 'b!']
-      const WITHIN = 20
-      const REF = /[^]*\\0/
-      const time = (re, s) => { const t0 = performance.now(); re.test(s); return performance.now() - t0 }
-      const inputs = []
-      for (const u of units) for (const t of tails) {
-        const s = u.repeat(Math.ceil(10000 / u.length)).slice(0, 10000 - t.length) + t
-        const ref = Math.min(time(REF, s), time(REF, s), time(REF, s))
-        // (a reference V8 answers without the search, by a check for a character the input lacks, would measure nothing)
-        if (!(ref > 5)) { process.stdout.write('REFERENCE ' + ref.toFixed(1) + ' ms: not the quadratic search\\n'); process.exit(4) }
-        inputs.push({ u, t, s, ref })
-      }
+      const [pats, subject, budget] = JSON.parse(process.argv[1]); const units = ['a', 'b', ' ', '1', 'x', 'ab', 'a ']; const tails = ['', '!', '\\n', 'b!']
       for (const p of pats) {
         const re = new RegExp(p)
-        for (const { u, t, s, ref } of inputs) {
+        for (const u of units) for (const t of tails) {
+          const s = u.repeat(Math.ceil(subject / u.length)).slice(0, subject - t.length) + t
           process.stdout.write(JSON.stringify(p) + '\\n')
-          const ms = time(re, s)
-          if (ms > WITHIN * ref) {
-            const ref2 = Math.min(ref, time(REF, s)), ms2 = Math.min(ms, time(re, s))
-            if (ms2 > WITHIN * ref2) { process.stdout.write('SLOW ' + ms2.toFixed(0) + ' ms against ' + ref2.toFixed(0) + ' ' + JSON.stringify([p, u, t]) + '\\n'); process.exit(3) }
-          }
+          const t0 = performance.now(); re.test(s); const ms = performance.now() - t0
+          if (ms > budget) { process.stdout.write('SLOW ' + ms.toFixed(0) + ' ' + JSON.stringify([p, u, t]) + '\\n'); process.exit(3) }
         }
       }
       process.stdout.write('DONE\\n')`
-    const res = spawnSync(process.execPath, ['-e', child, JSON.stringify(accepted)], { timeout: 240_000, encoding: 'utf8', maxBuffer: 1 << 26 })
+    const res = spawnSync(process.execPath, ['-e', child, JSON.stringify([accepted, subject, budget])], { timeout: 240_000, encoding: 'utf8', maxBuffer: 1 << 26 })
     const lines = (res.stdout ?? '').trim().split('\n')
     expect(lines[lines.length - 1], `killed or slow while running ${lines[lines.length - 1]}`).toBe('DONE')
   }, 300_000)
