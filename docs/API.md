@@ -513,7 +513,7 @@ focusable elements; non-React hosts can do the same. The keyboard contract is in
 
 #### `@aster-charts/core/hit`
 
-`buildHitIndex(scene)` returns `{ query(x, y), queryMark(x, y), pick(x, y), tooltip(x, y), size() }`. `query` returns anything
+`buildHitIndex(scene, cell?, { renderer?, strategy? })` (`strategy`: `'auto'`, the default, scans a small scene's boxes and builds a grid for a larger one that is asked more than a few questions; `'scan'` and `'grid'` force one, all three answer alike) returns `{ query(x, y), queryMark(x, y), pick(x, y), tooltip(x, y), size() }`. `query` returns anything
 painted; `queryMark` the items of interactive marks only (guides and group items' boxes excluded); `pick` is vega's `event.item`,
 the topmost item that takes the pointer (it looks through a mark with `interactive: false` and a guide part the spec did not make
 interactive, and finds the parts it did); `tooltip` is the item vega's tooltip handler is called with: the item `pick` finds, a
