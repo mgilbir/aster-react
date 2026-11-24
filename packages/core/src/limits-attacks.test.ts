@@ -241,12 +241,25 @@ describe('generated rows count against maxRows', () => {
 })
 
 describe('wall clock is sampled inside synchronous work', () => {
-  it('the encode loop samples the clock: 2.5M rows under 500 ms', async () => {
+  it('the encode loop samples the clock: 400k rows, the budget ends inside the encoding', async () => {
+    // The copy of the rows reads the clock too (every 1024 rows), so a real-time budget can end there and the test would name any
+    // phase: the budget is a count of reads of a VIRTUAL clock, set to run out at 85% of the reads of a whole run, which is past the
+    // copy and the dataset build, inside the loop that encodes the items. A loop that did not read the clock would leave the budget
+    // to run out at a checkpoint after it (and the phase would not be the mark's).
     const r = await attack(`
-      core.renderSpec({ width: 100, height: 100, data: [{ name: 't' }],
-        marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { field: 'a' }, y: { field: 'a' }, size: { value: 4 } } } }] },
-        { data: { t: new Array(2500000).fill({ a: 1 }) }, limits: { maxTimeMs: 500 } })`)
-    expectLimit(r, /maxTimeMs exceeded during (mark (symbol )?encoding|dataset build|startup)/, 500)
+      const spec = { width: 100, height: 100, data: [{ name: 't' }],
+        marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { field: 'a' }, y: { field: 'a' }, size: { value: 4 } } } }] }
+      const data = { t: new Array(400000).fill({ a: 1 }) }
+      const realNow = performance.now
+      let reads = 0
+      performance.now = () => ++reads
+      try {
+        core.renderSpec(spec, { data, limits: { maxTimeMs: 1e12 } })
+        const total = reads
+        reads = 0
+        core.renderSpec(spec, { data, limits: { maxTimeMs: Math.floor(total * 0.85) } })
+      } finally { performance.now = realNow }`)
+    expectLimit(r, /maxTimeMs exceeded during mark (symbol )?encoding$/)
   }, T)
 
   it('O(n^2) window median over 20k rows under 250 ms', async () => {
