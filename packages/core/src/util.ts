@@ -323,9 +323,12 @@ export function accessor<Out>(
   }) as Accessor<Out>
 }
 
-/** The accessor's display name, or `null` for a non-accessor. */
-export function accessorName(fn: unknown): string | null {
-  return fn == null ? null : ((fn as Accessor).fname ?? null)
+/**
+ * The accessor's display name, or `null` for no accessor. An accessor made with no name (an `{expr}` parameter) has none:
+ * `undefined`, which an output written under it shows as the key `"undefined"`, as upstream does.
+ */
+export function accessorName(fn: unknown): string | null | undefined {
+  return fn == null ? null : (fn as Accessor).fname
 }
 
 /** The field names an accessor reads, or `null` for a non-accessor. */

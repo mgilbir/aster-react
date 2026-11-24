@@ -11,7 +11,6 @@
  */
 import { fieldOf } from './transform-agg.js'
 import type { Row, TransformContext } from './transform.js'
-import { compileExprTransform } from './transform.js'
 import { allot, meterTick } from './limits.js'
 import { layoutRandom } from './layout-random.js'
 import { buildQuadTree, NO_CELL } from './quadtree.js'
@@ -441,15 +440,6 @@ const FORCE_PARAMS: Record<string, readonly string[]> = {
   y: ['strength', 'y'],
 }
 
-/** A parameter given as an expression turns into a function of the node (or link). */
-function numberParam(v: unknown, ctx: TransformContext): unknown {
-  if (v !== null && typeof v === 'object' && typeof (v as { expr?: unknown }).expr === 'string') {
-    const f = compileExprTransform((v as { expr: string }).expr, ctx)
-    return (d: unknown) => f(d as Row)
-  }
-  return v
-}
-
 // (the kind of every force was checked with the rest of the transform's parameters: see param-rules.ts)
 function buildForce(spec: Record<string, unknown>, ctx: TransformContext): Force {
   const name = spec.force as string
@@ -457,8 +447,8 @@ function buildForce(spec: Record<string, unknown>, ctx: TransformContext): Force
   // force has strength 1, not the 0.7 its definition lists)
   const given = (p: string): unknown => (FORCE_PARAMS[name]!.includes(p) ? spec[p] : undefined)
   const square = (p: string, fallback: number): number => { const v = given(p) as number | undefined; return v === undefined ? fallback : v * v }
-  const num = (p: string, fallback: number): number => { const v = given(p); return v === undefined ? fallback : +(numberParam(v, ctx) as number) }
-  const fn = <T>(p: string): Measure<T> | null => { const v = given(p); return v === undefined ? null : measure<T>(numberParam(v, ctx)) }
+  const num = (p: string, fallback: number): number => { const v = given(p); return v === undefined ? fallback : +(v as number) }
+  const fn = <T>(p: string): Measure<T> | null => { const v = given(p); return v === undefined ? null : measure<T>(v) }
   switch (name) {
     case 'center':
       return new CenterForce(num('x', 0), num('y', 0))
@@ -483,9 +473,8 @@ function buildForce(spec: Record<string, unknown>, ctx: TransformContext): Force
     default: {
       const axis = name as 'x' | 'y'
       const target = given(axis)
-      // (a field: a name read off the node)
-      const fieldName = typeof target === 'string' ? target : (target as { field?: unknown } | null)?.field
-      const acc = fieldName === undefined ? null : fieldOf(fieldName)
+      // (a field: a name read off the node, or the accessor a `{field}` / `{expr}` was made -- see param-resolve.ts)
+      const acc = typeof target === 'string' || typeof target === 'function' ? fieldOf(target) : null
       return new AxisForce(axis, acc ? (d) => +(acc(d) as number) : target === undefined ? null : measure<Node>(target), num('strength', 0.1))
     }
   }

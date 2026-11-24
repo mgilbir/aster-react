@@ -20,7 +20,7 @@ const definition = (type: string): Definition => (vega as unknown as { definitio
 const kindOf = (p: Param): string => (p.type === 'expr' ? 'expression' : p.type === 'compare' ? 'compare' : p.type === 'field' || p.expr ? 'field' : 'value')
 const refOf = (p: Param): Spec => (p.type === 'projection' ? { ref: 'projection' } : p.type === 'data' ? { ref: 'data' } : {})
 
-interface Read { name: string; kind: string; required: boolean; list: boolean; ref?: string; sub?: Array<{ key: Record<string, string>; params: Read[] }> }
+interface Read { name: string; kind: string; required: boolean; list: boolean; ref?: string; computed?: boolean; sub?: Array<{ key: Record<string, string>; params: Read[] }> }
 
 /**
  * What the spec's keys are for a definition, and how each is read: an index parameter is read from the keys `from` (the data set) and
@@ -30,11 +30,13 @@ const keysOf = (p: Param): Read[] =>
   p.type === 'index' ? [{ name: 'from', kind: 'value', required: false, list: false, ref: 'index' }, { name: 'key', kind: 'value', required: false, list: false }]
     : [{
       name: p.name, kind: kindOf(p), required: !!p.required, list: !!p.array, ...refOf(p),
+      // (a value vega computes per tuple when written `{field}` / `{expr}`, a constant otherwise: `expr: true` on no field)
+      ...(p.expr && p.type !== 'field' ? { computed: true } : {}),
       ...(p.type === 'param' ? { sub: (p.params as unknown as Array<{ key: Record<string, string>; params?: Param[] }>).map((s) => ({ key: s.key, params: (s.params ?? []).flatMap(keysOf) })) } : {}),
     }]
 
 const asRead = (p: ReturnType<typeof transformParams>[number]): Read => ({
-  name: p.name, kind: p.kind, required: p.required, list: p.list, ...(p.ref ? { ref: p.ref } : {}),
+  name: p.name, kind: p.kind, required: p.required, list: p.list, ...(p.ref ? { ref: p.ref } : {}), ...(p.computed ? { computed: true } : {}),
   ...(p.sub ? { sub: p.sub.map((s) => ({ key: { ...s.key }, params: s.params.map(asRead) })) } : {}),
 })
 

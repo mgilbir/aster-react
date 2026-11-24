@@ -1,22 +1,15 @@
 /**
- * How the raster transforms read their parameters: the accessor of a `field` parameter and the settings of a density
- * estimate. Shared by `contour` (in the core transforms) and `kde2d` (in the transforms add-on), which read the density
+ * How the raster transforms read the settings of a density estimate. Shared by `contour` (in the core transforms) and `kde2d` (in the transforms add-on), which read the density
  * settings the same way.
  *
  * Fixed by the observable behaviour: the density settings are read (and refused) in the order size, cell size,
  * bandwidth, with the messages `invalid size`, `invalid cell size` and `invalid bandwidth`.
  */
 import { array } from './util.js'
-import { fieldOf, type Row } from './row-keys.js'
+import type { Row } from './row-keys.js'
 
 type Params = Record<string, unknown>
 export type Get = (d: Row) => unknown
-
-/** The accessor of a `field` parameter: a field name, or an `{expr}` evaluated over the tuple. */
-export function accessorOf(f: unknown, compile: (expr: string) => Get): Get {
-  if (f !== null && typeof f === 'object' && typeof (f as { expr?: unknown }).expr === 'string') return compile((f as { expr: string }).expr)
-  return fieldOf(f) as Get
-}
 
 /** The settings of a density estimate: the view size, log2 of the cell size, and the bandwidth per axis (negative: estimate). */
 export interface DensitySettings {
