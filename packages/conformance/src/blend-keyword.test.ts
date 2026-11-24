@@ -81,6 +81,12 @@ describe('Vega-Lite: blend reaches the SVG only as a keyword', () => {
     })
     it(`${what}: a value that is not a keyword writes nothing`, () => {
       for (const h of HOSTILE) {
+        // (a literal that is not one of the schema's blend modes is refused by its path before anything is drawn (C245); the
+        // expression forms reach the sink, which writes only keywords)
+        if (!what.includes('expression')) {
+          expect(() => compile(make(h) as never), JSON.stringify(h)).toThrow(/\[aster\/vl\] (config\.)?mark\.blend: must be one of/)
+          continue
+        }
         const svg = render(make(h))
         expect(svg, JSON.stringify(h)).not.toContain('mix-blend-mode')
         expect(svg, JSON.stringify(h)).not.toMatch(/example\.invalid|fill: red|color: red/)
