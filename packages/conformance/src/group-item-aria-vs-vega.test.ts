@@ -5,8 +5,8 @@
  * vega-scenegraph writes an item's `description`, `aria`, `ariaRole` and `ariaRoleDescription` (the `ariaItemAttributes`
  * of util/aria.js) on the element of EVERY item, a group mark's item `<g transform>` included -- the mark's own container
  * carries the mark-level `description` / `aria`, which are a different thing and stay as they were. Each case runs
- * through real vega, the string renderer, the DOM renderer and the accessible tree: the strict canonicalizer judges the
- * documents (structure includes `role`, `aria-*`), and the tree must name exactly the group items vega describes.
+ * through real vega, the string renderer and the DOM renderer: the strict canonicalizer judges the documents (structure includes
+ * `role`, `aria-*`). The accessible tree must name exactly the group items vega describes in the last three tests of the file only.
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
