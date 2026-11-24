@@ -31,7 +31,7 @@ async function withVega(spec: Spec, after?: (view: any) => Promise<void> | void)
   const logger = { level() { return logger }, error: (...a: unknown[]) => { errors.push(classOf(a[0])); return logger }, warn: () => logger, info: () => logger, debug: () => logger }
   let view: any
   try {
-    view = new (vega as any).View(vega.parse(spec as never), { renderer: 'none', logger })
+    view = new (vega as any).View(vega.parse(structuredClone(spec) as never), { renderer: 'none', logger })
   } catch (e) {
     return { thrown: classOf(e), errors }
   }
@@ -109,7 +109,7 @@ describe('a null or undefined row where rows enter a dataset: the same TypeError
   for (const [name, rows] of Object.entries(HOST)) {
     const spec = frame([{ name: 't', values: [{ a: 9 }] }], [text('t')])
     it(`host rows (view.data / the data prop), ${name}: renderSpec and a session`, async () => {
-      const want = await withVega(spec, (view) => view.data('t', rows))
+      const want = await withVega(spec, (view) => view.data('t', structuredClone(rows)))
       // (vega's view.data throws before it changes anything; Aster's evaluation with those rows throws the same error)
       for (const run of [PATHS.renderSpec, PATHS.session]) {
         const got = withAster(run(spec, { data: { t: rows } }))
@@ -118,7 +118,7 @@ describe('a null or undefined row where rows enter a dataset: the same TypeError
       }
     })
     it(`a session given host rows and dataChanges over them, ${name}`, async () => {
-      const want = await withVega(spec, (view) => view.data('t', rows))
+      const want = await withVega(spec, (view) => view.data('t', structuredClone(rows)))
       const session = createChartSession()
       const start = rows.map((r) => (r == null ? { a: 0 } : r))
       session.evaluate(spec as never, { data: { t: start } })
@@ -126,7 +126,7 @@ describe('a null or undefined row where rows enter a dataset: the same TypeError
       expect(got.thrown).toBe(want.thrown)
     })
     it(`a stream append (view.insert), ${name}`, async () => {
-      const want = await withVega(spec, (view) => view.insert('t', rows))
+      const want = await withVega(spec, (view) => view.insert('t', structuredClone(rows)))
       const stream = createChartStream(spec as never)
       const got = withAster(() => { stream.push({ append: { t: rows } }); stream.flush(); return renderSceneToSvg(stream.scene()!) })
       expect(got.thrown).toBe(want.thrown)

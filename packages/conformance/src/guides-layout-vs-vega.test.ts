@@ -19,7 +19,7 @@ type Spec = Record<string, unknown>
 
 async function oracleSvg(spec: Spec): Promise<string> {
   const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(
-    vega.parse(spec as never),
+    vega.parse(structuredClone(spec) as never),
     { renderer: 'none' },
   )
   try {
@@ -136,7 +136,7 @@ describe('signal init and containerSize(): a container-sized spec falls back lik
     Object.defineProperty(el, 'clientHeight', { value: 260 })
     document.body.appendChild(el)
     const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { initialize(el: Element): unknown; runAsync(): Promise<unknown>; toSVG(): Promise<string>; finalize(): void } }).View(
-      vega.parse(spec as never), { renderer: 'none' })
+      vega.parse(structuredClone(spec) as never), { renderer: 'none' })
     view.initialize(el)
     await view.runAsync()
     const oracle = await view.toSVG()

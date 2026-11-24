@@ -26,7 +26,7 @@ async function oracle(spec: Spec): Promise<{ svg: string; errors: string[] }> {
     warn: () => logger, info: () => logger, debug: () => logger,
   }
   const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(
-    vega.parse(spec as never),
+    vega.parse(structuredClone(spec) as never),
     { renderer: 'none', logger },
   )
   try {
@@ -115,7 +115,7 @@ describe('recovered errors are logged and the render carries on, like vega', () 
 
   it('an expression that does not PARSE is a spec error and still throws (vega throws it from vega.parse)', async () => {
     const spec = frame([rect({ x: { field: 'a' } })], DATA({ transform: [{ type: 'filter', expr: 'datum.a >' }] }))
-    expect(() => vega.parse(spec as never)).toThrow()
+    expect(() => vega.parse(structuredClone(spec) as never)).toThrow()
     const logs: unknown[] = []
     expect(() => renderSpec(spec as never, { logger: { error: (...a) => { logs.push(a[0]) }, warn: () => {} } })).toThrow()
     expect(logs).toEqual([])
