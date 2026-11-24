@@ -15,6 +15,13 @@
  * compiler will actually run.
  */
 import { SpecParseError } from './parse-error.js'
+import { MARK_TYPES } from './event-selector.js'
+
+/**
+ * The mark types vega draws (the ones an event selector can name, but `*`). Any other `type` -- an unknown name, Vega-Lite's
+ * `circle`, `bar` or `geoshape`, another spelling, none -- is refused when the mark is compiled.
+ */
+export const VEGA_MARK_TYPES: ReadonlySet<string> = new Set(Object.keys(MARK_TYPES).filter((t) => t !== '*'))
 
 /** vega-util `array()`: a non-array becomes the one-element list, `null`/`undefined` the empty list. */
 export function specList(value: unknown): unknown[] {
