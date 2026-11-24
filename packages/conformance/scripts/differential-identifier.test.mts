@@ -13,9 +13,12 @@
  * them): marks and group marks of the view over the datasets, with an identifier among their transforms, are compared by the
  * numbers their items hold, which an item keeps for as long as it lives.
  *
- * Not covered, by design: rows added together to data that a `collect` sorts, upstream of an `identifier`, are numbered in the order
- * vega received them and Aster in sorted order (so a sort is only ever the last step of a dataset nobody derives from); a row that LEAVES a dataset and comes back later keeps its id in vega (it is the same tuple) but gets a
- * new one here (an evaluation keeps no row it no longer has); the programs never bring a row back. Replacing the rows of a
+ * Drawn, although this header once excluded them as differences: a row that LEAVES a dataset (the `lim` signal moves down and a filter
+ * drops it) and comes back (it moves up again) keeps its id, as in vega (it is the same tuple); rows added together to data a `collect`
+ * sorts, upstream of an `identifier`, are numbered as vega numbers them; and a dataset that sorts may be the source of another. Vega and
+ * Aster agree on all of these (the audit that listed them could not reproduce them); a difference there is a regression, and it fails here.
+ *
+ * Not covered, by design: replacing the rows of a
  * dataset by different ones is not a vega operation (it is remove + insert, new ids) but a diff here, so it is not generated.
  * The rows of a dataset that unions several are in the order vega received them, pulse by pulse, and here in the order of the
  * datasets they come from: the items a mark makes of rows that arrive together are numbered in that order, so marks are over data
@@ -36,7 +39,7 @@ interface Mark { name: string; type: 'rect' | 'group'; from: string; transform: 
 interface Program {
   datasets: Dataset[]
   marks: Mark[]
-  /** The first `lim`; every later one is larger (a row never comes back). */
+  /** The first `lim`; a later one is larger or smaller (a row that leaves comes back). */
   lim: number
   steps: Step[]
 }
@@ -61,12 +64,10 @@ function genProgram(rng: Rng, withSteps: boolean): Program {
   const row = (): Row => ({ k: `r${nextKey++}`, v: rng.between(0, 9), w: 0 })
   const n = rng.between(2, 5)
   const datasets: Dataset[] = []
-  // (datasets that end in a sort are nobody's source: see the header)
-  const sortedLast = new Set<number>()
   for (let i = 0; i < n; i++) {
     const name = `d${i}`
     const d: Dataset = { name, transform: [] }
-    const pool = [...Array(i).keys()].filter((j) => !sortedLast.has(j))
+    const pool = [...Array(i).keys()]
     if (i === 0 || !pool.length || rng.chance(0.4)) {
       d.values = Array.from({ length: rng.between(0, 5) }, row)
     } else {
@@ -81,14 +82,13 @@ function genProgram(rng: Rng, withSteps: boolean): Program {
         () => ({ type: 'formula', expr: 'datum.v * 2', as: 'dbl' }),
         () => ({ type: 'identifier', as: rng.pick(['id', 'id', 'id2']) }),
         () => ({ type: 'identifier', as: 'id' }),
+        // a sort ahead of an identifier: rows added together are numbered in the order they were received (and then sorted)
+        () => ({ type: 'collect', sort: { field: 'v', order: rng.pick(['ascending', 'descending']) } }),
       ])())
     }
     // every dataset carries at least one identifier, or there is nothing to compare
     if (!d.transform.some((t) => t.type === 'identifier')) d.transform.push({ type: 'identifier', as: rng.pick(['id', 'id2']) })
-    if (rng.chance(0.25)) {
-      d.transform.push({ type: 'collect', sort: { field: 'v', order: rng.pick(['ascending', 'descending']) } })
-      sortedLast.add(i)
-    }
+    if (rng.chance(0.25)) d.transform.push({ type: 'collect', sort: { field: 'v', order: rng.pick(['ascending', 'descending']) } })
     datasets.push(d)
   }
   // marks over the datasets whose transforms number their items (and may read the numbers)
@@ -113,7 +113,7 @@ function genProgram(rng: Rng, withSteps: boolean): Program {
     const name = rng.pick(names)
     // (an evaluation again with nothing changed)
     if (kind === 'again') prog.steps.push({ op: 'again' })
-    else if (kind === 'lim') prog.steps.push({ op: 'lim', to: (lim += rng.between(1, 3)) })
+    else if (kind === 'lim') prog.steps.push({ op: 'lim', to: (lim = Math.max(1, lim + rng.between(-3, 3))) })
     else if (kind === 'append') {
       const rows = Array.from({ length: rng.between(1, 3) }, row)
       live.get(name)!.push(...rows.map((r) => r.k as string))
