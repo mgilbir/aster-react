@@ -5,8 +5,11 @@
  * compared strictly: ring coordinates and orientation, grid values bit for bit (Float32), pixel bytes, thrown errors.
  *
  * The inputs are drawn from a seeded generator so a failure replays. Edge cases are in the draw on purpose: ties and
- * flat fields (saddles), NaN / +-Infinity / null / undefined / string cells, grids shorter than their size, unsorted and
- * invalid thresholds, empty and fractional sizes, flipped and translated scales, per-axis and zero bandwidths.
+ * flat fields (saddles), grids shorter than their size, unsorted and invalid thresholds, empty and fractional sizes, flipped and
+ * translated scales, per-axis and zero bandwidths. NaN / +-Infinity / null / undefined / string cells and invalid thresholds reach
+ * only the sections against vega (d3-contour and vega-geo differ on them, and Aster follows vega: see the note above the d3
+ * section); the d3 section draws only what the two share. The last block counts what each section compared (a floor each), so a
+ * generator that mostly refuses, or gives empty results, cannot pass.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import * as vega from 'vega'
@@ -79,17 +82,18 @@ function randomThresholds(r: Rng, pool: number[], odd: boolean): unknown[] {
 // JavaScript does. Aster follows vega (the oracle of the product), so this d3 comparison draws only what the two share and the
 // "contour of a value grid" section further down compares the odd inputs with vega itself.
 const CONTOUR_CASES = 1500
+const d3Tally = { cases: 0, refused: 0, withRings: 0 }
 describe(`d3-contour 4.0.2 vs Aster contour module (${CONTOUR_CASES} generated cases)`, () => {
   const r = prng(0xc0a7)
   for (let i = 0; i < CONTOUR_CASES; i++) {
     const big = i % 5 === 0
-    const odd = false
     const w = big ? int(r, 12, 48) : int(r, 0, 9)
     const h = big ? int(r, 12, 40) : int(r, 0, 9)
-    const { values, pool } = randomGrid(r, w, h, odd)
-    const thresholds = (randomThresholds(r, pool, odd) as number[]).sort((a, b) => a - b)
+    // (numbers only: the odd cells and thresholds are the sections against vega's)
+    const { values, pool } = randomGrid(r, w, h, false)
+    const thresholds = (randomThresholds(r, pool, false) as number[]).sort((a, b) => a - b)
     const smooth = chance(r, 0.6)
-    const typed = !odd && chance(r, 0.5)
+    const typed = chance(r, 0.5)
     // a size that need not match the grid: fractional, negative, NaN
     const size: [number, number] = chance(r, 0.04) ? [pick(r, [-1, NaN, Math.max(0, w - 1) + 0.7]), h] : chance(r, 0.15) ? [Math.max(0, w - int(r, 0, 2)), Math.max(0, h - int(r, 0, 2))] : [w + (chance(r, 0.1) ? 0.6 : 0), h]
     it(`#${i} ${w}x${h} size=${size} smooth=${smooth} ${typed ? 'f32' : 'array'} t=${JSON.stringify(thresholds)}`, () => {
@@ -97,6 +101,9 @@ describe(`d3-contour 4.0.2 vs Aster contour module (${CONTOUR_CASES} generated c
       const want = exact(() => d3Contour.contours().smooth(smooth).size(size).thresholds(thresholds as number[])(structuredClone(cells) as number[]))
       const got = exact(() => contourPolygons(structuredClone(cells) as number[], thresholds as number[], size, smooth))
       expect(got).toEqual(want)
+      d3Tally.cases++
+      if ((want as { $?: string })?.$ === 'throw') d3Tally.refused++
+      else if (Array.isArray(want) && want.some((c) => (c as { coordinates?: unknown[] }).coordinates?.length)) d3Tally.withRings++
     })
   }
 })
@@ -165,11 +172,17 @@ function flatten(rows: unknown[]): unknown[] {
   })
 }
 
+/** What each section compared: rows that were produced and equal, messages that were refused and equal, and results that were empty. */
+const tally = new Map<string, { compared: number; refused: number; empty: number }>()
+
 async function same(label: string, rows: Row[], transform: Params[]): Promise<void> {
   const want = await viaVega(rows, transform)
   const got = viaAster(rows, transform)
   if ('error' in want) {
     expect('error' in got ? got.error : 'no error', label).toContain(want.error)
+    const t = tally.get(label) ?? { compared: 0, refused: 0, empty: 0 }
+    t.refused++
+    tally.set(label, t)
     return
   }
   expect('error' in got ? got.error : null, label).toBeNull()
@@ -177,6 +190,10 @@ async function same(label: string, rows: Row[], transform: Params[]): Promise<vo
   const b = enc(flatten(want.rows))
   const d = firstDifference(a, b)
   if (d) expect.fail(`${label}: Aster differs from Vega at ${d}`)
+  const t = tally.get(label) ?? { compared: 0, refused: 0, empty: 0 }
+  t.compared++
+  if (want.rows.length === 0) t.empty++
+  tally.set(label, t)
 }
 
 /** The path of the first difference between two `enc` images (the full toEqual diff of a grid is unreadable). */
@@ -506,5 +523,28 @@ describe('vega-geo parameter refusals with several problems at once (generated, 
       const t = make(r)
       it(`${kind} #${i} ${JSON.stringify(enc(t))}`, async () => { await same(`${kind} problems`, rows, [t]) })
     }
+  }
+})
+
+// ------------------------------------------------------------------------------------------- what the sections compared
+describe('the raster sections compare what they claim (floors, measured: kde2d 260 equal results and 300 equal refusals, ...)', () => {
+  const floors: Record<string, { compared: number; refused?: number }> = {
+    kde2d: { compared: 180 }, isocontour: { compared: 350 }, contour: { compared: 110 }, heatmap: { compared: 80 }, 'contour values': { compared: 170 },
+    'contour points': { compared: 100 }, 'kde2d->isocontour': { compared: 115 }, 'heatmap grids': { compared: 150 },
+    'kde2d problems': { compared: 0, refused: 100 }, 'contour problems': { compared: 0, refused: 100 }, 'isocontour problems': { compared: 0, refused: 100 },
+  }
+  it('the d3-contour section drew rings, not only empty answers', () => {
+    expect(d3Tally.cases).toBe(CONTOUR_CASES)
+    expect(d3Tally.withRings, 'cases whose answer had rings').toBeGreaterThan(CONTOUR_CASES * 0.4)
+    expect(d3Tally.refused, 'cases d3 refused').toBeLessThan(CONTOUR_CASES * 0.1)
+  })
+  for (const [label, floor] of Object.entries(floors)) {
+    it(`${label}`, () => {
+      const t = tally.get(label) ?? { compared: 0, refused: 0, empty: 0 }
+      expect(t.compared, `${label}: equal results`).toBeGreaterThanOrEqual(floor.compared)
+      expect(t.refused, `${label}: equal refusals`).toBeGreaterThanOrEqual(floor.refused ?? 0)
+      // most results are not empty, or the section compares nothing
+      if (floor.compared > 0) expect(t.empty, `${label}: empty results`).toBeLessThan(t.compared * 0.5)
+    })
   }
 })
