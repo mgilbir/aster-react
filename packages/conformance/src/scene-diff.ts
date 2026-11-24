@@ -1,13 +1,27 @@
 /**
  * Scene-level differential.
  *
- * The SVG canonicalizer proves what a viewer sees; this compares the resolved
- * scenes *before* serialization: scale domains/ranges/bandwidth per scope,
- * group paint order, and per-item geometry/paint/stroke/extent records. It is
- * intentionally structural on the parts that are allowed to differ across
- * renderers (guide wrapper groups) and strict on the parts that must not.
+ * The SVG canonicalizer proves what a viewer sees; this compares the resolved scenes *before* serialization, as one tree on
+ * each side:
+ *   - the root scales, and every group item's own scales (by name, on both sides: a scale only one side has is a difference);
+ *   - in every scope (the root group, each group item), the marks in PAINT order: vega's scenegraph keeps definition order and
+ *     its renderers paint by `zindex` (stable: the items without one first, then by zindex), so the oracle's list is put in that
+ *     order; Aster's scene is in paint order already. The marks are compared as a sequence of role|marktype (a mark one side
+ *     has and the other lacks, or two marks of different types painted in the other order, is a difference);
+ *   - each mark's items: a multiset of item records (every encode channel the pinned Vega schema declares, `encodeEntry`, that
+ *     either side's item carries), and the paint order of items whose painted extents overlap (the only place it changes what a
+ *     viewer sees), with item `zindex` applied on the oracle's side as its renderers apply it;
+ *   - a group mark's items are compared one by one, each with its own scales and marks, recursively (facets, nested groups).
+ * Axes, legends and titles (role axis / legend / title) are left out on both sides: their scenegraphs are built differently
+ * (vega: group marks of parts; Aster: one node per guide), and their output is compared by the SVG gates and the guide
+ * differentials.
+ *
+ * The result carries what was compared (`items`, `attributes`, `marks`, `groups`, `scales`) and how many items the oracle's
+ * scene holds (`oracleItems`): the gate fails a spec whose oracle drew items of which none was compared.
  */
 import * as vega from 'vega'
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
 import {
   compileChart,
@@ -18,29 +32,70 @@ import {
   type SceneNode,
   type SceneRoot,
 } from '@aster-charts/core'
+import { forEngines } from './engines.js'
 
 export interface SceneDiffResult {
   diffs: string[]
+  /** group items compared (scopes) */
   groups: number
+  /** items compared (group items included) */
   items: number
+  /** channel values compared over those items */
+  attributes: number
+  /** marks compared */
+  marks: number
   scales: number
+  /** the items (group items included) of the oracle's scene, guides aside: what there was to compare */
+  oracleItems: number
 }
 
-interface ScopeRecord {
-  path: string
-  kind: string
-  scales: ScaleSnapshot[]
-  items?: SceneItem[]
+/** The encode channels of the pinned Vega schema (`encodeEntry`): what an item record holds, when either side's item has it. */
+const CHANNELS: readonly string[] = (() => {
+  const require = createRequire(import.meta.url)
+  const schemaPath = require.resolve('vega').replace(/build[\\/][^\\/]+$/, 'build/vega-schema.json')
+  const schema = JSON.parse(readFileSync(schemaPath, 'utf8')) as { definitions: { encodeEntry: { properties: Record<string, unknown> } } }
+  return Object.keys(schema.definitions.encodeEntry.properties).sort()
+})()
+
+/** A group item's channels Aster draws into its background path instead of keeping (see `itemRecord`). */
+const GROUP_DRAWN = ['cornerRadius', 'cornerRadiusTopLeft', 'cornerRadiusTopRight', 'cornerRadiusBottomLeft', 'cornerRadiusBottomRight', 'x2', 'y2', 'xc', 'yc']
+
+/**
+ * The path vega draws for a shape-drawn item (shape, geoshape, contour): its `shape` is a function of a context, which with no
+ * context returns the path string (vega-scenegraph path/shapes.js `shape`). Aster keeps that string as `shape`.
+ */
+function vegaShape(it: SceneItem): Record<string, unknown> {
+  const rec = it as unknown as { shape?: unknown; mark?: { shape?: unknown } }
+  const gen = (rec.mark?.shape ?? rec.shape) as { context?: (c: null) => (item: unknown) => unknown } | undefined
+  if (typeof gen?.context !== 'function') return {}
+  const d = gen.context(null)(it)
+  return typeof d === 'string' ? { shape: d } : {}
 }
 
-const NUM_KEYS = new Set([
-  'x', 'y', 'x2', 'y2', 'width', 'height', 'size', 'radius', 'innerRadius', 'outerRadius',
-  'startAngle', 'endAngle', 'angle', 'opacity', 'fillOpacity', 'strokeOpacity', 'strokeWidth',
-])
+/**
+ * What Aster keeps of a group item's own channels in another form: its aria channels in `itemAria` (the node's own `description`,
+ * `aria`, `ariaRole*` are its MARK's, drawn on the mark's container), its `clip` as a `contentClip` node wrapping its content,
+ * and its `strokeForeground` as a second `_bg` item after the content.
+ */
+function asterGroupItem(g: SceneGroup): Record<string, unknown> {
+  const aria = (g as { itemAria?: Record<string, unknown> }).itemAria ?? {}
+  const kids = g.items ?? []
+  const clipped = kids.some((c) => flag(c, 'contentClip'))
+  // (a stroke drawn in the foreground is a second `_bg` item after the content)
+  const foreground = kids.length > 1 && flag(kids[kids.length - 1], '_bg')
+  return { description: aria.description, aria: aria.aria, ariaRole: aria.ariaRole, ariaRoleDescription: aria.ariaRoleDescription, clip: clipped ? true : undefined, strokeForeground: foreground ? true : undefined }
+}
+
+/** Guides: compared by the SVG gates, not here (see the header). */
+const GUIDE_ROLES: ReadonlySet<string> = new Set(['axis', 'legend', 'title'])
+
+/** One side's scene as the comparison reads it. */
+interface CMark { key: string; items: CItem[] }
+interface CItem { item: SceneItem; record: string; fields: number; scales?: ScaleSnapshot[]; marks?: CMark[] }
 
 function keyOf(node: Record<string, unknown>): string {
   // Names are generated differently by hand-written Vega and by our compiler
-  // (`marks` vs. undefined), but role + marktype + sibling order is stable.
+  // (`marks` vs. undefined), but role + marktype is stable.
   return `${String(node.role ?? '')}|${String(node.marktype ?? '')}`
 }
 
@@ -53,6 +108,10 @@ function normValue(v: unknown): unknown {
   if (v instanceof Date) return v.getTime()
   if (typeof v === 'number') return round(v)
   if (Array.isArray(v)) return v.map(normValue)
+  if (v !== null && typeof v === 'object') {
+    const o = v as Record<string, unknown>
+    return Object.fromEntries(Object.keys(o).sort().filter((k) => typeof o[k] !== 'function').map((k) => [k, normValue(o[k])]))
+  }
   return v
 }
 
@@ -92,99 +151,6 @@ function scaleSnapshots(map: Record<string, unknown> | Map<string, unknown> | un
   return out.sort((a, b) => a.name.localeCompare(b.name))
 }
 
-function realRootItems(root: SceneNode): SceneNode[] {
-  const out: SceneNode[] = []
-  const visit = (node: SceneNode): void => {
-    const n = node as SceneGroup
-    if (!n.marktype && !n.role && !n.name && Array.isArray(n.items)) {
-      for (const c of n.items) visit(c)
-      return
-    }
-    if ((n.role === 'frame' || n.name === 'root') && Array.isArray(n.items)) {
-      for (const c of n.items) visit(c)
-      return
-    }
-    out.push(node)
-  }
-  visit(root)
-  return out
-}
-
-function collectRealScopes(
-  nodes: SceneNode[],
-  parent = '',
-  inherited: ScaleSnapshot[] = [],
-  out: ScopeRecord[] = [],
-): ScopeRecord[] {
-  const counts = new Map<string, number>()
-  for (const node of nodes) {
-    const n = node as SceneGroup
-    const items = Array.isArray(n.items) ? n.items : undefined
-    if (!items) continue
-    const ctx = (n as unknown as { context?: { scales?: Record<string, unknown> } }).context
-    // Vega puts a scope's context on the transparent group wrapping its
-    // children, not on the named group node itself. Prefer the node's own
-    // context, then the first wrapper child's context.
-    const childCtx = !ctx?.scales
-      ? items.find((c) => {
-          const cc = c as SceneGroup
-          return !cc.marktype && !cc.role && !cc.name
-        }) as unknown as { context?: { scales?: Record<string, unknown> } } | undefined
-      : undefined
-    const scaleCtx = ctx?.scales ? ctx : childCtx?.context?.scales ? childCtx.context : undefined
-    const scales = scaleCtx?.scales ? scaleSnapshots(scaleCtx.scales) : inherited
-    const transparent = !n.marktype && !n.role && !n.name
-    if (transparent) {
-      // Vega's scene wraps each scope in an unnamed group that carries the
-      // context (and therefore the resolved scales). Keep it out of the path.
-      collectRealScopes(items as SceneNode[], parent, scales, out)
-      continue
-    }
-    const key = keyOf(n as unknown as Record<string, unknown>)
-    const idx = counts.get(key) ?? 0
-    counts.set(key, idx + 1)
-    const path = `${parent}/${key}#${idx}`
-    const isMarkGroup = n.marktype !== 'group' && n.marktype != null
-    out.push({ path, kind: key, scales, ...(isMarkGroup ? { items: items as SceneItem[] } : {}) })
-    const groups = items.filter((i) => {
-      const c = i as SceneGroup
-      return !!c.items && (c.marktype === 'group' || c.marktype == null)
-    })
-    collectRealScopes(groups as SceneNode[], path, scales, out)
-  }
-  return out
-}
-
-function collectOurScopes(
-  nodes: SceneNode[],
-  parent = '',
-  out: ScopeRecord[] = [],
-): ScopeRecord[] {
-  const counts = new Map<string, number>()
-  for (const node of nodes) {
-    const n = node as SceneGroup
-    const items = Array.isArray(n.items) ? n.items : undefined
-    if (!items) continue
-    const key = keyOf(n as unknown as Record<string, unknown>)
-    const idx = counts.get(key) ?? 0
-    counts.set(key, idx + 1)
-    const path = `${parent}/${key}#${idx}`
-    const isMarkGroup = n.marktype !== 'group' && n.marktype != null
-    const scales = n.__scales ? fromOurScales(n.__scales) : []
-    // Top-level mark groups inherit the root snapshot for the scope check; a
-    // nested group only advertises its own local scales.
-    if (isMarkGroup || scales.length) {
-      out.push({ path, kind: key, scales, ...(isMarkGroup ? { items: items as SceneItem[] } : {}) })
-    }
-    const groups = items.filter((i) => {
-      const c = i as SceneGroup
-      return !!c.items && (c.marktype === 'group' || c.marktype == null)
-    })
-    collectOurScopes(groups as SceneNode[], path, out)
-  }
-  return out
-}
-
 function fromOurScales(scales: ScaleSnapshot[]): ScaleSnapshot[] {
   return scales.map((s) => ({
     name: s.name,
@@ -196,29 +162,40 @@ function fromOurScales(scales: ScaleSnapshot[]): ScaleSnapshot[] {
   })).sort((a, b) => a.name.localeCompare(b.name))
 }
 
-function itemRecord(it: SceneItem, marktype: string): string {
-  const rec = { ...(it as unknown as Record<string, unknown>) }
+/**
+ * The record of an item: every encode channel either side may carry, normalised. Returns the record and the channels it holds.
+ * `own` replaces channels the side keeps in another form (see `vegaShape`, `asterGroupItem`).
+ */
+function itemRecord(it: SceneItem, marktype: string, own: Record<string, unknown> = {}): { record: string; fields: number } {
+  const rec = { ...(it as unknown as Record<string, unknown>), ...own }
   // Area marks: vega keeps the baseline on y2 (with a NaN height) when the
   // spatial adjust ran; our builder folds it into y. Normalize to the baseline.
   if (marktype === 'area' && rec.y == null && typeof rec.y2 === 'number' && !Number.isFinite(rec.height as number)) {
     rec.y = rec.y2
   }
-  const parts: string[] = [String(rec.text ?? '')]
-  for (const key of NUM_KEYS) {
-    let v = rec[key]
-    // A symbol's default size (and therefore radius) is implicit in the scene;
-    // normalize it so a hand-written mark and a compiled mark agree.
-    if (key === 'size' && v == null && marktype === 'symbol') v = 30
-    if (typeof v === 'number' && Number.isFinite(v)) parts.push(`${key}=${round(v)}`)
-  }
-  for (const key of ['fill', 'stroke', 'strokeDash', 'strokeCap', 'strokeJoin', 'align', 'baseline', 'fontWeight', 'defined']) {
+  // vega's renderers read a missing position as 0 (`item.x || 0`), and a group's, rect's or image's missing size as 0: Aster
+  // writes the 0 out. A NaN is drawn as 0 too, but it is kept: it is a different value in every scene a host reads.
+  for (const k of ['x', 'y']) if (rec[k] === undefined) rec[k] = 0
+  if (marktype === 'group' || marktype === 'rect' || marktype === 'image') for (const k of ['width', 'height']) if (rec[k] === undefined) rec[k] = 0
+  // A symbol's default size (and therefore radius) is implicit in the scene;
+  // normalize it so a hand-written mark and a compiled mark agree.
+  if (marktype === 'symbol' && rec.size == null) rec.size = 30
+  // (a group item's corners and its x2 / y2: Aster keeps the background it draws -- the `_bg` path -- not the channels; the SVG
+  // gates compare that path)
+  if (marktype === 'group') for (const k of GROUP_DRAWN) delete rec[k]
+  // (a shape-drawn item's path is its `shape`, compared as such: Aster keeps a copy of it as `path` too, vega none)
+  if (marktype === 'shape' || marktype === 'geoshape' || marktype === 'contour') delete rec.path
+  // (an item `clip` or `strokeForeground` of false is no clip, no foreground stroke)
+  if (rec.clip === false) delete rec.clip
+  if (rec.strokeForeground === false) delete rec.strokeForeground
+  const parts: string[] = []
+  for (const key of CHANNELS) {
     const v = rec[key]
-    if (v != null) parts.push(`${key}=${JSON.stringify(normValue(v))}`)
+    if (v === undefined || typeof v === 'function') continue
+    if ((key === 'path' || key === 'shape') && typeof v === 'string') parts.push(`${key}=${v.replace(/-?\d+\.?\d*(?:e[-+]?\d+)?/gi, (m) => String(round(Number(m))))}`)
+    else parts.push(`${key}=${JSON.stringify(normValue(v))}`)
   }
-  if (typeof rec.path === 'string' && marktype !== 'shape' && marktype !== 'geoshape' && marktype !== 'contour') {
-    parts.push(`path=${rec.path.replace(/-?\d+\.?\d*(?:e[-+]?\d+)?/gi, (m) => String(round(Number(m))))}`)
-  }
-  return parts.join(';')
+  return { record: parts.join(';'), fields: parts.length }
 }
 
 function compareScales(a: ScaleSnapshot[], b: ScaleSnapshot[], scope: string, diffs: string[]): number {
@@ -252,6 +229,84 @@ function compareScales(a: ScaleSnapshot[], b: ScaleSnapshot[], scope: string, di
   return names.length
 }
 
+/**
+ * vega-scenegraph's paint order of a mark's items, or of a scope's marks: those without a (truthy) `zindex` first, in order, then
+ * the others by zindex, stable (scenegraph `zorder` + `visit`).
+ */
+function zorder<T>(nodes: readonly T[]): T[] {
+  const z = (n: T): number => Number((n as { zindex?: unknown }).zindex) || 0
+  if (!nodes.some((n) => z(n) !== 0)) return [...nodes]
+  const plain = nodes.filter((n) => z(n) === 0)
+  const indexed = nodes.map((n, i) => ({ n, i })).filter(({ n }) => z(n) !== 0).sort((a, b) => z(a.n) - z(b.n) || a.i - b.i).map(({ n }) => n)
+  return [...plain, ...indexed]
+}
+
+/** The oracle's marks of a scope (a group item of vega's scenegraph: its `items` are its marks), in paint order. */
+function vegaMarks(groupItem: SceneNode): CMark[] {
+  const marks = ((groupItem as SceneGroup).items ?? []) as SceneGroup[]
+  return zorder(marks.filter((m) => m.marktype != null && !GUIDE_ROLES.has(String(m.role)))).map((m) => {
+    const items = zorder((m.items ?? []) as SceneItem[])
+    const shaped = m.marktype === 'shape' || m.marktype === 'geoshape' || m.marktype === 'contour'
+    if (m.marktype !== 'group') return { key: keyOf(m as unknown as Record<string, unknown>), items: items.map((it) => ({ item: it, ...itemRecord(it, String(m.marktype), shaped ? vegaShape(it) : {}) })) }
+    return {
+      key: keyOf(m as unknown as Record<string, unknown>),
+      items: items.map((it) => {
+        // (vega puts a scope's context, and so its own scales, on the group item)
+        const ctx = (it as unknown as { context?: { scales?: Record<string, unknown> } }).context
+        return { item: it, ...itemRecord(it, 'group'), scales: ctx?.scales ? scaleSnapshots(Object.fromEntries(Object.entries(ctx.scales))) : [], marks: vegaMarks(it as unknown as SceneNode) }
+      }),
+    }
+  })
+}
+
+const flag = (n: unknown, k: string): boolean => (n as Record<string, unknown>)[k] === true
+
+/**
+ * Aster's marks of a scope, in its order (paint order). A leaf mark is a node holding its items; a group mark's items are
+ * consecutive group nodes of one `markIndex`; a group item holds its background (`_bg`), its content (perhaps wrapped in a
+ * `contentClip` node) and its foreground.
+ */
+function asterMarks(nodes: readonly SceneNode[]): CMark[] {
+  const out: CMark[] = []
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i] as SceneGroup
+    if (flag(n, '_bg')) continue
+    if (flag(n, 'contentClip')) { out.push(...asterMarks((n.items ?? []) as SceneNode[])); continue }
+    if (n.marktype === 'group' && !flag(n, '_scope') && !flag(n, 'emptyMark') && GUIDE_ROLES.has(String(n.role))) continue
+    if (n.marktype === 'group') {
+      const id = (n as { markIndex?: unknown }).markIndex
+      const run: SceneGroup[] = [n]
+      while (id !== undefined && i + 1 < nodes.length) {
+        const next = nodes[i + 1] as SceneGroup
+        if (next.marktype !== 'group' || (next as { markIndex?: unknown }).markIndex !== id || flag(next, '_bg')) break
+        run.push(next)
+        i++
+      }
+      out.push({
+        key: keyOf(n as unknown as Record<string, unknown>),
+        items: run.filter((g) => !flag(g, 'emptyMark')).map((g) => ({
+          item: g as unknown as SceneItem, ...itemRecord(g as unknown as SceneItem, 'group', asterGroupItem(g)),
+          scales: g.__scales ? fromOurScales(g.__scales) : [],
+          marks: asterMarks((g.items ?? []) as SceneNode[]),
+        })),
+      })
+      continue
+    }
+    if (n.marktype != null) {
+      out.push({ key: keyOf(n as unknown as Record<string, unknown>), items: ((n.items ?? []) as SceneItem[]).map((it) => ({ item: it, ...itemRecord(it, String(n.marktype)) })) })
+      continue
+    }
+    if (Array.isArray(n.items)) out.push(...asterMarks(n.items as SceneNode[]))
+  }
+  return out
+}
+
+function countItems(marks: readonly CMark[]): number {
+  let n = 0
+  for (const m of marks) for (const it of m.items) n += 1 + (it.marks ? countItems(it.marks) : 0)
+  return n
+}
+
 function itemBounds(it: SceneItem): { x1: number; y1: number; x2: number; y2: number } | null {
   const rec = it as unknown as Record<string, unknown>
   const x = rec.x
@@ -276,23 +331,25 @@ function overlaps(a: { x1: number; y1: number; x2: number; y2: number }, b: type
   return a.x1 < b.x2 && a.x2 > b.x1 && a.y1 < b.y2 && a.y2 > b.y1
 }
 
+interface Tally { diffs: string[]; groups: number; items: number; attributes: number; marks: number; scales: number }
+
 /**
  * Item equality is a multiset check; paint order is separately checked for
  * items whose painted extents actually overlap (the only place order changes
  * what a viewer sees).
  */
-function compareItems(real: SceneItem[], ours: SceneItem[], path: string, diffs: string[], marktype: string): void {
-  const realRecords = real.map((it) => itemRecord(it, marktype))
-  const ourRecords = ours.map((it) => itemRecord(it, marktype))
+function compareLeafItems(real: readonly CItem[], ours: readonly CItem[], path: string, t: Tally): void {
+  const realRecords = real.map((it) => it.record)
+  const ourRecords = ours.map((it) => it.record)
   const rs = [...realRecords].sort()
   const os = [...ourRecords].sort()
-  if (rs.length !== os.length) diffs.push(`${path}: item count ${rs.length} vs ${os.length}`)
-  const n = Math.max(rs.length, os.length)
+  const n = Math.min(real.length, ours.length)
+  t.items += n
+  for (let i = 0; i < n; i++) t.attributes += Math.max(real[i]!.fields, ours[i]!.fields)
+  if (rs.length !== os.length) t.diffs.push(`${path}: item count ${rs.length} vs ${os.length}`)
   let reported = 0
-  for (let i = 0; i < n; i++) {
-    if (rs[i] !== os[i]) {
-      if (reported++ < 6) diffs.push(`${path} item: ${rs[i] ?? '<none>'}  |  ${os[i] ?? '<none>'}`)
-    }
+  for (let i = 0; i < Math.max(rs.length, os.length); i++) {
+    if (rs[i] !== os[i] && reported++ < 6) t.diffs.push(`${path} item: ${rs[i] ?? '<none>'}  |  ${os[i] ?? '<none>'}`)
   }
   if (rs.length !== os.length) return
   // Paint order only matters where bounding boxes overlap. Match records to
@@ -302,10 +359,10 @@ function compareItems(real: SceneItem[], ours: SceneItem[], path: string, diffs:
   realRecords.forEach((r, i) => { if (!firstReal.has(r)) firstReal.set(r, i) })
   ourRecords.forEach((r, i) => { if (!firstOur.has(r)) firstOur.set(r, i) })
   for (let i = 0; i < real.length; i++) {
-    const bi = itemBounds(real[i]!)
+    const bi = itemBounds(real[i]!.item)
     if (!bi) continue
     for (let j = i + 1; j < real.length; j++) {
-      const bj = itemBounds(real[j]!)
+      const bj = itemBounds(real[j]!.item)
       if (!bj || !overlaps(bi, bj)) continue
       const ri = firstReal.get(realRecords[i]!)
       const rj = firstReal.get(realRecords[j]!)
@@ -313,68 +370,76 @@ function compareItems(real: SceneItem[], ours: SceneItem[], path: string, diffs:
       const oj = firstOur.get(realRecords[j]!)
       if (ri == null || rj == null || oi == null || oj == null) continue
       if ((ri - rj) * (oi - oj) < 0) {
-        diffs.push(`${path}: paint order differs for overlapping items (${realRecords[i]!.slice(0, 60)} / ${realRecords[j]!.slice(0, 60)})`)
+        t.diffs.push(`${path}: paint order differs for overlapping items (${realRecords[i]!.slice(0, 60)} / ${realRecords[j]!.slice(0, 60)})`)
         return
       }
     }
   }
 }
 
-/** Compare one spec (already Vega) through real Vega and the engine. */
+/** Compare the marks of one scope, in paint order, and everything below them. */
+function compareScope(real: readonly CMark[], ours: readonly CMark[], path: string, t: Tally): void {
+  const rk = real.map((m) => m.key)
+  const ok = ours.map((m) => m.key)
+  if (rk.join(',') !== ok.join(',')) t.diffs.push(`${path || '/'}: marks in paint order ${JSON.stringify(rk)} vs ${JSON.stringify(ok)}`)
+  // (marks are partnered by kind and occurrence, so one missing mark does not misalign every mark after it)
+  const seen = new Map<string, number>()
+  const partner = new Map<string, CMark[]>()
+  for (const m of ours) partner.set(m.key, [...(partner.get(m.key) ?? []), m])
+  for (const m of real) {
+    const k = seen.get(m.key) ?? 0
+    seen.set(m.key, k + 1)
+    const o = partner.get(m.key)?.[k]
+    const at = `${path}/${m.key}#${k}`
+    if (o === undefined) continue
+    t.marks++
+    if (m.key.endsWith('|group')) {
+      if (m.items.length !== o.items.length) t.diffs.push(`${at}: group item count ${m.items.length} vs ${o.items.length}`)
+      m.items.forEach((ri, i) => {
+        const oi = o.items[i]
+        if (oi === undefined) return
+        t.groups++
+        t.items++
+        t.attributes += Math.max(ri.fields, oi.fields)
+        const here = `${at}[${i}]`
+        if (ri.record !== oi.record) t.diffs.push(`${here} group item: ${ri.record}  |  ${oi.record}`)
+        t.scales += compareScales(ri.scales ?? [], oi.scales ?? [], here, t.diffs)
+        compareScope(ri.marks ?? [], oi.marks ?? [], here, t)
+      })
+    } else compareLeafItems(m.items, o.items, at, t)
+  }
+}
+
 /**
+ * Compare one spec (already Vega) through real Vega and the engine.
  * `adjustOurs` sees Aster's scene before it is compared: the gate's `--plant-difference` (scripts/scene-diff.mts) moves an
  * item there to prove the comparison and the exit path can fail.
  */
 export async function sceneDiff(spec: Record<string, unknown>, adjustOurs?: (scene: SceneRoot) => void): Promise<SceneDiffResult> {
   // URL datasets are part of the resolved scene; resolve them exactly as the
   // renderer would before comparing.
-  spec = await loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS) as unknown as Record<string, unknown>
   // (vega changes the rows of an inline dataset in place -- a force layout rewrites its link rows -- so each engine gets its own copy)
-  const ourSpec = structuredClone(spec)
-  const runtime = vega.parse(spec as never)
+  const [oracleSpec, ourSpec] = forEngines(await loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS) as unknown as Record<string, unknown>, (oracle, aster) => [oracle, aster] as const)
+  const runtime = vega.parse(oracleSpec as never)
   const view = new (vega as any).View(runtime, { renderer: 'none' })
-  const diffs: string[] = []
-  let groups = 0
-  let items = 0
-  let scales = 0
+  const t: Tally = { diffs: [], groups: 0, items: 0, attributes: 0, marks: 0, scales: 0 }
+  let oracleItems = 0
   try {
     await view.runAsync()
-    const realRoot = view.scenegraph().root as SceneNode
-    const realNodes = realRootItems(realRoot)
-    const realScopes = collectRealScopes(realNodes)
+    // vega's root is the frame mark; its one item is the root group, whose items are the view's marks
+    const rootItem = ((view.scenegraph().root as SceneGroup).items ?? [])[0] as SceneNode | undefined
+    const real = rootItem ? vegaMarks(rootItem) : []
+    oracleItems = countItems(real)
     const scene = evaluateChart(compileChart(ourSpec as never))
     adjustOurs?.(scene)
-    const ourScopes = collectOurScopes(scene.items)
+    const ours = asterMarks(scene.items)
     // Root scope scales come from the view's own runtime context (the scene's
     // context scales are operator wrappers; `_runtime.scales` is the root map).
     const rootScales = scaleSnapshots((view as unknown as { _runtime?: { scales?: Map<string, unknown> } })._runtime?.scales)
-    scales += compareScales(rootScales, fromOurScales(scene.__scales ?? []), 'root', diffs)
-
-    const realByPath = new Map(realScopes.map((s) => [s.path, s]))
-    for (const ours of ourScopes) {
-      const real = realByPath.get(ours.path)
-      if (!real) {
-        diffs.push(`${ours.path}: scope missing in oracle scene`)
-        continue
-      }
-      groups++
-      // Nested scopes compare their local scales; top-level mark groups are
-      // covered by the root snapshot above.
-      if (ours.scales.length) {
-        const only = new Set(ours.scales.map((s) => s.name))
-        scales += compareScales(real.scales.filter((s) => only.has(s.name)), ours.scales, ours.path, diffs)
-      }
-      if (ours.items) {
-        items += ours.items.length
-        if (!real.items) {
-          diffs.push(`${ours.path}: items missing in oracle scene`)
-          continue
-        }
-        compareItems(real.items, ours.items, ours.path, diffs, ours.kind.split('|')[1] ?? '')
-      }
-    }
+    t.scales += compareScales(rootScales, fromOurScales(scene.__scales ?? []), 'root', t.diffs)
+    compareScope(real, ours, '', t)
   } finally {
     view.finalize()
   }
-  return { diffs, groups, items, scales }
+  return { diffs: t.diffs, groups: t.groups, items: t.items, attributes: t.attributes, marks: t.marks, scales: t.scales, oracleItems }
 }
