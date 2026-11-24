@@ -151,6 +151,7 @@ function disk(cx: number, cy: number, r: number, near: Box): Pt[] {
     if (n <= MAX_CACHED_CIRCLE) unitCircles.set(n, unit) // (at most MAX_CACHED_CIRCLE small tables, whatever the widths drawn)
   }
   const p: Pt[] = new Array<Pt>(n)
+  // bounded: n is at most MAX_DISK_POINTS, ticked for above
   for (let i = 0; i < n; i++) p[i] = [cx + r * unit[2 * i]!, cy + r * unit[2 * i + 1]!]
   return p
 }

@@ -299,8 +299,8 @@ function arcsOf(root: TopoObject, filter: MeshFilter | undefined, arcCount: numb
       case 'LineString': listOf<number>(o.arcs, 'a LineString\'s "arcs"').forEach(note); break
       case 'MultiLineString': case 'Polygon':
         listOf<unknown>(o.arcs, `a ${o.type}'s "arcs"`).forEach((a) => listOf<number>(a, `a ${o.type}'s "arcs"`).forEach(note)); break
-      // bounded: the arcs of one geometry (the decode meters the positions they make)
       case 'MultiPolygon':
+        // bounded: the arcs of one geometry (the decode meters the positions they make)
         listOf<unknown>(o.arcs, 'a MultiPolygon\'s "arcs"').forEach((p) => listOf<unknown>(p, 'a MultiPolygon\'s "arcs"').forEach((a) => listOf<number>(a, 'a MultiPolygon\'s "arcs"').forEach(note))); break
     }
   }
