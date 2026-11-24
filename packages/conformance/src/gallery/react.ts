@@ -2,12 +2,11 @@
  * React path of the gallery gate: the page bundle (page-entry.tsx) is served to headless Chromium from a fake origin
  * (https://gallery.invalid/); every other request is answered from the vendored data on disk or ABORTED. No network.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync } from 'node:fs'
 import { join, dirname, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
-import { chromium, type BrowserContext } from 'playwright'
+import { chromium, type Browser, type BrowserContext } from 'playwright'
 import { BASE_URL, dataUrlsIn, localFileFor, readSpec, type GallerySpec, type Outcome } from './lib.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -24,7 +23,9 @@ const bodyOf = (file: string): Buffer => {
 async function routeOffline(ctx: BrowserContext, html: string, js: string): Promise<void> {
   await ctx.route('**/*', async (route) => {
     const url = route.request().url()
-    const u = new URL(url)
+    let u: URL
+    // (a request is always answered: fulfilled from disk, or aborted -- never left hanging)
+    try { u = new URL(url) } catch { return route.abort('blockedbyclient') }
     if (url === `${BASE_URL}index.html`) return route.fulfill({ status: 200, contentType: 'text/html', body: html })
     if (url === `${BASE_URL}page.js`) return route.fulfill({ status: 200, contentType: 'text/javascript', body: js })
     const file = localFileFor(url)
@@ -42,8 +43,8 @@ export async function runReact(specs: GallerySpec[], onResult: (o: Outcome) => v
 
 /** A Vega spec given inline (not a gallery file): `liveMs` is how much virtual time it runs before the frame is compared. */
 export interface InlineSpec { id: string; spec: Record<string, unknown>; liveMs?: number; clicks?: number[] }
-export async function runInline(specs: InlineSpec[], onResult: (o: Outcome) => void = () => undefined, workers = 3): Promise<Outcome[]> {
-  return runPage(specs, '__runGallery', (g) => ({ id: g.id, kind: 'vega', spec: g.spec, inline: true, ...(g.liveMs !== undefined ? { liveMs: g.liveMs } : {}), ...(g.clicks ? { clicks: g.clicks } : {}) }), onResult, workers)
+export async function runInline(specs: InlineSpec[], onResult: (o: Outcome) => void = () => undefined, workers = 3, hooks: RunHooks = {}): Promise<Outcome[]> {
+  return runPage(specs, '__runGallery', (g) => ({ id: g.id, kind: 'vega', spec: g.spec, inline: true, ...(g.liveMs !== undefined ? { liveMs: g.liveMs } : {}), ...(g.clicks ? { clicks: g.clicks } : {}) }), onResult, workers, hooks)
 }
 
 /** The spec-swap path: ONE mounted <Chart> goes from spec A to spec B; `vsOracle` also says whether it equals vega's B. */
@@ -54,21 +55,27 @@ export async function runSwap(pairs: SwapPair[], onResult: (o: SwapOutcome) => v
   return runPage(pairs, '__runSwap', (p) => ({ a: side(p.a), b: side(p.b) }), onResult, workers)
 }
 
-/** Test seam: `whileRunning` is called right after a spec has been sent to the page (the harness may be busy from then on). */
-export interface RunHooks { whileRunning?: () => void }
+/**
+ * Test seams: `whileRunning` is called right after a spec has been sent to the page (the harness may be busy from then on);
+ * `beforeOpen` before a worker opens its page (a throw there is a worker that cannot start); `onBrowser` is handed the browser.
+ */
+export interface RunHooks { whileRunning?: () => void; beforeOpen?: () => void; onBrowser?: (browser: Browser) => void }
 
 async function runPage<I extends { id: string }, O extends Outcome>(specs: I[], fn: '__runGallery' | '__runSwap', payload: (i: I) => unknown, onResult: (o: O) => void, workers: number, hooks: RunHooks = {}): Promise<O[]> {
-  const tmp = mkdtempSync(join(tmpdir(), 'aster-gallery-'))
+  // (the bundle is built in memory and served from it: nothing is written to disk)
+  const bundle = await build({
+    entryPoints: [join(HERE, 'page-entry.tsx')],
+    bundle: true, write: false, format: 'iife', platform: 'browser', jsx: 'automatic',
+    define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'error',
+  })
+  const js = bundle.outputFiles[0]!.text
+  const html = '<!doctype html><html><body><script src="./page.js"></script></body></html>'
+  const browser = await chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] })
+  hooks.onBrowser?.(browser)
+  // (a worker that fails -- a page that never becomes ready, a context that cannot open a page -- stops the others taking work
+  // and the browser is closed whatever happened: no Chromium is left running, and no worker reports after the run has failed)
+  let stopped = false
   try {
-    mkdirSync(tmp, { recursive: true })
-    const bundle = await build({
-      entryPoints: [join(HERE, 'page-entry.tsx')],
-      bundle: true, write: false, format: 'iife', platform: 'browser', jsx: 'automatic',
-      define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'error',
-    })
-    const js = bundle.outputFiles[0]!.text
-    const html = '<!doctype html><html><body><script src="./page.js"></script></body></html>'
-    const browser = await chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] })
     const results = new Map<string, O>()
     const queue = [...specs]
     const worker = async (): Promise<void> => {
@@ -76,11 +83,12 @@ async function runPage<I extends { id: string }, O extends Outcome>(specs: I[], 
       await routeOffline(ctx, html, js)
       let page = await ctx.newPage()
       const open = async (): Promise<void> => {
+        hooks.beforeOpen?.()
         await page.goto(`${BASE_URL}index.html`)
         await page.waitForFunction(() => '__runGallery' in window, null, { timeout: 30_000 })
       }
       await open()
-      for (let g = queue.shift(); g; g = queue.shift()) {
+      for (let g = stopped ? undefined : queue.shift(); g; g = stopped ? undefined : queue.shift()) {
         const t0 = Date.now()
         let o: O
         try {
@@ -97,15 +105,19 @@ async function runPage<I extends { id: string }, O extends Outcome>(specs: I[], 
           page = await ctx.newPage()
           await open()
         }
+        if (stopped) break
         results.set(g.id, o)
         onResult(o)
       }
       await ctx.close()
     }
-    await Promise.all(Array.from({ length: Math.min(workers, specs.length) }, worker))
-    await browser.close()
+    await Promise.all(Array.from({ length: Math.min(workers, specs.length) }, () => worker().catch((e: unknown) => {
+      stopped = true
+      throw e
+    })))
     return specs.map((g) => results.get(g.id)!)
   } finally {
-    rmSync(tmp, { recursive: true, force: true })
+    stopped = true
+    await browser.close()
   }
 }
