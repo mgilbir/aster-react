@@ -1,11 +1,44 @@
 import { describe, it, expect } from 'vitest'
 import { validateDataChanges } from './dataChanges.js'
-import { mergeBatches } from './batches.js'
+import { createBatchFold } from './batches.js'
+
+/** One batch with the effect of `a` then `b` (the producer queue's fold). */
+function mergeBatches<B extends object>(a: B, b: B): B {
+  const fold = createBatchFold<never>()
+  fold.add(a as never)
+  fold.add(b as never)
+  return fold.take() as unknown as B
+}
 import { contentEqual } from './spec.js'
 
 const rows = (n: number): unknown[] => Array.from({ length: n }, (_, i) => ({ i }))
 
 describe('validateDataChanges', () => {
+  it('generated: a changeset passes exactly when every position holds an integer index in range (C101)', () => {
+    // every kind of element, at every position of changesets of length 1..4 over 3 rows: a valid index, out of range, negative,
+    // fractional, NaN, undefined, null, a numeric string, a hole
+    const HOLE = Symbol('hole')
+    const kinds: unknown[] = [0, 2, 3, -1, 1.5, NaN, undefined, null, '1', HOLE]
+    const ok = (v: unknown): boolean => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < 3
+    let checked = 0
+    for (let len = 1; len <= 4; len++) {
+      for (let pos = 0; pos < len; pos++) {
+        for (const kind of kinds) {
+          const indices: number[] = []
+          for (let k = 0; k < len; k++) indices[k] = 1
+          if (kind === HOLE) delete indices[pos]
+          else indices[pos] = kind as number
+          const v = validateDataChanges({ t: indices }, { t: rows(3) }, new Map([['t', 3]]))
+          const expected = kind !== HOLE && ok(kind)
+          expect({ len, pos, kind: String(kind), passed: v.changes !== undefined }).toEqual({ len, pos, kind: String(kind), passed: expected })
+          if (!expected) expect(v.problems).toHaveLength(1)
+          checked++
+        }
+      }
+    }
+    expect(checked).toBe(100)
+  })
+
   it('passes a correct changeset', () => {
     expect(validateDataChanges({ t: [0, 2] }, { t: rows(3) }, new Map([['t', 3]]))).toEqual({ changes: { t: [0, 2] }, problems: [] })
   })
@@ -28,7 +61,7 @@ describe('validateDataChanges', () => {
   })
 })
 
-describe('mergeBatches', () => {
+describe('the batch fold (createBatchFold)', () => {
   it('concatenates appends, lets a later snapshot supersede earlier appends, keeps later scalars', () => {
     const merged = mergeBatches(
       { append: { t: [1], u: [1] }, signals: { a: 1 }, width: 10 },

@@ -20,7 +20,7 @@ import { validateDataChanges } from './dataChanges.js'
 import { SCALE_INFO_KEY, scalesFromSerialized, type SerializedScale } from './serialScales.js'
 import { SignalBinds, type SignalBindDef } from './binds.js'
 import {
-  checkSizeProp, createEventSignalStore, useControlledSignals, useDataInput, useStablePolicy, type EventSignalStore,
+  checkSizeProp, createEventSignalStore, useControlledSignals, useDataInput, useStableLogger, useStablePolicy, type EventSignalStore,
 } from './inputs.js'
 // The incremental DOM patcher ships as the `@aster-charts/core/dom` addon, which every chart needs. The canvas
 // renderer and the hit/signal event loop are NOT imported here: they arrive as the `canvas` and
@@ -547,11 +547,7 @@ function ChartView({
   // (read by the handle, whose identity never changes)
   const pngCapRef = React.useRef(pngCap)
   pngCapRef.current = pngCap
-  const hasLogger = logger != null
-  const stableLogger = React.useMemo<Logger | undefined>(
-    () => (hasLogger ? { error: (...a) => loggerRef.current?.error(...a), warn: (...a) => loggerRef.current?.warn(...a) } : undefined),
-    [hasLogger],
-  )
+  const stableLogger = useStableLogger(logger)
   const bindDefs = React.useMemo(
     () => ((spec.signals as SignalBindDef[] | undefined) ?? []).filter((s) => s && s.bind != null),
     [spec],
