@@ -43,7 +43,21 @@
           "y": { "scale": "y", "field": "sum" },
           "y2": { "scale": "y", "value": 0 },
           "fill": { "scale": "c", "field": "g" },
-          "fillOpacity": { "value": 0.7 }
+          "fillOpacity": { "value": 0.7 },
+          "stroke": { "value": "black" },
+          "strokeWidth": { "field": "rn" }
+        }
+      }
+    },
+    {
+      "type": "symbol",
+      "from": { "data": "table" },
+      "encode": {
+        "update": {
+          "x": { "scale": "x", "field": "g", "band": 0.5 },
+          "y": { "scale": "y", "field": "next" },
+          "size": { "signal": "datum.rank * 60" },
+          "fill": { "value": "firebrick" }
         }
       }
     }

@@ -149,6 +149,10 @@
     "color": {
       "field": "avg",
       "type": "quantitative"
+    },
+    "opacity": {
+      "field": "n",
+      "type": "quantitative"
     }
   }
 }
