@@ -44,19 +44,51 @@ export function readSpec(s: GallerySpec): Record<string, unknown> {
   return JSON.parse(readFileSync(s.file, 'utf8')) as Record<string, unknown>
 }
 
+/** The vega-datasets version the gallery's data is pinned to (gallery/manifest.json `vegaDatasets`, the installed package). */
+export const PINNED_DATASETS: string = (JSON.parse(readFileSync(join(GALLERY_DIR, 'manifest.json'), 'utf8')) as { vegaDatasets: string }).vegaDatasets
+
+/** What a gallery URL names: the vendored file, and the vega-datasets version a jsDelivr URL asks for (null: none stated). */
+export interface GalleryData { file: string; version: string | null }
+
 /**
- * Where a gallery URL lives on disk, or null when it is not one the galleries use. `data/x.csv` against the base URL
- * and `cdn.jsdelivr.net/npm/vega-datasets@<v>/data/x.csv` both mean the file `x.csv` of the pinned vega-datasets.
+ * What a gallery URL resolves to on disk, or null when it is not one the galleries use: `data/x.csv` against the base URL
+ * (the gallery's own copy of vega-datasets), or `cdn.jsdelivr.net/npm/vega-datasets[@<version>]/data/x.csv` -- that package and
+ * no other. Both are served from the PINNED vega-datasets; a URL that asks for another version is served the pinned bytes too,
+ * and `version` says which it asked for, so the run can record that the spec was compared on other bytes than it names (see
+ * `datasetVersionMismatches`). A path that does not decode (a malformed `%` escape) is not a gallery URL.
  */
-export function localFileFor(rawUrl: string): string | null {
+export function galleryDataFor(rawUrl: string): GalleryData | null {
   let u: URL
   try { u = new URL(rawUrl, BASE_URL) } catch { return null }
-  const okHost = u.hostname === 'gallery.invalid' || u.hostname === 'cdn.jsdelivr.net'
-  if (!okHost) return null
-  const m = /(?:^|\/)data\/([^/]+)$/.exec(decodeURIComponent(u.pathname))
-  if (!m) return null
-  const file = join(DATASETS_DIR, m[1]!)
-  return existsSync(file) ? file : null
+  let path: string
+  try { path = decodeURIComponent(u.pathname) } catch { return null }
+  let name: string
+  let version: string | null = null
+  if (u.hostname === 'gallery.invalid') {
+    const m = /^\/data\/([^/]+)$/.exec(path)
+    if (!m) return null
+    name = m[1]!
+  } else if (u.hostname === 'cdn.jsdelivr.net') {
+    const m = /^\/npm\/vega-datasets(?:@([^/]+))?\/data\/([^/]+)$/.exec(path)
+    if (!m) return null
+    version = m[1] ?? null
+    name = m[2]!
+  } else return null
+  const file = join(DATASETS_DIR, name)
+  return existsSync(file) ? { file, version } : null
+}
+
+/** The file a gallery URL resolves to (see `galleryDataFor`), or null. */
+export function localFileFor(rawUrl: string): string | null {
+  return galleryDataFor(rawUrl)?.file ?? null
+}
+
+/** The data URLs of a spec that ask for a vega-datasets version other than the pinned one (they are served the pinned bytes). */
+export function datasetVersionMismatches(spec: unknown): string[] {
+  return dataUrlsIn(spec).filter((url) => {
+    const v = galleryDataFor(url)?.version
+    return v != null && v.replace(/^v/, '') !== PINNED_DATASETS
+  })
 }
 
 /**
@@ -118,4 +150,13 @@ export function needsCanvas(message: string): boolean {
     .map((line) => (/^\s*at\s/.test(line) ? line.replace(/\s*\(.*\)\s*$/, '').replace(/^\s*at\s+(?:async\s+)?(?:file:|node:|\/|[A-Za-z]:\\).*$/, '') : line))
     .join('\n')
   return /getContext|canvas/i.test(withoutLocations)
+}
+
+/**
+ * The passing list a run may record, given the list recorded before and what passed now: a run in which a listed spec no longer
+ * passes records nothing (`write` null), so a regression can never become the baseline.
+ */
+export function nextPassingList(listed: readonly string[], passed: ReadonlySet<string>): { regressed: string[]; write: string[] | null } {
+  const regressed = listed.filter((id) => !passed.has(id))
+  return { regressed, write: regressed.length ? null : [...passed].sort() }
 }
