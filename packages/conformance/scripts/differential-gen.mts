@@ -66,12 +66,32 @@ export interface Case {
   label: string
   oracle: () => unknown
   aster: () => unknown
+  /**
+   * Whether the oracle's value (as `enc` shows it) is one worth comparing: the floors of a test count these. Without it, a value
+   * is informative when {@link holdsData} finds a finite number, a non-empty string or a date in it (an `undefined`, a NaN, an empty
+   * list or a bare `null` is not).
+   */
+  informative?: (value: unknown) => boolean
+}
+
+/** Whether an `enc` image holds a finite number, a non-empty string, a boolean or a date somewhere. */
+export function holdsData(v: unknown): boolean {
+  if (typeof v === 'number') return Number.isFinite(v)
+  if (typeof v === 'string') return v !== ''
+  if (typeof v === 'boolean') return true
+  if (Array.isArray(v)) return v.some(holdsData)
+  if (v !== null && typeof v === 'object') {
+    const tag = (v as { $?: unknown }).$
+    if (tag !== undefined) return tag === 'date' || tag === 're'
+    return Object.values(v).some(holdsData)
+  }
+  return false
 }
 
 /**
  * Run `count` generated cases; collect the first mismatches (with their label) and throw one error listing them.
- * Returns how many cases the oracle refused (threw) and how many produced a non-null value, so a generator whose
- * cases mostly refuse or parse to null can be told apart from one that exercises the code.
+ * Returns how many cases the oracle refused (threw) and how many produced a value worth comparing (`Case.informative`), so a
+ * generator whose cases mostly refuse or produce nothing can be told apart from one that exercises the code.
  */
 export function compareCases(name: string, count: number, gen: (i: number) => Case): { cases: number; refused: number; informative: number } {
   const bad: string[] = []
@@ -84,7 +104,7 @@ export function compareCases(name: string, count: number, gen: (i: number) => Ca
     const want = outcome(c.oracle)
     const got = outcome(c.aster)
     if ((want as { threw?: string }).threw) refused++
-    else if ((want as { value?: unknown }).value !== null) informative++
+    else if ((c.informative ?? holdsData)((want as { value?: unknown }).value)) informative++
     if (JSON.stringify(want) !== JSON.stringify(got)) {
       failures++
       if (bad.length < 5) {
