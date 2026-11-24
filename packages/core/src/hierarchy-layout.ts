@@ -11,6 +11,7 @@ import { layoutRandom } from './layout-random.js'
 import { GOLDEN_RATIO, TILINGS, tileColumns } from './treemap-tiling.js'
 import { walkPostOrder, walkPreOrder } from './tree-walk.js'
 import { orderOf } from './tuple-order.js'
+import { meterTick } from './limits.js'
 
 // -- shared by every layout -----------------------------------------------------------------------------------------
 
@@ -86,6 +87,7 @@ function writeLayout(rows: Row[], root: HierNode, fields: string[], as: string[]
   // of its own a second time)
   let written: Map<Row, Row> | undefined
   return rows.map((r, i) => {
+    if ((i & 1023) === 1023) meterTick('hierarchy', 1024)
     const own = out[i] ?? byData?.get(r)
     if (own) return own
     if (!written) {

@@ -214,7 +214,12 @@ The pre-flight reads the spec's lists the way the compiler does (vega-util `arra
 `renderSpec`, `evaluateChart`, `getChartInfo`, a session's `evaluate`/`change` and the worker
 handler each open one. It is checked at phase boundaries (`pre-flight`, `compile`,
 `evaluate`, `render`) and, inside the evaluation, every 1024 rows/items or at each metered
-site (see below). It does **not** cover:
+site (see below). Every pass over the rows reads it as it goes, not only after it: the copy of
+the rows a dataset is given, each transform's pass (a `formula` or `filter`'s expression per row,
+the rows `bin`, `timeunit`, `identifier`, `lookup`, `project`, `geopoint` write, a `stack` or
+`pivot`'s grouping), every 1024 comparisons of a sort of the data, and every 1024 nodes of a
+hierarchy walk; a time budget stops a pass over a million rows within a few milliseconds of
+running out (`limits-clock.test.ts`). It does **not** cover:
 
 - anything it cannot interrupt: a single synchronous native call (a regular expression, see
   below), or `compileChart` itself;

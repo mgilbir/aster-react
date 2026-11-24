@@ -16,7 +16,8 @@ import { SpecParseError } from './parse-error.js'
 import { isDiscrete, isQuantile } from './scale.js'
 import { aggregateGroup } from './transform.js'
 import { part } from './engine-parts.js'
-import { ascending, error as raise, isArray, isObject, isString, pushAll, sortData } from './util.js'
+import { ascending, error as raise, isArray, isObject, isString, pushAll } from './util.js'
+import { sortMetered } from './limits.js'
 
 export interface ScaleContext {
   width: number
@@ -197,7 +198,7 @@ function orderedKeys(categories: Keyed[], ordering: Ordering | undefined): unkno
   const column = columnName(ordering.op, ordering.field)
   const direction = (ordering.order || 'ascending') === 'descending' ? -1 : 1
   const ranked = categories.map((category, position) => ({ category, position }))
-  sortData(ranked, (a, b) => ascending(a.category[column], b.category[column]) * direction || a.position - b.position)
+  sortMetered(ranked, (a, b) => ascending(a.category[column], b.category[column]) * direction || a.position - b.position, 'scale domain')
   return ranked.map((r) => r.category.key)
 }
 

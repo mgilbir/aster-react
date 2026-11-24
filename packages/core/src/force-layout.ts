@@ -11,7 +11,7 @@
  */
 import { fieldOf } from './transform-agg.js'
 import type { Row, TransformContext } from './transform.js'
-import { allot, meterTick } from './limits.js'
+import { allot, copiedRows, meterTick } from './limits.js'
 import { layoutRandom } from './layout-random.js'
 import { buildQuadTree, NO_CELL } from './quadtree.js'
 
@@ -487,7 +487,7 @@ function buildForce(spec: Record<string, unknown>, ctx: TransformContext): Force
  * vega's tuples are.
  */
 export function forceRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext & { dynamicParams?: ReadonlySet<string> }): Row[] {
-  const nodes = (ctx.inPlace ? rows : rows.map((r) => ({ ...r }))) as Node[]
+  const nodes = (ctx.inPlace ? rows : copiedRows(rows, 'force')) as Node[]
   const specs = ([] as Array<Record<string, unknown>>).concat((t.forces as Array<Record<string, unknown>> | undefined) ?? [])
   const sim = new Simulation(nodes)
   let iters = (t.iterations as number | undefined) || 300
