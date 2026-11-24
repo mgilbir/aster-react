@@ -72,6 +72,8 @@ const dragging: Spec = { ...FRAME, signals: [{ name: 'moved', value: 0, on: [{ e
 describe('a mounted <Chart> whose spec changes draws what vega draws for the new spec', () => {
   const eligible: Array<{ name: string; spec: Spec }> = []
   const all: Array<{ name: string; spec: Spec }> = []
+  // what the sample did not use, and why (named: nothing leaves the sample unrecorded)
+  const left: string[] = []
   beforeAll(async () => {
     const files = readdirSync(CORPUS).filter((f) => f.endsWith('.vg.json')).sort()
     const rand = mulberry32(0x5eed1)
@@ -79,20 +81,25 @@ describe('a mounted <Chart> whose spec changes draws what vega draws for the new
     while (names.size < 70) names.add(files[Math.floor(rand() * files.length)]!)
     for (const f of names) {
       const spec = JSON.parse(readFileSync(join(CORPUS, f), 'utf8')) as Spec
-      if (JSON.stringify(spec).includes('"url"')) continue // (loaded data is the gallery gate's business)
+      if (JSON.stringify(spec).includes('"url"')) { left.push(`${f}: loaded data`); continue } // (loaded data is the gallery gate's business)
       all.push({ name: f, spec })
       // B must already be drawn as vega draws it by a fresh mount
       let want: ReturnType<typeof canonicalizeSvg>
-      try { want = canonicalizeSvg(await vegaSvg(spec)) } catch { continue }
+      try { want = canonicalizeSvg(await vegaSvg(spec)) } catch (e) { left.push(`${f}: vega throws: ${String(e).slice(0, 80)}`); continue }
       const m = mount()
       m.render(SHELLS[0]![1](spec))
-      if (diffCanonical(want, canon(m.container)).length === 0) eligible.push({ name: f, spec })
+      const fresh = diffCanonical(want, canon(m.container))
+      if (fresh.length === 0) eligible.push({ name: f, spec })
+      else left.push(`${f}: a fresh mount differs from vega: ${fresh[0]!.slice(0, 80)}`)
     }
   }, 120_000)
 
   for (const [shell, element] of SHELLS) {
     it(`${shell}: A -> B equals vega's B, over a seeded sample of corpus pairs and live specs`, async () => {
-      expect(eligible.length).toBeGreaterThanOrEqual(35)
+      // the sample of 70 corpus files: one loads data (not a case here); every other B is one vega draws and a fresh mount draws alike
+      expect(left).toEqual(['image.vg.json: loaded data'])
+      expect(all.length).toBe(69)
+      expect(eligible.length).toBe(all.length)
       const rand = mulberry32(0xbee5)
       const pairs: Array<[string, Spec, { name: string; spec: Spec }]> = []
       for (let i = 0; i < 50; i++) pairs.push(['', all[Math.floor(rand() * all.length)]!.spec, eligible[Math.floor(rand() * eligible.length)]!])
