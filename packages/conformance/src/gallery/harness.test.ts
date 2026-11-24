@@ -1,11 +1,13 @@
 /**
- * The gallery harness's own contracts (audit C394, C507, C528, C537).
+ * The gallery harness's own contracts (audit C394, C507, C527, C528, C537).
  */
 import { describe, expect, it } from 'vitest'
 import type { Browser } from 'playwright'
 import { datasetVersionMismatches, galleryDataFor, localFileFor, nextPassingList, PINNED_DATASETS } from './lib.js'
 import { runInline } from './react.js'
 import { settleWithin } from '../render-vega.js'
+import { logged, vegaSvg, warned } from './oracle.js'
+import { oracleProblem } from './static.js'
 
 describe('gallery data URLs (C394)', () => {
   it('resolves the gallery\'s own data/ and the jsDelivr vega-datasets package, with the version it asks for', () => {
@@ -56,4 +58,29 @@ describe('runPage (C528)', () => {
     expect(browser).toBeDefined()
     expect(browser!.isConnected()).toBe(false)
   }, 120_000)
+})
+
+describe('a broken oracle is not a pass (C527)', () => {
+  it('names an error vega logged, and a data file it could not load, as the reason the spec is unverifiable', () => {
+    expect(oracleProblem([], [])).toBeNull()
+    expect(oracleProblem(['TypeError: x is undefined\n    at f'], [])).toEqual({ reason: 'oracle-logged-error', first: 'TypeError: x is undefined' })
+    expect(oracleProblem([], ['Loading failed: 404'])).toEqual({ reason: 'oracle-load-failed', first: 'Loading failed: 404' })
+    expect(oracleProblem(['Error: getContext of null'], [])?.reason).toBe('oracle-needs-canvas (Node has none)')
+  })
+
+  it('the oracle the gallery renders with logs a formula that throws, and a file that does not load', async () => {
+    const spec = (data: unknown, extra: unknown[] = []) => ({ width: 20, height: 20, data: [data, ...extra], marks: [] })
+    logged.length = 0
+    warned.length = 0
+    await vegaSvg(spec({ name: 't', values: [{ a: 1 }], transform: [{ type: 'formula', expr: 'datum.a.b.c.d', as: 'z' }] }) as never)
+    expect(oracleProblem(logged, warned), JSON.stringify([logged, warned])).not.toBeNull()
+    logged.length = 0
+    warned.length = 0
+    await vegaSvg(spec({ name: 't', url: 'data/no-such-file.json', format: { type: 'json' } }) as never)
+    expect(oracleProblem(logged, warned), JSON.stringify([logged, warned])).not.toBeNull()
+    logged.length = 0
+    warned.length = 0
+    await vegaSvg(spec({ name: 't', values: [{ a: 1 }] }) as never)
+    expect(oracleProblem(logged, warned)).toBeNull()
+  })
 })
