@@ -142,7 +142,6 @@ interface Mounted { container: HTMLElement; errors: Error[]; unmount(): void }
 
 function mount(variant: Variant, props: Record<string, unknown>): Mounted {
   if (typeof document === 'undefined') throw new Error('the variant matrix needs a DOM: add `// @vitest-environment jsdom` to this test file')
-  ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   const errors: Error[] = []
   const container = document.createElement('div')
   document.body.appendChild(container)

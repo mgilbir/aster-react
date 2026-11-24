@@ -138,7 +138,7 @@ forEachVariant(['svg'], (Chart, variant) => {
       expect(Number.isFinite(interval!.y![0])).toBe(true)
       expect(Number.isFinite(interval!.y![1])).toBe(true)
 
-      root!.unmount()
+      act(() => { root!.unmount() })
     })
   })
 
