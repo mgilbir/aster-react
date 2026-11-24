@@ -10,7 +10,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import * as vega from 'vega'
 import { compileExpr, type ExpressionRuntime } from '../../core/src/expression.ts'
-import { exact, expectSameOutcome, loggedThrow, quietLogger, withTz } from './differential-util.mts'
+import { exact, loggedThrow, quietLogger, withTz } from './differential-util.mts'
+import { expectSameOutcome } from './differential-outcome.mts'
 
 // each case sweeps hundreds of inputs through a real vega View: slower than a unit test, more so under a parallel run
 vi.setConfig({ testTimeout: 60_000 })
