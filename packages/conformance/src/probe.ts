@@ -22,6 +22,7 @@ import { renderWithVega } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 import { parseProbeArgs } from './probe-verdict.js'
 import { plantSvg } from './gate-plant.js'
+import { forEngines } from './engines.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
 import { GATE_FLAGS, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
 
@@ -47,12 +48,13 @@ function loadProbes(dir: string): ProbeEntry[] {
 
 async function runOne(entry: ProbeEntry, plant: boolean) {
   try {
-    const spec = entry.kind === 'vg' ? entry.spec : (vl.compile(entry.spec as any).spec as unknown as Record<string, unknown>)
-    const [oracleSvg, ourSvg] = await Promise.all([
-      renderWithVega(spec),
+    const spec = entry.kind === 'vg' ? entry.spec : (vl.compile(structuredClone(entry.spec) as any).spec as unknown as Record<string, unknown>)
+    // (each engine its own copy: vega writes onto the rows it ingests)
+    const [oracleSvg, ourSvg] = await forEngines(spec, (oracle, aster) => Promise.all([
+      renderWithVega(oracle),
       // url datasets resolve through the load addon, exactly what a real host does
-      loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS).then((loaded) => renderSpec(loaded as never)),
-    ])
+      loadSpecData(aster as never, TRUSTED_LOAD_OPTIONS).then((loaded) => renderSpec(loaded as never)),
+    ]))
     const diffs = diffCanonical(canonicalizeSvg(oracleSvg), canonicalizeSvg(plant ? plantSvg(ourSvg) : ourSvg))
     return { pass: diffs.length === 0, diffs }
   } catch (err) {

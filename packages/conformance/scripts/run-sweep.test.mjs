@@ -125,6 +125,26 @@ describe('run-sweep verdicts', { timeout: 60_000 }, () => {
     expect(within.code, within.out).toBe(0)
   })
 
+  it("each engine gets its own copy: an engine with the oracle's transform removed differs (C61)", async () => {
+    const r = await sweep('transform-removed', '--floor', '1', '--min-ok', '0', '--max-node-error', '0')
+    expect(r.code, r.out).toBe(1)
+    expect(r.out).toMatch(/\[differ\] stacked/)
+    expect(r.out).toMatch(/0 ok, .* 1 differ/)
+  })
+
+  it("a later case does not read what an earlier case's oracle wrote onto a shared table (C61)", async () => {
+    const r = await sweep('shared-table', '--floor', '2', '--min-ok', '0', '--max-node-error', '0')
+    expect(r.code, r.out).toBe(1)
+    expect(r.out).toMatch(/1 ok, .* 1 differ/)
+    expect(r.out).toMatch(/\[differ\] b-unstacked/)
+  })
+
+  it('the Vega-Lite path compiles each engine from its own copy (C61)', async () => {
+    const r = await sweep('vl-transform-removed', '--floor', '1', '--min-ok', '0', '--max-node-error', '0')
+    expect(r.code, r.out).toBe(1)
+    expect(r.out).toMatch(/\[differ\] vl-stacked/)
+  })
+
   it('retained cases without a ceiling are not a pass', async () => {
     const r = await sweep('write-retained', '--floor', '1', '--min-ok', '0', '--max-node-error', '0')
     expect(r.code, r.out).toBe(1)

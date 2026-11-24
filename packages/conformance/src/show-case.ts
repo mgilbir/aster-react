@@ -11,6 +11,7 @@ import { renderSpec } from '@aster-charts/core'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
 import { compile as compileVL } from '@aster-charts/vl'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { forEngines } from './engines.js'
 
 cli({ url: import.meta.url, args: '<case-name-substr>' })
 
@@ -43,13 +44,16 @@ const c = cases.find((x: any) => x.name.includes(filter))
 if (!c) { console.error('no case matches'); process.exit(1) }
 console.log(`case: ${c.name} (${c.family}.${c.property})`)
 
-const oracleVg = (vl as unknown as { compile: (s: unknown) => { spec: unknown } }).compile(c.spec).spec
-const ourVg = compileVL(c.spec as never)
+// (each engine its own copy of the case: vega writes onto the rows it ingests)
+const [oracleVg, ourVg] = forEngines(c.spec as Record<string, unknown>, (oracle, aster) => [
+  (vl as unknown as { compile: (s: unknown) => { spec: unknown } }).compile(oracle).spec,
+  compileVL(aster as never),
+] as const)
 writeFileSync('/tmp/case-oracle.vg.json', JSON.stringify(oracleVg, null, 1))
 writeFileSync('/tmp/case-ours.vg.json', JSON.stringify(ourVg, null, 1))
 writeFileSync('/tmp/case-source.vl.json', JSON.stringify(c.spec, null, 1))
 
-const runtime = vega.parse(oracleVg as never)
+const runtime = vega.parse(structuredClone(oracleVg) as never)
 const view = new (vega as any).View(runtime, { renderer: 'none' })
 await view.runAsync()
 writeFileSync('/tmp/case-oracle.svg', await view.toSVG())

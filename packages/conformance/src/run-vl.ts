@@ -39,19 +39,11 @@ import { compile as compileOurs } from '@aster-charts/vl'
 import { renderWithVega, renderWithVegaChecked } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 import { plantSvg } from './gate-plant.js'
+import { deepFreeze, forEngines } from './engines.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
 import { GATE_FLAGS, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
 
 cli({ url: import.meta.url, flags: GATE_FLAGS, args: '[filter]' })
-
-/** Recursively freeze so any in-place write by the compiler throws (ESM is strict). */
-function deepFreeze<T>(v: T): T {
-  if (v !== null && typeof v === 'object' && !Object.isFrozen(v)) {
-    Object.freeze(v)
-    for (const k of Object.keys(v as object)) deepFreeze((v as Record<string, unknown>)[k])
-  }
-  return v
-}
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const DIRS: Array<{ dir: string; aster: boolean }> = [
@@ -93,14 +85,17 @@ function multisetLines(o: { records: string[] }, u: { records: string[] }, diffs
 async function runCase(spec: Record<string, unknown>, plant: boolean): Promise<CaseResult> {
   let vegaOk = false
   try {
-    const oracleVg = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, unknown> } }).compile(spec).spec
-    const before = JSON.stringify(spec)
-    const ourVg = compileOurs(deepFreeze(JSON.parse(before)))
+    // each compiler its own copy of the input (ours deep-frozen: compile must never write onto its input), and every render its
+    // own copy of the Vega it renders (vega writes onto the rows it ingests)
+    const [oracleVg, ourVg] = forEngines(spec, (oracle, aster) => [
+      (vl as unknown as { compile: (s: unknown) => { spec: Record<string, unknown> } }).compile(oracle).spec,
+      compileOurs(deepFreeze(aster) as never) as unknown as Record<string, unknown>,
+    ] as const)
     const ourPlain = (): Record<string, unknown> => JSON.parse(JSON.stringify(ourVg))
     const [oracleSvg, checked, oracleChecked] = await Promise.all([
-      renderWithVega(oracleVg),
+      renderWithVega(structuredClone(oracleVg)),
       renderWithVegaChecked(ourPlain()),
-      renderWithVegaChecked(oracleVg),
+      renderWithVegaChecked(structuredClone(oracleVg)),
     ])
     const inherited = new Set([...oracleChecked.errors, ...oracleChecked.warnings])
     const bad = [
