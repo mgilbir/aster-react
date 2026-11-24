@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { compileChart, evaluateChart, applyTransforms, renderSpec } from './index.js'
 import { buildStratifyTree } from './transform.js'
 import { minOf, maxOf, pushAll } from './util.js'
-import { attack } from './attack.testkit.js'
+import { attack, expectReturned } from './attack.testkit.js'
 import type { VgSpec } from './types.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -186,9 +186,7 @@ describe('bin follows vega-statistics bin()', () => {
           [{ type: 'bin', field: 'x', extent: [1, 99], as: ['b0', 'b1'], ...${JSON.stringify(params)} }],
           { runtime: { expr() { throw new Error('no expressions') } }, signals: {} })
         return JSON.stringify(rows)`)
-      expect(r.killed, 'hang').toBe(false)
-      expect(r.threw).toBeNull()
-      expect(r.value).toBe(oracle)
+      expectReturned(r, oracle)
     }, 30_000)
   }
 
@@ -207,8 +205,9 @@ describe('bin follows vega-statistics bin()', () => {
         core.renderSpec({ width: 100, height: 100, signals: [{ name: 'b', value: { start: 0, stop: 10, step } }],
           scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: [0, 100], bins: { signal: 'b' } }],
           axes: [{ orient: 'bottom', scale: 'x' }] })
-      }`)
-    expect(r.killed, 'hang').toBe(false)
+      }
+      return true`)
+    expectReturned(r, true)
   }, 30_000)
 })
 
