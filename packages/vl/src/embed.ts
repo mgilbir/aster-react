@@ -103,7 +103,7 @@ export function renameFragment(node: unknown, r: Renames): void {
 }
 
 /** Legend properties that name the scale the legend describes. */
-const LEGEND_SCALE_PROPS = new Set(['fill', 'stroke', 'size', 'shape', 'opacity', 'strokeWidth', 'strokeDash', 'fillOpacity', 'strokeOpacity', 'angle'])
+export const LEGEND_SCALE_PROPS: ReadonlySet<string> = new Set(['fill', 'stroke', 'size', 'shape', 'opacity', 'strokeWidth', 'strokeDash', 'fillOpacity', 'strokeOpacity', 'angle'])
 
 /** Rename dataset references (`from.data`, scale-domain `data`, facet `data`) in place. */
 export function renameDataRefs(node: unknown, map: ReadonlyMap<string, string>): void {

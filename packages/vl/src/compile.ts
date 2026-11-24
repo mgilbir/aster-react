@@ -7,7 +7,7 @@
  * oracle's; the rendered output must not.
  */
 
-import { EXPRESSION_KEYS, relabelUnits, renameDataRefs, renameExpr, renameFragment, userExpression } from './embed.js'
+import { EXPRESSION_KEYS, LEGEND_SCALE_PROPS, relabelUnits, renameDataRefs, renameExpr, renameFragment, userExpression } from './embed.js'
 import { mergeBins, optimizeData } from './optimize.js'
 import { tokenize } from './expr-tokens.js'
 import { VLCompileError, pushAll, flatField, datumRef as dref, genName, safeKey, splitAccessPath, dict, own, setOwn } from './names.js'
@@ -2637,7 +2637,14 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
     const rank = (n: unknown): number => (n === `${CH}_width` || n === `${CH}_x_step` || n === 'x_step' ? 0 : n === `${CH}_height` || n === `${CH}_y_step` || n === 'y_step' ? 1 : 2)
     facetChildSignals.sort((a, b) => rank(a.name) - rank(b.name))
   }
-  const renames = { signals: sizeSigMap, scales: new Map<string, string>(indepScales.map((i) => [i.ch, `${CH}_${i.ch}`] as [string, string])) }
+  // --- independent scales of the other channels (resolve.scale.color / size / shape ...: independent; resolve.ts) ---
+  // Each cell owns the channel's scale (`child_color`), over the cell's data, as it owns `theta`; the legend of such a scale is the
+  // cell's too (parseLegend: an independent scale makes its legend independent), and so is a legend resolved independent over a scale
+  // the cells share.
+  const resolveLegendF = isObject(spec.resolve) && isObject((spec.resolve as Record<string, unknown>).legend) ? ((spec.resolve as Record<string, unknown>).legend as Record<string, unknown>) : {}
+  const indepOthers = Object.keys(resolveScaleF).filter((ch) => ch !== 'x' && ch !== 'y' && ch !== 'theta' && resolveScaleF[ch] === 'independent' && ((inner.scales as ScaleSpec[]) ?? []).some((sc) => sc.name === ch))
+  if (innerIsFacet && (indepOthers.length || Object.values(resolveLegendF).includes('independent'))) throw new VLCompileError('independent scales or legends in a facet that holds another facet are not supported yet')
+  const renames = { signals: sizeSigMap, scales: new Map<string, string>([...indepScales.map((i) => i.ch), ...indepOthers].map((ch) => [ch, `${CH}_${ch}`] as [string, string])) }
   if (innerSel) renameFragment(innerSel.unit, renames)
   renameFragment(inner.scales, renames)
   renameFragment(inner.axes ?? [], renames)
@@ -2699,25 +2706,38 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
   const childMarks = innerIsFacet ? (inner.marks as Record<string, unknown>[]) : (inner.marks as Record<string, unknown>[]).map(remapFrom).map(prefixNames)
   // resolve.ts defaultScaleResolve: a facet shares every scale but theta, which each cell owns (`child_theta`, over the cell's data)
   const cellScales: Record<string, unknown>[] = []
+  // the data of a scale's domain is the cell's: the facet's partition, or the dataset the cell derives from it
+  const mapDomainOf = (dom: unknown): unknown => {
+    if (!isObject(dom)) return dom
+    const out: Record<string, unknown> = { ...dom }
+    // (a dataset of a spec with data of its own is not the cell's: it stays at the root)
+    const cellOf = (name: string): string => cellMap.get(name) ?? (innerOwnData ? name : FACET)
+    if (typeof out.data === 'string') out.data = cellOf(out.data)
+    if (Array.isArray(out.fields)) out.fields = out.fields.map((f) => (isObject(f) && typeof f.data === 'string' ? { ...f, data: cellOf(f.data) } : f))
+    return out
+  }
   {
-    // the data of a scale's domain is the cell's: the facet's partition, or the dataset the cell derives from it
-    const mapDomain = (dom: unknown): unknown => {
-      if (!isObject(dom)) return dom
-      const out: Record<string, unknown> = { ...dom }
-      // (a dataset of a spec with data of its own is not the cell's: it stays at the root)
-      const cellOf = (name: string): string => cellMap.get(name) ?? (innerOwnData ? name : FACET)
-      if (typeof out.data === 'string') out.data = cellOf(out.data)
-      if (Array.isArray(out.fields)) out.fields = out.fields.map((f) => (isObject(f) && typeof f.data === 'string' ? { ...f, data: cellOf(f.data) } : f))
-      return out
-    }
     const innerScalesAll = (inner.scales as ScaleSpec[]) ?? []
     for (const i of innerIsFacet ? [] : indepScales) {
       const at = innerScalesAll.findIndex((sc) => sc.name === i.ch)
       if (at < 0) continue
       const sc = innerScalesAll.splice(at, 1)[0]!
-      cellScales.push({ ...sc, name: `${CH}_${i.ch}`, domain: mapDomain(sc.domain) })
+      cellScales.push({ ...sc, name: `${CH}_${i.ch}`, domain: mapDomainOf(sc.domain) })
     }
   }
+  for (const ch of indepOthers) {
+    const innerScalesAll = (inner.scales as ScaleSpec[]) ?? []
+    const at = innerScalesAll.findIndex((sc) => sc.name === ch)
+    const sc = innerScalesAll.splice(at, 1)[0]!
+    cellScales.push({ ...sc, name: `${CH}_${ch}`, domain: mapDomainOf(sc.domain) })
+  }
+  // (the legends of the cells' own scales, and those resolved independent, are drawn in every cell)
+  const cellScaleNames = new Set(indepOthers.map((ch) => `${CH}_${ch}`))
+  const legendIndependent = new Set(Object.keys(resolveLegendF).filter((ch) => resolveLegendF[ch] === 'independent'))
+  const ownLegend = (lg: Record<string, unknown>): boolean =>
+    [...LEGEND_SCALE_PROPS].some((k) => typeof lg[k] === 'string' && (cellScaleNames.has(lg[k] as string) || legendIndependent.has(lg[k] as string)))
+  const cellLegends = ((inner.legends ?? []) as Record<string, unknown>[]).filter(ownLegend)
+  if (cellLegends.length) inner.legends = ((inner.legends ?? []) as Record<string, unknown>[]).filter((lg) => !ownLegend(lg))
   {
     const innerScales = (inner.scales as ScaleSpec[]) ?? []
     const at = innerIsFacet ? -1 : innerScales.findIndex((sc) => sc.name === 'theta')
@@ -2885,6 +2905,7 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
         ...(cellData.length ? { data: cellData } : {}),
         ...(gridAxes.length ? { axes: gridAxes } : {}),
         ...(cellScales.length ? { scales: cellScales } : {}),
+        ...(cellLegends.length ? { legends: cellLegends } : {}),
         marks: childMarks,
       },
     ]
@@ -2995,6 +3016,7 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
     ...(cellData.length ? { data: cellData } : {}),
     ...(gridAxes.length ? { axes: gridAxes } : {}),
     ...(cellScales.length ? { scales: cellScales } : {}),
+    ...(cellLegends.length ? { legends: cellLegends } : {}),
     ...(innerIsFacet ? { layout: nestedLayout() } : {}),
     marks: childMarks,
   })
