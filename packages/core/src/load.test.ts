@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest'
 import { compileChart, evaluateChart } from './index.js'
 import { readData, inferType } from './data-format.js'
 import { loadSpecData } from './addon-load.js'
+import { partLoaded, withdrawParts } from './engine-parts.js'
 import type { VgSpec } from './types.js'
 
 /** A policy that permits every url (the fetch is a stub: nothing is requested). */
@@ -251,5 +252,22 @@ describe('a url dataset in a group mark that nobody loaded fails as a top-level 
   it('a group dataset with values or made from another is not a url dataset', () => {
     expect(() => evaluateChart(compileChart(group({ data: [{ name: 'v', url: 'https://data.example.com/v.json', values: [{ x: 1 }] }], marks: [symbolOf('v')] })), {})).not.toThrow()
     expect(() => evaluateChart(compileChart(group({ data: [{ name: 's', source: 'facets' }], marks: [symbolOf('s')] })), {})).not.toThrow()
+  })
+})
+
+describe('loadSpecData asks for the engine part its own reading needs', () => {
+  // a dataset whose `parse` has a date pattern is read with the time part, which a shell that loads parts on demand does not have until
+  // something asks (the gallery's React path threw "the time part is not loaded" from the loader, on vega's parallel-coordinates)
+  it('loads the time part for a date pattern in `parse`, and not for plain types', async () => {
+    const restore = withdrawParts(['time'])
+    try {
+      const fetchCsv = (async () => new Response('[{"d":"2020-03-01","n":"4"}]', { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch
+      const plain = await loadSpecData({ data: [{ name: 't', url: 'https://example.test/t.json', format: { type: 'json', parse: { n: 'number' } } }] } as never, { fetch: fetchCsv, allow: () => true })
+      expect(partLoaded('time')).toBe(false)
+      expect(JSON.stringify(plain)).toContain('"n":4')
+      const dated = await loadSpecData({ data: [{ name: 't', url: 'https://example.test/t.json', format: { type: 'json', parse: { d: 'date:%Y-%m-%d' } } }] } as never, { fetch: fetchCsv, allow: () => true })
+      expect(partLoaded('time')).toBe(true)
+      expect(JSON.stringify(dated)).toContain('2020-03-01T')
+    } finally { restore() }
   })
 })
