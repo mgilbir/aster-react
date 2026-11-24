@@ -687,7 +687,7 @@ interface EvalContext {
   layoutState: { failed: boolean; warnings: Array<string | readonly unknown[]>; warned?: Set<string> }
   /** Signals whose `init` expression has run (it runs once). */
   initDone: Set<string>
-  /** The datasets and scales reached their fixed point: an `init` that reads them (see `initWaits`) may run. */
+  /** The datasets and scales reached their fixed point: every `init` may run (see `initReady`). */
   initsSettled?: boolean
   /** What each signal's update read when it last ran in this pass (see `signalReadKey`): it runs again only when that changed. */
   signalRuns?: Map<string, string>
@@ -1687,10 +1687,9 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false, changedNames
       && !ctx.initDone.has(def.name) && !ctx.hostSignals.has(def.name)
     const expr = def.update ?? (initPending ? def.init : undefined)
     if (!expr) continue
-    // an `init` that reads, directly or through other signals, data, a scale or a signal a transform publishes runs once those are
-    // settled (vega runs it once, at its rank, after everything it reads): the evaluation opens it when its datasets and scales
-    // reached their fixed point (see `prepareChartCtx`)
-    if (initPending && !ctx.initsSettled && initWaits(ctx.chart, def.name)) continue
+    // an `init` that reads, directly or through other signals, data, a scale or a signal a transform publishes runs once those exist
+    // (vega runs it once, at its rank, after everything it reads; see `initReady`)
+    if (initPending && !ctx.initsSettled && !initReady(ctx, def.name)) continue
     // a signal with `update` AND `on` handlers is a state: an event set it, and its update is not run again until what it reads
     // pulses (the event loop, which runs that dataflow, writes it down when it does); the store's value is the signal's
     if (def.update !== undefined && def.on?.length && ctx.hostSignals.has(def.name)) continue
@@ -1821,37 +1820,60 @@ function unreactiveReads(chart: CompiledChart, def: CompiledSignalDef): Omit<Sig
 }
 
 /**
- * Whether signal `name`'s `init` must wait for the evaluation's datasets and scales to settle: its text, or that of a signal it reads
- * (transitively), reads data or a scale, or names a signal a dataset's transform publishes (an `extent`, a `bin`'s signal).
+ * What signal `name`'s `init` stands on, transitively through the signals it reads: the datasets (null: any), whether it reads a
+ * scale, and the writers of the signals it reads that a dataset's transform publishes (an `extent`, a `bin`'s signal).
  */
-const INIT_WAITS = new WeakMap<CompiledChart, Map<string, boolean>>()
-function initWaits(chart: CompiledChart, name: string): boolean {
-  let memo = INIT_WAITS.get(chart)
-  if (memo === undefined) INIT_WAITS.set(chart, (memo = new Map()))
+interface InitReads { data: ReadonlySet<string> | null; scales: boolean; writers: ReadonlySet<string> }
+const INIT_READS = new WeakMap<CompiledChart, Map<string, InitReads>>()
+function initReadsOf(chart: CompiledChart, name: string): InitReads {
+  let memo = INIT_READS.get(chart)
+  if (memo === undefined) INIT_READS.set(chart, (memo = new Map()))
   let out = memo.get(name)
   if (out !== undefined) return out
-  const published = new Set<string>()
-  for (const d of chart.data) walkStrings(d.transform, (str, owner) => { if (owner !== null && owner.signal === str) published.add(str) })
+  const writers = new Map<string, string[]>()
+  for (const d of chart.data) walkStrings(d.transform, (str, owner) => { if (owner !== null && owner.signal === str) (writers.get(str) ?? writers.set(str, []).get(str)!).push(d.name) })
   const defs = new Map<string, CompiledSignalDef>()
   for (const d of chart.signalDefs ?? []) if (!defs.has(d.name)) defs.set(d.name, d)
+  let data: Set<string> | null = new Set()
+  let scales = false
+  const by = new Set<string>()
   const seen = new Set<string>()
   const queue = [name]
-  out = false
-  for (let i = 0; i < queue.length && !out; i++) {
+  for (let i = 0; i < queue.length; i++) {
     const n = queue[i]!
     if (seen.has(n)) continue
     seen.add(n)
-    if (n !== name && published.has(n)) { out = true; break }
+    if (n !== name) for (const w of writers.get(n) ?? []) by.add(w)
     const d = defs.get(n)
     if (d === undefined) continue
     for (const text of [d.update, d.init]) {
       if (typeof text !== 'string') continue
-      if (DATA_DEPENDENT_EXPR.test(lexedText(text))) { out = true; break }
+      const lexed = lexedText(text)
+      if (DATA_DEPENDENT_EXPR.test(lexed)) {
+        const ds = datasetsReadIn(text)
+        if (ds === null) data = null
+        else if (data !== null) for (const x of ds) data.add(x)
+        if (SCALE_FN_EXPR.test(lexed)) scales = true
+      }
       for (const id of identifiersIn(text)) if (!seen.has(id)) queue.push(id)
     }
   }
+  out = { data, scales, writers: by }
   memo.set(name, out)
   return out
+}
+
+/**
+ * Whether signal `name`'s `init` can run now: everything it stands on (`initReadsOf`) exists in this evaluation -- the datasets it
+ * reads are built, the scales are, the datasets that publish a signal it reads are. vega runs an init once, at its rank, after what it
+ * reads; run before (the first resolve, before any dataset), it would latch on a value nothing computed yet.
+ */
+function initReady(ctx: EvalContext, name: string): boolean {
+  const r = initReadsOf(ctx.chart, name)
+  if (r.data === null ? ctx.chart.data.some((d) => !ctx.datasets.has(d.name)) : [...r.data].some((n) => !ctx.datasets.has(n))) return false
+  if (r.scales && !ctx.chart.scales.every((sc) => ctx.scales.has(sc.name))) return false
+  for (const w of r.writers) if (!ctx.datasets.has(w)) return false
+  return true
 }
 
 // ===========================================================================
