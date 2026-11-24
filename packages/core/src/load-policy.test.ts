@@ -204,6 +204,15 @@ describe('bounded in time, bytes and concurrency', () => {
     expect(String(err.message)).toMatch(/maxBytes \d+ > 20000/)
     // the producer was stopped long before it could have buffered anything large
     expect(endlessSent).toBeLessThan(20_000 + 5_000_000)
+    // ... because the reader was cancelled: the server's response is closed (a reader left open keeps the connection, and the
+    // server keeps pumping until the socket's buffer is full: it would stay open here). That the count was low at the moment of the
+    // rejection says nothing: the server had had no time to send more.
+    const deadline = Date.now() + 3000
+    while (endless.open.size > 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10))
+    expect(endless.open.size, 'the endless response is still open: the reader was not cancelled').toBe(0)
+    const sent = endlessSent
+    await new Promise((r) => setTimeout(r, 100))
+    expect(endlessSent, 'the server went on sending').toBe(sent)
   }, 15_000)
 
   it('a declared content-length over maxBytes is refused without reading the body', async () => {
