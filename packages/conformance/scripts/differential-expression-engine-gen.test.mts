@@ -368,6 +368,8 @@ function itemExpr(r: Rng, depth: number): string {
   const leaf = (): string => r.pick([
     'item.x', 'item.y', 'item.fill', 'item.datum.n', 'item.datum.c', 'item.mark.marktype', 'item.mark.name', 'item.mark.role',
     'item.mark.group.width', 'item.mark.group.height', 'isDefined(item)', 'isObject(item.mark)', 'item.nosuch', 'datum.n', '3', '"k"',
+    // the group around the mark: its datum (`parent`), the group item itself (`group()`), and what each holds
+    'parent', 'parent.nosuch', 'isDefined(parent)', 'group().width', 'group().name', 'group().mark.name', 'isObject(group())', 'group(\'cell\').height',
   ])
   if (depth === 0) return leaf()
   const sub = (): string => itemExpr(r, depth - 1)

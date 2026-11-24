@@ -38,6 +38,9 @@ async function onVega(spec: Spec): Promise<{ rows?: unknown[]; errors: string[] 
   }
 }
 
+/** An error as its words, without the `Error: ` and `[aster] ` tags of either side. */
+const words = (e: unknown): string => String((e as Error)?.message ?? e).replace(/^Error: /, '').replace(/^\[aster\] /, '')
+
 function onAster(spec: Spec): { rows?: unknown[]; errors: unknown[] } {
   const errors: unknown[] = []
   const logger = { error: (...a: unknown[]) => { errors.push(a[0]) }, warn: () => {} }
@@ -111,12 +114,14 @@ describe('nest matches vega', () => {
         got = onAster(spec)
       } catch (e) {
         if (!want.errors.length) bad.push(`${label}: aster threw ${(e as Error).message}`)
+        else if (words(e) !== words(want.errors[0])) bad.push(`${label}: vega logged "${words(want.errors[0])}", aster threw "${words(e)}"`)
         else refused++
         continue
       }
       if (want.errors.length) {
         refused++
         if (!got.errors.length) bad.push(`${label}: vega logged "${want.errors[0]}", aster nothing`)
+        else if (words(got.errors[0]) !== words(want.errors[0])) bad.push(`${label}: vega logged "${words(want.errors[0])}", aster logged "${words(got.errors[0])}"`)
         continue
       }
       if (got.errors.length) { bad.push(`${label}: aster logged ${String(got.errors[0])}`); continue }

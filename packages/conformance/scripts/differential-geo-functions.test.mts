@@ -9,7 +9,7 @@ import * as vega from 'vega'
 import '../../core/src/addon-geo.ts'
 import { compileExpr, type ExpressionRuntime } from '../../core/src/expression.ts'
 import { geoRegistry } from '../../core/src/registry.ts'
-import { exact, quietLogger } from './differential-util.mts'
+import { exact, expectSameOutcome, loggedThrow, quietLogger } from './differential-util.mts'
 import { Rand, seedOf, withoutEmptyRings } from './geo-gen.mts'
 
 const PROJECTIONS = [
@@ -36,13 +36,13 @@ async function viaVega(code: string, args: unknown[]): Promise<unknown> {
   )
   args.forEach((v, i) => view.signal(NAMES[i]!, v))
   await view.runAsync()
-  return errors.length ? { $: 'throw' } : exact(() => view.signal('out'))
+  return errors.length ? loggedThrow(errors[0]![0]) : exact(() => view.signal('out'))
 }
 function viaAster(code: string, args: unknown[]): unknown {
   const params: Record<string, unknown> = {}
   args.forEach((v, i) => { params[NAMES[i]!] = v })
   const got = exact(() => compileExpr(code, runtime)(undefined, params)) as { $?: string } | null
-  return got?.$ === 'throw' ? { $: 'throw' } : got
+  return got
 }
 
 const poly = (ring: number[][]) => ({ type: 'Polygon', coordinates: [ring] })
@@ -75,7 +75,7 @@ describe('geo expression functions vs real vega (live)', () => {
           const code = `${fn}(a, b)`
           // (no projection: the sphere's measures, where an empty ring adds nothing in Aster; a name is looked up as vega looks it up)
           const sphere = typeof proj !== 'string' || !PROJECTIONS.some((p) => p.name === proj)
-          expect(viaAster(code, [proj, g]), `${fn} ${String(proj)} ${JSON.stringify(g)}`).toEqual(await viaVega(code, [proj, sphere ? withoutEmptyRings(g) : g]))
+          expectSameOutcome(viaAster(code, [proj, g]), await viaVega(code, [proj, sphere ? withoutEmptyRings(g) : g]), `${fn} ${String(proj)} ${JSON.stringify(g)}`)
         }
       }
     })
@@ -92,7 +92,7 @@ describe('geo expression functions vs real vega (live)', () => {
     for (const proj of [...PROJECTIONS.map((p) => p.name), 'nope']) {
       for (const pos of positions) {
         const code = `${fn}(a, b)`
-        expect(viaAster(code, [proj, pos]), `${fn} ${proj} ${JSON.stringify(pos)}`).toEqual(await viaVega(code, [proj, pos]))
+        expectSameOutcome(viaAster(code, [proj, pos]), await viaVega(code, [proj, pos]), `${fn} ${proj} ${JSON.stringify(pos)}`)
       }
     }
   })
@@ -109,7 +109,7 @@ describe('geo expression functions vs real vega (live)', () => {
       for (const proj of [...PROJECTIONS.map((p) => p.name), 'nope']) {
         for (const g of GEO.slice(0, 5)) {
           const want = await viaVega(code, [proj, g])
-          expect(viaAster(code, [proj, g]), `${code} ${proj} ${JSON.stringify(g)}`).toEqual(want)
+          expectSameOutcome(viaAster(code, [proj, g]), want, `${code} ${proj} ${JSON.stringify(g)}`)
           if (want !== null && (want as { $?: string }).$ !== 'throw') compared++
         }
       }
@@ -119,7 +119,7 @@ describe('geo expression functions vs real vega (live)', () => {
 
   it('geoScale(projection)', async () => {
     for (const proj of [...PROJECTIONS.map((p) => p.name), 'nope', null, undefined]) {
-      expect(viaAster('geoScale(a)', [proj]), `geoScale ${String(proj)}`).toEqual(await viaVega('geoScale(a)', [proj]))
+      expectSameOutcome(viaAster('geoScale(a)', [proj]), await viaVega('geoScale(a)', [proj]), `geoScale ${String(proj)}`)
     }
   })
 })
