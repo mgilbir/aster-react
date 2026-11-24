@@ -17,6 +17,8 @@ import { diffAppend, diffScene, marksOf, type Diff } from './geometry-differenti
 import { applyOp, genSpec, inputOf, int, mulberry32, OPS, pick, rowOf, type World } from './scene-fuzz.testlib.js'
 import { randomScene } from './geometry-scenes.testlib.js'
 import { CORPUS_UNLOADABLE, isDataNotLoaded, vegaCorpusFiles } from './corpus.testlib.js'
+import { sceneIntersect } from './scene-intersect.js'
+import { AsterLimitError } from './limits.js'
 
 type Rnd = () => number
 
@@ -92,6 +94,7 @@ describe('mark geometry: old vs new, every consumer', () => {
       const fails: string[] = []
       for (let seed = lo; seed <= hi; seed++) {
         const r = mulberry32(seed)
+        // (intersect: the legacy copy cannot take a non-finite scene: see the next describe)
         diffTwice(randomScene(r), r, `seed ${seed}`, fails, { intersect: false })
         diffTwice(randomScene(r, true), r, `seed ${seed} (finite)`, fails)
       }
@@ -144,6 +147,41 @@ describe('mark geometry: old vs new, every consumer', () => {
       }
       expect(fails).toEqual([])
       expect(unusable, 'generated specs that threw and were not compared').toBe(0)
+    }, 60_000)
+  }
+})
+
+describe('sceneIntersect on non-finite scenes', () => {
+  // The legacy copy of intersect() hangs on these (seed 112), so the differential leaves it out for them. The current one is checked
+  // here on its own: it ends on every NaN / infinite arc, shape and path, quickly, and refuses only with an AsterLimitError (a
+  // region beyond 2^52 or a walk past its ceiling); it never throws anything else.
+  const BOXES: Array<[[number, number], [number, number]]> = [[[0, 0], [300, 200]], [[10, 10], [20, 20]], [[-1e9, -1e9], [1e9, 1e9]], [[0, 0], [0, 0]], [[250, 150], [40, 30]], [[Number.NEGATIVE_INFINITY, 0], [100, Number.POSITIVE_INFINITY]]]
+  for (const [lo, hi] of [[1, 100], [101, 200], [201, 300], [301, 400]] as const) {
+    it(`seeds ${lo}-${hi}: each call ends within 500 ms and throws only AsterLimitError`, () => {
+      let calls = 0
+      let refused = 0
+      let found = 0
+      let worst = 0
+      for (let seed = lo; seed <= hi; seed++) {
+        const scene = randomScene(mulberry32(seed), false)
+        for (const box of BOXES) {
+          const t0 = performance.now()
+          try {
+            const hit = sceneIntersect(scene, box, null, null)
+            expect(Array.isArray(hit), `seed ${seed}`).toBe(true)
+            found += hit.length
+          } catch (e) {
+            if (!(e instanceof AsterLimitError)) throw new Error(`seed ${seed} box ${JSON.stringify(box)}: ${(e as Error).name}: ${(e as Error).message}`)
+            refused++
+          }
+          worst = Math.max(worst, performance.now() - t0)
+          calls++
+        }
+      }
+      expect(calls).toBe((hi - lo + 1) * BOXES.length)
+      expect(worst, 'slowest call (ms)').toBeLessThan(500)
+      expect(refused, 'refusals are rare: the scenes are answered').toBeLessThan(calls / 10)
+      expect(found, 'items found').toBeGreaterThan(100)
     }, 60_000)
   }
 })
