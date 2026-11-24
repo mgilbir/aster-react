@@ -21,7 +21,7 @@ import { canonicalizeSvg, diffCanonical } from './normalize.js'
 const CORPUS = join(dirname(fileURLToPath(import.meta.url)), '..', 'corpus')
 
 describe('DOM descriptors vs string renderer (strict canonical form)', () => {
-  // one test per corpus scene: a single loop over all 419 exceeded the 5 s default under a parallel suite
+  // one test per corpus scene: a single loop over the whole corpus exceeded the 5 s default under a parallel suite
   for (const f of readdirSync(CORPUS).filter((n) => n.endsWith('.json')).sort()) {
     it(f, async () => {
       const raw = JSON.parse(readFileSync(join(CORPUS, f), 'utf8'))

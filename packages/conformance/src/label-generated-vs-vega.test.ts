@@ -70,7 +70,8 @@ describe('label: generated specs vs vega-label', () => {
     for (let i = 0; i < AREA_SEEDS; i++) {
       for (const method of ['floodfill', 'reduced-search']) cases.push({ ...labelCase(5000 + i, false, { kind: 'group-area', method }), id: `area-${method}-${i}` })
     }
-    // a size that is not a pair: both log the error and leave the labels as they were
+    // a size that is not a pair: vega lays nothing out and leaves the labels as they were (their text only), and so must the engine
+    // (what each logs is not captured here: the rows are what is compared)
     for (const [id, size] of [['size-one', [100]], ['size-three', [100, 100, 100]]] as const) {
       const base = labelCase(2)
       const spec = structuredClone(base.spec) as { marks: Array<{ transform?: Array<Record<string, unknown>> }> }
