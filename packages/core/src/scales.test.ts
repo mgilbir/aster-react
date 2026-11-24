@@ -143,12 +143,10 @@ describe('getChartInfo', () => {
     // x(5) should be 5 * 400/10 = 200
     const px200 = xScale(5) as number
     expect(px200).toBe(200)
-    // invert: 200 → 5 (since domain [0,10] → range [0,400])
+    // invert: 200 → 5 (since domain [0,10] → range [0,400]); a linear scale has one
     const inv = (xScale as { invert?: (v: number) => number }).invert
-    if (inv) {
-      const dataBack = inv(px200)
-      expect(dataBack).toBeCloseTo(5, 4)
-    }
+    expect(typeof inv).toBe('function')
+    expect(inv!(px200)).toBeCloseTo(5, 4)
   })
 
   it('y scale inverted range: invert works on reverse scale', () => {
@@ -159,23 +157,20 @@ describe('getChartInfo', () => {
     const px300 = yScale(0) as number
     expect(px300).toBe(300)
     const inv = (yScale as { invert?: (v: number) => number }).invert
-    if (inv) {
-      const inverted0 = inv(px300)
-      expect(inverted0).toBeCloseTo(0, 4)
-      const inverted10 = inv(0)
-      expect(inverted10).toBeCloseTo(10, 4)
-    }
+    expect(typeof inv).toBe('function')
+    expect(inv!(px300)).toBeCloseTo(0, 4)
+    expect(inv!(0)).toBeCloseTo(10, 4)
   })
 
-  it('drag-to-interval: pixel 10 maps to data ≈ 0.125', () => {
+  it('drag-to-interval: pixel 10 maps to data 0.25, and pixel 5 to 0.125', () => {
     const info = getChartInfo(lineSpec as never, { width: 400, height: 300 })
     const xScale = info.scales.get('x')!
-    // Domain [0, 10], range [0, 400]: scale(0.125) = 0.125 * 400/10 = 5
-    // If we invert pixel 5 (no padding comp), we get back 0.125
+    // Domain [0, 10], range [0, 400]: one pixel is 0.025 data units, so a drag that starts at pixel 10 starts at data 0.25
     const inv = (xScale as { invert?: (v: number) => number }).invert
-    if (inv) {
-      const pxFromData = xScale(0.125) as number  // = 5
-      expect(inv(pxFromData)).toBeCloseTo(0.125, 4)
-    }
+    expect(typeof inv).toBe('function')
+    expect(inv!(10)).toBeCloseTo(0.25, 10)
+    expect(inv!(5)).toBeCloseTo(0.125, 10)
+    // and the round trip
+    expect(xScale(0.125)).toBeCloseTo(5, 10)
   })
 })
