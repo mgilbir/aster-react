@@ -47,6 +47,7 @@
     "conformance:batch": "pnpm --filter @aster-charts/conformance run conformance:batch",
     "conformance:signals": "pnpm --filter @aster-charts/conformance run conformance:signals",
     "conformance:intersect": "pnpm --filter @aster-charts/conformance run conformance:intersect",
+    "conformance:geometry": "pnpm --filter @aster-charts/conformance run conformance:geometry",
     "conformance:selections": "pnpm --filter @aster-charts/conformance run conformance:selections",
     "verify:publish": "node scripts/verify-publish.mjs"
   },
