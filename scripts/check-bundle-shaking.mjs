@@ -619,13 +619,32 @@ const PATTERNS = [
   },
   {
     name: 'react-novl',
-    why: 'without the vl import a Vega-Lite spec asks for it (the base entry carries no compiler)',
-    imports: `import * as React from 'react'\nimport { renderToString } from 'react-dom/server'\nimport { Chart, hasVegaLiteCompiler } from '@aster-charts/react'`,
+    why: 'without the vl import a Vega-Lite spec asks for it, through the error state and onError (nothing thrown from render), and the base entry carries no compiler',
+    dom: true,
+    imports: `import * as React from 'react'\nimport { renderToString } from 'react-dom/server'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart, hasVegaLiteCompiler } from '@aster-charts/react'`,
     body: `
-      let err = null
-      try { renderToString(React.createElement(Chart, { spec: ${lit(BAR_VL)}, width: 200, height: 100 })) } catch (e) { err = String(e.message) }
-      return { has: hasVegaLiteCompiler(), err }`,
-    check: (r) => [[r.has === false && /@aster-charts\/react\/vl/.test(r.err ?? ''), 'the error names the import to add']],
+      // (the React boundary's one error channel: a failure is the chart's error state and one onError call, never a throw)
+      const errors = []
+      const el = React.createElement(Chart, { spec: ${lit(BAR_VL)}, width: 200, height: 100, onError: (e) => errors.push(String(e.message)) })
+      let thrown = null
+      let html = ''
+      try { html = renderToString(el) } catch (e) { thrown = String(e.message) }
+      const host = document.createElement('div'); document.body.appendChild(host)
+      try { flushSync(() => createRoot(host).render(el)) } catch (e) { thrown = thrown ?? String(e.message) }
+      const alert = host.querySelector('[role="alert"]')
+      return { has: hasVegaLiteCompiler(), thrown, serverAlert: /role="alert"/.test(html), alert: alert ? alert.getAttribute('title') : null, svg: host.querySelector('svg') != null, errors }`,
+    check: (r) => [
+      [r.has === false, 'hasVegaLiteCompiler() is false'],
+      [r.thrown === null, 'nothing is thrown from render, on the server or the client'],
+      [r.serverAlert && r.alert != null && !r.svg, 'the server markup and the mounted chart are the error state'],
+      [r.errors.length === 1 && /@aster-charts\/react\/vl/.test(r.errors[0]), 'onError is called once, with an error that names the import to add'],
+      [/@aster-charts\/react\/vl/.test(r.alert ?? ''), 'the error state carries that error'],
+    ],
+    modules: (m) => [
+      [!m.parsed.some((f) => /packages\/vl\/dist\//.test(f)), 'no module of @aster-charts/vl (the compiler) is even read'],
+      [!hasModule(m.parsed, 'react', 'vl'), 'nor @aster-charts/react/vl, the entry that registers it'],
+      [hasModule(m.contributing, 'react', 'ChartCore'), 'and the module check sees what the bundle is made of (ChartCore)'],
+    ],
   },
   {
     name: 'react-ssr',
