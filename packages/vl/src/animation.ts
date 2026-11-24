@@ -37,29 +37,21 @@ export function isTimerSelect(select: unknown): boolean {
   return false
 }
 
-/** A timer selection param, checked: throws a VLCompileError naming what is not supported. */
+/**
+ * A timer selection param, checked: throws a VLCompileError naming what vega-lite 6.4.3 cannot run. The rest of a timer selection is
+ * a point selection (its `toggle`, `nearest`, `resolve`, `clear`, an initial value, a binding): vega-lite compiles each of them, and
+ * so does the compile, which then says what vega-lite says of them.
+ */
 export function validateTimerSelection(param: Obj, at: string, fail: (path: string, msg: string) => never): void {
   const select = param.select as Obj
-  for (const k of Object.keys(select)) {
-    if (!['type', 'on', 'fields', 'encodings'].includes(k)) fail(`${at}.select.${k}`, 'a timer selection takes only `type`, `on` and one of `fields` / `encodings` (the animation options vega-lite 6.4.3 has are these)')
-  }
   if (isObj(select.on)) {
     for (const k of Object.keys(select.on)) if (k !== 'type' && k !== 'throttle') fail(`${at}.select.on.${k}`, 'a timer event stream is {"type": "timer"} (vega-lite replaces its throttle with its own 60 fps clock)')
   }
   const hasFields = select.fields !== undefined
   const hasEnc = select.encodings !== undefined
-  if (hasFields === hasEnc) {
-    fail(`${at}.select`, 'a timer selection needs exactly one of `fields` or `encodings` (without either, vega-lite 6.4.3 selects by row id and emits marks that read a dataset it never defines)')
+  if (!hasFields && !hasEnc) {
+    fail(`${at}.select`, 'a timer selection needs `fields` or `encodings` (without either, vega-lite 6.4.3 selects by row id and emits marks that read a dataset it never defines)')
   }
-  if (hasFields) {
-    const f = select.fields
-    if (!Array.isArray(f) || f.length === 0 || !f.every((x) => typeof x === 'string' && x !== '')) fail(`${at}.select.fields`, 'must be a non-empty array of field names')
-  } else {
-    const e = select.encodings
-    if (!Array.isArray(e) || e.length !== 1 || e[0] !== 'time') fail(`${at}.select.encodings`, 'a timer selection can project the `time` encoding only: ["time"]')
-  }
-  if (param.value !== undefined) fail(`${at}.value`, 'an initial value does not apply to a timer selection')
-  if (param.bind !== undefined) fail(`${at}.bind`, 'a bound timer selection is not supported')
 }
 
 /**

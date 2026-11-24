@@ -8,7 +8,8 @@
  */
 
 import { EXPRESSION_KEYS, LEGEND_SCALE_PROPS, relabelUnits, renameDataRefs, renameExpr, renameFragment, userExpression } from './embed.js'
-import { mergeBins, optimizeData } from './optimize.js'
+import { refuseUndeclaredNames } from './declared.js'
+import { mergeBins, mergeChainedBins, optimizeData } from './optimize.js'
 import { tokenize } from './expr-tokens.js'
 import { VLCompileError, pushAll, flatField, datumRef as dref, genName, safeKey, splitAccessPath, dict, own, setOwn } from './names.js'
 import { validateGeoUnit, validateSpec } from './validate.js'
@@ -20,10 +21,10 @@ import { predicateExpr, domainValueExpr, dateTimeToExpr, isDateTime as isDateTim
 import {
   SELECTION_ID, STORE, assembleSelectionScaleDomain, assembleTopLevelSelectionSignals, assembleUnitSelectionData,
   assembleFacetSignals, assembleUnitSelectionMarks, assembleUnitSelectionSignals, interactiveLegendSelections, parseUnitSelections, requiresSelectionId, selectionPredicate,
-  stringValue, varName, type ParamPredicate, type SelCmpt, type SelUnit,
+  stringValue, varName, type ParamPredicate, type Selection, type SelUnit,
 } from './selection.js'
 import { compositeMarkOf, isGiven, markGiven } from './composite-marks.js'
-import { derivesFrom, mergeEncoding, normalizeUnits } from './composite.js'
+import { derivesFrom, isSynthesizedOrder, mergeEncoding, normalizeUnits } from './composite.js'
 import { timeScaleRange } from './animation.js'
 import { fieldsTitle, mergeGuideTitles, titleText, writtenTitle, type GuideTitle, type TitledField } from './titles.js'
 import { orientationOf, type Position } from './orient.js'
@@ -153,6 +154,7 @@ function compileTwice(input: VLSpec, payloads: RowPayloads): VLSpec {
   const forwardLookups = first.lookups.size > 0 ? first.lookups : undefined
   const out = !forwardSelections && !forwardLookups ? first.out : compileOnce(input, payloads, forwardSelections, forwardLookups).out
   refuseDuplicateNames(out)
+  refuseUndeclaredNames(out)
   return out
 }
 
@@ -187,7 +189,7 @@ function refuseDuplicateNames(out: VLSpec): void {
 /** The root properties of a spec the consumption check does not hold the compiler to (compileOnce). */
 const PLAIN_AT_ROOT: ReadonlySet<string> = new Set(['config'])
 
-function compileOnce(input: VLSpec, payloads: RowPayloads, forward?: ReadonlyMap<string, SelCmpt>, forwardLookups?: ReadonlyMap<string, { name: string }>): { out: VLSpec; misses: ReadonlySet<string>; selections: ReadonlyMap<string, SelCmpt>; lookups: ReadonlyMap<string, { name: string }> } {
+function compileOnce(input: VLSpec, payloads: RowPayloads, forward?: ReadonlyMap<string, Selection>, forwardLookups?: ReadonlyMap<string, { name: string }>): { out: VLSpec; misses: ReadonlySet<string>; selections: ReadonlyMap<string, Selection>; lookups: ReadonlyMap<string, { name: string }> } {
   return withConsumption(() => {
     // (the copy is armed while it is made: every property of the spec has to be read by the compile, or it is refused at the end
     // (consume.ts). The config is defaults: a block applies where the spec has something it configures, and validate.ts checks its
@@ -246,7 +248,7 @@ function refuseRootNameReuse(spec: VLSpec): void {
   visit(spec, '')
 }
 
-function compileValidated(spec: VLSpec, forward?: ReadonlyMap<string, SelCmpt>, forwardLookups?: ReadonlyMap<string, { name: string }>): { out: VLSpec; misses: ReadonlySet<string>; selections: ReadonlyMap<string, SelCmpt>; lookups: ReadonlyMap<string, { name: string }> } {
+function compileValidated(spec: VLSpec, forward?: ReadonlyMap<string, Selection>, forwardLookups?: ReadonlyMap<string, { name: string }>): { out: VLSpec; misses: ReadonlySet<string>; selections: ReadonlyMap<string, Selection>; lookups: ReadonlyMap<string, { name: string }> } {
   const userConfig = isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined
   ignoreNestedChrome(spec)
   refuseRootNameReuse(spec)
@@ -383,7 +385,10 @@ function unitStackProps(unit: Record<string, unknown>): { fieldChannel: string; 
   const fields = parseEncodingFields(encoding, unit.config, markRaw)
   const orient = inferOrient(unit as VLSpec, mark, markRaw, fields)
   const measure = fields.find((f) => (f.channel === 'x' || f.channel === 'y') && isStacked(f, mark, orient, fields))
-  return measure ? { fieldChannel: measure.channel, offset: measureStackOffset(measure), orient } : undefined
+  if (measure) return { fieldChannel: measure.channel, offset: measureStackOffset(measure), orient }
+  // (stack.ts: an arc or a label stacks along theta or radius; its mark def has no orientation)
+  const polar = polarStackOf(fields, mark)
+  return polar ? { fieldChannel: polar.fieldChannel, offset: polar.offset } : undefined
 }
 
 /**
@@ -1092,6 +1097,8 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     rawLen: number
     usesRawDomain: boolean
     group: number
+    /** an animation's frame filter, moved out of the main dataset (a timer selection of the layer's unit) */
+    frame?: { filter: Record<string, unknown> }
     /** the scales read the rows before / after the invalid filter */
     invalidSplit?: InvalidScaleSplit
     /** the dataset the scales' domains read */
@@ -1174,16 +1181,19 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
     ignore(spec, 'projection', 'a layer that projects nothing reads no projection')
     for (const p of parsed) ignore(p.l, 'projection', 'a layer that projects nothing reads no projection')
   }
-  for (const p of parsed) {
+  parsed.forEach((p, i) => {
     const g = groups[p.group]!
     const d = buildData(p.l, p.fields, p.mark, p.orient, g.castDone, ctx)
+    // (an animation: the unit's frame filter leaves the main dataset, and the marks of a unit with a time channel read the frame)
+    const timerSel = Object.values(layerSel[i]?.cmpts ?? {}).find(isTimerSelection)
+    if (timerSel) p.frame = extractFrameFilter(d, timerSel.name, p.fields.some((f) => f.channel === 'time'))
     g.casts.push(...d.casts)
     p.pipeline = d.pipeline
     p.seriesFields = d.seriesFields
     p.rawLen = d.rawLen
     p.usesRawDomain = d.usesRawDomain
     p.invalidSplit = d.invalidSplit
-  }
+  })
 
   // data: per source group the source + casts dataset, then one derived
   // dataset per layer that needs a pipeline; layers without transforms read
@@ -1223,6 +1233,12 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
         p.dataName = dataName
         rawName = dataName
       }
+    } else if (p.frame) {
+      // (vega-lite keeps an empty main dataset: the frame dataset derives from it)
+      const dataName = ctx.dn(nextData++)
+      data.push({ name: dataName, source: g.castsName, transform: [] })
+      p.dataName = dataName
+      rawName = dataName
     } else {
       p.dataName = g.castsName
       rawName = g.castsName
@@ -1243,6 +1259,10 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
       if (lookup) data.push({ name: lookup.name, source: p.dataName, transform: [{ type: 'filter', expr: ctx.selectionTest!({ param: c.name }) }] })
     }
     const builtMarks = buildMarks(p.l, p.fields, p.mark, p.orient, p.dataName, p.markSize)
+    if (p.frame) {
+      data.push({ name: `${p.dataName}_curr`, source: p.dataName, transform: [p.frame.filter] })
+      if (p.fields.some((f) => f.channel === 'time')) animateMarks(builtMarks, p.dataName)
+    }
     // (a layer the user named is named so: `outer_marks`, whichever layers it is in)
     const leafName = typeof p.l.name === 'string' && p.l.name !== '' ? varName(p.l.name) : undefined
     if (leafName !== undefined) ctx.namedPrefixes.push(`${leafName}_`)
@@ -2665,6 +2685,11 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
   renameFragment(inner.marks, renames)
   renameFragment(inner.legends ?? [], renames)
   renameFragment(inner.projections ?? [], renames)
+  // (a facet's projection is built from what its child specified, as a layer's is: `equalEarth` is the default of a unit's own)
+  for (const pj of (inner.projections ?? []) as Record<string, unknown>[]) {
+    const c = ASSEMBLED_FROM.get(pj)
+    if (c?.defaultType === true && c.specified.type === undefined) delete pj.type
+  }
   renameFragment(facetChildSignals, renames)
 
   // split the inner axes: grid axes stay in the cell, label axes move to the
@@ -4341,7 +4366,7 @@ function stackByFields(fields: FieldDef[], dimensionChannel: 'x' | 'y'): FieldDe
   for (const ch of NONPOSITION_ORDER) {
     if (ch === 'tooltip') continue
     for (const f of fields) {
-      if (f.channel !== ch || f.datumOnly || !f.field || f.aggregate || groupFields.has(aggFieldName(f))) continue
+      if (f.channel !== ch || f.datumOnly || !f.field || f.aggregate || groupFields.has(aggFieldName(f)) || isSynthesizedOrder(f.raw)) continue
       out.push(f)
     }
   }
@@ -4420,9 +4445,9 @@ interface CompileCtx extends TransformContext {
   /** The dataset names the user's spec declares or references (a source of one of these names is the user's, not this compiler's). */
   userDataNames: ReadonlySet<string>
   /** The selection components of the spec, by (sanitized) parameter name. */
-  selections: Map<string, SelCmpt>
+  selections: Map<string, Selection>
   /** The selections of views compiled in an earlier pass: a predicate may name a selection a later view declares. */
-  forwardSelections?: ReadonlyMap<string, SelCmpt>
+  forwardSelections?: ReadonlyMap<string, Selection>
   /** The parameter names a predicate asked for that no earlier view declared as a selection. */
   selectionMisses: Set<string>
   /** Some selection projects `_vgsid_`: every pipeline starts with an identifier transform. */
@@ -4578,6 +4603,7 @@ function makeCtx(top: VLSpec): CompileCtx {
   }
   ctx.selectionTest = selectionTester(ctx)
   ctx.selectionTimeUnits = (param) => ctx.selections.get(varName(param))?.fields.timeUnits ?? []
+  ctx.parameterSpan = (extent) => binSpanExpr(ctx, { extent })
   ctx.addSelectionLookup = (param) => {
     const cmpt = ctx.selections.get(varName(param))
     if (!cmpt) throw new VLCompileError(`cannot look up the variable parameter "${param}": only a selection parameter can be a lookup source`)
@@ -4669,10 +4695,14 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   const userTransforms = Array.isArray(spec.transform) ? (spec.transform as Record<string, unknown>[]) : []
   // fields a user transform produces are derived: vega-lite never re-parses them
   const derivedKeys = new Set<string>()
+  let carriedNames: ReadonlySet<string> | undefined
+  let madeTimeUnits: ReadonlySet<string> | undefined
   {
     const probe: TranslateState = { parsed: new Map() }
     translateTransforms(userTransforms, ctx, probe)
     for (const [k, v] of probe.parsed) if (v === 'derived') derivedKeys.add(k)
+    carriedNames = probe.carried
+    madeTimeUnits = probe.timeUnitOutputs
     // a sequence generator's rows are numbers already (sequence.ts producedFields)
     if (isObject(spec.data) && isObject(spec.data.sequence)) derivedKeys.add(typeof spec.data.sequence.as === 'string' ? spec.data.sequence.as : 'data')
   }
@@ -4681,14 +4711,38 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   // (a path under a field a user transform produces - a flatten's output, say - can only be read once that transform has run: its
   // copy follows the transforms, as a parse node placed after them, and the copy is not parsed again)
   const lateFlat: Record<string, unknown>[] = []
+  // (a name a transform of this unit produces is a flat key of its rows, whatever dots it has: `as: "m.x"` writes the row's key "m.x",
+  // which a path `m.x` or `m\.x` reads, as vega-lite's flat copies do; data/parse.ts ParseNode never re-parses a produced field)
+  const producedNames = new Set(derivedKeys)
+  const lateDone = new Set<string>()
   const addFlat = (userPath: string): void => {
     const ff = flatField(userPath)
-    if (ff.expr === undefined || castDone.has(`flat:${ff.key}`)) return
-    castDone.add(`flat:${ff.key}`)
-    if (derivedKeys.has(splitAccessPath(userPath)[0]!)) {
-      lateFlat.push({ type: 'formula', expr: ff.expr, as: ff.key })
+    if (ff.expr === undefined) return
+    const pieces = splitAccessPath(userPath)
+    const joined = pieces.join('.')
+    const produced = producedNames.has(joined)
+    if (produced || derivedKeys.has(pieces[0]!)) {
+      // (the copy follows the transforms of THIS pipeline: a sibling layer's pipeline needs its own, so it is not kept in castDone)
+      if (lateDone.has(ff.key)) return
+      lateDone.add(ff.key)
+      lateFlat.push({ type: 'formula', expr: produced ? `datum[${JSON.stringify(joined)}]` : ff.expr, as: ff.key })
       derivedKeys.add(ff.key)
-    } else casts.push({ type: 'formula', expr: ff.expr, as: ff.key })
+      return
+    }
+    if (carriedNames?.has(joined) === true && !lateDone.has(ff.key)) {
+      // (the group key an aggregate carries: read before it, and copied again after it)
+      lateDone.add(ff.key)
+      lateFlat.push({ type: 'formula', expr: `datum[${JSON.stringify(joined)}]`, as: ff.key })
+    }
+    if (castDone.has(`flat:${ff.key}`)) return
+    castDone.add(`flat:${ff.key}`)
+    casts.push({ type: 'formula', expr: ff.expr, as: ff.key })
+    // vega-lite's flat copy of a nested path is named by the joined path (`o.v`), and expressions (a calculate, a composite mark's
+    // fences) read it by that name: the rows carry it as well
+    if (pieces.length > 1 && !castDone.has(`flat:${joined}`)) {
+      castDone.add(`flat:${joined}`)
+      casts.push({ type: 'formula', expr: ff.expr, as: joined })
+    }
   }
   for (const f of fields) if (f.flatExpr !== undefined) addFlat(f.source)
   for (const p of referencedPaths(spec.encoding)) addFlat(p)
@@ -4856,7 +4910,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   } else pushAll(pipeline, userOut)
   pushAll(pipeline, lateFlat)
   // (the facet node of a facet inside a facet sits here: what the encoding adds is made inside the innermost cell)
-  const userLen = pipeline.length
+  let userLen = pipeline.length
 
   // maps: the geojson (projection fit) and geopoint (longitude / latitude) transforms follow the
   // user's transforms and the implicit parses, ahead of bin / timeUnit / aggregate
@@ -4867,6 +4921,8 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
 
   // binning (data/parse.ts: user transforms, geo, THEN bin, then timeUnit): the extent is taken over the filtered rows
   if (leafDepth === undefined) pushAll(pipeline, binPipeline)
+  // (the bin a transform made and the bin a channel asks for - or two transforms' - are one bin node to vega-lite)
+  userLen = mergeChainedBins(pipeline)(userLen)
   // a binned discrete field is named by its bin's text (data/bin.ts: `<bin>_range`)
   for (const f of binFields) {
     if (!binDiscrete(f)) continue
@@ -4883,6 +4939,8 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     const as = timeUnitField(f)
     if (tuSeen.has(as)) continue
     tuSeen.add(as)
+    // (optimizers.ts RemoveDuplicateTimeUnits: a time unit the transforms made already, under this name, is not made again)
+    if (!f.tu!.binned && madeTimeUnits?.has(as) === true) continue
     // timeunit.ts TimeUnitNode (binned): the field is the start already; its end is made only for a rect-based mark or a band position
     const hasSecondary0 = fields.some((g) => g.channel === `${f.channel}2`)
     if (f.tu!.binned) {
@@ -9197,10 +9255,12 @@ export function compileUnit(input: VLSpec): VLSpec {
  * the main dataset's own transform list: a pipeline that split before it (an aggregate with a sort over the raw
  * table) has the filter in an earlier dataset, which vega-lite does not search.
  */
-function extractFrameFilter(data: DataPipeline, selection: string): { filter: Record<string, unknown> } {
+function extractFrameFilter(data: DataPipeline, selection: string, required: boolean): { filter: Record<string, unknown> } | undefined {
   // vega-lite: the first filter of the main dataset that tests a selection (`expr.includes('vlSelectionTest')`)
   const isFrameFilter = (t: Record<string, unknown>): boolean => t.type === 'filter' && typeof t.expr === 'string' && t.expr.includes('vlSelectionTest')
   const at = data.pipeline.findIndex(isFrameFilter)
+  // (a timer selection of a unit that has no time channel, and no filter of the selection either, has no frame to cut)
+  if (at < 0 && !required) return undefined
   if (at < 0) throw new VLCompileError(`transform: the {"filter": {"param": ${JSON.stringify(selection)}}} is not in the unit's data pipeline`)
   if (data.usesRawDomain && data.pipeline.length > data.rawLen && at < data.rawLen) {
     throw new VLCompileError(`transform: the {"filter": {"param": ${JSON.stringify(selection)}}} lands in the pre-aggregation table, not the main dataset; vega-lite 6.4.3 then emits marks that read a frame dataset it never defines`)
@@ -9275,7 +9335,8 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   const data = buildData(spec, fields, mark, orient, undefined, ctx)
   // animation: the selection's frame filter leaves the main dataset for the `_curr` dataset the marks read
   const timerSel = unitSel ? Object.values(unitSel.cmpts).find(isTimerSelection) : undefined
-  const animation = timerSel && fields.some((f) => f.channel === 'time') ? extractFrameFilter(data, timerSel.name) : undefined
+  const hasTimeChannel = fields.some((f) => f.channel === 'time')
+  const animation = timerSel ? extractFrameFilter(data, timerSel.name, hasTimeChannel) : undefined
   // vega-lite's default sizing: continuous dimensions get 300, discrete
   // dimensions size from the band step (bandspace(domain length) * step)
   // (a position without a scale sizes its view as one with no position does)
@@ -9350,7 +9411,7 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
     FRAG_PROJECTION.set(out, unitProj)
   }
   const builtMarks = buildMarks(spec, fields, mark, orient, dataName, markSize)
-  if (animation) animateMarks(builtMarks, dataName)
+  if (animation && hasTimeChannel) animateMarks(builtMarks, dataName)
   out.marks = builtMarks
   out.scales = buildScales(spec, fields, mark, orient, scaleDataName, wSpec, hSpec, data.seriesFields, pd.rawName)
   applyScaleConfig(out.scales as ScaleSpec[], isObject(spec.config) ? (spec.config as Record<string, unknown>) : undefined)
@@ -9506,7 +9567,7 @@ function legendSymbolPaint(spec: VLSpec, mark: string, fields: FieldDef[], chann
 
 /** The selections of one unit, parsed. */
 interface UnitSel {
-  cmpts: Record<string, SelCmpt>
+  cmpts: Record<string, Selection>
   unit: SelUnit
   /** scale channels whose domain follows a param, by channel */
   extents: Map<string, { param: string; field?: string; encoding?: string }>
@@ -9601,7 +9662,8 @@ function prepareUnitSelections(
       const f = fieldOf(channel)!
       return { as: timeUnitField(f), field: f.field, timeUnit: f.tu }
     },
-    scaleName: opts.scaleName,
+    // (a unit with no time scale: vega-lite writes the scale's name as it finds it, `undefined`)
+    scaleName: (channel) => (channel === 'time' && fieldOf('time') === undefined ? 'undefined' : opts.scaleName(channel)),
     scaleType: (channel) => {
       const f = fieldOf(channel)
       return f && (channel === 'x' || channel === 'y') ? positionalScaleType(mark, f) : undefined
@@ -9860,7 +9922,7 @@ function mergeSelParts(parts: SelParts[]): SelParts | undefined {
 }
 
 /** Interactive legends (legends.ts parseInteractiveLegend + legend/encode.ts): a legend over a field a selection is bound to. */
-function applyLegendSelectionsOf(legends: Record<string, unknown>[], fields: FieldDef[], cmpts: Record<string, SelCmpt>): void {
+function applyLegendSelectionsOf(legends: Record<string, unknown>[], fields: FieldDef[], cmpts: Record<string, Selection>): void {
   for (const lg of legends) {
     const key = LEGEND_SCALE_KEYS.find((k) => typeof lg[k] === 'string')
     if (!key) continue
@@ -9891,7 +9953,7 @@ function assembleUnitSelections(sel: UnitSel | undefined, marks: Record<string, 
 }
 
 /** The unit's brush / voronoi marks around its own, noted as the selections' (they keep the selection's name when a view is embedded). */
-function assembleSelectionMarks(unit: SelUnit, cmpts: Record<string, SelCmpt>, marks: Record<string, unknown>[]): Record<string, unknown>[] {
+function assembleSelectionMarks(unit: SelUnit, cmpts: Record<string, Selection>, marks: Record<string, unknown>[]): Record<string, unknown>[] {
   const own = new Set(marks)
   const out = assembleUnitSelectionMarks(unit, cmpts, marks)
   for (const m of out) if (!own.has(m)) (m as Record<symbol, unknown>)[SELECTION_MARK] = true

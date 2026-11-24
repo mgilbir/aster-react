@@ -142,8 +142,6 @@ export interface Selection {
   on?: unknown
   [k: string]: unknown
 }
-/** The name the compiler passes selections around by. */
-export type SelCmpt = Selection
 
 // --- what a selection needs to know of its unit --------------------------------------------------------------------------------
 
