@@ -956,7 +956,7 @@ function paintedBox(el: XmlEl, a: Record<string, string>, m: Mat, eff: Record<st
       if (fs == null || eff['dominant-baseline'] !== undefined || eff['letter-spacing'] !== undefined || eff['word-spacing'] !== undefined) return null
       const content = textContent(el, fs)
       const lines = content.split(/<\/?tspan[^>]*>/).filter((l) => l.trim() !== '')
-      const chars = Math.max(1, ...lines.map((l) => l.length))
+      const chars = lines.reduce((m, l) => Math.max(m, l.length), 1)
       // Glyph extents of any font stay inside 1.5 em per character horizontally
       // and [-1.3, 0.5] em (+ 1.6 em per extra line) vertically of the baseline.
       const w = chars * fs * 1.5

@@ -1721,7 +1721,11 @@ function compileFacetedComposition(spec: VLSpec, ctx: CompileCtx, nested: string
   if (sharedScales.length) {
     const byName = new Map(cellData.map((d) => [String(d.name), d]))
     const copies = new Map<string, string>()
-    let next = Math.max(-1, ...[...data, ...cellData].map((d) => /^data_(\d+)$/.exec(String(d.name))?.[1]).filter((n): n is string => n !== undefined).map(Number)) + 1
+    // (the next free `data_N`: a fold, not a spread, of the datasets the spec and its cells define)
+    let next = [...data, ...cellData].reduce((m, d) => {
+      const n = /^data_(\d+)$/.exec(String(d.name))?.[1]
+      return n === undefined ? m : Math.max(m, Number(n))
+    }, -1) + 1
     const copyOf = (name: string): string => {
       const have = copies.get(name)
       if (have !== undefined) return have
