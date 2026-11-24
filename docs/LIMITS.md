@@ -331,7 +331,10 @@ supply (`test`, `regexp`, `replace`/`split` with a RegExp or a `/literal/`,
    - **polynomial of degree 3 or more**: three loops each able to hand the same input on to the next, the search's loop
      counted (`a*a*a*b`, `\s*.*x`, `.*foo.*bar`, the trim idiom `^\s*(.*?)\s*$`). Measured on V8: `\s*.*x` on 4 000
      spaces runs 14 s, `.*foo.*bar` on 6 000 characters 16 s, the trim idiom on 4 000 spaces before `x\n\nx` 19.7 s; the
-     default input cap is 10 000. Degree 2 is allowed (`a*b` and `\s+$` take about 0.1 s on 10 000 characters), and a loop
+     default input cap is 10 000. Degree 2 is allowed (`a*b` and `\s+$` take about 0.1 s on 10 000 characters; V8's cost per
+     step depends on the shape, which the screen does not model: a repeated group such as `(\w?)+!` measured up to 15 times
+     that, and the soundness test holds every accepted generated pattern to 20 times the plain quadratic search of its input),
+     and a loop
      after which the match can always end is no hazard (`\s*.*`, `\d+\.?\d*`: the first path that reaches it succeeds);
    - **too many live paths**: over 4 096 ways to have matched one input so far (`(a|a)(a|a)...`), a loop counted as
      absorbing any length of it; or, next to a degree-2 chain, more than 16 transitions tried per character from those paths

@@ -180,8 +180,16 @@ describe('the screen terminates and is sound (child processes, hard kill)', () =
    * Every pattern the screen lets through runs promptly on inputs built to make it backtrack, at the default input cap: each
    * character the pattern names repeated 10 000 times, with no suffix and with suffixes that fail it. Patterns are generated from a
    * small grammar (seeded); V8 runs them in a child that the parent kills past its budget.
+   *
+   * "Promptly" is the screen's guarantee (docs/LIMITS.md): at most quadratic, at most WITHIN times the plain quadratic search of
+   * the same input (`[^]*\0`, every start position walking to the end and back), timed in the same process right before:
+   * V8's constant per step varies with the pattern's shape, which the screen's model does not see (measured against the
+   * reference: `(\dx*?)*x$` 3 to 5.5 times, `(\w?)+!` 7 to 15 times, `(\d)(\w?)+[^b]{2}!` 7 to 12.6 times, the screen's own
+   * bound `a*a{1,3}x` about 2.4 times), and the machine's load scales both (an absolute 1.5 s failed on `(\dx*?)*x$`, which
+   * runs 0.4 s on a quiet machine and 1.6 s in the gate), so an absolute time measures the machine. A slow answer is timed again,
+   * with the reference, before it counts. Patterns the screen refuses for the bounded run after a loop ran 137 to 180 times it.
    */
-  it('generated patterns the screen accepts run within 1.5 s each on 10 000-character attack inputs', () => {
+  it('generated patterns the screen accepts run within 20 times the plain quadratic search on 10 000-character attack inputs', () => {
     let s = 0x5eed
     const rand = (): number => { s = (Math.imul(s, 1103515245) + 12345) >>> 0; return s / 4294967296 }
     const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)]!
@@ -206,13 +214,26 @@ describe('the screen terminates and is sound (child processes, hard kill)', () =
     expect(accepted.length).toBe(300)
     const child = `
       const pats = JSON.parse(process.argv[1]); const units = ['a', 'b', ' ', '1', 'x', 'ab', 'a ']; const tails = ['', '!', '\\n', 'b!']
+      const WITHIN = 20
+      const REF = /[^]*\\0/
+      const time = (re, s) => { const t0 = performance.now(); re.test(s); return performance.now() - t0 }
+      const inputs = []
+      for (const u of units) for (const t of tails) {
+        const s = u.repeat(Math.ceil(10000 / u.length)).slice(0, 10000 - t.length) + t
+        const ref = Math.min(time(REF, s), time(REF, s), time(REF, s))
+        // (a reference V8 answers without the search, by a check for a character the input lacks, would measure nothing)
+        if (!(ref > 5)) { process.stdout.write('REFERENCE ' + ref.toFixed(1) + ' ms: not the quadratic search\\n'); process.exit(4) }
+        inputs.push({ u, t, s, ref })
+      }
       for (const p of pats) {
         const re = new RegExp(p)
-        for (const u of units) for (const t of tails) {
-          const s = u.repeat(Math.ceil(10000 / u.length)).slice(0, 10000 - t.length) + t
+        for (const { u, t, s, ref } of inputs) {
           process.stdout.write(JSON.stringify(p) + '\\n')
-          const t0 = performance.now(); re.test(s); const ms = performance.now() - t0
-          if (ms > 1500) { process.stdout.write('SLOW ' + ms.toFixed(0) + ' ' + JSON.stringify([p, u, t]) + '\\n'); process.exit(3) }
+          const ms = time(re, s)
+          if (ms > WITHIN * ref) {
+            const ref2 = Math.min(ref, time(REF, s)), ms2 = Math.min(ms, time(re, s))
+            if (ms2 > WITHIN * ref2) { process.stdout.write('SLOW ' + ms2.toFixed(0) + ' ms against ' + ref2.toFixed(0) + ' ' + JSON.stringify([p, u, t]) + '\\n'); process.exit(3) }
+          }
         }
       }
       process.stdout.write('DONE\\n')`
