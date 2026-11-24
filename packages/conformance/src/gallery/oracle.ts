@@ -1,6 +1,7 @@
 /** The oracle side of the static path: real vega rendered headless from the offline gallery data. */
 import * as vega from 'vega'
 import { BASE_URL, fileFetch } from './lib.js'
+import { settleWithin } from '../render-vega.js'
 
 /**
  * Errors vega (or Aster) throws from a timer/promise callback nobody awaits (vega's scenegraph redraw does) surface as
@@ -11,11 +12,13 @@ process.on('uncaughtException', (e) => { stray.push(e instanceof Error ? e.messa
 process.on('unhandledRejection', (e) => { stray.push(e instanceof Error ? e.message : String(e)) })
 /** What the view being rendered logged as an error (vega logs a failing operator and carries on; the rendered document is then not what the spec describes). */
 export const logged: string[] = []
+/** What it logged as a warning: vega's loader reports a data file it could not load as a warning (`Loading failed`) and renders the chart without it. */
+export const warned: string[] = []
 const collector = {
-  level(): number { return 1 },
+  level(): number { return 2 },
   // (the stack too: a null canvas surfaces as `Cannot set properties of null` from a function called getContext)
   error(...a: unknown[]) { logged.push(a.map((x) => (x as Error)?.stack ?? String(x)).join(' ')); return this },
-  warn() { return this },
+  warn(...a: unknown[]) { warned.push(a.map((x) => (x as Error)?.message ?? String(x)).join(' ')); return this },
   info() { return this },
   debug() { return this },
 }
@@ -35,9 +38,9 @@ export async function vegaSvg(spec: Record<string, unknown>): Promise<string> {
   const view = new vega.View(vega.parse(spec as never), { renderer: 'none', loader })
   view.logger(collector as never)
   try {
-    await view.runAsync()
+    await settleWithin(view.runAsync(), 'the oracle (vega runAsync)')
     view.finalize() // the first frame: no timer tick between the run and the serialisation
-    return await view.toSVG()
+    return await settleWithin(view.toSVG(), 'the oracle (vega toSVG)')
   } finally {
     view.finalize()
   }
