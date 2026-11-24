@@ -783,7 +783,7 @@ function describeScene(scene: SceneRoot, options: DomRenderOptions): DomDesc {
   const children: DomDesc[] = []
   if (scene.background) children.push({ tag: 'rect', attrs: pairs((w) => backgroundRectAttrs(scene, w)) })
   const marks: DomDesc[] = []
-  pushAll(marks, nodeDescs(childNodes(scene.items, plotW, plotH, { snaps: scene.__scales }, clips), clips, options))
+  pushAll(marks, nodeDescs(childNodes(scene.items, plotW, plotH, { snaps: scene.__scales, ...(scene.__locale ? { locale: scene.__locale } : {}) }, clips), clips, options))
   children.push(g('g', pairs((w) => viewGroupAttrs(scene, w)), [
     g('g', pairs(rootFrameGroupAttrs), [
       g('g', pairs((w) => groupItemAttrs(scene.frameX ?? 0, scene.frameY ?? 0, w, scene.frameAria)), [

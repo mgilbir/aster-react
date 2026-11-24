@@ -222,7 +222,7 @@ function markNode(it: SceneItem, group: SceneGroup, id: string, tx: number, ty: 
   return { ...node, selected: opts.isSelected?.(node) }
 }
 
-function guideNode(group: SceneGroup, id: string, tx: number, ty: number, scales: Map<string, unknown>): A11yNode | null {
+function guideNode(group: SceneGroup, id: string, tx: number, ty: number, scales: Map<string, unknown>, locale: SceneRoot['__locale']): A11yNode | null {
   const role = group.role
   if ((group as unknown as { aria?: boolean }).aria === false) return null
   if (role !== 'axis' && role !== 'legend' && role !== 'title') return null
@@ -264,7 +264,7 @@ function guideNode(group: SceneGroup, id: string, tx: number, ty: number, scales
         : undefined
     const gm = group as unknown as { format?: unknown; formatType?: unknown }
     // (a caption vega cannot make -- the scale's label format refuses the axis's format -- leaves the node its role's name)
-    const label = group.description ? String(group.description) : axisLabel({ orient, title, scale: scaleName, format: gm.format, formatType: gm.formatType }, scales) ?? 'axis'
+    const label = group.description ? String(group.description) : axisLabel({ orient, title, scale: scaleName, format: gm.format, formatType: gm.formatType }, scales, locale) ?? 'axis'
     const dom = (scales.get(scaleName ?? '') as { domain?: () => unknown[] } | undefined)?.domain?.()
     const numeric = dom && dom.length >= 2 && typeof dom[0] === 'number' && typeof dom[dom.length - 1] === 'number'
     return {
@@ -279,7 +279,7 @@ function guideNode(group: SceneGroup, id: string, tx: number, ty: number, scales
     }
   }
   const gm = group as unknown as { legendType?: string; legendScale?: string; legendChannels?: string[]; legendFormat?: unknown; legendFormatType?: unknown }
-  const label = group.description ? String(group.description) : legendLabel({ ...gm, title }, scales, typeof datum.type === 'string' ? datum.type : 'symbol') ?? 'legend'
+  const label = group.description ? String(group.description) : legendLabel({ ...gm, title }, scales, typeof datum.type === 'string' ? datum.type : 'symbol', locale) ?? 'legend'
   return {
     id, kind: 'legend', marktype: 'group', role: 'graphics-symbol', roleDescription: 'legend',
     label, x: b.x1, y: b.y1, width: b.x2 - b.x1, height: b.y2 - b.y1,
@@ -423,14 +423,14 @@ function treeOf(scene: SceneRoot, scales: Map<string, unknown>, options: A11yOpt
     const gy = ty + (group.y ?? 0)
     const role = group.role
     if (role === 'axis' || role === 'legend' || role === 'title') {
-      const n = guideNode(group, `guide-${seq++}`, tx, ty, scopeScales)
+      const n = guideNode(group, `guide-${seq++}`, tx, ty, scopeScales, scene.__locale)
       if (n) nodes.push(n)
       if (role === 'legend' && n) pushAll(nodes, legendEntryNodes(group, n.id, tx, ty, options, threshold))
       return
     }
     const kids = group.items
     if (!Array.isArray(kids)) return
-    const local = group.__scales ? new Map([...scopeScales, ...scalesFromSnapshots(group.__scales)]) : scopeScales
+    const local = group.__scales ? new Map([...scopeScales, ...scalesFromSnapshots(group.__scales, scene.__locale)]) : scopeScales
     const marktype = group.marktype
     // vega-scenegraph: `aria: false` (the mark's, or a group item's own) puts `aria-hidden` on the element, which hides
     // everything inside it; a group item that carries a `description` is described by its own role and role description
@@ -487,7 +487,7 @@ function treeOf(scene: SceneRoot, scales: Map<string, unknown>, options: A11yOpt
       if (live && snap.labelValues) live.labelValues = snap.labelValues
     }
   }
-  const rootScales = scales.size ? scales : scene.__scales ? scalesFromSnapshots(scene.__scales) : scales
+  const rootScales = scales.size ? scales : scene.__scales ? scalesFromSnapshots(scene.__scales, scene.__locale) : scales
   // where the root group is in the viewport: inside the padding, at the frame's offset (the origin the scene's items are in)
   const originX = (scene.padding?.left ?? 0) + (scene.frameX ?? 0)
   const originY = (scene.padding?.top ?? 0) + (scene.frameY ?? 0)

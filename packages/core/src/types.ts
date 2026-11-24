@@ -198,6 +198,12 @@ export interface CompiledChart {
    * view's event listeners that are not named.
    */
   eventConfig?: { defaults?: { prevent?: unknown; allow?: unknown }; view?: unknown }
+  /**
+   * `config.locale`: the chart's own number and time locale (vega-view `locale(spec.locale.number, spec.locale.time)`), which its
+   * axes, legends, captions, expression `format` / `timeFormat` / `timeParse` and data parsing read; a half it leaves out is the
+   * default one.
+   */
+  locale?: import('./locale.js').LocaleDefinition
   /** Top-level chart title (string or object form, defaults merged from config.title). */
   title?: CompiledTitle
   /** Cartographic projections referenced by geo marks / the geoshape transform. */
@@ -707,6 +713,8 @@ export interface SceneRoot {
   description?: string
   /** @internal Resolved scales in this scope (scene-differential metadata). */
   __scales?: ScaleSnapshot[]
+  /** @internal The chart's own locale (`config.locale`), which the guide captions format with: plain data, as the scene may be cloned. */
+  __locale?: import('./locale.js').LocaleDefinition
   /**
    * @internal Live scales for this evaluation, so hosts can derive `ChartInfo`
    * (interaction, hit tests) from an already-evaluated scene without compiling

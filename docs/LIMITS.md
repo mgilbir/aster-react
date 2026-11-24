@@ -499,7 +499,7 @@ const loaded = await loadSpecData(spec, {
 ```
 
 `format.parse` accepts vega's `date:'%d/%m/%Y'` and `utc:'%Y-%m-%d'` patterns
-(quoted or not), resolved through the default locale like `vega-loader`.
+(quoted or not), resolved through the chart's locale (`config.locale`, else the default one) like `vega-loader`.
 
 ## Refusing url datasets: `urlData`
 
@@ -700,9 +700,9 @@ for every consumer (scales, layout, marks and expressions); from the strongest: 
 
 ## Locale and formatter caches
 
-Expression `format`, `timeFormat`, `monthFormat`, ... read the **current**
+Expression `format`, `timeFormat`, `monthFormat`, ... read the chart's locale (`config.locale`) or the **current**
 default locale on every call, so `defaultLocale(...)` after import takes
-effect. Memoised formatters are bounded (512 per table, least-recently-used out)
+effect. A chart's own locale makes its formatter tables once, with the compiled chart, and they go with it. Memoised formatters are bounded (512 per table, least-recently-used out)
 so arbitrary specifiers in data cannot grow the process without bound. The same holds for the
 expression `pluck` accessor table (1024, least-recently-used out): an accessor is a pure function of
 its name, so a dropped one is simply rebuilt.

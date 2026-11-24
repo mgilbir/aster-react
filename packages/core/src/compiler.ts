@@ -169,6 +169,8 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
     style: cfgStyle,
     ...(cfg.lineBreak != null ? { lineBreak: cfg.lineBreak } : {}),
     ...(cfg.events != null && typeof cfg.events === 'object' ? { eventConfig: cfg.events as CompiledChart['eventConfig'] } : {}),
+    // (vega-view reads `spec.locale` when it is truthy: an object's `number` and `time` halves; anything else is the default locale)
+    ...(cfg.locale != null && typeof cfg.locale === 'object' ? { locale: cfg.locale as CompiledChart['locale'] } : {}),
     layout: (spec.layout as Record<string, unknown> | undefined) ?? undefined,
     ...(contentSized.length ? { contentSized } : {}),
   }
