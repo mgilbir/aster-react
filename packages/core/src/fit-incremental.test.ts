@@ -261,7 +261,7 @@ describe('an evaluation that dies after a pass updated a structure in place', ()
     evaluateChart(chart, { data: { t: [row(0, 11), row(1, 20)] }, ...size, dataChanges: { t: [0] } })
     const good = [row(0, 11), row(1, 20)]
     const bad = [row(0, 99), row(1, 20), { x: 2, c: 'k', obj: undefined }]
-    expect(() => evaluateChart(chart, { data: { t: bad }, ...size, limits: { maxRows: 1000 }, dataPulse: { t: { changed: [0], appendOnly: true, baseLength: 2, added: [[2, 3]] } } })).toThrow()
+    expect(() => evaluateChart(chart, { data: { t: bad }, ...size, limits: { maxRows: 1000 }, dataPulse: { t: { changed: [0], appendOnly: true, baseLength: 2, added: [[2, 3]] } } })).toThrow(/limit exceeded: maxRows 1000000000 > 1000 \(sequence\)/)
     const next = [...good, row(2, 30)]
     const inc = evaluateChart(chart, { data: { t: next }, ...size, dataPulse: { t: { changed: [], appendOnly: true, baseLength: 2, added: [[2, 3]] } } })
     expect(renderSceneToSvg(inc)).toBe(renderSceneToSvg(fresh(spec, { data: { t: next }, ...size })))

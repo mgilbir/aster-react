@@ -40,15 +40,12 @@ describe('expression', () => {
     expect(fn({ v: 21 })).toBe(43)
   })
 
-  it('monthFormat(2) returns a non-empty string', () => {
-    const fn = compileExpr('monthFormat(2)', runtime)
-    const result = fn({}) as string
-    expect(typeof result).toBe('string')
-    expect(result.length).toBeGreaterThan(0)
+  it('monthFormat(2) is "March" (vega 6.3.1\'s answer)', () => {
+    expect(compileExpr('monthFormat(2)', runtime)({})).toBe('March')
   })
 })
 
-describe('expression — function library (oracle-calibrated)', () => {
+describe('expression — function library (values checked against vega 6.3.1; the full differential is oracle-vectors.test.ts)', () => {
   const scaleObj = Object.assign((v: unknown) => Number(v) * 2, {
     domain: () => [0, 10],
     range: () => [0, 20],
@@ -112,7 +109,9 @@ describe('expression — function library (oracle-calibrated)', () => {
     expect(run("indata('t', 'a', 99)")).toBeUndefined()
   })
   it('color functions return color objects', () => {
-    expect(String(run("rgb('#f00')"))).toMatch(/rgb|#ff0000/i)
+    // (vega 6.3.1: a colour object { r: 255, g: 0, b: 0, opacity: 1 } that prints as 'rgb(255, 0, 0)')
+    expect(String(run("rgb('#f00')"))).toBe('rgb(255, 0, 0)')
+    expect(run("rgb('#f00') + ''")).toBe('rgb(255, 0, 0)')
     expect(run('luminance("white")')).toBeCloseTo(1, 3)
   })
 })

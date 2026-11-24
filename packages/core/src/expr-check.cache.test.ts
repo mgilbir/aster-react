@@ -6,7 +6,7 @@ vi.mock('./expr-parser.js', async (importOriginal) => {
   return { ...real, parseExpressionCached: (code: string) => { parsed.push(code); return real.parseExpressionCached(code) } }
 })
 
-const { checkExpression } = await import('./expr-check.js')
+const { checkExpression, expressionCheckCacheSize, EXPRESSION_CHECK_GENERATION } = await import('./expr-check.js')
 const { checkExpressions } = await import('./spec-expressions.js')
 const { registerExpressionFunction } = await import('./expression.js')
 
@@ -41,6 +41,9 @@ describe('what is found about an expression is kept across specs', () => {
 
   it('is bounded: more texts than it holds do not grow it without end, and every one is still checked right', () => {
     for (let i = 0; i < 20000; i++) checkExpression(`${i} + 1`, () => true)
+    // what it holds is read: two generations at most, however many texts passed through (an unbounded table holds all 20 000)
+    expect(expressionCheckCacheSize()).toBeLessThanOrEqual(2 * EXPRESSION_CHECK_GENERATION)
+    expect(expressionCheckCacheSize()).toBeGreaterThan(EXPRESSION_CHECK_GENERATION / 2)
     expect(() => checkExpression('nosuchbound + 1', () => false)).toThrow('Unrecognized signal name: "nosuchbound"')
     expect(() => checkExpression('1 +', () => true)).toThrow('Expression parse error: 1 +')
   })

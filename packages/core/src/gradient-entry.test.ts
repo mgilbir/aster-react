@@ -20,7 +20,7 @@ describe('the gradient of a scale', () => {
   it('an encode entry paints a linear gradient left to right, over the ticks of the scale and its ends', () => {
     const fill = fillOf(frame({ gradient: 'g' })) as { gradient: string; x1: number; x2: number; y1: number; y2: number; stops: Array<{ offset: number; color: string }> }
     expect(fill).toMatchObject({ gradient: 'linear', x1: 0, y1: 0, x2: 1, y2: 0 })
-    expect(fill.stops.length).toBeGreaterThanOrEqual(11)
+    expect(fill.stops.length).toBe(21) // vega 6.3.1: ticks(20) over [0, 10] (offsets 0, 0.05, ..., 1)
     expect(fill.stops[0]).toEqual({ offset: 0, color: 'rgb(255, 255, 255)' })
     expect(fill.stops[fill.stops.length - 1]).toEqual({ offset: 1, color: 'rgb(0, 0, 0)' })
   })

@@ -142,5 +142,7 @@ describe('the datum keeps its data values', () => {
     const its = items(scene).filter((i) => i.datum && 'px' in i.datum)
     expect(its.map((i) => i.datum!.y)).toEqual([null, 8])
     expect(its.map((i) => i.fill)).toEqual(['blue', 'red'])
+    // `defined` reads the data value too: isValid(null) is false (vega 6.3.1 gives [false, 'blue', null], [true, 'red', 8])
+    expect(its.map((i) => (i as { defined?: boolean }).defined)).toEqual([false, true])
   })
 })

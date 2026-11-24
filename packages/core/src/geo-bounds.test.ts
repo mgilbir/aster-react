@@ -14,8 +14,16 @@ describe('projectedBounds', () => {
 
   it('bounds an ordinary shape by its unrounded geometry', () => {
     const p = buildProjection({ type: 'equirectangular', scale: 100, translate: [0, 0] } as never)
-    const b = projectedBounds(p, { type: 'Polygon', coordinates: [[[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]] })
+    // (wound clockwise, the way d3-geo reads an exterior ring: the other way round is the rest of the sphere)
+    const b = projectedBounds(p, { type: 'Polygon', coordinates: [[[0, 0], [0, 10], [10, 10], [10, 0], [0, 0]]] })
+    // equirectangular: x = scale * lambda, y = -scale * phi (radians), about the translate; the box is the polygon's own, to the
+    // last digit (it is the unrounded geometry: a path text rounds to 3 places, 17.453 here)
+    const r = 100 * (10 * Math.PI) / 180
     expect(b).not.toBeNull()
-    expect(b![2]).toBeGreaterThan(b![0])
+    expect(b![0]).toBeCloseTo(0, 12)
+    expect(b![1]).toBeCloseTo(-r, 12)
+    expect(b![2]).toBeCloseTo(r, 12)
+    expect(b![3]).toBeCloseTo(0, 12)
+    expect(b![2]).not.toBe(17.453)
   })
 })
