@@ -119,7 +119,11 @@ function randomItems(r: Rnd, type: string, n: number): SceneItem[] {
 
 const TYPES = ['line', 'area', 'trail', 'arc', 'rect', 'symbol', 'path', 'shape', 'rule', 'text']
 
-/** A random scene; `finite` keeps every number finite (`sceneIntersect` is only fed those: a non-finite arc can stall it). */
+/**
+ * A random scene; `finite` keeps every number finite. The differential feeds the legacy `intersect()` only those: its copy walks
+ * a non-finite arc without end (seed 112, box 1). The current `sceneIntersect` on the non-finite scenes is pinned on its own
+ * (geometry-differential.test.ts, 'sceneIntersect on non-finite scenes').
+ */
 export function randomScene(r: Rnd, finite = false): SceneRoot {
   tame = finite
   const marks: SceneGroup[] = []
