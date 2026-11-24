@@ -397,6 +397,107 @@ const STRINGS = {
   description: 'Aa',
 };
 
+/**
+ * COMPOSITION, TRANSFORMS, CONDITIONS and PARAMETERS (audit C301, "narrow input space"): everything above sweeps one unit chart.
+ * The charts here are the composite shapes (layer, hconcat, vconcat, concat, repeat, facet) with every value of the properties the
+ * composition itself owns (`resolve` of scale, axis and legend, `spacing`, `align`, `center`, `bounds`), a unit chart through each
+ * transform (filter, calculate, aggregate, bin object, impute, window, fold, timeUnit, stack), a `condition` on a test and on a
+ * parameter, and the parameter forms that draw (a selection with an initial value, a variable parameter read by an encoding).
+ * Compared like every other case: both compilers' Vega rendered, the pictures and their ARIA structure equal.
+ */
+const UNIT = (extra = {}) => ({
+  width: 90,
+  height: 70,
+  mark: 'point',
+  encoding: {
+    x: { field: 'w', type: 'quantitative' },
+    y: { field: 'v', type: 'quantitative' },
+    color: { field: 'c', type: 'nominal' },
+    ...extra,
+  },
+});
+
+const inLayer = ({ width: _w, height: _h, ...rest }) => rest;
+
+const COMPOSITES = {
+  // (a layer's size is the layer's: a child's own width and height are not part of the layer's grammar)
+  layer: (resolve) => ({ resolve, width: 90, height: 70, layer: [inLayer(UNIT()), inLayer({ ...UNIT(), mark: 'line' })] }),
+  hconcat: (resolve) => ({ resolve, hconcat: [UNIT(), { ...UNIT(), mark: 'bar' }] }),
+  vconcat: (resolve) => ({ resolve, vconcat: [UNIT(), { ...UNIT(), mark: 'bar' }] }),
+  concat: (resolve) => ({ resolve, columns: 2, concat: [UNIT(), { ...UNIT(), mark: 'bar' }, { ...UNIT(), mark: 'tick' }] }),
+  repeat: (resolve) => ({
+    resolve,
+    repeat: { column: ['v', 'w'] },
+    spec: { ...UNIT({ x: { field: { repeat: 'column' }, type: 'quantitative' } }), encoding: { x: { field: { repeat: 'column' }, type: 'quantitative' }, y: { field: 'v', type: 'quantitative' }, color: { field: 'c', type: 'nominal' } } },
+  }),
+  facet: (resolve) => ({
+    resolve,
+    facet: { column: { field: 'c', type: 'nominal' } },
+    spec: { width: 60, height: 70, mark: 'bar', encoding: { x: { field: 'w', type: 'ordinal' }, y: { field: 'v', type: 'quantitative' }, color: { field: 'c', type: 'nominal' } } },
+  }),
+};
+
+const TRANSFORMS = {
+  filter: { transform: [{ filter: 'datum.v > 50' }] },
+  'filter-field-predicate': { transform: [{ filter: { field: 'c', oneOf: ['alpha', 'delta'] } }] },
+  calculate: { transform: [{ calculate: 'datum.v * 2', as: 'v' }] },
+  aggregate: { transform: [{ aggregate: [{ op: 'mean', field: 'v', as: 'v' }], groupby: ['c'] }] },
+  window: { transform: [{ window: [{ op: 'rank', as: 'w' }], sort: [{ field: 'v', order: 'descending' }] }] },
+  impute: { transform: [{ impute: 'v', key: 'w', value: 0 }] },
+  fold: { transform: [{ fold: ['v', 'w'], as: ['k', 'v'] }] },
+  stack: { transform: [{ stack: 'v', groupby: ['c'], as: ['v0', 'v1'] }], encoding: { y: { field: 'v0', type: 'quantitative' }, y2: { field: 'v1' } } },
+  'bin-object': { encoding: { x: { bin: { maxbins: 3, extent: [0, 10] }, field: 'w', type: 'quantitative' }, y: { aggregate: 'count', type: 'quantitative' } } },
+  'bin-step': { encoding: { x: { bin: { step: 4 }, field: 'w', type: 'quantitative' }, y: { aggregate: 'count', type: 'quantitative' } } },
+  'time-unit': { encoding: { x: { timeUnit: 'month', field: 't', type: 'temporal' }, y: { aggregate: 'sum', field: 'v', type: 'quantitative' } } },
+};
+
+const CONDITIONS = {
+  'test-value': { color: { condition: { test: 'datum.v > 50', value: 'firebrick' }, value: 'steelblue' } },
+  'test-field': { color: { condition: { test: 'datum.v > 50', field: 'c', type: 'nominal' }, value: 'grey' } },
+  'param-value': { params: [{ name: 'pick', select: 'point' }], encoding: { opacity: { condition: { param: 'pick', value: 1 }, value: 0.3 } } },
+  'param-empty-false': { params: [{ name: 'pick', select: 'point' }], encoding: { opacity: { condition: { param: 'pick', empty: false, value: 1 }, value: 0.3 } } },
+  'interval-initial': { params: [{ name: 'brush', select: { type: 'interval', encodings: ['x'] }, value: { x: [2, 6] } }], encoding: { opacity: { condition: { param: 'brush', value: 1 }, value: 0.3 } } },
+  'point-initial': { params: [{ name: 'pick', select: { type: 'point', fields: ['c'] }, value: [{ c: 'beta' }] }], encoding: { size: { condition: { param: 'pick', value: 200 }, value: 40 } } },
+  'variable-param': { params: [{ name: 'cutoff', value: 50 }], transform: [{ filter: 'datum.v > cutoff' }] },
+  'variable-param-expr': { params: [{ name: 'op', value: 0.4 }], mark: { type: 'point', opacity: { expr: 'op' } } },
+};
+
+function compositionCases(used, slug) {
+  const out = [];
+  const add = (family, property, value, spec) => {
+    const name = uniqueName(used, `${family}-${property}-${slug(value)}`);
+    out.push({ name, family, property, lite: true, spec: { $schema: SCHEMA_URL, data: { values: ROWS }, ...spec } });
+  };
+  for (const [kind, build] of Object.entries(COMPOSITES)) {
+    add('composition', kind, 'plain', build(undefined));
+    for (const channel of ['scale', 'axis', 'legend']) {
+      for (const axisOrChannel of channel === 'scale' ? ['x', 'y', 'color'] : channel === 'axis' ? ['x', 'y'] : ['color']) {
+        for (const mode of ['shared', 'independent']) add('composition', `${kind}-resolve-${channel}`, `${axisOrChannel}-${mode}`, build({ [channel]: { [axisOrChannel]: mode } }));
+      }
+    }
+    if (kind !== 'layer') {
+      for (const spacing of [0, 8, 40]) add('composition', `${kind}-spacing`, spacing, { ...build(undefined), spacing });
+      // (`align` is a property of concat, repeat and facet; hconcat and vconcat have none)
+      if (kind !== 'hconcat' && kind !== 'vconcat') for (const align of ['all', 'each', 'none']) add('composition', `${kind}-align`, align, { ...build(undefined), align });
+      for (const center of [true, false]) add('composition', `${kind}-center`, center, { ...build(undefined), center });
+      for (const bounds of ['full', 'flush']) add('composition', `${kind}-bounds`, bounds, { ...build(undefined), bounds });
+    }
+  }
+  for (const [name, t] of Object.entries(TRANSFORMS)) {
+    const unit = UNIT();
+    add('transform', name, 'unit', { ...unit, ...t, encoding: { ...unit.encoding, ...(t.encoding ?? {}) }, transform: t.transform });
+    add('transform', name, 'in-layer', { width: 90, height: 70, layer: [inLayer({ ...unit, ...t, encoding: { ...unit.encoding, ...(t.encoding ?? {}) }, transform: t.transform })] });
+    add('transform', name, 'in-facet', { facet: { column: { field: 'c', type: 'nominal' } }, spec: { ...unit, width: 50, ...t, encoding: { ...unit.encoding, ...(t.encoding ?? {}) }, transform: t.transform } });
+  }
+  for (const [name, c] of Object.entries(CONDITIONS)) {
+    const unit = UNIT();
+    const spec = { ...unit, ...(c.params ? { params: c.params } : {}), ...(c.transform ? { transform: c.transform } : {}), ...(c.mark ? { mark: c.mark } : {}), encoding: { ...unit.encoding, ...(c.encoding ?? {}), ...(c.color ? { color: c.color } : {}) } }
+    add('condition', name, 'unit', spec);
+    add('condition', name, 'in-layer', { width: 90, height: 70, layer: [inLayer(spec)] });
+  }
+  return out;
+}
+
 export function generate(ctx) {
   const schema = JSON.parse(
     readFileSync(
@@ -560,5 +661,7 @@ export function generate(ctx) {
       }
     }
   }
+  // composition, transforms, conditions and parameters (C301)
+  cases.push(...compositionCases(used, slug));
   return { cases, skips };
 }

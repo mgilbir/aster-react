@@ -109,3 +109,20 @@ describe('the channel forms and structural channels the vega sweep writes (C74)'
     expect(new Set(keys).size).toBeLessThan(keys.length)
   })
 })
+
+describe('the Vega-Lite sweep is not only unit charts (C301)', () => {
+  const cases = generateVL(ctx()).cases
+  const fam = (f) => cases.filter((c) => c.family === f)
+  it('has layer, hconcat, vconcat, concat, repeat and facet, each with resolve, spacing, center and bounds values', () => {
+    const specs = fam('composition').map((c) => c.spec)
+    for (const key of ['layer', 'hconcat', 'vconcat', 'concat', 'repeat', 'facet']) expect(specs.some((s) => key in s), key).toBe(true)
+    expect(fam('composition').some((c) => c.property === 'facet-resolve-scale' && c.name.endsWith('color-independent'))).toBe(true)
+    expect(fam('composition').some((c) => c.property === 'concat-bounds' && c.name.endsWith('flush'))).toBe(true)
+  })
+  it('has transforms, conditions and parameters', () => {
+    const t = fam('transform').map((c) => JSON.stringify(c.spec))
+    for (const w of ['"filter"', '"calculate"', '"aggregate"', '"window"', '"impute"', '"fold"', '"stack"', '"maxbins"', '"timeUnit"']) expect(t.some((s) => s.includes(w)), w).toBe(true)
+    const c = fam('condition').map((x) => JSON.stringify(x.spec))
+    expect(c.some((s) => s.includes('"test"')) && c.some((s) => s.includes('"param"')) && c.some((s) => s.includes('"select"'))).toBe(true)
+  })
+})
