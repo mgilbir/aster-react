@@ -302,6 +302,17 @@ function SpecChart({ spec: rawSpec, loadError, chartRef, ...props }: Omit<ChartC
   return <ChartView key={useChartEpoch(spec)} {...props} spec={spec} specError={normalized.error} chartRef={chartRef} focusHandoff={focusHandoff} />
 }
 
+/**
+ * A write by the host (the handle's `setSignal`, a bound input) through the event loop. The loop is vega's `view.signal(name, value)`:
+ * a value equal to the signal's own changes nothing and reports nothing (core's `setSignal`), but it is still a write by an event, and
+ * the latest writer wins: it is recorded in the store, so a key the `signals` prop later releases keeps this value (Q19).
+ */
+function setThroughLoop(binding: { setSignal: (name: string, value: unknown) => void }, store: EventSignalStore | null | undefined, name: string, value: unknown): void {
+  const before = store?.get().written[name]
+  binding.setSignal(name, value)
+  if (store != null && store.get().written[name] === before) store.write({ [name]: value })
+}
+
 function ChartView({
   spec,
   sceneOverride,
@@ -1656,7 +1667,7 @@ function ChartView({
       if (!mountedRef.current) return
       const binding = signalBindingRef.current
       if (binding) {
-        binding.setSignal(name, value)
+        setThroughLoop(binding, signalStoreRef.current, name, value)
         return
       }
       signalStoreRef.current?.write({ [name]: value })
@@ -1674,7 +1685,7 @@ function ChartView({
   const setBoundSignal = React.useCallback((name: string, value: unknown): void => {
     const binding = signalBindingRef.current
     if (binding) {
-      binding.setSignal(name, value)
+      setThroughLoop(binding, signalStore, name, value)
       return
     }
     signalStore.write({ [name]: value })
