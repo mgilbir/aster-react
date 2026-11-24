@@ -94,4 +94,20 @@ export const EXPECTED_DIFFERENCES = Object.freeze([
       "vega's parser makes such a stroked area a layout container: its stroke does not grow the view as it does for every other role "
       + "(height 82 against 84); Aster grows the view by the stroke (C205).",
   },
+  {
+    gate: 'test',
+    case: 'guide-null-vs-vega: a legend layout parameter nulled in the config',
+    reason:
+      "`config.legend.gridAlign`, `rowPadding`, `columnPadding` or `gradientLength` = null: vega-parser writes `undefined` into the "
+      + "expression of the legend's entry layout and `vega.parse` throws `Unrecognized signal name: \"undefined\"` (a defect of the "
+      + "parser, not a refusal anyone wrote); Aster reads a null config value as no value and renders the legend with its defaults (C310).",
+  },
+  {
+    gate: 'test',
+    case: 'guide-encode-vs-vega: a list of styles on a title group or subtitle',
+    reason:
+      "`encode.group.style` or `encode.subtitle.style` given as a list of two styles on a title: vega-parser concatenates the list into "
+      + "an expression (`nullnull`) and `vega.parse` throws `Unrecognized signal name: \"nullnull\"`; Aster applies the styles of the "
+      + "list in order, as it does for every other mark (C310).",
+  },
 ])
