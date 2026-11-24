@@ -186,12 +186,19 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       required('formula', t, 'expr', 'as')
       const expr = exprRowPass(t.expr as string, ctx)
       const as = t.as as string
-      if (owned && as !== '__proto__') {
+      if (owned) {
         const out = rows.slice()
         for (const r of out) r[as] = expr(r)
         return out
       }
-      return rows.map((r) => ({ ...r, [as]: expr(r) }))
+      // (written as vega's Formula writes it, `t[as] = value`, onto a copy: an output named `__proto__` is the copy's prototype --
+      // a value that is no object is no prototype and is dropped -- as it is in every other transform that names its output, never
+      // Object.prototype)
+      return rows.map((r) => {
+        const o = { ...r }
+        o[as] = expr(r)
+        return o
+      })
     }
     case 'filter': {
       required('filter', t, 'expr')
