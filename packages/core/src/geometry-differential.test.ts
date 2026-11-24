@@ -1,9 +1,10 @@
 /**
- * Mark geometry, old implementation vs new, consumer by consumer (see geometry-differential.testlib.ts): the vega corpus, random
- * specs through the evaluator (and their incremental updates, where items are reused), random hand-built scenes that reach the
- * renderers without the evaluator's normalisation (NaN, infinities, -0, strings, every curve, custom symbol paths, rounded and
- * clipped rects, arcs with corners and pads...), transition frames (one scene object rewritten in place), and the canvas append path.
- * Each scene is also drawn twice in a row, so a cached geometry is compared as well as a fresh one.
+ * The SVG, DOM and canvas renderers against their refactor baseline (see geometry-differential.testlib.ts) on the scenes the
+ * evaluator makes: the vega corpus, random specs (and their incremental updates, where items are reused), transition frames (one
+ * scene object rewritten in place), and the canvas append path. Every scene is drawn twice in a row, so a cached geometry is
+ * compared as well as a fresh one. (Hand-built scenes with the values no scale writes -- NaN, the infinities, strings, sizes vega
+ * reads as numbers -- are not compared here: their baseline is the behaviour before the fixes that made those values read as vega
+ * reads them. Their bounds, pick and `intersect()` are compared with vega, geometry-vs-vega.test.ts and `pnpm conformance:geometry`.)
  */
 import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
@@ -15,9 +16,7 @@ import { createSceneTransition } from './transition.js'
 import type { SceneRoot } from './types.js'
 import { diffAppend, diffScene, type Diff } from './geometry-differential.testlib.js'
 import { applyOp, genSpec, inputOf, int, mulberry32, OPS, pick, rowOf, type World } from './scene-fuzz.testlib.js'
-import { randomScene } from './geometry-scenes.testlib.js'
 
-type Rnd = () => number
 const here = dirname(fileURLToPath(import.meta.url))
 
 function report(label: string, diffs: Diff[], sink: string[]): void {
@@ -25,9 +24,9 @@ function report(label: string, diffs: Diff[], sink: string[]): void {
 }
 
 /** Both draws: fresh, then again on the same scene (cached geometry). */
-function diffTwice(scene: SceneRoot, r: Rnd, label: string, sink: string[], opts?: Parameters<typeof diffScene>[2]): void {
-  report(label, diffScene(scene, r, opts), sink)
-  report(`${label} (again)`, diffScene(scene, r, opts), sink)
+function diffTwice(scene: SceneRoot, label: string, sink: string[], opts?: Parameters<typeof diffScene>[1]): void {
+  report(label, diffScene(scene, opts), sink)
+  report(`${label} (again)`, diffScene(scene, opts), sink)
 }
 
 // --- the tests ---------------------------------------------------------------------------------------------------------------
@@ -48,24 +47,11 @@ describe('mark geometry: old vs new, every consumer', () => {
   for (const [lo, hi] of runs(0, CORPUS.length - 1, 60)) {
     it(`the vega corpus, specs ${lo}-${hi}`, () => {
       const fails: string[] = []
-      const r = mulberry32(11 + lo)
       for (const file of CORPUS.slice(lo, hi + 1)) {
         const doc = JSON.parse(readFileSync(file, 'utf8'))
         let scene: SceneRoot
         try { scene = evaluateChart(compileChart(doc.spec ?? doc), {}) } catch { continue }
-        report(file.split('/').pop()!, diffScene(scene, r), fails)
-      }
-      expect(fails).toEqual([])
-    }, 60_000)
-  }
-
-  for (const [lo, hi] of runs(1, 400, 25)) {
-    it(`random hand-built scenes, seeds ${lo}-${hi}`, () => {
-      const fails: string[] = []
-      for (let seed = lo; seed <= hi; seed++) {
-        const r = mulberry32(seed)
-        diffTwice(randomScene(r), r, `seed ${seed}`, fails, { intersect: false })
-        diffTwice(randomScene(r, true), r, `seed ${seed} (finite)`, fails)
+        diffTwice(scene, file.split('/').pop()!, fails)
       }
       expect(fails).toEqual([])
     }, 60_000)
@@ -81,12 +67,12 @@ describe('mark geometry: old vs new, every consumer', () => {
         let world: World = { t: Array.from({ length: int(r, 1, 25) }, () => rowOf(r, g.dense)), u: Array.from({ length: 3 }, () => rowOf(r, g.dense)) }
         let prev: SceneRoot
         try { prev = evaluateChart(chart, inputOf(world)) } catch { continue }
-        diffTwice(prev, r, `${g.label} seed ${seed}`, fails)
+        diffTwice(prev, `${g.label} seed ${seed}`, fails)
         for (let step = 0; step < 4; step++) {
           world = applyOp(r, world, pick(r, OPS), g.dense)
           let next: SceneRoot
           try { next = evaluateChart(chart, inputOf(world)) } catch { break }
-          diffTwice(next, r, `${g.label} seed ${seed} step ${step}`, fails, { intersect: false, label2: false })
+          diffTwice(next, `${g.label} seed ${seed} step ${step}`, fails)
           report(`${g.label} seed ${seed} step ${step}`, diffAppend(prev, next), fails)
           prev = next
         }
@@ -109,7 +95,7 @@ describe('mark geometry: old vs new, every consumer', () => {
           b = evaluateChart(chart, inputOf({ t: world.t.map((row) => ({ ...row, v: int(r, 0, 24), x: int(r, 0, 12) })), u: world.u }))
         } catch { continue }
         const tr = createSceneTransition(a, b)
-        for (const t of [0, 0.25, 0.5, 0.75, 1]) diffTwice(tr.at(t), r, `${g.label} seed ${seed} t=${t}`, fails, { intersect: false, label2: false })
+        for (const t of [0, 0.25, 0.5, 0.75, 1]) diffTwice(tr.at(t), `${g.label} seed ${seed} t=${t}`, fails)
       }
       expect(fails).toEqual([])
     }, 60_000)

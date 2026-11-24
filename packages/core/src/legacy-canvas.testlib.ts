@@ -1126,7 +1126,6 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
     case 'shape':
     case 'geoshape': {
       // (a shape's geo path goes to the context directly, its arcs as arcs)
-      const arcs = 'exact'
       for (const it of group.items ?? []) {
         if (!it.path) continue
         // vega path mark: translate, rotate, then the path scaled by (scaleX||1, scaleY||1)
@@ -1135,7 +1134,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
         const sx = (rec.scaleX as number) || 1
         const sy = (rec.scaleY as number) || 1
         const segs = parsePathData(it.path)
-        buildInItemFrame(ctx, it.x || 0, it.y || 0, angle, sx, sy, () => tracePath(ctx, segs, 0, 0, arcs))
+        buildInItemFrame(ctx, it.x || 0, it.y || 0, angle, sx, sy, () => tracePath(ctx, segs, 0, 0))
         paintPath(ctx, segs, it, defs, 'auto', gradientBox(it))
       }
       return

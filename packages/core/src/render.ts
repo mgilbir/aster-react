@@ -3,7 +3,7 @@
  * enough that geometry (paths, rects, lines, tick positions) matches the
  * reference renderer; the conformance diff compares normalized geometry.
  */
-import { SYMBOL_DEFAULT_SIZE } from './util.js'
+import { frameSize, SYMBOL_DEFAULT_SIZE } from './util.js'
 import type { SceneDef, SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { baselineOffset, fontSize as vegaFontSize } from './bounds.js'
 import { checkPathLength, metering } from './limits.js'
@@ -946,7 +946,7 @@ export const itemArcGeometry = (it: SceneItem): ReturnType<typeof arcGeometry> =
 export function itemArcPath(it: SceneItem, digits: number | null = 3): GeneratedPath {
   if (digits === 3) return gen(itemArcGeometry(it).text())
   const rec = it as Record<string, unknown>
-  return arcPath(+((it.outerRadius ?? it.radius) as number || 0), +(it.innerRadius as number || 0), +(it.startAngle as number || 0), +(it.endAngle as number || 0), +(rec.cornerRadius as number || 0), +(rec.padAngle as number || 0), digits)
+  return arcPath(+(it.outerRadius as number || 0), +(it.innerRadius as number || 0), +(it.startAngle as number || 0), +(it.endAngle as number || 0), +(rec.cornerRadius as number || 0), +(rec.padAngle as number || 0), digits)
 }
 
 // --- the one SVG attribute/text writer --------------------------------------
@@ -1787,8 +1787,8 @@ function groupItem(g: SceneGroup, frameW: number, frameH: number, scope: GuideSc
     if (g.role === 'legend') return legendItem(g, clips)
     if (g.role === 'title') return titleItem(g, frameW, frameH, scope)
   }
-  const gw = g.width ?? frameW
-  const gh = g.height ?? frameH
+  const gw = frameSize(g, 'width', frameW)
+  const gh = frameSize(g, 'height', frameH)
   // (a group's own scales; the ones of the scopes around it stay in reach, as a nested axis may read them)
   const inner: GuideScope = g.__scales ? { snaps: [...(scope.snaps ?? []), ...g.__scales] } : scope
   const items = (g.items ?? []) as SceneItem[]
@@ -1802,8 +1802,8 @@ function groupItem(g: SceneGroup, frameW: number, frameH: number, scope: GuideSc
   const scopeNode = body.length === 1 && isGroup(body[0]!) && flag(body[0]!, 'contentClip') ? (body[0] as SceneGroup) : null
   if (scopeNode) {
     // the item's `clip` (encode): the content `<g>` is clipped to the item's own box or rounded-rect path
-    cw = scopeNode.width ?? gw
-    ch = scopeNode.height ?? gh
+    cw = frameSize(scopeNode, 'width', gw)
+    ch = frameSize(scopeNode, 'height', gh)
     contentAttrs = (w) => clipRefAttrs(groupClipId(scopeNode, clips, cw, ch), w)
     body = (scopeNode.items ?? []) as SceneItem[]
   }

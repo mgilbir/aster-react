@@ -10,7 +10,7 @@
  * full precision (lines and areas, like vega's canvas; arcs, drawn by the generator's own calls). Only path strings that come
  * with the scene (a path mark's, a shape's, a legend leaf's, a group's clip) are parsed, once per distinct string.
  */
-import { SYMBOL_DEFAULT_SIZE } from './util.js'
+import { frameSize, SYMBOL_DEFAULT_SIZE } from './util.js'
 import type { SceneDef, SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { gradientDefOf, isGradientPaint as isGradientObject } from './svg-defs.js'
 import { Bounds, boundLeaf, boundStroke, boundTypedMark } from './bounds.js'
@@ -286,7 +286,13 @@ class ExtentContext implements CanvasLike {
   }
   save(): void { this.stack.push({ m: [...this.m] as ExtentContext['m'], lineWidth: this.lineWidth, font: this.font }) }
   restore(): void { const s = this.stack.pop(); if (s) { this.m = s.m; this.lineWidth = s.lineWidth; this.font = s.font } }
-  translate(x: number, y: number): void { this.m = [this.m[0], this.m[1], this.m[2], this.m[3], this.m[0] * x + this.m[2] * y + this.m[4], this.m[1] * x + this.m[3] * y + this.m[5]] }
+  translate(x: number, y: number): void {
+    // (as a canvas does: a translate that is not two finite numbers is ignored)
+    x = +x
+    y = +y
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return
+    this.m = [this.m[0], this.m[1], this.m[2], this.m[3], this.m[0] * x + this.m[2] * y + this.m[4], this.m[1] * x + this.m[3] * y + this.m[5]]
+  }
   scale(x: number, y: number): void { this.m = [this.m[0] * x, this.m[1] * x, this.m[2] * y, this.m[3] * y, this.m[4], this.m[5]] }
   rotate(a: number): void {
     const c = Math.cos(a), s = Math.sin(a), m = this.m
@@ -550,10 +556,11 @@ function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW
       ctx.rect(0, 0, plotW, plotH)
       ctx.clip()
     }
-    if (group.x != null || group.y != null) ctx.translate(group.x ?? 0, group.y ?? 0)
+    // (vega's group draw: `translate(x || 0, y || 0)`, the item's values as they are: the canvas itself drops one that is not finite)
+    if (group.x != null || group.y != null) ctx.translate((group.x || 0) as number, (group.y || 0) as number)
     // a group's content frame is its own width x height (the root plot size for the guide groups that have none)
-    const gw = group.width ?? plotW
-    const gh = group.height ?? plotH
+    const gw = frameSize(group, 'width', plotW)
+    const gh = frameSize(group, 'height', plotH)
     if (group.clip === true) {
       ctx.beginPath()
       if (group.clipPathD) tracePath(ctx, parsePathData(group.clipPathD), group.x ?? 0, group.y ?? 0)
@@ -582,6 +589,8 @@ function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW
       if (isGroup(item)) renderGroup(item, ctx, scene, gw, gh, opts)
       // (a leaf whose bounds the pass never measured: vega's canvas draws only what meets the view's bounds, see `_unmeasured`)
       else if ((item as { _unmeasured?: boolean })._unmeasured === true) continue
+      // (vega draws a group item's box in the frame around it, at `x || 0`: at a position that is not a number the canvas draws no box)
+      else if ((item as { _bg?: boolean })._bg === true && !placedAt(group)) continue
       else if ((item as { _bg?: boolean })._bg === true) renderLeafItem(item, ctx, scene, bgBox, bake, (item as { _frame?: Frame })._frame ?? (item === group.items![0] || item === group.items![group.items!.length - 1] ? outer : undefined))
       else renderLeafItem(item, ctx, scene, undefined, bake, (item as { _frame?: Frame })._frame ?? leafFrame)
     }
@@ -695,6 +704,11 @@ function diagonalGradient(ctx: CanvasLike, stops: ReadonlyArray<{ offset: number
   ictx.fillStyle = gradient
   ictx.fillRect(0, 0, w, h)
   return ctx.createPattern(image, 'no-repeat') ?? undefined
+}
+
+/** Whether a group item's position is two finite numbers as vega reads it (`x || 0`): where its canvas can draw the item's box. */
+function placedAt(g: SceneGroup): boolean {
+  return Number.isFinite(+((g.x || 0) as number)) && Number.isFinite(+((g.y || 0) as number))
 }
 
 /**

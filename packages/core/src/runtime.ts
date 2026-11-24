@@ -64,7 +64,7 @@ import { dataWithoutRows, valuesSignal } from './spec-structure.js'
 import { diffRows, equalCell, rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import type { aggregateGroups } from './transform-agg.js'
 import type { GridPlace } from './trellis.js'
-import { boundAxisGroup, boundGroupItem, boundLeaf, boundTypedMark, Bounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
+import { boundAxisGroup, boundGroupItem, boundLeaf, boundTypedMark, Bounds, groupLayoutBounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
 import { rectItemPath } from './render.js'
 import { boundFailure } from './bound-failure.js'
 import { buildAxis as buildAxisGuide, tickPlacement } from './guide-axis.js'
@@ -2006,8 +2006,9 @@ function measureGuideGroup(g: SceneGroup): Bounds {
     const cached = GROUP_BOUNDS.get(g)
     if (cached) return cached
   }
-  // a laid-out group / legend / typed mark: the bounds vega's Bound pass leaves on it
-  const bounds = layoutBounds(g)
+  // a laid-out group / legend / typed mark: the bounds vega's Bound pass leaves on it (a group item's as they are, which its mark's
+  // union reads: see `eachMarkBounds`)
+  const bounds = g.marktype === 'group' || (g.marktype === undefined && Array.isArray(g.items)) ? groupLayoutBounds(g) : layoutBounds(g)
   if (cacheable) GROUP_BOUNDS.set(g, bounds)
   return bounds
 }
@@ -2038,28 +2039,16 @@ function computeGuidePadding(
   // overflow. Measure each group with the exact vega bounds port: axes via
   // the axisLayout spine semantics, everything else via the recursive
   // item-union (same as vega-scenegraph's bound pass).
-  let minX = 0
-  let maxX = width
-  let minY = 0
-  let maxY = height
-
-  const grow = (b: Bounds, group: SceneGroup): void => {
-    b = shareOfView(b, group, fitting)
-    if (b.empty()) return
-    // Axis bounds carry fp residue from measured label/title geometry where
-    // vega's arithmetic is exact; collapse only that sub-ulp residue. Mark and
-    // legend geometry is exact enough that a genuine positive residue (a bar
-    // whose right edge is the view width) must still grow the margin.
-    // (an axis's bounds are the exact arithmetic of vega's own: no guard)
-    const ei = 0
-    minX = Math.min(minX, b.x1 + ei)
-    maxX = Math.max(maxX, b.x2 - ei)
-    minY = Math.min(minY, b.y1 + ei)
-    maxY = Math.max(maxY, b.y2 - ei)
-  }
-  // a mark's `clip` bounds the mark to the frame it sits in (vega boundClip), a group mark across all its items
-  if (hasClippedMark(items)) eachMarkBounds(items, width, height, (n) => measureGuideGroup(n as SceneGroup), (b, n) => grow(b, n as SceneGroup))
-  else for (const group of items) grow(measureGuideGroup(group), group)
+  // (vega's viewBounds: the view's box, with each mark's bounds unioned in -- a union, so an edge that is not a number is left out,
+  // as there, and the padding is read from the box's edges as they come out)
+  const view = new Bounds().set(0, 0, width, height)
+  const grow = (b: Bounds, group: SceneGroup): void => { view.union(shareOfView(b, group, fitting)) }
+  // (mark by mark: a group mark's items into the mark's bounds first, a mark's `clip` bounding it to the frame, vega boundClip)
+  eachMarkBounds(items, width, height, (n) => measureGuideGroup(n as SceneGroup), (b, n) => grow(b, n as SceneGroup))
+  const minX = view.x1
+  const maxX = view.x2
+  const minY = view.y1
+  const maxY = view.y2
 
   // vega's viewSizeLayout (autosize pad): origin = spec padding + the ceil'd
   // overflow of the viewBounds on each side — no extra margin.
@@ -6445,6 +6434,11 @@ interface GroupOutcome {
 /** Whether instance `a` is `b` or below it. */
 const within = (a: readonly number[], b: readonly number[]): boolean => a.length >= b.length && b.every((v, i) => a[i] === v)
 
+/** A group item's x or y as vega's item holds it: the encoded value when there is one that is not a finite number, else `laid`. */
+const rawPosition = (encoded: unknown, laid: number): number => (encoded == null || (typeof encoded === 'number' && Number.isFinite(encoded)) ? laid : encoded as number)
+/** A group item's width or height as vega's item holds it: the encoded value (none, if none was encoded), `laid` when it is a number of at least 0. */
+const rawSize = (encoded: unknown, laid: number): number => (typeof encoded === 'number' && Number.isFinite(encoded) && encoded >= 0 ? laid : encoded as number)
+
 function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGroup, outcome?: GroupOutcome, unsettled = false): SceneGroup {
   const { src, path, item: geo } = entered
   // (an item made again reports afresh)
@@ -6622,7 +6616,10 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
     const ordered = paintOrderOf(siblings)
 
     // the item's `clip` (encode) clips its content to its own box; the mark's `clip` clips the whole mark to the enclosing group
-    const { items: groupContent, paint } = groupItems(geo, gw, gh, ordered)
+    // (its box and its clip are vega's: drawn from the width and height as the item holds them, `+(width || 0)`)
+    const rawW = rawSize(geo.width, gw)
+    const rawH = rawSize(geo.height, gh)
+    const { items: groupContent, paint } = groupItems(geo, rawW, rawH, ordered)
     // a hyperlinked group (`href` in its encode) is vetted like any mark's link
     let href = (geo as Record<string, unknown>).href
     if (href != null && ctx.urlPolicy !== undefined && applyLinkUrlPolicy(href, ctx.urlPolicy) == null) href = undefined
@@ -6631,7 +6628,9 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
     const itemAria = itemAriaOf(geo as Record<string, unknown>)
 
     const group = {
-      marktype: 'group', name: mark.name, role, x: gx, y: gy, width: gw, height: gh,
+      // (the item's position and size are the values its encode wrote, as vega keeps them: a NaN, an infinity, a negative size or a
+      // string is read by each consumer as vega's reads it, `x || 0`, `width || 0` -- `gx`, `gw` are where its content is laid out)
+      marktype: 'group', name: mark.name, role, x: rawPosition(geo.x, gx), y: rawPosition(geo.y, gy), width: rawW, height: rawH,
       items: groupContent,
       ...paint,
       datum: src.datum,

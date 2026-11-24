@@ -31,18 +31,27 @@ export class Flattener implements PathSink {
   private startY = 0
   constructor(private readonly t: (x: number, y: number) => [number, number]) {}
   private start(x: number, y: number): void {
+    this.closed = false
     const [tx, ty] = this.t(x, y)
     this.cur = [tx, ty]
     this.polys.push({ pts: this.cur, closed: false })
     this.x = x; this.y = y; this.startX = x; this.startY = y
   }
+  /** A subpath was closed: the current point is its start, where the next one begins (a canvas's `closePath`). */
+  private closed = false
   private push(x: number, y: number, curved = true): void {
-    if (!this.cur) { this.start(x, y); return }
+    if (!this.cur) {
+      // (with no current point, a segment begins the subpath at its own end -- a canvas's "ensure there is a subpath"; after a
+      // close the current point is the closed subpath's start, and the segment is drawn from there)
+      if (!this.closed) { this.start(x, y); return }
+      this.start(this.x, this.y)
+    }
+    const cur = this.cur!
     const [tx, ty] = this.t(x, y)
-    this.cur.push(tx, ty)
+    cur.push(tx, ty)
     if (curved) {
       const poly = this.polys[this.polys.length - 1]!
-      ;(poly.curved ??= [])[this.cur.length / 2 - 1] = true
+      ;(poly.curved ??= [])[cur.length / 2 - 1] = true
     }
     this.x = x; this.y = y
   }
@@ -89,6 +98,7 @@ export class Flattener implements PathSink {
     this.polys[this.polys.length - 1]!.closed = true
     // a new subpath after a close starts at the old start point
     this.cur = null
+    this.closed = true
     this.x = this.startX; this.y = this.startY
   }
 }

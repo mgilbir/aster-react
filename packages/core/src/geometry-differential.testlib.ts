@@ -1,15 +1,14 @@
 /**
- * Test-only (excluded from the published build): the old implementation (the `legacy-*.testlib.ts` copies of stack/3-expr, the base this lands on) against
- * the current one, consumer by consumer, over one scene. Every consumer of mark geometry is compared on the SAME scene object, so
- * a hit result can be compared by item identity:
+ * Test-only (excluded from the published build): a refactor baseline -- the `legacy-*.testlib.ts` copies of the renderers as they
+ * were on stack/3-expr, amended since to follow fixes (their headers say which) -- against the current renderers, consumer by
+ * consumer, over one scene:
  *  - the SVG string (`renderSceneToSvg`), byte for byte;
  *  - the DOM descriptor tree (`sceneToDomDesc`, per item and dense-batched);
  *  - the canvas: every call and every property write on the context, numbers compared with `Object.is` (so -0 and NaN count),
- *    batched and unbatched, at dpr 1 and 2;
- *  - the hit index: `query`, `queryMark`, `pick` and `tooltip` at every probe point (grid and linear mode), each target's item,
- *    marktype, kind and fromData, and `size`;
- *  - bounds: `boundTypedMark` of every mark and `boundLeaf` of every item (both miter settings), bit for bit;
- *  - `sceneIntersect` over probe boxes; the label transform's painter (`drawMark`) as a call log.
+ *    batched and unbatched, at dpr 1 and 2.
+ * Such a baseline can only say "unchanged": a defect both sides share passes it. The consumers of mark geometry that vega has --
+ * bounds, the pick, `intersect()`, and the path reading behind them -- are compared with real vega instead
+ * (packages/conformance/src/geometry-vs-vega.test.ts, `pnpm conformance:geometry`), as is the label transform's painter.
  */
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { renderSceneToSvg } from './render.js'
@@ -22,14 +21,6 @@ import {
   renderSceneToCanvasAppend as legacyCanvasAppend,
   snapshotCanvasScene as legacySnapshot,
 } from './legacy-canvas.testlib.js'
-import { buildHitIndex, type HitTarget } from './hit.js'
-import { buildHitIndex as legacyHitIndex } from './legacy-hit.testlib.js'
-import { Bounds, boundLeaf, boundTypedMark } from './bounds.js'
-import { Bounds as LegacyBounds, boundLeaf as legacyBoundLeaf, boundTypedMark as legacyBoundTypedMark } from './legacy-bounds.testlib.js'
-import { sceneIntersect } from './scene-intersect.js'
-import { sceneIntersect as legacyIntersect } from './legacy-scene-intersect.testlib.js'
-import { drawMark } from './label-draw.js'
-import { drawMark as legacyDrawMark } from './legacy-label-draw.testlib.js'
 import './legacy-guide-caption.testlib.js'
 import './guide-caption.js'
 
@@ -88,8 +79,6 @@ function firstDiff(a: readonly string[], b: readonly string[]): string | null {
   return null
 }
 
-const targetText = (t: HitTarget | null, ids: Map<object, number>): string => (t === null ? 'null' : `${t.marktype}:${t.kind}:${t.fromData}:${argText(t.item, ids)}`)
-
 /** Every mark container of the scene (a group whose items are mark items), with the offset of its frame. */
 export function marksOf(scene: SceneRoot): Array<{ mark: SceneGroup; x: number; y: number }> {
   const out: Array<{ mark: SceneGroup; x: number; y: number }> = []
@@ -102,8 +91,6 @@ export function marksOf(scene: SceneRoot): Array<{ mark: SceneGroup; x: number; 
   for (const g of scene.items ?? []) walk(g, 0, 0)
   return out
 }
-
-const boxText = (b: { x1: number; y1: number; x2: number; y2: number }): string => [b.x1, b.y1, b.x2, b.y2].map(numText).join(',')
 
 /** Probe points: a random spread over the view and around every item's position (on it, and just off it). */
 export function probePoints(scene: SceneRoot, r: Rnd, random = 40, max = 160): Array<[number, number]> {
@@ -146,8 +133,8 @@ export function probePoints(scene: SceneRoot, r: Rnd, random = 40, max = 160): A
   return out
 }
 
-/** Compares every consumer, old vs new, on `scene`; returns the differences (empty: identical). */
-export function diffScene(scene: SceneRoot, r: Rnd, opts: { label?: string; dom?: boolean; canvas?: boolean; hit?: boolean; bounds?: boolean; intersect?: boolean; label2?: boolean } = {}): Diff[] {
+/** Compares the SVG, DOM and canvas renderers, old vs new, on `scene`; returns the differences (empty: identical). */
+export function diffScene(scene: SceneRoot, opts: { dom?: boolean; canvas?: boolean } = {}): Diff[] {
   const diffs: Diff[] = []
   const tryBoth = <T,>(consumer: string, oldFn: () => T, newFn: () => T, eq: (a: T, b: T) => string | null): void => {
     let a: T | Error
@@ -173,46 +160,6 @@ export function diffScene(scene: SceneRoot, r: Rnd, opts: { label?: string; dom?
     for (const o of [{}, { batchSymbols: false }, { dpr: 2 }] as RenderCanvasOptions[]) {
       tryBoth(`canvas${JSON.stringify(o)}`, () => canvasLog((c) => legacyCanvas(scene, c, o)), () => canvasLog((c) => renderSceneToCanvas(scene, c, o)), firstDiff)
     }
-  }
-  if (opts.hit !== false) {
-    const pts = probePoints(scene, r)
-    for (const cell of [undefined, 1e9]) {
-      tryBoth(`hit${cell ? '-linear' : ''}`, () => {
-        const ids = new Map<object, number>()
-        const ix = legacyHitIndex(scene, cell)
-        return [`size ${ix.size()}`, ...pts.flatMap(([x, y]) => [targetText(ix.query(x, y), ids), targetText(ix.queryMark(x, y), ids), targetText(ix.pick(x, y), ids), targetText(ix.tooltip(x, y), ids)])]
-      }, () => {
-        const ids = new Map<object, number>()
-        const ix = buildHitIndex(scene, cell)
-        return [`size ${ix.size()}`, ...pts.flatMap(([x, y]) => [targetText(ix.query(x, y), ids), targetText(ix.queryMark(x, y), ids), targetText(ix.pick(x, y), ids), targetText(ix.tooltip(x, y), ids)])]
-      }, firstDiff)
-    }
-  }
-  if (opts.bounds !== false) {
-    tryBoth('bounds', () => marksOf(scene).flatMap(({ mark }) => [
-      boxText(legacyBoundTypedMark(new LegacyBounds(), mark)),
-      boxText(legacyBoundTypedMark(new LegacyBounds(), mark, true)),
-      ...(mark.items ?? []).flatMap((it) => [boxText(legacyBoundLeaf(new LegacyBounds(), it as SceneItem)), boxText(legacyBoundLeaf(new LegacyBounds(), it as SceneItem, true))]),
-    ]), () => marksOf(scene).flatMap(({ mark }) => [
-      boxText(boundTypedMark(new Bounds(), mark)),
-      boxText(boundTypedMark(new Bounds(), mark, true)),
-      ...(mark.items ?? []).flatMap((it) => [boxText(boundLeaf(new Bounds(), it as SceneItem)), boxText(boundLeaf(new Bounds(), it as SceneItem, true))]),
-    ]), firstDiff)
-  }
-  if (opts.intersect !== false) {
-    const W = scene.plotWidth ?? scene.width ?? 200
-    const H = scene.plotHeight ?? scene.height ?? 200
-    const boxes: number[][][] = []
-    for (let i = 0; i < 6; i++) {
-      const x = r() * W, y = r() * H
-      boxes.push([[x, y], [x + r() * W * 0.6, y + r() * H * 0.6]])
-    }
-    const ids = new Map<object, number>()
-    tryBoth('intersect', () => boxes.map((b) => legacyIntersect(scene, b, null, null).map((it) => argText(it, ids)).join(' ')), () => boxes.map((b) => sceneIntersect(scene, b, null, null).map((it) => argText(it, ids)).join(' ')), firstDiff)
-  }
-  if (opts.label2 !== false) {
-    tryBoth('label-draw', () => marksOf(scene).flatMap(({ mark }) => { const { ctx, log } = loggingContext(); legacyDrawMark(mark, ctx as never); return log }),
-      () => marksOf(scene).flatMap(({ mark }) => { const { ctx, log } = loggingContext(); drawMark(mark, ctx as never); return log }), firstDiff)
   }
   return diffs
 }
