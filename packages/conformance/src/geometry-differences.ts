@@ -8,8 +8,8 @@
  *   - a class needs evidence in the difference itself (a value the oracle's own scenegraph or DOM holds), never the name of a spec or a
  *     seed, and never "the browser only": a predicate reads the items, the groups above them and the oracle's element;
  *   - a class that no difference falls into any more has been fixed: the gate fails (`FIXED-GAP`) until its entry is removed, so the
- *     table can only name differences that still exist (the rule of scripts/lib/expected-differences.mjs on lane a18's branch, which
- *     this table is to be moved onto when the two are stacked).
+ *     table can only name differences that still exist (the expected-differences rule of lane a18's branch, which this table is to be
+ *     moved onto when the two are stacked).
  *
  * Each class says why the difference is not a defect of Aster's: the oracle's answer there is not a function of the spec that vega
  * and a browser agree on (an attribute SVG rejects and the browser repairs in its own way, glyph cells, a view of no size), or it is
