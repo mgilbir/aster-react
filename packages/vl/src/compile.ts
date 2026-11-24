@@ -13,6 +13,7 @@ import { tokenize } from './expr-tokens.js'
 import { VLCompileError, pushAll, flatField, datumRef as dref, genName, safeKey, splitAccessPath, dict, own, setOwn } from './names.js'
 import { validateGeoUnit, validateSpec } from './validate.js'
 import { cloneSpecStructure, detachRows, isRows, jsonWithRows, sameJson, stringifyWithoutRows, withRows, type RowPayloads } from './rows.js'
+import { forwardedMarkProps, ignoredMarkProps } from './mark-props.js'
 import { ARMING, consumeAll, consuming, derive, deriveDeep, deriveWithout, ignore, ignoreUnread, peek, pick, refuseUnconsumed, transfer, withConsumption } from './consume.js'
 import { markChannelCompatible } from './channels.js'
 import { predicateExpr, domainValueExpr, dateTimeToExpr, isDateTime as isDateTimeValue } from './predicate.js'
@@ -1020,7 +1021,7 @@ function layerAxisOf(n: LayerTreeNode, ch: 'x' | 'y', leafAxis: (leaf: number) =
         if (g.disabled) {
           throw new VLCompileError(`encoding.${ch}.axis: \`axis: null\` on a layer after one that draws the ${ch} axis is not supported: vega-lite 6.4.3 crashes on it (merging the layers' axis titles); put it on the first layer`)
         }
-        m.leaves.push(...g.leaves)
+        pushAll(m.leaves, g.leaves)
         if (!m.explicitOrient && g.explicitOrient) { m.orient = g.orient; m.explicitOrient = true }
         if (!m.explicitGrid && g.explicitGrid) { m.grid = g.grid; m.explicitGrid = true }
       })
@@ -4759,16 +4760,21 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   // turns the implicit parsing of the source off altogether)
   const explicitParse = isObject(spec.data) && isObject(spec.data.format) ? (spec.data.format as Record<string, unknown>).parse : undefined
   if (isObject(explicitParse)) for (const k of Object.keys(explicitParse)) castDone.add(flatField(k).key)
-  // (data/parse.ts: the implicit parse of the encoding comes after the unit's transforms, and a pivot produces fields no one can name
-  // (pivot.ts producedFields), so nothing parses past it: with a pivot, vega-lite parses no field of the encoding)
+  // (data/parse.ts: the implicit parse of the encoding comes after the unit's transforms; a pivot makes columns of the values it reads
+  // (pivot.ts producedFields is unknown, so none of them counts as derived), and a field of the encoding is one of them or passes
+  // through it: with a pivot the parses follow the transforms, where vega-lite puts them, rather than the source)
   const pivots = userTransforms.some((t) => isObject(t) && peek(() => t.pivot) !== undefined)
-  if (!skipCasts && explicitParse !== null && !pivots) {
+  const parsesAfter: Record<string, unknown>[] = []
+  const parses = pivots ? parsesAfter : casts
+  // (each unit after its own pivot: what a layer beside it parsed at the shared source is not parsed here)
+  const parsed = pivots ? new Set(castDone) : castDone
+  if (!skipCasts && explicitParse !== null) {
     // a field carrying a timeUnit anywhere in the encoding casts as a date,
     // even if another channel declares it quantitative
     const timeUnitFields = new Set(fields.filter((f) => f.timeUnit).map((f) => f.field))
     for (const f of fields) {
-      if (castDone.has(f.field)) continue
-      castDone.add(f.field)
+      if (parsed.has(f.field)) continue
+      parsed.add(f.field)
       if (f.argAgg || derivedKeys.has(f.field)) continue
       const declared = (f.raw as Record<string, unknown> | undefined)?.type
       // count/distinct/valid/missing over a nominal/ordinal field counts raw
@@ -4792,11 +4798,14 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
         if (axisFT !== 'number') {
           // a timeUnit implies a temporal cast even when the declared type is
           // quantitative (probed: size/timeUnit-year casts the source toDate)
-          casts.push({ type: 'formula', expr: `toDate(${dref(f.field)})`, as: f.field })
+          parses.push({ type: 'formula', expr: `toDate(${dref(f.field)})`, as: f.field })
           castTypes.set(f.field, 'date')
         }
       } else if (f.type === 'quantitative' && !skipNumberCasts) {
-        casts.push({ type: 'formula', expr: `toNumber(${dref(f.field)})`, as: f.field })
+        // (with a pivot, vega-lite's own number parse (formatparse.ts getImplicitFromEncoding): a min / max aggregate's field, and the
+        // quantitative dimension of a path mark with no order; the cast of every other quantitative field is C169's, a15's lane)
+        if (pivots && !(f.aggregate === 'min' || f.aggregate === 'max' || (isPathMark(mark) && f.channel === (orient === 'horizontal' ? 'y' : 'x') && !peek(() => isObject(spec.encoding) && spec.encoding.order !== undefined)))) continue
+        parses.push({ type: 'formula', expr: `toNumber(${dref(f.field)})`, as: f.field })
         castTypes.set(f.field, 'number')
       }
     }
@@ -4844,6 +4853,7 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     pushAll(pipeline, binPipeline)
     pushAll(pipeline, userOut.slice(ownStart))
   } else pushAll(pipeline, userOut)
+  pushAll(pipeline, parsesAfter)
   pushAll(pipeline, lateFlat)
   // (the facet node of a facet inside a facet sits here: what the encoding adds is made inside the innermost cell)
   const userLen = pipeline.length
@@ -5120,6 +5130,11 @@ function polarRectPositions(update: Record<string, unknown>, spec: VLSpec, field
     const withFarOffset = (ref: Record<string, unknown>): Record<string, unknown> => (farOffsetValue ? { ...ref, offset: farOffsetValue } : ref)
     // the second channel (theta2, radius2), a field, a datum or a constant: where the arc ends, in the first channel's scale
     const second = secondaryPolarRef(spec, fields, channel, bandScale, scaled)
+    // (position-range.ts pointOrRangePosition: the mark def's angle places an arc only when its encoding has no theta - a field, a
+    // datum or a value; and its end angle only when nothing else ends it: no stack, no second channel, no band or bin of its own)
+    const encodedTheta = channel === 'theta' && (def !== undefined || (isObject(written) && written.value !== undefined))
+    if (encodedTheta) ignore(md, 'theta', 'the arc\'s theta channel places it')
+    if (channel === 'theta' && (second !== undefined || (def !== undefined && (stack?.fieldChannel === channel || discrete || def.bin || def.tu)))) ignore(md, 'theta2', 'the stack, the second channel or the band of theta ends the arc')
     if (def !== undefined && !def.datumOnly && (def.bin || (def.tu && second === undefined)) && !discrete) {
       // rectBinPosition: the band size is 1 (a bin, a time unit), so the near key reads the far end of the band
       let start: string
@@ -6578,7 +6593,7 @@ function axisTitle(def: FieldDef, userAxis?: Record<string, unknown> | null, fie
 /** The paint of a legend's symbols, for the legend of a channel with the user's legend definition (legendSymbolPaint). */
 type SymbolPaint = (channel: string, userLegend: Record<string, unknown>) => Record<string, unknown>
 
-function buildLegends(fields: FieldDef[], mark: string, markOpacity: number | undefined, markFilled: boolean, cfgLegendIn: Record<string, unknown> | undefined, formats: { numberFormat?: string; timeFormat?: string; customFormatTypes?: boolean; numberFormatType?: string; timeFormatType?: string }, paint: { shape?: string }, symbolPaint: SymbolPaint): Record<string, unknown>[] {
+function buildLegends(fields: FieldDef[], mark: string, markOpacity: number | undefined, markFilled: boolean, cfgLegendIn: Record<string, unknown> | undefined, formats: { numberFormat?: string; timeFormat?: string; customFormatTypes?: boolean; numberFormatType?: string; timeFormatType?: string }, paint: { shape?: string | { signal: string } }, symbolPaint: SymbolPaint): Record<string, unknown>[] {
   const legends: Record<string, unknown>[] = []
   // config.legend is a defaults layer: orient/direction keys are translated
   // into the compiled `direction`, everything else merges under the channel's
@@ -6659,7 +6674,7 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity: number | un
     push(colorDef.channel, lg, colorDef)
   }
   // the symbols of the other legends are painted the same way (legend/encode.ts symbols())
-  const symbolFor = (channel: string, userLegend: Record<string, unknown>): { symbolType: string; encode: Record<string, unknown> } => {
+  const symbolFor = (channel: string, userLegend: Record<string, unknown>): { symbolType: string | { signal: string }; encode: Record<string, unknown> } => {
     // (symbols with nothing to paint have no encode)
     const update = symbolPaint(channel, userLegend)
     return { symbolType, encode: Object.keys(update).length ? { encode: { symbols: { update } } } : {} }
@@ -6829,6 +6844,49 @@ function legendTitle(def: FieldDef, userLegend: Record<string, unknown>): unknow
 }
 
 /**
+ * position-align.ts vgAlignedPositionChannel: the `align` (x) or `baseline` (y) that places a sized rect-like position, from the mark
+ * def, then the mark type's config, then config.mark. An expression is not read (vega-lite warns and keeps the default). A baseline
+ * other than top / middle / bottom (a text's alphabetic, line-top, line-bottom) makes vega-lite write the position under an
+ * `undefined` channel, so its mark loses the position: refused (DECISIONS Q9), naming the property.
+ */
+function rectAlignment(markDef: Record<string, unknown> | undefined, cfgType: Record<string, unknown> | undefined, cfgMark: Record<string, unknown> | undefined, ch: 'x' | 'y'): 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom' | undefined {
+  const prop = ch === 'x' ? 'align' : 'baseline'
+  const v = markDef?.[prop] ?? cfgType?.[prop] ?? cfgMark?.[prop]
+  if (v === undefined || v === null || isObject(v)) return undefined
+  const ok = ch === 'x' ? ['left', 'center', 'right'] : ['top', 'middle', 'bottom']
+  if (!ok.includes(v as string)) {
+    const where = markDef?.[prop] !== undefined ? `mark.${prop}` : `config.${prop}`
+    throw new VLCompileError(`${where}: ${JSON.stringify(v)} places no ${ch === 'x' ? 'horizontal' : 'vertical'} position of a sized mark: vega-lite 6.4.3 writes the mark's ${ch} under an undefined channel and draws it without one; use ${ok.join(', ')}`)
+  }
+  return v as 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom'
+}
+
+/**
+ * position-rect.ts rectPosition: a rect-like position over a bin (or a time unit with no second channel) spans the bin unless the mark
+ * has a size of its own there - its own width / height, or a rect's size - which takes it off the bin (a bar that wide centred on the
+ * bin's middle; a size of 0 draws nothing of the bin). @aster-charts/vl draws the bin either way, so the size is refused rather than
+ * dropped. (A relative band size, `{band}`, stays on the bin, and is read.)
+ */
+function refuseOwnSizeOnBinnedPosition(spec: VLSpec, mark: string, orient: string, fields: FieldDef[]): void {
+  if (mark !== 'bar' && mark !== 'rect' && mark !== 'tick') return
+  const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : undefined
+  if (md === undefined) return
+  const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
+  const channels: Array<'x' | 'y'> = mark === 'tick' ? [orient === 'horizontal' ? 'x' : 'y'] : ['x', 'y']
+  for (const ch of channels) {
+    const vg = ch === 'x' ? 'width' : 'height'
+    const own = peek(() => (md[vg] !== undefined ? md[vg] : mark === 'rect' ? md.size : undefined))
+    if (own === undefined || (isObject(own) && 'band' in own)) continue
+    const def = fields.find((f) => f.channel === ch && f.field && !f.fromCondition)
+    if (def === undefined || peek(() => enc[`${ch}Offset`] !== undefined || enc.size !== undefined)) continue
+    const binnedPosition = (def.bin && !binDiscrete(def)) || (def.tu !== undefined && def.tu !== null && enc[`${ch}2`] === undefined && positionalScaleType(mark, def) !== 'band' && positionalScaleType(mark, def) !== 'point')
+    if (!binnedPosition) continue
+    const prop = md[vg] !== undefined ? vg : 'size'
+    throw new VLCompileError(`mark.${prop}: is valid Vega-Lite but @aster-charts/vl does not implement it here: a ${mark} with a ${prop} of its own on a binned or time-unit ${ch} (vega-lite 6.4.3 takes the ${mark} off the bin)`)
+  }
+}
+
+/**
  * Forward the user's legend properties onto the compiled legend (vega-lite
  * copies the legend definition through verbatim minus the VL-only keys and
  * the keys that belong to the other legend type — probed: a symbol legend
@@ -6862,6 +6920,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   const update: Record<string, unknown> = {}
   /** the orientation the rule branch settled on (undefined: a line segment), for the geographic positions */
   let ruleOrientOut: string | undefined
+  // (the Vega channel that places a tick's size axis: its align / baseline)
+  let tickSizeAt: string | undefined
   const xOffsetDefM = fields.find((f) => f.channel === 'xOffset' && f.field)
   const yOffsetDefM = fields.find((f) => f.channel === 'yOffset' && f.field)
   const xOffsetPresent = xOffsetDefM != null
@@ -6882,9 +6942,13 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   // any fillOpacity (definition or config) suppresses the reduced-opacity default
   const cfgFillOpacity = cfgType?.fillOpacity ?? cfgMark?.fillOpacity
   pointOpacityDefault = isAggregateEnc || (hasFillOpacity || cfgFillOpacity !== undefined) ? undefined : C.pointOpacity
+  refuseOwnSizeOnBinnedPosition(spec, mark, orient, fields)
 
   if (mark === 'bar' || mark === 'rect') {
     const markDef = isObject(spec.mark) ? spec.mark : undefined
+    // (position-rect.ts positionAndSize: a rect's discrete channel is placed by its align / baseline; one vega-lite cannot place by is
+    // refused: rectAlignment)
+    if (mark === 'rect') for (const [ch, d] of [['x', xDef], ['y', yDef]] as const) if (d !== undefined && ['band', 'point'].includes(positionalScaleType(mark, d))) rectAlignment(markDef, cfgType, cfgMark, ch)
     if (markOpacity != null) update.opacity = { value: markOpacity }
     // pass-through mark-def paint props (getMarkPropOrConfig reads each
     // straight off the definition; vega renders the ones it knows)
@@ -6919,17 +6983,24 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const num = (v: unknown): number | undefined => (typeof v === 'number' ? v : undefined)
     const barBandSize = (vg: 'width' | 'height'): number | undefined => mark !== 'bar' ? undefined
       : num(markDef?.size) ?? num(markDef?.[vg]) ?? num(cfgType?.[vg]) ?? num(cfgType?.size)
-    const continuousBandOf = (vg: 'width' | 'height'): number => {
+    // (positionAndSize: a mark def size that is an expression is the band's size as a signal; a band size of 0 is none, and the bar is
+    // the view's discrete step less 2 wide (defaultSizeRef); no size at all is the bar config's continuousBandSize)
+    const continuousBandRef = (vg: 'width' | 'height'): Record<string, unknown> => {
+      const own = mark === 'bar' ? markDef?.size : undefined
+      if (isObject(own) && (typeof own.expr === 'string' || typeof own.signal === 'string')) return { signal: (own.expr ?? own.signal) as string }
       const b = barBandSize(vg)
-      return b !== undefined && b !== 0 ? b : ((cfgType?.continuousBandSize as number | undefined) ?? C.continuousBandSize)
+      if (b === 0) return { value: viewDiscreteStep(spec, vg) - 2 }
+      return { value: b !== undefined ? b : ((cfgType?.continuousBandSize as number | undefined) ?? C.continuousBandSize) }
     }
     // (position-range.ts pointPosition2OrSize / position2orSize: a bar's range channel with no second position and no stack takes the
     // mark's own `width` / `height` - then the bar config's, the mark config's - placed by its `align` / `baseline`; with them it is not read)
+    // (position-range.ts position2orSize: a size of 0 is no size, and the next block is asked)
+    const truthyNum = (v: unknown): number | undefined => (typeof v === 'number' && v !== 0 ? v : undefined)
     const rangeSize = (vg: 'width' | 'height'): number | undefined => mark !== 'bar' ? undefined
-      : num(markDef?.[vg]) ?? num(cfgType?.[vg]) ?? num(cfgMark?.[vg])
+      : truthyNum(markDef?.[vg]) ?? truthyNum(cfgType?.[vg]) ?? truthyNum(cfgMark?.[vg])
     // (position-align.ts vgAlignedPositionChannel: a sized position is placed by `align` (x) / `baseline` (y), centred by default)
     const alignedAt = (ch: 'x' | 'y'): string => {
-      const align = ch === 'x' ? ((markDef?.align ?? cfgType?.align ?? cfgMark?.align) as string | undefined) : ((markDef?.baseline ?? cfgType?.baseline ?? cfgMark?.baseline) as string | undefined)
+      const align = rectAlignment(markDef, cfgType, cfgMark, ch)
       return ch === 'x' ? ({ left: 'x', right: 'x2' } as Record<string, string>)[align ?? ''] ?? 'xc' : ({ top: 'y', bottom: 'y2' } as Record<string, string>)[align ?? ''] ?? 'yc'
     }
     const sizedRange = (ch: 'x' | 'y', def: FieldDef): boolean => {
@@ -6943,10 +7014,10 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (orient === 'vertical') {
       if (xDef) {
         const sc = positionalScaleType(mark, xDef)
-        if (mark === 'rect' && xDef.timeUnit == null && !xDef.bin && sc !== 'band' && markDef?.width !== undefined) {
+        if (mark === 'rect' && xDef.timeUnit == null && !xDef.bin && sc !== 'band' && Boolean(markDef?.width)) {
           // a rect with a width of its own is centered on its value
           update.xc = { scale: 'x', field: aggFieldName(xDef) }
-          update.width = { value: markDef.width }
+          update.width = { value: markDef!.width }
         } else if (mark === 'rect' && xDef.timeUnit == null && !xDef.bin && sc !== 'band' && sc !== 'point') {
           // a continuous rect spans to the scale's zero/min (vega-lite rangePosition)
           update.x = { scale: 'x', field: aggFieldName(xDef) }
@@ -6955,7 +7026,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           // a plain temporal dimension centers the bar with the continuous
           // band size (vega-lite's continuousBandSize)
           update[mark === 'bar' ? alignedAt('x') : 'xc'] = { scale: 'x', field: aggFieldName(xDef) }
-          update.width = sizeDef ? { scale: 'size', field: aggFieldName(sizeDef) } : { value: continuousBandOf('width') }
+          update.width = sizeDef ? { scale: 'size', field: aggFieldName(sizeDef) } : continuousBandRef('width')
         } else if (xDef.timeUnit && sc !== 'band' && rectSpansUnit('x')) {
           setBinnedRect(update, 'x', xDef, spec, mark)
         } else if (xDef.bin && !binDiscrete(xDef) && rectSpansUnit('x')) {
@@ -6965,7 +7036,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
           // the bar with x2 at the band position; a size/discreteBandSize
           // centers a fixed-width bar in the band; otherwise the bar spans
           // the band
-          const barAlign = (markDef?.align ?? cfgType?.align ?? cfgMark?.align) as string | undefined
+          const barAlign = rectAlignment(markDef, cfgType, cfgMark, 'x')
           const barExplicitSize = (((mark === 'bar' ? markDef?.size : undefined)
             ?? markDef?.width
             ?? (mark === 'bar' ? (cfgType?.size as number | undefined) : undefined)
@@ -7001,7 +7072,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
             update[mark === 'bar' ? alignedAt('x') : 'xc'] = { scale: 'x', field: aggFieldName(xDef) }
             // a discrete point scale centers a default-step bar (18px); a
             // continuous measure uses the continuous band size
-            update.width = sizeDef ? { scale: 'size', field: aggFieldName(sizeDef) } : { value: sc === 'point' ? barBandSize('width') ?? C.defaultStep : continuousBandOf('width') }
+            update.width = sizeDef ? { scale: 'size', field: aggFieldName(sizeDef) } : sc === 'point' ? { value: barBandSize('width') ?? C.defaultStep } : continuousBandRef('width')
           }
         }
       }
@@ -7036,9 +7107,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
             else update.y = { scale: 'y', field: aggFieldName(yDef) }
             update.height = { signal: `max(0.25, bandwidth('y'))` }
           }
-        } else if (mark === 'rect' && markDef?.height !== undefined) {
+        } else if (mark === 'rect' && Boolean(markDef?.height)) {
           update.yc = { scale: 'y', field: aggFieldName(yDef) }
-          update.height = { value: markDef.height }
+          update.height = { value: markDef!.height }
         } else if (positionalScaleType(mark, yDef) === 'point') {
           update.yc = { scale: 'y', field: aggFieldName(yDef) }
           update.height = { value: C.defaultStep }
@@ -7051,21 +7122,21 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     } else {
       if (yDef) {
         const sc = positionalScaleType(mark, yDef)
-        if (mark === 'rect' && yDef.timeUnit == null && !yDef.bin && sc !== 'band' && markDef?.height !== undefined) {
+        if (mark === 'rect' && yDef.timeUnit == null && !yDef.bin && sc !== 'band' && Boolean(markDef?.height)) {
           update.yc = { scale: 'y', field: aggFieldName(yDef) }
-          update.height = { value: markDef.height }
+          update.height = { value: markDef!.height }
         } else if (mark === 'rect' && yDef.timeUnit == null && !yDef.bin && sc !== 'band' && sc !== 'point') {
           update.y = { scale: 'y', field: aggFieldName(yDef) }
           update.y2 = zeroOrMinRef('y', yDef, mark)
         } else if (yDef.timeUnit == null && !yDef.bin && yDef.type === 'temporal' && !yDef.datumOnly) {
           update[mark === 'bar' ? alignedAt('y') : 'yc'] = { scale: 'y', field: aggFieldName(yDef) }
-          update.height = sizeDef ? { scale: 'size', field: aggFieldName(sizeDef) } : { value: continuousBandOf('height') }
+          update.height = sizeDef ? { scale: 'size', field: aggFieldName(sizeDef) } : continuousBandRef('height')
         } else if (yDef.timeUnit && sc !== 'band' && rectSpansUnit('y')) {
           setBinnedRect(update, 'y', yDef, spec, mark)
         } else if (yDef.bin && !binDiscrete(yDef) && rectSpansUnit('y')) {
           setBinnedRect(update, 'y', yDef, spec, mark)
         } else if (sc === 'band') {
-          const yAlignH = (markDef?.baseline ?? cfgType?.baseline ?? cfgMark?.baseline) as string | undefined
+          const yAlignH = rectAlignment(markDef, cfgType, cfgMark, 'y')
           const hExplicitSize = (((mark === 'bar' ? markDef?.size : undefined)
             ?? markDef?.height
             ?? (cfgType?.size as number | undefined)
@@ -7098,7 +7169,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
             update.y2 = zeroOrMinRef('y', yDef, mark)
           } else {
             update[mark === 'bar' ? alignedAt('y') : 'yc'] = { scale: 'y', field: aggFieldName(yDef) }
-            update.height = sizeDef ? { scale: 'size', field: aggFieldName(sizeDef) } : { value: sc === 'point' ? barBandSize('height') ?? C.defaultStep : continuousBandOf('height') }
+            update.height = sizeDef ? { scale: 'size', field: aggFieldName(sizeDef) } : sc === 'point' ? { value: barBandSize('height') ?? C.defaultStep } : continuousBandRef('height')
           }
         }
       }
@@ -7117,9 +7188,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         } else if (!stackedX && positionalScaleType(mark, xDef) === 'band' && !xOffsetPresent) {
           update.x = { scale: 'x', field: aggFieldName(xDef) }
           update.width = { signal: `max(0.25, bandwidth('x'))` }
-        } else if (mark === 'rect' && markDef?.width !== undefined) {
+        } else if (mark === 'rect' && Boolean(markDef?.width)) {
           update.xc = { scale: 'x', field: aggFieldName(xDef) }
-          update.width = { value: markDef.width }
+          update.width = { value: markDef!.width }
         } else if (positionalScaleType(mark, xDef) === 'point') {
           // (a point scale has no band to fill: the mark is a default step wide, centred on its point)
           update.xc = { scale: 'x', field: aggFieldName(xDef) }
@@ -7276,9 +7347,12 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const thickField = thickAxis === 'x' ? xDef : yDef
     const thickVg = thickAxis === 'x' ? 'width' : 'height'
     const thickVal = (tickDef?.thickness ?? (cfgType?.thickness as number | undefined) ?? 1) as number
+    // (position-rect.ts getBandSize through getMarkPropOrConfig: the mark def's size, then its own width / height of the size axis,
+    // then the tick config's)
     const tickExplicitSize = (tickDef?.size
+      ?? tickDef?.[sizeVg]
       ?? (cfgType?.size as number | undefined)
-      ?? (cfgType?.height as number | undefined)) as number | undefined
+      ?? (cfgType?.[sizeVg] as number | undefined)) as number | undefined
     const tickSize = tickExplicitSize != null
       ? (tickExplicitSize === 0 ? C.defaultStep : tickExplicitSize)
       : ((cfgType?.discreteBandSize as number | undefined) === 0 ? undefined : cfgType?.discreteBandSize as number | undefined)
@@ -7297,7 +7371,17 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     }
     // a tick whose encoding leaves it no orientation is neither across a band nor along one: its size axis, if it has no band to stand
     // on, spans from the position to the start of the scale (or the whole of the view when it has none)
-    const tickSpans = markOrient(spec, mark, spec.mark, fields) === undefined && !sizeDef && sizeRaw === undefined
+    // (a size of 0 is no size where vega-lite asks for one by its truth: a span, a bin)
+    const sizeGiven = sizeRaw !== undefined && tickExplicitSize !== 0
+    // (the size axis of a sized tick is placed by its align / baseline, centred by default: position-align.ts)
+    const sizeAt = ((): string => {
+      const a = rectAlignment(tickDef, cfgType, cfgMark, sizeAxis)
+      return a === 'left' || a === 'top' ? sizeAxis : a === 'right' || a === 'bottom' ? `${sizeAxis}2` : `${sizeAxis}c`
+    })()
+    tickSizeAt = sizeAt
+    // (tick.ts with no orientation: rectPosition places the size axis as a range - rangePosition - which reads no size of the mark,
+    // only its own width / height, position2orSize)
+    const tickSpans = markOrient(spec, mark, spec.mark, fields) === undefined && !sizeDef
       && (sizeField === undefined || (!isDiscreteType(sizeField.type) && !sizeField.bin && !(sizeField.tu && sizeField.type === 'temporal')))
     if (tickSpans) {
       if (sizeField === undefined) {
@@ -7307,31 +7391,34 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         update[sizeAxis] = { scale: sizeAxis, field: aggFieldName(sizeField) }
         update[`${sizeAxis}2`] = zeroOrMinRef(sizeAxis)
       }
+      const range = tickDef !== undefined ? ownRectSizing(tickDef, cfgType, cfgMark).range(sizeVg) : undefined
+      if (range !== undefined) {
+        delete update[`${sizeAxis}2`]
+        update[sizeVg] = range
+      }
     } else if (sizeField) {
       const isBand = positionalScaleType(mark, sizeField) === 'band'
       // position-rect.ts rectPosition: a binned / time-unit size axis spans its bin (tick.ts calls rectPosition for it)
-      const binnedSizeAxis = !isBand && !sizeDef && sizeRaw === undefined && (sizeField.bin || (sizeField.tu && sizeField.type === 'temporal'))
+      const binnedSizeAxis = !isBand && !sizeDef && !sizeGiven && (sizeField.bin || (sizeField.tu && sizeField.type === 'temporal'))
         && !fields.some((f) => (f.channel === `${sizeAxis}2` && !binsItself(sizeField)) || f.channel === `${sizeAxis}Offset`)
       if (binnedSizeAxis) {
         setBinnedRect(update, sizeAxis, sizeField, spec, mark)
       } else if (sizeDef) {
-        update[`${sizeAxis}c`] = { scale: sizeAxis, field: aggFieldName(sizeField), ...(isBand ? { band: 0.5 } : {}) }
+        update[isBand ? `${sizeAxis}c` : sizeAt] = { scale: sizeAxis, field: aggFieldName(sizeField), ...(isBand ? { band: 0.5 } : {}) }
         update[sizeVg] = { scale: 'size', field: aggFieldName(sizeDef) }
       } else if (sizeRaw !== undefined) {
-        update[`${sizeAxis}c`] = { scale: sizeAxis, field: aggFieldName(sizeField), ...(isBand ? { band: 0.5 } : {}) }
+        update[isBand ? `${sizeAxis}c` : sizeAt] = { scale: sizeAxis, field: aggFieldName(sizeField), ...(isBand ? { band: 0.5 } : {}) }
         update[sizeVg] = { value: sizeRaw }
       } else if (isBand) {
         // baseline.bottom pins a band size axis to its y2 edge; every other
         // baseline anchors at the band start (vega-lite tick.ts).
-        const sizeBase = (tickDef?.baseline ?? cfgType?.baseline) as string | undefined
-        if (sizeAxis === 'y' && sizeBase === 'bottom') {
-          update.y2 = { scale: 'y', field: aggFieldName(sizeField) }
-        } else {
-          update[sizeAxis] = { scale: sizeAxis, field: aggFieldName(sizeField) }
-        }
+        // (position-align.ts with the band default 'top': align / baseline place the band channel - its start, its end or its middle)
+        const a = rectAlignment(tickDef, cfgType, cfgMark, sizeAxis)
+        const at = a === 'right' || a === 'bottom' ? `${sizeAxis}2` : a === 'center' || a === 'middle' ? `${sizeAxis}c` : sizeAxis
+        update[at] = { scale: sizeAxis, field: aggFieldName(sizeField), ...(at === `${sizeAxis}c` ? { band: 0.5 } : {}) }
         update[sizeVg] = { signal: `max(0.25, bandwidth('${sizeAxis}'))` }
       } else {
-        update[`${sizeAxis}c`] = { scale: sizeAxis, field: aggFieldName(sizeField) }
+        update[sizeAt] = { scale: sizeAxis, field: aggFieldName(sizeField) }
         // (a point scale has no band to fill: the tick is a default step wide, as a bar on one is)
         update[sizeVg] = { value: positionalScaleType(mark, sizeField) === 'point' ? C.defaultStep : ((cfgType?.continuousBandSize as number | undefined) ?? C.continuousBandSize) }
       }
@@ -7381,7 +7468,12 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     // (text.ts: a text is placed by x and y, and by theta and radius around that place: a pie label sits at the middle of the view;
     // any other text missing x or y takes the mark def's place, or the middle, below)
     const polarText = thetaDefT !== undefined || radiusDefT !== undefined
-    Object.assign(update, pointPlace(mark, orient, fields, xDef, yDef, polarText ? { signal: 'width', mult: 0.5 } : undefined, polarText ? { signal: 'height', mult: 0.5 } : undefined))
+    // (position-point.ts pointPositionDefaultRef: the centre of a polar text is the mark def's x / y, else the middle of the view)
+    const polarCentre = (ch: 'x' | 'y', edge: 'width' | 'height'): Record<string, unknown> => {
+      const v = isObject(spec.mark) ? spec.mark[ch] : undefined
+      return v === undefined ? { signal: edge, mult: 0.5 } : v === edge ? { field: { group: edge } } : { value: v }
+    }
+    Object.assign(update, pointPlace(mark, orient, fields, xDef, yDef, polarText ? polarCentre('x', 'width') : undefined, polarText ? polarCentre('y', 'height') : undefined))
     polarPointPositions(update, spec, fields, polarStackOf(fields, mark))
     if (polarText) {
       const mRadius = isObject(spec.mark) ? (spec.mark.radius as number | undefined) : undefined
@@ -7414,8 +7506,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     // the polar radius; the paint/offset props go straight through)
     const markPaint = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : undefined
     const textProp = (p: string): unknown => markPaint?.[p] ?? cfgType?.[p] ?? cfgMark?.[p]
+    // (a radius channel places the text; the mark's outer radius is its radius only without one)
     const textOuterRadius = textProp('outerRadius')
-    if (textOuterRadius != null) update.radius = { value: textOuterRadius }
+    if (textOuterRadius != null && !radiusDefT) update.radius = { value: textOuterRadius }
     const textCfgSize = (cfgType?.size as number | undefined) ?? (cfgMark?.size as number | undefined)
     if (markPaint?.size != null) update.fontSize = { value: markPaint.size }
     else if (textCfgSize != null) update.fontSize = { value: textCfgSize }
@@ -7425,7 +7518,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       const v = p === 'dx' || p === 'dy' || p === 'baseline' || p === 'align' ? markPaint?.[p] : textProp(p)
       if (v !== undefined) update[p] = { value: v }
     }
-    if (markPaint?.outerRadius != null) update.radius = { value: markPaint.outerRadius }
+    if (markPaint?.outerRadius != null && !radiusDefT) update.radius = { value: markPaint.outerRadius }
     // (a text's polar offset from its position: the mark's radius and theta, as vega-lite passes them)
     if (markPaint?.radius != null) update.radius = { value: markPaint.radius }
     if (markPaint?.theta != null) update.theta = { value: markPaint.theta }
@@ -7514,7 +7607,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       // (a point's polar offset from its position: the mark's radius and theta pass through, as vega-lite passes them)
       if (mark !== 'text') for (const p of ['radius', 'theta'] as const) if (md0[p] != null) update[p] = { value: md0[p] }
     }
-    fillMissingPositions(update, mark, fields, orient, scaleConfigOf(spec), ruleOrientOut, typeof md0.size === 'number' && md0.size !== 0 ? md0.size : isObject(md0.size) && (typeof md0.size.signal === 'string' || typeof md0.size.expr === 'string') ? { signal: (md0.size.signal ?? md0.size.expr) as string } : undefined, markOrient(spec, mark, spec.mark, fields) === undefined)
+    fillMissingPositions(update, mark, fields, orient, scaleConfigOf(spec), ruleOrientOut, typeof md0.size === 'number' && md0.size !== 0 ? md0.size : isObject(md0.size) && (typeof md0.size.signal === 'string' || typeof md0.size.expr === 'string') ? { signal: (md0.size.signal ?? md0.size.expr) as string } : undefined, markOrient(spec, mark, spec.mark, fields) === undefined, tickSizeAt, mark === 'bar' || mark === 'tick' ? ownRectSizing(md0, cfgType, cfgMark) : undefined)
   }
 
   // (valueref.ts: a position's value "width" / "height" is the edge of the view, the group's size)
@@ -7581,6 +7674,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     const v = markDefP?.[p]
     if (v !== undefined && update[p] === undefined) update[p] = isObject(v) && typeof v.signal === 'string' ? { signal: v.signal } : { value: v }
   }
+  // (base.ts markDefProperties: what vega-lite writes as it is into the mark's encoding, of the mark def alone, where nothing above
+  // encoded it: ignored-table.ts FORWARDED)
+  if (markDefP !== undefined) forwardMarkDefProps(update, markDefP, forwardedMarkProps(markDefP.$image === true ? 'image' : mark))
   // aria.ts: `config.aria: false` leaves the role description out, whatever the mark def says; a mark with `aria: false` (its own, or
   // its mark type's or config.mark's) is hidden from the accessibility tree and encodes no aria property at all
   {
@@ -7750,6 +7846,12 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   const geo = GEO_UNITS.get(spec)
   applyGeoPositions(update, spec, mark, ruleOrientOut)
 
+  // (rule.ts: a rule with none of x, y, longitude and latitude encodes nothing - vega-lite "shows nothing" of it but Vega's defaults)
+  if (mark === 'rule' && peek(() => !isObject(spec.encoding) || ['x', 'y', 'longitude', 'latitude'].every((ch) => (spec.encoding as Record<string, unknown>)[ch] === undefined))) {
+    // (what was encoded of the mark def is dropped with it, as vega-lite drops it)
+    consumeAll(update)
+    for (const k of Object.keys(update)) delete update[k]
+  }
   const markSpec: Record<string, unknown> = {
     name: 'marks',
     type: mark === 'bar' || mark === 'tick' ? 'rect' : mark === 'point' || mark === 'circle' || mark === 'square' ? 'symbol' : mark === 'geoshape' ? 'shape' : mark,
@@ -7783,7 +7885,11 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     // an image mark carries no paint; its bands are not floored at the rect minimum
     markSpec.type = 'image'
     markSpec.style = ['image']
-    for (const k of ['fill', 'stroke', 'ariaRoleDescription']) delete update[k]
+    // (a role description of the image's own mark def is the image's: aria.ts)
+    const ownDescription = peek(() => (spec.mark as Record<string, unknown>).ariaRoleDescription) !== undefined
+    for (const k of ['fill', 'stroke', ...(ownDescription ? [] : ['ariaRoleDescription'])]) delete update[k]
+    // (what the image's own mark def gives of its paint vega-lite writes into the image's encoding: base.ts markDefProperties)
+    forwardMarkDefProps(update, spec.mark as Record<string, unknown>, forwardedMarkProps('image').filter((p) => p === 'fill' || p === 'stroke'))
     for (const k of ['width', 'height']) {
       const w = update[k] as { signal?: string } | undefined
       if (w?.signal) w.signal = w.signal.replace(/^max\(0\.25, (.*)\)$/, '$1')
@@ -8081,6 +8187,8 @@ function positionAndSizeRefs(ch: 'x' | 'y', def: FieldDef | undefined, spec: VLS
   // the aligned position channel
   const alignProp = ch === 'x' ? 'align' : 'baseline'
   const align = md[alignProp] ?? markConfigProp(spec, mark, alignProp)
+  // (an align / baseline vega-lite cannot place by is refused, not dropped)
+  rectAlignment(md, { [alignProp]: markConfigProp(spec, mark, alignProp) }, undefined, ch)
   // (the band size is relative here whatever its source: a band scale aligns to the top / left of its band)
   const top = !absolute && (scaleType ?? offsetType) === 'band'
   const vgChannel = ch === 'x'
@@ -8297,7 +8405,30 @@ function constantRectPosition(update: Record<string, unknown>, spec: VLSpec, mar
   }
 }
 
-function fillMissingPositions(update: Record<string, unknown>, mark: string, fields: FieldDef[], orient: string, scaleCfg: ScaleCfg, ruleOrient?: string, explicitSizeRaw?: number | { signal: string }, orientUndefined = false): void {
+/**
+ * What a unit's own mark def gives a rect-like mark that misses a position channel (position-rect.ts positionAndSize / rangePosition):
+ * the band size of a band channel (getBandSize: its own width / height, then its size), the size of a range (position2orSize: its own
+ * width / height when not 0), and the Vega channel its align / baseline places a band channel by.
+ */
+interface OwnRectSizing {
+  band(vg: 'width' | 'height'): Record<string, unknown> | undefined
+  range(vg: 'width' | 'height'): Record<string, unknown> | undefined
+  at(ch: 'x' | 'y'): string
+}
+function ownRectSizing(markDef: Record<string, unknown>, cfgType: Record<string, unknown> | undefined, cfgMark: Record<string, unknown> | undefined): OwnRectSizing {
+  const ref = (v: unknown): Record<string, unknown> | undefined => typeof v === 'number' ? { value: v } : isObject(v) && (typeof v.expr === 'string' || typeof v.signal === 'string') ? { signal: (v.expr ?? v.signal) as string } : undefined
+  return {
+    // (a band size of 0 is none: the default size, defaultSizeRef)
+    band: (vg) => (markDef.size ? ref(markDef.size) : markDef[vg] ? ref(markDef[vg]) : undefined),
+    range: (vg) => (markDef[vg] ? ref(markDef[vg]) : undefined),
+    at: (ch) => {
+      const a = rectAlignment(markDef, cfgType, cfgMark, ch)
+      return a === 'left' || a === 'top' ? ch : a === 'right' || a === 'bottom' ? `${ch}2` : `${ch}c`
+    },
+  }
+}
+
+function fillMissingPositions(update: Record<string, unknown>, mark: string, fields: FieldDef[], orient: string, scaleCfg: ScaleCfg, ruleOrient?: string, explicitSizeRaw?: number | { signal: string }, orientUndefined = false, tickSizeAt?: string, own?: OwnRectSizing): void {
   // (a mark def size is a number or an expression, which vega-lite emits as a signal reference)
   const explicitSize = explicitSizeRaw
   const has = (...ks: string[]): boolean => ks.some((k) => update[k] !== undefined)
@@ -8317,8 +8448,8 @@ function fillMissingPositions(update: Record<string, unknown>, mark: string, fie
     case 'tick':
       // (tick.ts: the size axis is x of a horizontal tick and y of a vertical one; a size of the mark def is its length there)
       // (the other axis is the thickness axis: pointPosition centres it and `thickness` is its extent, set by the mark)
-      if (!hasX) { update.xc = midX; if (orient === 'horizontal') update.width = explicitSize !== undefined ? (typeof explicitSize === 'number' ? { value: explicitSize } : explicitSize) : { signal: '0.75 * width' } }
-      if (!hasY) { update.yc = midY; if (orient !== 'horizontal') update.height = explicitSize !== undefined ? (typeof explicitSize === 'number' ? { value: explicitSize } : explicitSize) : { signal: '0.75 * height' } }
+      if (!hasX) { update[orient === 'horizontal' ? tickSizeAt ?? 'xc' : 'xc'] = midX; if (orient === 'horizontal') update.width = own?.band('width') ?? (explicitSize !== undefined ? (typeof explicitSize === 'number' ? { value: explicitSize } : explicitSize) : { signal: '0.75 * width' }) }
+      if (!hasY) { update[orient !== 'horizontal' ? tickSizeAt ?? 'yc' : 'yc'] = midY; if (orient !== 'horizontal') update.height = own?.band('height') ?? (explicitSize !== undefined ? (typeof explicitSize === 'number' ? { value: explicitSize } : explicitSize) : { signal: '0.75 * height' }) }
       break
     case 'bar': {
       // position-rect.ts rectPosition: the band channel of the orientation (x of a vertical bar, y of a horizontal one) is
@@ -8326,13 +8457,14 @@ function fillMissingPositions(update: Record<string, unknown>, mark: string, fie
       // zeroOrMax to zeroOrMin, i.e. the whole view
       const padding = (scaleCfg.bandPaddingInner ?? scaleCfg.barBandPaddingInner) as number | undefined
       // (a size of the mark def or the encoding is the band's size: positionAndSize, `sizeMixins`)
-      const span = (size: 'width' | 'height'): unknown => (explicitSize !== undefined ? (typeof explicitSize === 'number' ? { value: explicitSize } : explicitSize) : typeof padding === 'number' ? { signal: `${1 - padding} * ${size}` } : { value: 18 })
-      // (a bar with no orientation - neither axis is a measure - has no band channel: both missing ones are ranges)
+      const span = (size: 'width' | 'height'): unknown => own?.band(size) ?? (explicitSize !== undefined ? (typeof explicitSize === 'number' ? { value: explicitSize } : explicitSize) : typeof padding === 'number' ? { signal: `${1 - padding} * ${size}` } : { value: 18 })
+      // (a bar with no orientation - neither axis is a measure - has no band channel: both missing ones are ranges, a range sized by
+      // the mark's own width / height runs that far from its start: position2orSize)
       if (!hasX) {
-        if (orient === 'vertical' && !orientUndefined) { update.xc = midX; update.width = span('width') } else { update.x = groupW; update.x2 = { value: 0 } }
+        if (orient === 'vertical' && !orientUndefined) { update[own?.at('x') ?? 'xc'] = midX; update.width = span('width') } else { update.x = groupW; const r = own?.range('width'); if (r) update.width = r; else update.x2 = { value: 0 } }
       }
       if (!hasY) {
-        if (orient === 'horizontal') { update.yc = midY; update.height = span('height') } else { update.y = { value: 0 }; update.y2 = groupH }
+        if (orient === 'horizontal') { update[own?.at('y') ?? 'yc'] = midY; update.height = span('height') } else { update.y = { value: 0 }; const r = own?.range('height'); if (r) update.height = r; else update.y2 = groupH }
       }
       break
     }
@@ -8747,12 +8879,32 @@ function markPaint(spec: VLSpec, mark: string, fields: FieldDef[], filled: boole
  * encoding of the unit is what is left: nothing after this reads a dropped channel.
  */
 /**
- * Mark-def properties the validator accepts (the schema has them) that vega-lite 6.4.3 reads nowhere for a unit: they change nothing,
- * so the compile consumes them as ignored (consume.ts). Each is pinned by a corpus case against vega-lite.
+ * A mark-def property outside the pinned schema's MarkDef that the validator accepts, so the generated table cannot hold it: vega-lite
+ * reads no `gradient` of a mark def (a gradient is a colour value; corpus area-gradient pins it).
  */
-const MARK_KEYS_VEGA_LITE_IGNORES: Readonly<Record<string, string>> = {
-  bandSize: 'vega-lite reads no mark-def bandSize (vlx-mark-bandsize-ignored)',
+const MARK_KEYS_OUTSIDE_SCHEMA_IGNORED: Readonly<Record<string, string>> = {
   gradient: 'vega-lite reads no mark-def gradient; a gradient is a colour value (area-gradient)',
+}
+
+/**
+ * base.ts markDefProperties: the properties `props` of the mark def, as they are (`{value}`, an expression as a signal), on the encode
+ * entry `update` where nothing has encoded them yet.
+ */
+function forwardMarkDefProps(update: Record<string, unknown>, markDef: Record<string, unknown>, props: readonly string[]): void {
+  for (const p of props) {
+    if (update[p] !== undefined || !Object.hasOwn(markDef, p)) continue
+    const v = markDef[p]
+    if (v !== undefined) update[p] = isObject(v) && typeof v.expr === 'string' ? { signal: v.expr } : isObject(v) && typeof v.signal === 'string' ? { signal: v.signal } : { value: v }
+  }
+}
+
+/** Consume, as no-ops, the properties of a unit's mark def that vega-lite ignores on its mark type (ignored-table.ts). */
+function ignoreMarkPropsVegaLiteIgnores(markDef: Record<string, unknown>, mark: string): void {
+  const ignored = ignoredMarkProps(mark)
+  for (const k of Object.keys(markDef)) {
+    if (ignored.has(k)) ignore(markDef, k, 'vega-lite ignores it on this mark type (ignored-table.ts)')
+    else if (Object.hasOwn(MARK_KEYS_OUTSIDE_SCHEMA_IGNORED, k)) ignore(markDef, k, MARK_KEYS_OUTSIDE_SCHEMA_IGNORED[k]!)
+  }
 }
 
 /**
@@ -8785,7 +8937,7 @@ function ignoreUnreadGeoParts(enc: Record<string, unknown>): void {
  */
 const PLACING_CHANNELS = ['x', 'y', 'x2', 'y2', 'xOffset', 'yOffset', 'theta', 'theta2', 'radius', 'radius2'] as const
 /**
- * `header` is a facet channel's: on these channels vega-lite's output does not depend on it (conformance vl-ignored-channel-keys.test.ts
+ * `header` is a facet channel's: on these channels vega-lite's output does not depend on it (conformance vl-ignored-properties.test.ts
  * pins that against vega-lite 6.4.3). On the other channels (a colour, a size, a shape ...) it changes vega-lite's output, and is held
  * to the consumption check.
  */
@@ -8814,7 +8966,11 @@ function ignoreUnreadChannelParts(enc: Record<string, unknown>): void {
 }
 
 function initUnitEncoding(spec: VLSpec, mark: string): void {
-  if (isObject(spec.mark)) for (const [k, why] of Object.entries(MARK_KEYS_VEGA_LITE_IGNORES)) ignore(spec.mark, k, why)
+  // (an image is compiled as a rect that knows it is one: imageAsRect)
+  if (isObject(spec.mark)) {
+    const md = spec.mark
+    ignoreMarkPropsVegaLiteIgnores(md, peek(() => (md.$image === true ? 'image' : md.$line === true ? 'line' : mark)))
+  }
   const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : undefined
   if (!enc) return
   ignoreUnreadGeoParts(enc)
@@ -9415,12 +9571,13 @@ function buildUnitLegends(spec: VLSpec, fields: FieldDef[], mark: string, markRa
 }
 
 /** legend/properties.ts defaultSymbolType: a constant shape (a value def or its first condition's value, else the mark's) is every non-shape legend's symbol. */
-function constantShape(spec: VLSpec, markRaw: unknown): string | undefined {
+function constantShape(spec: VLSpec, markRaw: unknown): string | { signal: string } | undefined {
   const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
   const d = enc.shape
   const own = isObject(d) && d.field === undefined && d.datum === undefined && typeof d.value === 'string' ? d.value : undefined
   const md = isObject(markRaw) ? markRaw : {}
-  return own ?? (typeof md.shape === 'string' ? md.shape : undefined)
+  // (an expression of the mark def is the legend's symbol type as a signal: legend/properties.ts defaultSymbolType)
+  return own ?? (typeof md.shape === 'string' ? md.shape : isObject(md.shape) && typeof md.shape.expr === 'string' ? { signal: md.shape.expr } : undefined)
 }
 
 /** Fill and stroke properties that the config gives a legend's symbols as it gives the mark (mark.ts FILL_STROKE_CONFIG). */

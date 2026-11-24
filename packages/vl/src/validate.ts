@@ -22,6 +22,7 @@ import { isTimerSelect, validateTimerSelection } from './animation.js'
 import { parseEventSelectorString } from './event-selector.js'
 import { dateTimePartProblem } from './predicate.js'
 import { CALENDAR_PARTS } from './calendar.js'
+import { ignoredMarkProps } from './mark-props.js'
 
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -1106,7 +1107,8 @@ function validateMark(mark: unknown, at: string): string {
         if (typeof def[k] !== 'number' && def[k] !== edge) mustBe(`${at}.${k}`, `a number or "${edge}" (an expression or signal is not supported)`)
         continue
       }
-      if (why) fail(`${at}.${k}`, why)
+      // (what vega-lite ignores on this mark type is consumed as it does, not refused: ignored-table.ts)
+      if (why && !ignoredMarkProps(type).has(k)) fail(`${at}.${k}`, why)
       if (k === 'order' && def.order !== false && def.order !== null && def.order !== true) fail(`${at}.order`, 'only order: false/null/true is supported')
     }
     if (def.orient !== undefined && def.orient !== 'horizontal' && def.orient !== 'vertical') mustBe(`${at}.orient`, '"horizontal" or "vertical"')
