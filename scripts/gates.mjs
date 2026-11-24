@@ -94,7 +94,8 @@ export const GATES = [
   },
   {
     name: 'geometry-browser', args: ['conformance:geometry'], tags: ['browser'],
-    why: 'generated geometry specs (every mark type, nested groups, the value classes no scale writes): the pick on each renderer and intersect() vs real vega in Chromium, under a deadline; the differences that remain are named by what the oracle does there (src/geometry-differences.ts) and must still differ',
+    why: 'generated geometry specs (every mark type, nested groups, the value classes no scale writes): the pick on each renderer and intersect() vs real vega in Chromium, under a deadline; the differences that remain are named by what the oracle does there (src/geometry-differences.ts, the reasons in scripts/lib/expected-differences.mjs) and must still differ',
+    verdict: { selfTest: { narrow: { args: ['--seeds=3'] }, none: { args: ['--seeds=0'] } } },
   },
   {
     name: 'react-browser', args: ['--filter', '@aster-charts/react', 'run', 'test:browser'], tags: ['browser'],

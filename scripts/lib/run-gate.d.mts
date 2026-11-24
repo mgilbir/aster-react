@@ -7,10 +7,10 @@ export interface Gate {
   readonly partial: boolean
   /** Add to a declared counter. */
   count(counter: string, n?: number): void
-  /** A case was compared and agrees; counts toward `counter` (default: the primary counter). */
-  agree(caseName: string, counter?: string): void
-  /** A case was compared and differs; counts toward `counter` (default: the primary counter). */
-  differ(caseName: string, detail: string, counter?: string): void
+  /** A case was compared and agrees; counts toward `counter` (default: the primary counter; `null`: toward none, for a gate that counts what it compared itself). */
+  agree(caseName: string, counter?: string | null): void
+  /** A case was compared and differs; counts toward `counter` (default: the primary counter; `null`: toward none, for a gate that counts what it compared itself). */
+  differ(caseName: string, detail: string, counter?: string | null): void
   /** A case could not be compared (it threw, the page failed): a failure, counted toward no counter. */
   error(caseName: string, detail: string): void
   /** A failure that belongs to no case (a page error, a ratchet broken). */
