@@ -158,6 +158,9 @@ cli({ url: import.meta.url })
 // Ceiling = the measure + 0.5.
 // With the compile-time check of expressions merged on top of #78-#86 (kB gzip): core 150.4, useChart 157.2, Chart 198.5, SvgChart 175.9,
 // SvgChart + interaction 193.2, Chart + VL 299.3; marginal: dom 6.0, canvas 6.0, hit 6.4, signals 12.9, load 5.4, geo 16.1, transforms 39.2.
+// The data loader loads the `time` part of the engine itself when a dataset's `parse` may read a date pattern (loadSpecData, addon-load.ts: the
+// shells' specNeeds is asked only for the spec the loader returns), measured (kB gzip): load marginal 6.7 (+1.3 over 5.4: the date-pattern check and the
+// import of the part, which is a chunk loaded on demand). Ceiling = the measure + 0.5; the other rows did not move.
 // Every ceiling is that measure + 0.5.
 // The ranged-channel, scale-type and polar fixes in @aster-charts/vl (fix/vl-ranged-temporal): Chart + VL 300.0 (+0.7 over 299.3: the scale-type rules,
 // the secondary channel's domain, theta2 / radius2 and the constant-second-channel rules); nothing else moves. Its ceiling is that measure + 0.5.
@@ -329,7 +332,7 @@ const BUDGETS = {
   // followups (stack/10-followups-correctness: one SVG path reader, eager through the hit index; the signal loop on demand; guide gradients): measured 2026-11-15 on a clean build, base stack/9-followups-speed -> branch (kB gzip): 15.5 -> 14.7; ceiling is the measured value + 0.5.
   '+ @aster-charts/core/signals': 15.2 * 1024,
   // stack layer 8 (perf/lazy-features: the shells load the engine's parts and the canvas renderer on demand; module boundaries): measured 2026-11-15 on a clean build, base stack/7-hover-finish -> branch (kB gzip): 5.4 -> 5.3; ceiling is the measured value + 0.5.
-  '+ @aster-charts/core/load': 5.8 * 1024,
+  '+ @aster-charts/core/load': 7.2 * 1024,
   // stack layer 8 (perf/lazy-features: the shells load the engine's parts and the canvas renderer on demand; module boundaries): measured 2026-11-15 on a clean build, base stack/7-hover-finish -> branch (kB gzip): 16.1 -> 15.9; ceiling is the measured value + 0.5.
   '+ @aster-charts/core/geo': 16.4 * 1024,
   // stack layer 8 (perf/lazy-features: the shells load the engine's parts and the canvas renderer on demand; module boundaries): measured 2026-11-15 on a clean build, base stack/7-hover-finish -> branch (kB gzip): 39.8 -> 39.6; ceiling is the measured value + 0.5.
