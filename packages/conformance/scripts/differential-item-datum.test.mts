@@ -154,10 +154,12 @@ describe('item datum: marks without `from`, group items and guide parts (vs vega
     for (const [i, spec] of CASES.entries()) {
       const want = await vegaRun(spec)
       const got = asterItems(evaluateChart(compileChart(structuredClone(spec))) as never)
-      for (const [key, items] of want) {
-        compared += items.length
+      // every mark and guide part of EITHER scenegraph: a part only Aster has (a ghost mark, a guide part vega does not draw) is a difference
+      for (const key of new Set([...want.keys(), ...got.keys()])) {
+        const items = want.get(key)
+        compared += items?.length ?? 0
         const mine = got.get(key)
-        if (JSON.stringify(mine) !== JSON.stringify(items)) failures.push(`case ${i} ${key}: vega=${JSON.stringify(items).slice(0, 160)} aster=${JSON.stringify(mine)?.slice(0, 160)}`)
+        if (JSON.stringify(mine) !== JSON.stringify(items)) failures.push(`case ${i} ${key}: vega=${JSON.stringify(items)?.slice(0, 160)} aster=${JSON.stringify(mine)?.slice(0, 160)}`)
       }
     }
     // a comparison of nothing proves nothing
