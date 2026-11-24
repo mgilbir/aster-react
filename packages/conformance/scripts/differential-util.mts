@@ -1,3 +1,5 @@
+import { expect } from 'vitest'
+
 /**
  * Shared helpers of the live oracle differentials (`differential-*.test.mts`).
  *
@@ -58,6 +60,31 @@ export const exact = (f: () => unknown): unknown => {
   } catch (err) {
     return { $: 'throw', name: (err as Error).name, message: (err as Error).message }
   }
+}
+
+/**
+ * The outcome of a function call that vega's dataflow logged an error for: `{ $: 'throw', message }` when the error is vega's own
+ * (its words are part of what it refuses with), `{ $: 'throw' }` when it is an error of the JavaScript engine (a TypeError, a
+ * RangeError), whose wording is the engine's and is not compared.
+ */
+export function loggedThrow(error: unknown): { $: 'throw'; message?: string } {
+  const e = error instanceof Error ? error : undefined
+  if (!e || e instanceof TypeError || e instanceof RangeError) return { $: 'throw' }
+  return { $: 'throw', message: e.message }
+}
+
+/**
+ * `expect(got).toEqual(want)`, except that where both sides threw and vega's error carries its own words, Aster's message must be
+ * those words (an Aster refusal that is the wrong refusal is a difference). Aster's `[aster] ` tag and an `Error: ` prefix are not words.
+ */
+export function expectSameOutcome(got: unknown, want: unknown, label: string): void {
+  const g = got as { $?: string; message?: string } | null
+  const w = want as { $?: string; message?: string } | null
+  if (g?.$ === 'throw' && w?.$ === 'throw') {
+    if (w.message !== undefined) expect(String(g.message).replace(/^\[aster\] /, '').replace(/^Error: /, ''), `${label}: the refusal's words`).toBe(w.message)
+    return
+  }
+  expect(got, label).toEqual(want)
 }
 
 /** A Vega logger that collects errors (the dataflow swallows operator errors; this surfaces them). */
