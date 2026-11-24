@@ -745,7 +745,8 @@ const TZS = ['America/New_York', 'Asia/Kolkata', 'Australia/Lord_Howe', 'Europe/
   add(S, 'smooth', { type: 'dotbin', field: 'v', step: 0.5, smooth: true }, rows)
   add(S, 'groupby', { type: 'dotbin', field: 'v', step: 0.5, groupby: ['g'] }, rows)
   add(S, 'as', { type: 'dotbin', field: 'v', step: 0.5, as: 'b' }, rows)
-  add(S, 'empty', { type: 'dotbin', field: 'v', step: 0.5 }, [], { dropOnCrash: true })
+  // Vega throws an incidental TypeError on no rows; Aster returns none: a known difference (expected-differences.mjs), not a dropped case.
+  add(S, 'empty', { type: 'dotbin', field: 'v', step: 0.5 }, [])
   add(S, 'odd values', { type: 'dotbin', field: 'v', step: 0.5 }, [{ v: 1 }, { v: '2' }, { v: null }, { v: 3 }])
 }
 {

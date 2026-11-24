@@ -23,9 +23,10 @@ import * as vega from 'vega'
 import { applyTransforms, compileExpr, type Row } from '@aster-charts/core'
 import '@aster-charts/core/transforms'
 import { CASES, SEED } from './transform-cases.mjs'
+import { expectEveryKnownDifferenceCompared, expectKnownDifference } from './known-differences.mts'
 
 /** Real Vega crashes (incidental TypeErrors) on exactly this many cases; see header. */
-const VEGA_CRASH_EXCLUDED = 41
+const VEGA_CRASH_EXCLUDED = 40
 
 type Case = (typeof CASES)[number]
 type Outcome = { out: unknown[]; sig: Record<string, unknown> } | { throw: Error }
@@ -128,6 +129,10 @@ function runAster(c: Case, freeze: boolean): { rows: Row[]; signals: Record<stri
   return { rows, signals }
 }
 
+/** Cases on which Aster answers differently from Vega on purpose: scripts/lib/expected-differences.mjs, `test` gate, `differential-transforms: <suite>: <case>`. */
+const KNOWN = new Set(['dotbin: empty'])
+const FILE = 'differential-transforms'
+
 let excluded = 0
 const bySuite = new Map<string, Case[]>()
 for (const c of CASES) bySuite.set(c.suite, [...(bySuite.get(c.suite) ?? []), c])
@@ -141,6 +146,14 @@ describe('transform differential vs real Vega (live, same engine)', { timeout: 6
           process.env.TZ = c.opt.tz ?? 'UTC'
           try {
             const oracle = await runVega(c)
+            if (KNOWN.has(`${c.suite}: ${c.name}`)) {
+              // Vega throws an incidental TypeError (null.map); Aster answers. Still compared, and must still differ.
+              let got: unknown
+              try { got = { out: runAster(c, false).rows } } catch (e) { got = { throw: e instanceof Error ? e.message : String(e) } }
+              const want = 'throw' in oracle ? { throw: String(oracle.throw.message ?? oracle.throw) } : { out: oracle.out }
+              expectKnownDifference(FILE, `${c.suite}: ${c.name}`, want, got)
+              return
+            }
             if (crashed(c, oracle)) { excluded++; return }
             if ('throw' in oracle) {
               // Vega threw: Aster must refuse too, with Vega's message unless it is an incidental TypeError text.
@@ -174,6 +187,10 @@ describe('transform differential vs real Vega (live, same engine)', { timeout: 6
   it(`real Vega crashed on exactly ${VEGA_CRASH_EXCLUDED} cases (the bounded exclusion)`, () => {
     // Runs after the cases above (same file, sequential): the exclusion cannot silently grow.
     expect(excluded).toBe(VEGA_CRASH_EXCLUDED)
+  })
+
+  it('every known difference of this file was compared', () => {
+    expectEveryKnownDifferenceCompared(FILE)
   })
 
   it('covers the whole case list', () => {

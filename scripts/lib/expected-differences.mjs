@@ -57,4 +57,36 @@ export const EXPECTED_DIFFERENCES = Object.freeze([
       "a canvas keeps its path in 32-bit floats: beyond 2^24 a coordinate cannot tell one pixel from the next (a rect 71 high "
       + "at 1e15 has no height there), and vega's pick asks the canvas; Aster tests in doubles.",
   },
+  {
+    gate: 'test',
+    case: 'differential-transforms: dotbin: empty',
+    reason:
+      "dotbin over no rows: vega's transform reads the extent of a pulse that has none and throws an incidental `Cannot read "
+      + "properties of null (reading 'map')` (a crash, not a refusal anyone wrote); Aster answers with no rows, which is what a "
+      + "binning of nothing is (C130, C470).",
+  },
+  {
+    gate: 'test',
+    case: 'differential-nest: generate with no keys over 1 rows',
+    reason:
+      "nest with `generate` and no keys: vega gives the root row the dataset's own output array as `values` and the root is a row of "
+      + "that array, so it holds itself (length rows + 1); Aster's root holds the rows (length rows), nothing cyclic. Vega's aliasing, "
+      + "invisible to a chart, and Aster's tree is the one that can be walked (C470).",
+  },
+  {
+    gate: 'test',
+    case: 'differential-nest: generate with no keys over 2 rows',
+    reason:
+      "nest with `generate` and no keys: vega gives the root row the dataset's own output array as `values` and the root is a row of "
+      + "that array, so it holds itself (length rows + 1); Aster's root holds the rows (length rows), nothing cyclic. Vega's aliasing, "
+      + "invisible to a chart, and Aster's tree is the one that can be walked (C470).",
+  },
+  {
+    gate: 'test',
+    case: 'differential-nest: generate with no keys over 5 rows',
+    reason:
+      "nest with `generate` and no keys: vega gives the root row the dataset's own output array as `values` and the root is a row of "
+      + "that array, so it holds itself (length rows + 1); Aster's root holds the rows (length rows), nothing cyclic. Vega's aliasing, "
+      + "invisible to a chart, and Aster's tree is the one that can be walked (C470).",
+  },
 ])
