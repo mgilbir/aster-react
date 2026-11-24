@@ -1,9 +1,14 @@
 // @vitest-environment jsdom
 /**
- * No consumer parses path text Aster generated: the canvas renderer, the hit index (query, queryMark, pick), bounds, the label
- * painter and `intersect()` read mark geometry as computed numbers. The only strings any of them parses are those a scene
- * carries (a path mark's or a shape's `path`, a legend leaf's path, a group's clip path): `parsePathData` is wrapped to record
- * every string it is given, and each must be a `path` or `clipPathD` of the scene drawn.
+ * No consumer parses path text Aster generated, for finite geometry: the canvas renderer, the hit index (query, queryMark, pick),
+ * bounds, the label painter and `intersect()` read mark geometry as computed numbers. The only strings any of them parses are
+ * those a scene carries (a path mark's or a shape's `path`, a symbol's custom `shape` text, a legend leaf's path, a group's clip path): the three readers of path
+ * text (`parsePathData`, `svgPathCommands`, `drawnPathCommands`) are wrapped to record every string they are given, and each
+ * must be a `path` or `clipPathD` of the scene drawn.
+ *
+ * Where a number is not finite (a NaN or infinite coordinate or radius) the geometry is read back from its text, as it always was
+ * (geometry-read.ts's curves, canvas.ts's leaf circle): the second test pins which strings those are, and that the text only
+ * ever carries the non-finite numbers.
  */
 import { describe, expect, it, vi } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
@@ -13,7 +18,13 @@ import { fileURLToPath } from 'node:url'
 const parsed: string[] = []
 vi.mock('./path-data.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('./path-data.js')>()
-  return { ...real, parsePathData: (d: string) => { parsed.push(d); return real.parsePathData(d) } }
+  // all three readers of path text (the consumers call each): a string handed to any of them is recorded
+  return {
+    ...real,
+    parsePathData: (d: string) => { parsed.push(d); return real.parsePathData(d) },
+    svgPathCommands: (d: string) => { parsed.push(d); return real.svgPathCommands(d) },
+    drawnPathCommands: (d: string) => { parsed.push(d); return real.drawnPathCommands(d) },
+  }
 })
 
 // (the parts of the engine the public entries carry, imported after the mock: see scripts/vitest-core-parts.setup.mjs)
@@ -28,6 +39,7 @@ const { drawMark } = await import('./label-draw.js')
 const { sceneIntersect } = await import('./scene-intersect.js')
 const { loggingContext, marksOf, probePoints } = await import('./geometry-differential.testlib.js')
 const { mulberry32 } = await import('./scene-fuzz.testlib.js')
+const { randomScene } = await import('./geometry-scenes.testlib.js')
 type SceneRoot = import('./types.js').SceneRoot
 
 /** Every path string the scene carries. */
@@ -38,13 +50,14 @@ function carried(scene: SceneRoot): Set<string> {
     const r = n as Record<string, unknown>
     if (typeof r.path === 'string') out.add(r.path)
     if (typeof r.clipPathD === 'string') out.add(r.clipPathD)
+    if (typeof r.shape === 'string') out.add(r.shape) // a symbol's custom shape is path text its spec wrote
     if (Array.isArray(r.items)) for (const c of r.items) walk(c)
   }
   for (const g of scene.items ?? []) walk(g)
   return out
 }
 
-function consumeAll(scene: SceneRoot): void {
+function consumeAll(scene: SceneRoot, intersect = true): void {
   renderSceneToCanvas(scene, loggingContext().ctx)
   renderSceneToCanvas(scene, loggingContext().ctx, { batchSymbols: false })
   const ix = buildHitIndex(scene)
@@ -54,7 +67,7 @@ function consumeAll(scene: SceneRoot): void {
     for (const it of mark.items ?? []) boundLeaf(new Bounds(), it, true)
     drawMark(mark, loggingContext().ctx as never)
   }
-  sceneIntersect(scene, [[0, 0], [scene.width, scene.height]], null, null)
+  if (intersect) sceneIntersect(scene, [[0, 0], [scene.width, scene.height]], null, null)
 }
 
 describe('no consumer parses generated path text', () => {
@@ -64,6 +77,7 @@ describe('no consumer parses generated path text', () => {
     const names = dirs.flatMap((d) => readdirSync(d).filter((f) => f.endsWith('.vg.json')).map((f) => join(d, f)))
     const offenders: string[] = []
     let checked = 0
+    let carriedParsed = 0
     for (const file of names) {
       const doc = JSON.parse(readFileSync(file, 'utf8'))
       let scene: SceneRoot
@@ -72,9 +86,34 @@ describe('no consumer parses generated path text', () => {
       try { consumeAll(scene) } catch { continue }
       checked++
       const allowed = carried(scene)
-      for (const d of parsed) if (!allowed.has(d) && offenders.length < 10) offenders.push(`${file.split('/').pop()}: ${d.slice(0, 80)}`)
+      for (const d of parsed) {
+        if (allowed.has(d)) carriedParsed++
+        else if (offenders.length < 10) offenders.push(`${file.split('/').pop()}: ${d.slice(0, 80)}`)
+      }
     }
     expect(checked).toBeGreaterThan(300)
     expect(offenders).toEqual([])
+    // the recorder sees the readers: the corpus's own path marks are parsed (a wrap that recorded nothing would pass anything)
+    expect(carriedParsed, 'carried path strings parsed').toBeGreaterThan(100)
   }, 300_000)
+
+  it('for non-finite geometry, the text read back is the one that holds the non-finite numbers', () => {
+    // hand-built random scenes whose numbers are NaN / Infinity 8% of the time (geometry-scenes.testlib.ts): lines, areas, trails, arcs
+    // and leaf circles read back from their text; no other generated text is parsed, and none that holds only finite numbers
+    let generated = 0
+    const offenders: string[] = []
+    for (let seed = 1; seed <= 150; seed++) {
+      const scene = randomScene(mulberry32(seed), false)
+      parsed.length = 0
+      try { consumeAll(scene, false) } catch { continue }
+      const allowed = carried(scene)
+      for (const d of parsed) {
+        if (allowed.has(d)) continue
+        generated++
+        if (!/NaN|-?Infinity/.test(d) && offenders.length < 10) offenders.push(`seed ${seed}: ${d.slice(0, 80)}`)
+      }
+    }
+    expect(offenders).toEqual([])
+    expect(generated, 'generated strings parsed').toBeGreaterThan(0)
+  }, 120_000)
 })
