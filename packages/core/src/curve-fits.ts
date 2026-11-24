@@ -14,8 +14,7 @@
  * Derived work: the loess smoother follows the local-regression algorithm of Jason Davies' science.js, the polynomial fit the
  * normal-equation method of d3-regression / regression-js (BSD-3-Clause; the notices are in THIRD_PARTY_NOTICES.md).
  */
-import { allot, allotUpTo, meterTick } from './limits.js'
-import { sortData } from './util.js'
+import { allot, allotUpTo, meterTick, sortMetered } from './limits.js'
 import type { Row } from './transform-agg.js'
 
 type Get = (d: unknown) => unknown
@@ -35,6 +34,7 @@ function validPoints(rows: Row[], x: Get, y: Get, sorted = false): Points {
   let n = 0
   for (let r = 0; r < rows.length; r++) {
     const d = rows[r]!
+    if ((r & 1023) === 1023) meterTick('regression', 1024)
     let u: unknown = x(d)
     let v: unknown = y(d)
     if (u != null && (u = +(u as number)) >= (u as number) && v != null && (v = +(v as number)) >= (v as number)) {
@@ -44,8 +44,8 @@ function validPoints(rows: Row[], x: Get, y: Get, sorted = false): Points {
     }
   }
   if (!sorted) return { xs: xs.subarray(0, n), ys: ys.subarray(0, n) }
-  // by x, ties staying in row order; two infinite xs of one sign compare as NaN, so the order is the builtin sort's own (sortData)
-  const order = sortData(Array.from({ length: n }, (_, i) => i), (a, b) => xs[a]! - xs[b]!)
+  // by x, ties staying in row order; two infinite xs of one sign compare as NaN, so the order is the builtin sort's own (sortMetered)
+  const order = sortMetered(Array.from({ length: n }, (_, i) => i), (a, b) => xs[a]! - xs[b]!, 'regression')
   return { xs: Float64Array.from(order, (i) => xs[i]!), ys: Float64Array.from(order, (i) => ys[i]!) }
 }
 
@@ -115,7 +115,9 @@ function constantFit(rows: Row[], x: Get, y: Get): Fit {
   // the one fit with its own idea of a valid row: x only has to be present, y not NaN once coerced
   let mean = 0
   let n = 0
-  for (const d of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const d = rows[i]!
+    if ((i & 1023) === 1023) meterTick('regression', 1024)
     const value = y(d) as number
     if (x(d) == null || value == null || isNaN(value)) continue
     mean += (value - mean) / ++n

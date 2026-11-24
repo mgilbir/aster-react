@@ -5,7 +5,7 @@
  */
 import { ascending, bisectRight, quantile, quantileSorted } from './arr.js'
 import { accessor, firstTwo, tickFormatFor, withLinearAxis, type ScaleObject } from './scale-continuous.js'
-import { sortData } from './util.js'
+import { sortMetered } from './limits.js'
 
 // ---- numbers to bins ---------------------------------------------------------------------------------------
 
@@ -31,7 +31,7 @@ function sortedNumbers(_: Iterable<unknown>): number[] {
     const d = +(raw as number)
     if (raw != null && !isNaN(d)) kept.push(d)
   }
-  return sortData(kept, ascending)
+  return sortMetered(kept, ascending, 'scale domain')
 }
 
 /** `bounds[i]` is the upper limit of class i; the class of x is how many limits lie at or below it. */
