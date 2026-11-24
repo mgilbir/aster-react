@@ -27,7 +27,9 @@ by a deadline.
    child process, with a memory cap and a deadline, and `terminate()` or kill it when the
    deadline passes. A worker is not a kill switch by itself; the host must terminate the one it
    created. `maxTimeMs` and the rest then give friendly errors in the common case, and the kill
-   covers whatever they miss.
+   covers whatever they miss. (Amended by DECISIONS Q4, 2026-11: the React worker hooks own that
+   deadline themselves -- `timeoutMs`, terminate, replace a worker made by `workerFactory`, and a
+   typed `AsterWorkerTimeoutError` -- so a host using them no longer has to.)
 
 ## Consequences
 

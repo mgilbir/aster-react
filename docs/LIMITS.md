@@ -828,8 +828,10 @@ its name, so a dropped one is simply rebuilt.
 - `data`, size props and controlled `view` / `brush` / interval values are checked at the boundary: a dataset that is not an
   array of rows and a size that is not a finite number of pixels or `'container'` put the chart in its error state; a bad
   view or interval axis is reported and left out. None reaches the engine.
-- A worker is not a kill switch by itself. To get the hard guarantee described above,
-  terminate the Worker you created (`worker.terminate()`) when your own deadline passes.
+- The worker hooks own a hard deadline (`timeoutMs`, default 30 000 ms; DECISIONS Q4): a request the worker does not answer in
+  time terminates it, the hook reports an `AsterWorkerTimeoutError`, and a worker made by `workerFactory` is replaced. A
+  `worker` you supply is terminated too and cannot be replaced by the hook: give a new one. Outside the hooks (your own
+  `worker_threads` Worker, a child process) the deadline is yours: terminate the worker when it passes.
 - The worker handler serializes the SVG inside the same limits scope as the evaluation (one meter and clock),
   so `maxPathLength` and the other serialization checks apply there exactly as in `renderSpec`.
 
