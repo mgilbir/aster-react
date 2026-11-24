@@ -4,14 +4,39 @@
  */
 import * as vega from 'vega'
 
+/**
+ * How long one oracle render may take before the harness gives up on it (audit C507): a spec whose run never settles (a load
+ * that never answers, a dataflow that never ends its pulse) would otherwise hold a gate until its CI job's own limit. Generous:
+ * the slowest gallery spec renders in a few seconds. A synchronous hang cannot be bounded from inside the process; the CI jobs
+ * carry `timeout-minutes` for that.
+ */
+export const ORACLE_DEADLINE_MS = 60_000
+
+/** `work`, or a rejection naming `what` once `ms` have passed without it settling. */
+export async function settleWithin<T>(work: Promise<T>, what: string, ms: number = ORACLE_DEADLINE_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} did not settle within ${ms / 1000} s`)), ms)
+  })
+  try {
+    return await Promise.race([work, late])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export async function renderWithVega(vgSpec: Record<string, unknown>): Promise<string> {
   const runtime = vega.parse(vgSpec as any)
   const view = new (vega as any).View(runtime, { renderer: 'none' })
-  await view.runAsync()
-  // The first frame: stop the view's timers (a Vega-Lite animation's clock) before they can tick. `toSVG` awaits further runs, and on
-  // a busy event loop a timer that is due would land between them and draw frame two; a spec without timers is unaffected.
-  view.finalize()
-  return view.toSVG()
+  try {
+    await settleWithin(view.runAsync(), 'the oracle (vega runAsync)')
+    // The first frame: stop the view's timers (a Vega-Lite animation's clock) before they can tick. `toSVG` awaits further runs, and on
+    // a busy event loop a timer that is due would land between them and draw frame two; a spec without timers is unaffected.
+    view.finalize()
+    return await settleWithin(view.toSVG() as Promise<string>, 'the oracle (vega toSVG)')
+  } finally {
+    view.finalize()
+  }
 }
 
 export interface CheckedRender {
@@ -60,13 +85,13 @@ export async function renderWithVegaChecked(vgSpec: Record<string, unknown>): Pr
     const runtime = vega.parse(vgSpec as any)
     const view = new (vega as any).View(runtime, { renderer: 'none', logger })
     try {
-      await view.runAsync()
+      await settleWithin(view.runAsync(), 'the oracle (vega runAsync)')
       view.finalize() // the first frame: no timer ticks before the SVG is drawn (see renderWithVega)
       for (const d of (vgSpec.data as Array<{ name: string }> | undefined) ?? []) {
         // (a dataset whose tuples hold themselves -- an argmax over a joinaggregate -- is not plain data: it is left out)
         try { datasets[d.name] = JSON.parse(JSON.stringify(view.data(d.name) ?? null)) as unknown[] } catch { /* not serializable */ }
       }
-      svg = await view.toSVG()
+      svg = await settleWithin(view.toSVG() as Promise<string>, 'the oracle (vega toSVG)')
     } finally {
       view.finalize()
     }

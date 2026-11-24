@@ -18,7 +18,7 @@ import '@aster-charts/core/geo' // registers the geo projections and contours fo
 import '@aster-charts/core/transforms' // registers kde/regression/loess/pack/treemap/wordcloud/voronoi
 import { renderSpec } from '@aster-charts/core'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
-import { renderWithVega } from './render-vega.js'
+import { renderWithVega, settleWithin } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 import { parseProbeArgs } from './probe-verdict.js'
 import { plantSvg } from './gate-plant.js'
@@ -53,7 +53,7 @@ async function runOne(entry: ProbeEntry, plant: boolean) {
     const [oracleSvg, ourSvg] = await forEngines(spec, (oracle, aster) => Promise.all([
       renderWithVega(oracle),
       // url datasets resolve through the load addon, exactly what a real host does
-      loadSpecData(aster as never, TRUSTED_LOAD_OPTIONS).then((loaded) => renderSpec(loaded as never)),
+      settleWithin(loadSpecData(aster as never, TRUSTED_LOAD_OPTIONS), "Aster's data load").then((loaded) => renderSpec(loaded as never)),
     ]))
     const diffs = diffCanonical(canonicalizeSvg(oracleSvg), canonicalizeSvg(plant ? plantSvg(ourSvg) : ourSvg))
     return { pass: diffs.length === 0, diffs }
