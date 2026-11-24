@@ -76,7 +76,7 @@ describe('dragToDataInterval', () => {
 
     expect(interval.x).toBeDefined()
     expect((interval.x![0])).toBeCloseTo(0.125, 4)  // min first (still 10-5 → 0.125)
-    expect((interval.x![1])).toBeCloseTo(2.125, 4)  // max first
+    expect((interval.x![1])).toBeCloseTo(2.125, 4)  // max last
   })
 })
 
@@ -128,16 +128,9 @@ describe('selectionToPixels', () => {
     expect(selection.x).toBeDefined()
     const pixelRect = selectionToPixels(selection, info)
 
-    // pixel rect: x = scale(0.125) = 5, width = |scale(0.25) - scale(0.125)| = 5
-    // Debug: check actual values
-    // x scale domain should be [0, 10] after applyZero
-    // x scale maps data → range [0, 400]: scale(d) = d * 400 / 10 = d * 40
-    // drag x=10..20 → (10-5)..(20-5) = 5..15 → invert(5)=5/40=0.125, invert(15)=15/40=0.375
-    // So selection.x = [0.125, 0.375]
-    // scaleVal(0.125) = 5, scaleVal(0.375) = 15
-    // pixelRect: x=5, width=|15-5|=10
-    // But test expected pixelRect.x=5, pixelRect.width=5 (which would be for scaleVal(0.25))
-    // Let's fix: the drag interval [10, 20] → x=[0.125, 0.375] → pixelRect {x: 5, width: 10}
+    // x scale: [0, 10] -> [0, 400], so scale(d) = d * 40. The drag x = 10..20 is (10 - 5)..(20 - 5) = 5..15 in the plot (the 5px padding),
+    // which inverts to [0.125, 0.375]. The rect is in the svg's coordinates: scale(0.125) + padding.left = 5 + 5 = 10, and its width
+    // |scale(0.375) - scale(0.125)| = 15 - 5 = 10 (the padding offsets the position, not the width).
     expect(pixelRect.x).toBeCloseTo(10, 1)
     expect(pixelRect.width).toBeCloseTo(10, 1)
   })

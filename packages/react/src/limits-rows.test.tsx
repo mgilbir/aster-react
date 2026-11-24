@@ -68,6 +68,8 @@ forEachVariant(['svg'], (Chart) => describe('maxRows on <Chart data limits>', ()
     const edited = { a: at.a!.map((r, i) => (i === 1 ? { v: 99 } : r)) }
     draw(edited, { a: [1] })
     expect(errors).toEqual([])
+    // the changeset was applied: the edited row (v 99) is drawn, and the host rows were not counted twice by it
+    expect(container.innerHTML).toContain('M99,0')
     draw(dataFor(MAX + 1))
     expect(errors.some(isRowLimit)).toBe(true)
     act(() => { root.unmount() })

@@ -4,13 +4,13 @@ import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, afterEach } from 'vitest'
 import { forEachVariant } from './testing/variants'
+import { stubPointerCapture } from './testing/pointer-capture'
 
 /**
  * A chart is ONE tab stop. jsdom has no sequential focus navigation, so `tab()` below walks the document's tab order the way
  * a browser does (elements with tabIndex >= 0 in tree order, wrapping); scripts/browser-interaction.mts presses the real
  * Tab key in Chromium over the same pages.
  */
-;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 forEachVariant(['svg'], (Chart, variant) => {
   const spec = (extra: Record<string, unknown> = {}): never => ({
     $schema: 'https://vega.github.io/schema/vega/v6.json',
@@ -185,16 +185,26 @@ forEachVariant(['svg'], (Chart, variant) => {
 
     variant.it(['interaction'], 'tooltips and selections keep one stop', () => {
       setup()
-      let sel: unknown
-      render(page([{ panZoom: true, tooltip: true, onSelectionChange: (s: unknown) => { sel = s } }, { tooltip: true }]))
-      const [a, b] = charts()
-      tab()
-      press('Escape')
-      act(() => { a!.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 10, clientY: 10 })) })
-      expect(sel === null || sel === undefined || typeof sel === 'object').toBe(true)
-      expect(stops(a!)).toEqual([a])
-      expect(stops(b!)).toHaveLength(1)
+      const pointerCapture = stubPointerCapture()
+      try {
+        let sel: unknown
+        render(page([{ onSelect: () => undefined, tooltip: true, onSelectionChange: (s: unknown) => { sel = s } }, { tooltip: true }]))
+        const [a, b] = charts()
+        a!.getBoundingClientRect = () => ({ left: 0, top: 0, width: 210, height: 110, right: 210, bottom: 110, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+        expect(stops(a!)).toHaveLength(1)
+        tab()
+        press('Escape')
+        act(() => { a!.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 10, clientY: 10 })) })
+        // a brush drag makes a selection: it is reported, and the chart still has its one stop
+        const overlay = a!.querySelector('[data-testid="chart-brush-overlay"]')!
+        for (const [type, x, y] of [['pointerdown', 30, 20], ['pointermove', 130, 80], ['pointerup', 130, 80]] as const) {
+          act(() => { overlay.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, pointerId: 1, bubbles: true })) })
+        }
+        expect(sel).toMatchObject({ type: 'interval', interval: { x: [expect.any(Number), expect.any(Number)] } })
+        expect(stops(a!)).toHaveLength(1)
+        expect(stops(b!)).toHaveLength(1)
+        expect(tabOrder()).toHaveLength(2)
+      } finally { pointerCapture.restore() }
     })
   })
-  void variant
 })

@@ -5,7 +5,7 @@
  * Every other test mounts fresh, so nothing held a spec CHANGE to that: the incremental DOM patcher, the timers, the
  * interaction state and the signal state a chart keeps between renders all belong to the spec they were made under.
  * The relation is the same everywhere: swap(A, B) === fresh(B), and swap(A, B, A) === fresh(A), as canonical markup
- * (attribute order is not output) -- over a seeded sample of the conformance corpus (both grammars, every mark type), and
+ * (attribute order is not output) -- over a seeded sample of the conformance corpus (both grammars, every mark type: the sample is stratified by mark type and its coverage asserted), and
  * for a swap made while a timer is ticking or a pointer interaction is in flight.
  * (The same relation against vega's own output, over the gallery, is `pnpm conformance:gallery` -- the spec-swap path.)
  */
@@ -16,7 +16,9 @@ import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
 import type { VgSpec } from '@aster-charts/core'
 import type { ChartHandle } from './Chart'
 import { forEachVariant } from './testing/variants'
-import { corpusFiles, loadCorpusSpec, type CorpusSpec } from './testing/corpus'
+import { CORPUS_DIR, corpusFiles, loadCorpusSpec, type CorpusSpec } from './testing/corpus'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 /** The markup as a tree with sorted attributes: what two renders are compared by. */
 function canonical(el: Element): string {
@@ -31,11 +33,54 @@ const mulberry32 = (seed: number): (() => number) => () => {
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296
 }
 
+/** Every mark type of the grammar: a swap is tested on each, so the incremental patcher is exercised on all of them. */
+export const MARK_TYPES = ['arc', 'area', 'group', 'image', 'line', 'path', 'rect', 'rule', 'shape', 'symbol', 'text', 'trail'] as const
+
+/** The mark types a (compiled Vega) spec draws with, nested marks included. */
+export function markTypesOf(spec: unknown): Set<string> {
+  const out = new Set<string>()
+  const walk = (marks: unknown): void => {
+    if (!Array.isArray(marks)) return
+    for (const m of marks as Array<{ type?: unknown; marks?: unknown }>) {
+      if (typeof m.type === 'string') out.add(m.type)
+      walk(m.marks)
+    }
+  }
+  walk((spec as { marks?: unknown }).marks)
+  return out
+}
+
+/**
+ * A seeded sample of `size` corpus files that holds at least `perType` specs of each mark type the corpus has (found by loading only the
+ * files whose text names the type, then confirming on the compiled spec), the rest drawn at random from the whole corpus.
+ */
+export async function stratifiedSample(size: number, perType: number, seed: number, keep: (c: CorpusSpec) => boolean = () => true): Promise<CorpusSpec[]> {
+  const files = corpusFiles()
+  const rand = mulberry32(seed)
+  const shuffled = [...files].sort(() => rand() - 0.5)
+  const chosen = new Map<string, CorpusSpec>()
+  for (const type of MARK_TYPES) {
+    let have = [...chosen.values()].filter((c) => markTypesOf(c.spec).has(type)).length
+    for (const file of shuffled) {
+      if (have >= perType) break
+      if (chosen.has(file) || !readFileSync(join(CORPUS_DIR, file), 'utf8').includes(`"${type}"`)) continue
+      const loaded = await loadCorpusSpec(file)
+      if (markTypesOf(loaded.spec).has(type) && keep(loaded)) { chosen.set(file, loaded); have++ }
+    }
+  }
+  const rest = shuffled.filter((f) => !chosen.has(f))
+  for (const file of rest) {
+    if (chosen.size >= size) break
+    const loaded = await loadCorpusSpec(file)
+    if (keep(loaded)) chosen.set(file, loaded)
+  }
+  return [...chosen.values()]
+}
+
 forEachVariant(['svg'], (Chart, variant) => {
   const roots: Root[] = []
   afterEach(() => { act(() => { for (const r of roots.splice(0)) r.unmount() }); document.body.innerHTML = '' })
   const mount = (): { container: HTMLElement; render(node: React.ReactElement): void } => {
-    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
     const container = document.createElement('div')
     document.body.appendChild(container)
     const root = createRoot(container)
@@ -53,21 +98,22 @@ forEachVariant(['svg'], (Chart, variant) => {
   describe('a spec that changes in a mounted chart', () => {
     let pool: CorpusSpec[] = []
     beforeAll(async () => {
-      // a seeded sample of the corpus: every grammar and mark type, with and without scales, legends, facets, projections
-      const files = corpusFiles()
-      const rand = mulberry32(0xa57e4)
-      const picked = new Set<string>()
-      while (picked.size < 48) picked.add(files[Math.floor(rand() * files.length)]!)
-      const loaded = await Promise.all([...picked].map(loadCorpusSpec))
-      // a variant without the event loop reports a spec with event streams (and renders it without them): leave those to the variants that have it
-      pool = loaded.filter((c) => variant.has(['signals']) || !JSON.stringify(c.spec).includes('"events"'))
+      // a seeded sample of the corpus, stratified by mark type; a variant without the event loop reports a spec with event streams (and
+      // renders it without them): leave those to the variants that have it
+      pool = await stratifiedSample(48, 3, 0xa57e4, (c) => variant.has(['signals']) || !JSON.stringify(c.spec).includes('"events"'))
     }, 60_000)
 
     it('equals a fresh mount of the new spec, over a seeded sample of corpus pairs (A -> B and A -> B -> A)', () => {
-      expect(pool.length).toBeGreaterThanOrEqual(variant.has(['signals']) ? 48 : 30)
+      expect(pool.length).toBe(48)
+      // every mark type is in the sample, at least three specs each (and every spec of the sample is in a pair below)
+      const covered = new Map<string, number>()
+      for (const c of pool) for (const t of markTypesOf(c.spec)) covered.set(t, (covered.get(t) ?? 0) + 1)
+      expect(MARK_TYPES.filter((t) => (covered.get(t) ?? 0) < 3), 'mark types with fewer than 3 specs in the sample').toEqual([])
       const rand = mulberry32(0x5a9)
       const pairs: Array<[CorpusSpec, CorpusSpec]> = []
-      for (let i = 0; i < 60; i++) {
+      // every spec of the sample is the OLD spec of one pair and the NEW spec of another (a ring), then random pairs besides
+      for (let i = 0; i < pool.length; i++) pairs.push([pool[i]!, pool[(i + 1) % pool.length]!])
+      for (let i = 0; i < 12; i++) {
         const a = pool[Math.floor(rand() * pool.length)]!
         const b = pool[Math.floor(rand() * pool.length)]!
         if (a !== b) pairs.push([a, b])
