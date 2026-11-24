@@ -36,6 +36,7 @@ Catch the typed errors by `code` (see "`instanceof` or `code`?" below); everythi
 | `AsterUrlError` (`ASTER_URL_DENIED`) | the URL policy refused a URL (protocol, credentials, non-public host, relative URL, the `allow` hook), or `urlData: 'refuse'` refused a url dataset | fix the URL, or widen the policy deliberately; a refused url dataset is the host's rule, so give the spec inline rows ([URL errors](#url-errors)) |
 | `AsterStreamBackpressureError` (`ASTER_STREAM_BACKPRESSURE`) | a `push` would overflow the queue under `policy: 'error'` | flush before pushing, slow the producer, or choose another policy ([Stream errors](#stream-errors)) |
 | `AsterStreamClosedError` (`ASTER_STREAM_CLOSED`) | `stream.session()` was called after `close()` | stop using the stream after closing it |
+| `AsterUnstableLoadOptionError` (`ASTER_UNSTABLE_LOAD_OPTION`) | `useSpecData` / `loadSpecDataResource` got a function option (`fetch`, `allow`) that is a new function on every render, so a suspended component would start a new load on every retry; thrown after a bounded number of loads | hoist the function (or keep it in a stable reference), or pass a `cacheKey` that names the load ([Other runtime errors](#other-runtime-errors)) |
 | `AsterWorkerTimeoutError` (`ASTER_WORKER_TIMEOUT`) | a worker hook's request was not answered within `timeoutMs` (default 30 s): the worker was terminated | show an error state; a worker from `workerFactory` is already replaced, a supplied `worker` must be replaced by you ([Worker errors](#worker-errors)) |
 | `SpecParseError` | the spec was refused when it was compiled, as `vega.parse` refuses it | fix the spec; the message is vega's ([Expressions are refused when the spec is compiled](#expressions-are-refused-when-the-spec-is-compiled)) |
 | `ExpressionParseError` | an expression does not parse, or a function was removed after the compile | fix the expression or the registration |
@@ -52,6 +53,7 @@ Catch the typed errors by `code` (see "`instanceof` or `code`?" below); everythi
 | `AsterUrlError` | `@aster-charts/core`, `@aster-charts/core/load` | `AsterUrlError` | `ASTER_URL_DENIED` | `url`, `reason` |
 | `AsterStreamBackpressureError` | `@aster-charts/core` | `AsterStreamBackpressureError` | `ASTER_STREAM_BACKPRESSURE` | `bound` (`'batches'` or `'rows'`), `limit` |
 | `AsterStreamClosedError` | `@aster-charts/core` | `AsterStreamClosedError` | `ASTER_STREAM_CLOSED` | none |
+| `AsterUnstableLoadOptionError` | `@aster-charts/react` | `AsterUnstableLoadOptionError` | `ASTER_UNSTABLE_LOAD_OPTION` | `options` (the function options that changed) |
 | `AsterWorkerTimeoutError` | `@aster-charts/react`, `@aster-charts/react/worker` | `AsterWorkerTimeoutError` | `ASTER_WORKER_TIMEOUT` | `timeoutMs` |
 | `ExpressionParseError` | `@aster-charts/core` | `ExpressionParseError` | none | `expression`, `cause` |
 | `SpecParseError` | `@aster-charts/core` | `SpecParseError` | none | `cause` |
