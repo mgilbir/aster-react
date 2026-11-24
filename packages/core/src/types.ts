@@ -113,6 +113,16 @@ export interface RuntimeInput {
    */
   dataPulse?: Record<string, import('./pulse.js').PulseChangeInput | import('./pulse.js').RowDiff>
   /**
+   * `evaluateChart` only: the scene this caller was given by its previous `evaluateChart` of the same compiled chart, which its
+   * `dataChanges` / `dataPulse` are relative to. With it a hint for a new array is checked in constant time, by identity: it is
+   * taken when the chart's last evaluation was this caller's (the rows the hint is relative to are the rows the chart kept state
+   * for), and otherwise -- another caller evaluated the same compiled chart since -- the hinted datasets are derived in full.
+   * Without it, a hint for a new array is taken only after one pass over the rows checks that those it calls unchanged are the
+   * rows the chart's last evaluation was given (the same objects, or equal field by field), which costs O(rows). A session keeps
+   * its own previous rows and does not read it.
+   */
+  previousScene?: SceneRoot
+  /**
    * Sessions only (`createChartSession`, and the React shells): infer a per-datum changeset by diffing replaced source arrays
    * against the previous session evaluation. Defaults to true when `dataChanges` is absent; set false to force a full re-encode.
    * `evaluateChart` keeps no previous rows to diff against and does not read it.

@@ -263,8 +263,10 @@ export const SHAPES: ReadonlyArray<readonly [string, (r: Rnd) => Scenario]> = [
 
 const OPS = ['edit', 'move', 'swap', 'append', 'insert', 'remove', 'truncate', 'replace', 'same'] as const
 type Op = typeof OPS[number]
-type Delivery = 'session' | 'dataChanges' | 'dataPulse' | 'changedDatasets' | 'none'
-const DELIVERIES: readonly Delivery[] = ['session', 'dataChanges', 'dataPulse', 'changedDatasets', 'none']
+type Delivery = 'session' | 'dataChanges' | 'dataPulse' | 'changedDatasets' | 'none' | 'dataChanges+previousScene' | 'dataPulse+previousScene'
+const DELIVERIES: readonly Delivery[] = ['session', 'dataChanges', 'dataPulse', 'changedDatasets', 'none', 'dataChanges+previousScene', 'dataPulse+previousScene']
+/** Whether a delivery names the scene its hints are relative to (`previousScene`: checked by identity, not by reading the rows). */
+const namesScene = (d: Delivery): boolean => d.endsWith('+previousScene')
 
 function update(r: Rnd, sc: Scenario, data: Data, op: Op): Data {
   const name = pick(r, sc.mutable)
@@ -296,7 +298,8 @@ function toDataPulse(d: RowDiff): NonNullable<RuntimeInput['dataPulse']>[string]
 }
 
 /** Truthful hints for the step from `a` to `b`, in the form `delivery` names (a form that cannot say it falls back to naming). */
-function hints(delivery: Delivery, a: Data, b: Data): Partial<RuntimeInput> {
+function hints(how: Delivery, a: Data, b: Data): Partial<RuntimeInput> {
+  const delivery = how.replace('+previousScene', '') as Delivery
   const touched = Object.keys(b).filter((n) => a[n] !== b[n])
   if (!touched.length || delivery === 'none' || delivery === 'session') return {}
   if (delivery === 'changedDatasets') return { changedDatasets: touched }
@@ -400,6 +403,7 @@ export function runScenario(shape: string, gen: (r: Rnd) => Scenario, seed: numb
   let stampFail: Fail | undefined
   // (DECISIONS Q14: `datasetsOfScene(scene)` is that scene's rows, whatever evaluations came after it)
   const history: Array<{ scene: SceneRoot; rows: string }> = []
+  let last: SceneRoot | undefined
   for (let step = 0; step <= steps; step++) {
     const prev = data
     if (step > 0) {
@@ -413,10 +417,11 @@ export function runScenario(shape: string, gen: (r: Rnd) => Scenario, seed: numb
       // (the session is handed new arrays for the datasets that changed and the very arrays it was given for the others, as a host's
       // immutable state does; the chart is handed what its hints describe)
       if (session) inc = session.evaluate(clone(sc.spec), { logger: quiet, data: { ...data }, ...(sc.signals ? { signals: sc.signals } : {}), ...(sc.extra ? clone(sc.extra) : {}) })
-      else inc = evaluateChart(chart!, { ...input(), ...(step > 0 ? hints(delivery, prev, data) : {}) })
+      else inc = evaluateChart(chart!, { ...input(), ...(step > 0 ? hints(delivery, prev, data) : {}), ...(namesScene(delivery) && last !== undefined ? { previousScene: last } : {}) })
     } catch (e) {
       return { shape, seed, delivery, step, ops, detail: `incremental threw ${(e as Error).message}` }
     }
+    last = inc
     const fresh = evaluateChart(compileChart(clone(sc.spec)), input())
     const d = compare(fresh, inc)
     if (d !== null) return { shape, seed, delivery, step, ops, detail: d }
@@ -455,16 +460,19 @@ describe('incremental === fresh over the shapes whose reuse rests on what a node
 /**
  * One compiled chart shared by two callers (DECISIONS Q16: supported, and per-chart state must not leak between them): each caller
  * evaluates its own sequence of states with hints relative to ITS previous state, the two interleaved. Every scene equals a fresh
- * evaluation of that caller's input.
+ * evaluation of that caller's input. A caller that names its previous scene (`previousScene`) has its hints checked by identity: the
+ * callers then take turns at random, so a caller's hint is sometimes relative to the chart's last evaluation (its own: the hint is
+ * taken) and sometimes not (the other caller evaluated since: it must not be applied to that caller's state).
  */
 export function runShared(shape: string, gen: (r: Rnd) => Scenario, seed: number, steps: number, delivery: Exclude<Delivery, 'session'>): Fail | null {
   const r = mulberry32(seed * 6151 + shape.length)
   const sc = gen(r)
   const chart = compileChart(clone(sc.spec))
   const callers = [sc.data, update(r, sc, sc.data, 'replace')]
+  const scenes: Array<SceneRoot | undefined> = [undefined, undefined]
   const ops: string[] = []
   for (let step = 0; step <= steps; step++) {
-    const who = step % 2
+    const who = step < 2 || !namesScene(delivery) ? step % 2 : int(r, 0, 1)
     const prev = callers[who]!
     let data = prev
     if (step > 1) { const op = pick(r, OPS); ops.push(`${who}:${op}`); data = update(r, sc, prev, op) }
@@ -472,10 +480,11 @@ export function runShared(shape: string, gen: (r: Rnd) => Scenario, seed: number
     const input = (): RuntimeInput => ({ logger: quiet, data: clone(data), ...(sc.signals ? { signals: clone(sc.signals) } : {}), ...(sc.extra ? clone(sc.extra) : {}) })
     let inc: SceneRoot
     try {
-      inc = evaluateChart(chart, { ...input(), ...(step > 1 ? hints(delivery, prev, data) : {}) })
+      inc = evaluateChart(chart, { ...input(), ...(step > 1 ? hints(delivery, prev, data) : {}), ...(namesScene(delivery) && scenes[who] !== undefined ? { previousScene: scenes[who] } : {}) })
     } catch (e) {
       return { shape, seed, delivery, step, ops, detail: `incremental threw ${(e as Error).message}` }
     }
+    scenes[who] = inc
     const d = compare(evaluateChart(compileChart(clone(sc.spec)), input()), inc)
     if (d !== null) return { shape, seed, delivery, step, ops, detail: d }
   }
@@ -502,8 +511,8 @@ describe('one compiled chart shared by two callers equals fresh for each (Q16)',
  * (the evaluation derives the dataset in full); the hint is trusted only where it can be checked without reading a row.
  */
 describe('a false appendOnly pulse (a wrong baseLength) is detected (Q29)', () => {
-  for (const [shape, gen] of SHAPES) {
-    it(shape, () => {
+  for (const [shape, gen] of SHAPES) for (const named of [false, true]) {
+    it(`${shape}${named ? ', from a caller that names its previous scene' : ''}`, () => {
       const fails: string[] = []
       for (let seed = 1; seed <= SEEDS; seed++) {
         const r = mulberry32(seed * 911 + shape.length)
@@ -511,13 +520,13 @@ describe('a false appendOnly pulse (a wrong baseLength) is detected (Q29)', () =
         const chart = compileChart(clone(sc.spec))
         let data = sc.data
         const input = (): RuntimeInput => ({ logger: quiet, data: clone(data), ...(sc.signals ? { signals: clone(sc.signals) } : {}), ...(sc.extra ? clone(sc.extra) : {}) })
-        evaluateChart(chart, input())
+        let last = evaluateChart(chart, input())
         for (let step = 1; step <= STEPS; step++) {
           const prev = data
           data = update(r, sc, data, pick(r, ['edit', 'append', 'remove', 'insert'] as const))
           const lie: NonNullable<RuntimeInput['dataPulse']> = {}
           for (const n of sc.mutable) lie[n] = { changed: [], appendOnly: true, baseLength: prev[n]!.length + pick(r, [-1, 1, 2]) }
-          const inc = evaluateChart(chart, { ...input(), dataPulse: lie })
+          const inc = last = evaluateChart(chart, { ...input(), dataPulse: lie, ...(named ? { previousScene: last } : {}) })
           const d = compare(evaluateChart(compileChart(clone(sc.spec)), input()), inc)
           if (d !== null) { fails.push(`seed ${seed} step ${step}: ${d}`); break }
         }

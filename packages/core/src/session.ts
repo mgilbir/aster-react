@@ -279,7 +279,9 @@ export function createChartSession(): ChartSession {
   let lastScene: SceneRoot | null = null
   let lastSpec: VgSpec | null = null
   let lastRaw: Map<string, unknown> | null = null
-  // the datasets the engine's committed state was made from (`lastRaw` also follows evaluations that found nothing to do)
+  // the datasets the engine's committed state was made from (`lastRaw` also follows evaluations that found nothing to do, whose rows
+  // are equal to these: so a pulse relative to `lastRaw` is relative to these too, and they are what the session hands the engine as
+  // the rows its pulses are relative to, compared by identity)
   let engineRaw: Map<string, unknown> | null = null
   let lastPulse: DataPulse | null = null
   // what the last accepted evaluation was given besides its data and its change descriptions: a `change` goes on from there
@@ -434,7 +436,7 @@ export function createChartSession(): ChartSession {
     const chart = recompile ? compileChart(spec) : lastChart!
     clock.check('compile')
     // (a chart compiled anew has no state to keep steps from)
-    const pending = evaluateChartPending(sessionEngine(), chart, { ...effectiveInput, data: dataInput(currentRaw) }, recompile ? undefined : stableData(input, currentRaw, pulse), lastRaw ?? undefined)
+    const pending = evaluateChartPending(sessionEngine(), chart, { ...effectiveInput, data: dataInput(currentRaw) }, recompile ? undefined : stableData(input, currentRaw, pulse), engineRaw ?? undefined)
     clock.check('evaluate')
     if (input.limits) checkSceneLimits(pending.scene, input.limits)
     pending.commit()
@@ -468,7 +470,7 @@ export function createChartSession(): ChartSession {
     const currentRaw = new Map(lastRaw)
     for (const [name, rows] of Object.entries(input.data ?? {})) currentRaw.set(name, rows)
     const { input: effectiveInput, pulse } = withAutoPulse(lastSpec, input, currentRaw)
-    const pending = evaluateChartPending(sessionEngine(), lastChart, { ...effectiveInput, data: dataInput(currentRaw) }, stableData(input, currentRaw, pulse), lastRaw)
+    const pending = evaluateChartPending(sessionEngine(), lastChart, { ...effectiveInput, data: dataInput(currentRaw) }, stableData(input, currentRaw, pulse), engineRaw ?? undefined)
     clock.check('change')
     if (input.limits) checkSceneLimits(pending.scene, input.limits)
     pending.commit()

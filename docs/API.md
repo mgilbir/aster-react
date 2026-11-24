@@ -129,11 +129,22 @@ naming the dataset: a name that is no dataset of the chart and none in `data` (a
 `dataChanges` / `dataPulse` for a dataset derived by `source` (describe its source's change), an index that is not a whole
 number, a `dataPulse` that says nothing (no `changed`, `from` or `appendOnly`). An index past the rows is ignored. An empty
 hint (`changedDatasets: []`) says that nothing changed. A description is relative to the rows the same caller gave the chart
-last time; one compiled chart may be evaluated by several callers with data of their own, so a pulse is taken only where the
-rows it says are unchanged are the rows the chart's last evaluation was given (the same objects, or rows equal field by
-field), else the dataset is derived in full. Within that, the rows before an `appendOnly` pulse's `baseLength` are taken as
-unchanged but for the ones it lists: a pulse whose `baseLength` is not the previous length is detected and ignored, one that
-leaves out a row it changed is not (that is what reading no unchanged row costs).
+last time; one compiled chart may be evaluated by several callers with data of their own, so a pulse for a new array is taken
+only where the chart's last evaluation was given the rows it is relative to, else the dataset is derived in full. A session
+knows its own previous rows. An `evaluateChart` caller says which rows its hints are relative to by passing back the scene its
+previous evaluation returned, `previousScene`: the check is then one identity comparison (the chart's last evaluation is that
+scene's, or another caller evaluated the chart since), whatever the number of rows. A caller that does not pass it has the rows
+checked instead, in one pass (the rows the pulse says are unchanged must be the rows the chart's last evaluation was given: the
+same objects, or rows equal field by field), which costs O(rows) on every hinted evaluation. Within that, the rows before an
+`appendOnly` pulse's `baseLength` are taken as unchanged but for the ones it lists: a pulse whose `baseLength` is not the
+previous length is detected and ignored, one that leaves out a row it changed is not (that is what reading no unchanged row
+costs).
+
+```ts
+let scene = evaluateChart(chart, { data: { table: rows } })
+const next = rows.map((r, i) => (i === 3 ? { ...r, v: 9 } : r))
+scene = evaluateChart(chart, { data: { table: next }, dataChanges: { table: [3] }, previousScene: scene })
+```
 
 Signal values you give (`signals`) are compared by content, whatever their size: a value changed in place is a change. Treat
 them as immutable all the same: a value is read when the evaluation runs, not copied. If you change an array in place (edit a row,
