@@ -279,7 +279,7 @@ describe('number locale (vega-format) vs the pinned vega-format (generated, live
     const probe = (l: { format(s: string): (v: number) => string; timeFormat(s: string): (d: Date) => string; utcParse(s: string): (t: string) => Date | null }) =>
       [l.format('$,.2f')(1234567.891), l.format('~s')(0.00012), l.timeFormat('%a %b %d')(new Date(Date.UTC(2024, 2, 9, 12))), +(l.utcParse('%d.%m.%Y')('09.03.2024') ?? 0)]
     try {
-      expect(() => aster.defaultLocale(num as never)).toThrow('defaultLocale expects either zero or two arguments.')
+      expect(() => (aster.defaultLocale as (...args: unknown[]) => unknown)(num)).toThrow('defaultLocale expects either zero or two arguments.')
       expect(() => vf.defaultLocale(num as never)).toThrow('defaultLocale expects either zero or two arguments.')
       const want = probe(vf.defaultLocale(num as never, { ...time, dateTime: '%A' } as never) as never)
       expect(probe(aster.defaultLocale(num as never, { ...time, dateTime: '%A' } as never) as never)).toEqual(want)
