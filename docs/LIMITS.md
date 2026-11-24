@@ -325,8 +325,8 @@ supply (`test`, `regexp`, `replace`/`split` with a RegExp or a `/literal/`,
      on the 9 000 characters of a long input ran for over 20 seconds. Two adjacent ones (`\s*.*`,
      `\d+\.?\d*`) and the trim idiom `^\s*(.*?)\s*$` are not touched; no regular expression in
      the gallery, the corpus or the test suites has the refused shape.
-2. **Length caps**: a pattern over 1024 characters, or an input longer than
-   `maxStringLength` (default 10 000), is refused. This bounds linear patterns.
+2. **Length caps**: a pattern over 1024 characters (a fixed cap: no limit raises it, and a `maxStringLength` below 1024 lowers it),
+   or an input longer than `maxStringLength` (default 10 000), is refused. This bounds linear patterns.
 
 **This is a heuristic, not a guarantee.** It blocks the known catastrophic
 shapes. It does not prove a pattern safe: polynomial blow-ups whose quantifiers are not
