@@ -27,7 +27,7 @@
  */
 import { ascending, DisallowedObjectProperties, safeGet, sortSlice, tupleDatum } from './util.js'
 import type { AstNode, Expr } from './expr-parser.js'
-import { activeMeter, checkRegexInput, checkRegexObject, limitViolation, metering, regExpOf } from './limits.js'
+import { activeMeter, checkRegexObject, checkRegexRun, freshRegExp, limitViolation, metering, regExpOf } from './limits.js'
 
 // --- the default function table ---------------------------------------------------------------------
 
@@ -49,7 +49,7 @@ const NATIVE_METHODS: ReadonlySet<unknown> = new Set(
 function callMethod(method: string, args: unknown[], cast?: (v: unknown) => unknown): unknown {
   const obj = cast ? cast(args[0]) : args[0]
   for (let i = 1; i < args.length; i++) {
-    if (args[i] instanceof RegExp) { checkRegexObject(args[i] as RegExp); checkRegexInput(String(obj)) }
+    if (args[i] instanceof RegExp) { checkRegexObject(args[i] as RegExp); checkRegexRun(args[i] as RegExp, String(obj)) }
   }
   // `.apply` stays a property read on whatever the lookup found: a missing method fails with the engine's
   // own "reading 'apply'" message, which is what the oracle reports
@@ -106,7 +106,7 @@ export const DefaultFunctions: Record<string, Fn> = {
   test: ((r: unknown, text: unknown) => {
     const re = regExpOf(r)
     const input = String(text)
-    checkRegexInput(input)
+    checkRegexRun(re, input)
     return re.test(input)
   }) as Fn,
 }
@@ -511,7 +511,7 @@ function compile(node: Expr, c: Compiling): Run {
       const v = node.value
       // vega's code generator writes a regular expression literal into the code, so each evaluation has a fresh RegExp: a `g` or `y`
       // literal starts every evaluation at lastIndex 0 (vega-interpreter's reading hands out the one object of its tree)
-      if (v instanceof RegExp && c.mode.engine) return () => new RegExp(v)
+      if (v instanceof RegExp && c.mode.engine) return () => freshRegExp(v)
       return () => v
     }
     case 'Identifier': {

@@ -332,8 +332,8 @@ supply (`test`, `regexp`, `replace`/`split` with a RegExp or a `/literal/`,
      absorbing any length of it;
    - a **backreference** inside a group that repeats (`(?:(a)\1)*`).
 
-   Otherwise the pattern has a **cost**, and it is accepted only if a run of it on the longest subject the limits let reach it
-   finishes within a fixed time, **since nothing can interrupt a running RegExp**:
+   Otherwise the pattern is accepted, with its **cost**, and **every run of it is checked before it starts, on the subject it
+   is given**, since nothing can interrupt a running RegExp:
    - the cost is `work * n ** degree` steps on `n` characters. `degree` is the longest chain of loops each able to hand the
      same input on to the next, the search's own loop counted: `a*b` searched and `\s+$` are 2, `\s*.*x` searched and the
      trim idiom `^\s*(.*?)\s*$` 3, `a*a*a*b` 4; a loop after which the match can always end is no link of a chain
@@ -342,26 +342,29 @@ supply (`test`, `regexp`, `replace`/`split` with a RegExp or a `/literal/`,
      every place the loop can stop, weighs its length (`a*a{1,3}x` 15, `a*x` 5);
    - a step is taken to cost `REGEX_NS_PER_UNIT` = 8 ns: the slowest of 130 measured shapes took 1.93 ns (`a+a{30}x`;
      `(\w?)+!` 1.80, the median 0.16) on a machine at load 5 to 10, with a margin of 4 for a loaded machine;
-   - the subject is at most `maxStringLength` (default 10 000, `REGEX_MAX_INPUT`): every regex input is refused past it; the
-     time is `maxTimeMs`, else `REGEX_RUN_BUDGET_MS` = 100 ms. The refusal says what was computed:
-     `regexSafety: polynomial backtracking of degree 2: about 2400 ms on 10000 characters, over the 100 ms a run may take`.
+   - before each run (`test`, `replace`, `split`, a method of a string given a RegExp, `countpattern` on each text and its
+     stopwords on each token) the run's cost on the actual subject must fit the time left under `maxTimeMs`, else
+     `REGEX_RUN_BUDGET_MS` = 100 ms per run; otherwise that run is refused, with an `AsterLimitError` saying what was computed:
+     `regexSafety: polynomial backtracking of degree 2: about 2400 ms on 10000 characters, over the 100 ms a run may take: /\s+$/`.
+     The subject is already at most `maxStringLength` (default 10 000, `REGEX_MAX_INPUT`). The check reads the pattern's cost
+     kept with the RegExp (O(1), no allocation), as the row and size caps act on data.
 
-   What this accepts at the defaults (10 000 characters, 100 ms): linear patterns (`^\d{4}-\d{2}-\d{2}$`, `\.csv$`, a
-   lookahead `^(?!foo)\w+$`, any anchored single loop); **no searched quadratic pattern** (`\s+$` costs about 2.4 s there,
-   `a*b` 4 s), and nothing of degree 3 or more. With `maxStringLength: 1000` the quadratic ones fit (`\s+$` 24 ms,
-   `\s*\w+\s*=\s*\d+` 88 ms; `a*a{1,3}x` 120 ms does not, it fits 500), and the trim idiom fits 100 characters. Measured
-   (the soundness test, `regex-screen.test.ts`): every accepted generated pattern ran within the budget on attack inputs of the
-   subject length, the slowest 0.7 ms at 10 000 characters and 7.1 ms at 1 000 (`(\d)(\w?)+[^b]{2}!`, 0.09 of its predicted
-   time). What the screen refused before, by shape, is refused here by cost: `\s*.*x` ran 14 s on 4 000 spaces, `.*foo.*bar`
-   16 s on 6 000 characters, the trim idiom 19.7 s on 4 000 spaces before `x\n\nx`, `a*[ab]{0,20}x` 11 s and `a+a{30}x`
-   14.6 s on 10 000 characters.
+   So a pattern is refused only for data that would actually make it too slow: `\s+$` runs on a 1 000-character text
+   (24 ms by the model) and is refused on a 10 000-character one (2 400 ms) unless `maxTimeMs` leaves that much; the trim idiom
+   runs on a 100-character text; linear patterns run on any text the caps allow. Measured (the soundness test,
+   `regex-screen.test.ts`): every generated pattern the screen accepts, driven through the engine on attack inputs of
+   10 000 and of 1 000 characters, either ran within the 100 ms or was refused before it ran; the patterns the screen refused
+   before by shape are refused here by cost on the subjects that made them hang (`\s*.*x` ran 14 s on 4 000 spaces,
+   `.*foo.*bar` 16 s on 6 000 characters, the trim idiom 19.7 s on 4 000 spaces before `x\n\nx`, `a*[ab]{0,20}x` 11 s and
+   `a+a{30}x` 14.6 s on 10 000 characters). The screen's own analysis of a pattern happens once per pattern (cached) and is
+   bounded by its step budget, not by the run's: the slowest generated pattern took 272 ms to analyse.
    A lookaround body is screened as a pattern of its own for its hazards, and adds its cost to every step of the match that
    reaches it. A Unicode property is read as "any character", a
    case-insensitive set is closed under every case mapping V8 applies (derived from V8's own `iu` matching, about 0.15 s
    once per process on the first case-insensitive pattern), and a `v`-mode set operation keeps an upper and a lower bound,
    so nothing a pattern can match is left out of the analysis.
 2. **Length caps**: a pattern over 1024 characters, or an input longer than
-   `maxStringLength` (default 10 000), is refused. This is the subject length the cost above is judged at.
+   `maxStringLength` (default 10 000), is refused.
 
 **This is a static model of a backtracking matcher, not a proof.** It is conservative by construction, so a few safe
 patterns are refused (`(a|a){2}`, `.{1,100}.{1,100}x`; rewrite them without the ambiguity). Its soundness is tested by

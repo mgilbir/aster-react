@@ -13,7 +13,7 @@
 import { accessorName, error, extent as vegaExtent, hasOwnProperty } from './util.js'
 import { fieldOf, fieldsOf, quantiles, type Row } from './transform-agg.js'
 import { numberRange, required } from './transform-basic.js'
-import { checkGeneratedRows, checkRegexInput, checkRowCount, guardedRegExp, meterTick } from './limits.js'
+import { checkGeneratedRows, checkRegexInput, checkRegexRun, checkRowCount, guardedRegExp, meterTick } from './limits.js'
 import { SQRT2PI, cumulativeNormal, densityNormal } from './stats-functions.js'
 import { FITS, fitParameters, loessSmooth, sampleCurve } from './curve-fits.js'
 
@@ -448,12 +448,15 @@ export function countpatternRows(rows: Row[], p: Params): Row[] {
   const counts = new Map<string, number>()
   for (const tuple of rows) {
     let text = f(tuple) as string
-    checkRegexInput(String(text))
+    // (the spec's pattern runs on the text, its stopwords on each token; vega's fixed defaults are the engine's own)
+    if (pattern) checkRegexRun(match, String(text))
+    else checkRegexInput(String(text))
     if (tcase === 'upper') text = text.toUpperCase()
     else if (tcase === 'lower') text = text.toLowerCase()
     const tokens = text.match(match) || []
     for (let i = 0, n = tokens.length; i < n; ++i) {
       const tk = tokens[i]!
+      if (stopwords) checkRegexRun(stop, tk)
       if (!stop.test(tk)) counts.set(tk, 1 + (counts.get(tk) || 0))
     }
     meterTick('countpattern', 1)
