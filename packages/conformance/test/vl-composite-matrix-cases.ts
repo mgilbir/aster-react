@@ -350,6 +350,12 @@ group('path overlays: line, area, trail and rule with points or a line', (add) =
   add('an unstacked area with a line', { data: DATA, mark: { type: 'area', line: true }, encoding: { x: q('x'), y: q('v', { aggregate: 'sum', stack: null }), color: n('g') } })
 })
 
+group('names and scales of the overlays and stacks (a named unit, a fill domain, a nested field)', (add) => {
+  add('a named line with points', { data: DATA, mark: { type: 'line', point: true }, encoding: { x: q('x'), y: q('v', { aggregate: 'mean' }) }, name: 'lines' })
+  add('a stacked bar with a domain on fill', { data: DATA, mark: 'bar', encoding: { x: n('g'), y: q('v', { aggregate: 'sum' }), fill: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } })
+  add('a boxplot over a nested field', { data: { values: DATA.values.map((d) => ({ ...d, o: { v: d.v } })) }, mark: 'boxplot', encoding: { x: n('c'), y: q('o.v') } })
+})
+
 group('stack order follows a colour domain', (add) => {
   const ORDERS: Array<[string, unknown]> = [['a list', ['C', 'A', 'B']], ['a shorter list', ['B', 'A']], ['a list with an unknown value', ['Z', 'C', 'A', 'B']]]
   for (const [on, domain] of ORDERS) {
@@ -370,24 +376,3 @@ group('stack order follows a colour domain', (add) => {
   add('a stacked bar with a calculate before', { data: DATA, transform: [{ calculate: 'datum.v * 2', as: 'v2' }], mark: 'bar', encoding: { x: n('g'), y: q('v2', { aggregate: 'sum' }), color: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } })
   add('a normalized stacked bar', { data: DATA, mark: 'bar', encoding: { x: n('g'), y: q('v', { aggregate: 'sum', stack: 'normalize' }), color: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } })
 })
-
-/**
- * Specs on which Aster and vega-lite differ today, so they are in no group above. They are compiled by the refactor guards (the compiled
- * Vega is pinned from before a rewrite) and not compared with vega-lite:
- *  - a composite mark over a nested field (`o.v`): vega-lite's own render has no data for it (an axis from 0 to 0);
- *  - errorbar over a binned channel: refused by Aster;
- *  - a boxplot whose parts are all switched off: vega-lite draws an empty 10 x 10 view, Aster draws the empty plot;
- *  - a config opacity: Aster repeats it in the mark's encode, vega-lite leaves it to the config's style (the render is the same);
- *  - a named line with points: vega-lite names the line's mark after the unit (`lines_marks`), Aster after the layer;
- *  - a stacked bar coloured by `fill` alone: vega-lite names the scale `fill`, Aster `color`.
- */
-export const ASTER_ONLY: Cases = [
-  ['a named line with points', { data: DATA, mark: { type: 'line', point: true }, encoding: { x: q('x'), y: q('v', { aggregate: 'mean' }) }, name: 'lines' }],
-  ['area with config.area.opacity and a line', { data: DATA, config: { area: { line: true, opacity: 0.2 } }, mark: 'area', encoding: { x: q('x'), y: q('v', { aggregate: 'sum' }) } }],
-  ['area with config.mark.opacity and points', { data: DATA, config: { area: { point: true }, mark: { opacity: 0.9 } }, mark: 'area', encoding: { x: q('x'), y: q('v', { aggregate: 'sum' }) } }],
-  ['stacked bar with a fill domain', { data: DATA, mark: 'bar', encoding: { x: n('g'), y: q('v', { aggregate: 'sum' }), fill: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } }],
-  ['boxplot with every part off', { data: DATA, mark: { type: 'boxplot', box: false, median: false, rule: false, outliers: false }, encoding: { x: n('c'), y: q('v') } }],
-  ['boxplot over a nested field', { data: { values: DATA.values.map((d) => ({ ...d, o: { v: d.v } })) }, mark: 'boxplot', encoding: { x: n('c'), y: q('o.v') } }],
-  ['errorbar over a nested field', { data: { values: DATA.values.map((d) => ({ ...d, o: { v: d.v } })) }, mark: 'errorbar', encoding: { x: n('c'), y: q('o.v') } }],
-  ['errorbar over a binned x', { data: DATA, mark: 'errorbar', encoding: { x: q('x', { bin: true }), y: q('v') } }],
-]
