@@ -20,7 +20,8 @@ import { applyTransforms, type Row } from './transform.js'
 import { compileChart } from './compiler.js'
 import { evaluateChart } from './evaluate.js'
 import { createChartSession } from './session.js'
-import { renderSceneToSvg } from './index.js'
+import './index.js' // (it carries the engine's parts)
+import { datasetsOfScene } from './runtime.js'
 import type { VgSpec } from './types.js'
 
 /** The runtime an expression sees, drawing from a source that counts. */
@@ -51,7 +52,7 @@ describe('mayDrawRandom names every expression function that draws', () => {
   for (const name of drawers) it(`${name}`, () => expect(mayDrawRandom(`${name}(datum.x)`)).toBe(true))
   it('and not the others', () => {
     for (const name of expressionFunctionNames()) {
-      if (!drawers.has(name) && !/sample|random|ci[01]/i.test(name)) expect(mayDrawRandom(`${name}(datum.x)`), name).toBe(false)
+      if (!drawers.has(name)) expect(mayDrawRandom(`${name}(datum.x)`), name).toBe(false)
     }
   })
 })
@@ -135,11 +136,19 @@ describe('the engine fingerprints the sites that may draw, and only those', () =
     let n = 0
     const source = (): number => ((++n * 37) % 101) / 101
     const session = createChartSession()
-    const first = renderSceneToSvg(session.evaluate(chartSpec, { random: source, width: 60, height: 40 }))
+    const first = session.evaluate(chartSpec, { random: source, width: 60, height: 40 })
     const drawn = n
-    const second = renderSceneToSvg(session.evaluate(chartSpec, { random: source, width: 90, height: 50 }))
+    const second = session.evaluate(chartSpec, { random: source, width: 90, height: 50 })
     expect(drawn).toBeGreaterThan(50)
     expect(n).toBe(drawn)
-    expect(typeof first + typeof second).toBe('stringstring')
+    // the spec has no marks, so the numbers are read where they are: the rows of both datasets, drawn once and the same after the resize
+    const a = datasetsOfScene(first)
+    const b = datasetsOfScene(second)
+    const r = (a.get('t') as Array<{ r: number }>).map((row) => row.r)
+    expect(r.length).toBeGreaterThan(5)
+    expect(new Set(r).size, 'the draws are distinct numbers, not a constant').toBeGreaterThan(5)
+    expect((b.get('t') as Array<{ r: number }>).map((row) => row.r)).toEqual(r)
+    expect(b.get('u')).toEqual(a.get('u'))
+    expect((a.get('u') as unknown[]).length).toBeGreaterThan(0)
   })
 })
