@@ -43,7 +43,7 @@
         },
         {
           "type": "filter",
-          "expr": "utcyear(datum.dd) >= 2021 && quarter(datum.dd) < 1"
+          "expr": "utcyear(datum.dd) >= 2021 && quarter(datum.dd) < 2"
         }
       ]
     }

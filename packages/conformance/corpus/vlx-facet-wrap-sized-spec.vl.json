@@ -1,7 +1,7 @@
 {
   "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
   "padding": 5,
-  "autosize": "none",
+  "autosize": "pad",
   "data": {
     "name": "table",
     "values": [
@@ -115,7 +115,7 @@
     "field": "c",
     "type": "nominal"
   },
-  "columns": 3,
+  "columns": 2,
   "spec": {
     "width": 90,
     "height": 80,

@@ -128,7 +128,7 @@
     },
     "color": {
       "condition": {
-        "test": "datum.y > 4",
+        "test": "datum.y > 5",
         "value": "firebrick"
       },
       "value": "grey"

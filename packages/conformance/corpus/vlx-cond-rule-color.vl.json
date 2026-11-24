@@ -124,7 +124,7 @@
         "test": "datum.x > 4",
         "value": "red"
       },
-      "value": "black"
+      "value": "steelblue"
     }
   }
 }

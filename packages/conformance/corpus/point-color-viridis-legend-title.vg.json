@@ -8,9 +8,21 @@
     {
       "name": "table",
       "values": [
-        {"x": 1, "y": 2, "val": 10},
-        {"x": 2, "y": 4, "val": 50},
-        {"x": 3, "y": 3, "val": 90}
+        {
+          "x": 1,
+          "y": 2,
+          "val": 10
+        },
+        {
+          "x": 2,
+          "y": 4,
+          "val": 50
+        },
+        {
+          "x": 3,
+          "y": 3,
+          "val": 90
+        }
       ]
     }
   ],
@@ -18,43 +30,85 @@
     {
       "name": "x",
       "type": "linear",
-      "domain": {"data": "table", "field": "x"},
+      "domain": {
+        "data": "table",
+        "field": "x"
+      },
       "range": "width",
       "nice": true
     },
     {
       "name": "y",
       "type": "linear",
-      "domain": {"data": "table", "field": "y"},
-      "range": [{"signal": "height"}, 0],
+      "domain": {
+        "data": "table",
+        "field": "y"
+      },
+      "range": [
+        {
+          "signal": "height"
+        },
+        0
+      ],
       "nice": true
     },
     {
       "name": "color",
-      "type": "sequential",
-      "domain": {"data": "table", "field": "val"},
-      "scheme": "viridis"
+      "type": "linear",
+      "domain": {
+        "data": "table",
+        "field": "val"
+      },
+      "range": {
+        "scheme": "viridis"
+      }
     }
   ],
   "marks": [
     {
       "type": "symbol",
-      "from": {"data": "table"},
+      "from": {
+        "data": "table"
+      },
       "encode": {
         "update": {
-          "x": {"scale": "x", "field": "x"},
-          "y": {"scale": "y", "field": "y"},
-          "size": {"value": 200},
-          "fill": {"scale": "color", "field": "val"}
+          "x": {
+            "scale": "x",
+            "field": "x"
+          },
+          "y": {
+            "scale": "y",
+            "field": "y"
+          },
+          "size": {
+            "value": 200
+          },
+          "fill": {
+            "scale": "color",
+            "field": "val"
+          }
         }
       }
     }
   ],
   "axes": [
-    {"scale": "x", "orient": "bottom", "grid": true, "labels": false},
-    {"scale": "y", "orient": "left", "grid": true, "labels": false}
+    {
+      "scale": "x",
+      "orient": "bottom",
+      "grid": true,
+      "labels": false
+    },
+    {
+      "scale": "y",
+      "orient": "left",
+      "grid": true,
+      "labels": false
+    }
   ],
   "legends": [
-    {"fill": "color", "title": "Temperature"}
+    {
+      "fill": "color",
+      "title": "Temperature"
+    }
   ]
 }

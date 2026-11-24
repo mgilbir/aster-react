@@ -113,7 +113,9 @@
   },
   "width": 160,
   "height": 100,
-  "mark": "bar",
+  "mark": {
+    "type": "circle"
+  },
   "encoding": {
     "x": {
       "field": "c",
@@ -123,7 +125,7 @@
       "field": "v",
       "type": "quantitative"
     },
-    "color": {
+    "size": {
       "field": "v",
       "type": "quantitative",
       "scale": {

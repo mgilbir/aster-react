@@ -126,7 +126,7 @@
     },
     "color": {
       "condition": {
-        "test": "datum['sum_v'] > 10",
+        "test": "datum['sum_v'] > 14",
         "value": "firebrick"
       },
       "value": "steelblue"

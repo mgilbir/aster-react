@@ -4,13 +4,54 @@
   "height": 300,
   "padding": 5,
   "autosize": "none",
-  "params": [{ "name": "brush", "select": { "type": "interval" } }],
-  "data": { "name": "table", "values": [
-    { "x": 1, "y": 2 }, { "x": 2, "y": 4 }, { "x": 3, "y": 3 }, { "x": 4, "y": 5 }
-  ] },
+  "params": [
+    {
+      "name": "brush",
+      "select": {
+        "type": "interval"
+      },
+      "value": {
+        "x": [
+          2,
+          4
+        ],
+        "y": [
+          3,
+          5
+        ]
+      }
+    }
+  ],
+  "data": {
+    "name": "table",
+    "values": [
+      {
+        "x": 1,
+        "y": 2
+      },
+      {
+        "x": 2,
+        "y": 4
+      },
+      {
+        "x": 3,
+        "y": 3
+      },
+      {
+        "x": 4,
+        "y": 5
+      }
+    ]
+  },
   "mark": "point",
   "encoding": {
-    "x": { "field": "x", "type": "quantitative" },
-    "y": { "field": "y", "type": "quantitative" }
+    "x": {
+      "field": "x",
+      "type": "quantitative"
+    },
+    "y": {
+      "field": "y",
+      "type": "quantitative"
+    }
   }
 }

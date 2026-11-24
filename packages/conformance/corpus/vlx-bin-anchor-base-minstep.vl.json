@@ -121,7 +121,7 @@
       "bin": {
         "anchor": 1,
         "base": 5,
-        "minstep": 1,
+        "minstep": 3,
         "maxbins": 4
       }
     },

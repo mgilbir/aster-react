@@ -1,4 +1,4 @@
-{"$schema":"https://vega.github.io/schema/vega/v5.json","width":120,"height":200,"padding":5,
+{"$schema":"https://vega.github.io/schema/vega/v6.json","width":120,"height":200,"padding":5,
  "data":[{"name":"rows","values":[{"a":3,"b":"x","v":1},{"a":1,"b":"y","v":2},{"a":3,"b":"y","v":3},{"a":2,"b":"z","v":4},{"a":1,"b":"x","v":5},{"a":3,"b":"x","v":6}]}],
  "marks":[{"type":"group","from":{"facet":{"name":"f","data":"rows","groupby":["a","b"],"aggregate":{"cross":true}}},
   "sort":{"field":["datum.a","datum.b"],"order":["ascending","ascending"]},
