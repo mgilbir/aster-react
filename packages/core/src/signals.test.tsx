@@ -332,11 +332,14 @@ describe('signal event streams', () => {
     expect(Object.keys(store).sort()).toEqual(['__proto__', 'constructor'])
     expect(Object.getOwnPropertyDescriptor(store, '__proto__')!.value).toBe(5)
     expect(store.constructor).toBe('c')
-    // a plain `{}` store keeps ITS prototype too
+    // a plain `{}` store keeps ITS prototype too: the handler writes an OBJECT (a primitive written to `__proto__` is a no-op even
+    // for a naive store), which must land as the store's own `__proto__` signal, not as its prototype (C344)
     const plain: Record<string, unknown> = {}
-    const t2 = bindSpec([{ name: '__proto__', value: 1, on: [{ events: 'click', update: '7' }] }], plain)
+    const t2 = bindSpec([{ name: '__proto__', value: 1, on: [{ events: 'click', update: '{polluted: true}' }] }], plain)
     fire(t2.svg, 'click')
     expect(Object.getPrototypeOf(plain)).toBe(Object.prototype)
+    expect(Object.getOwnPropertyDescriptor(plain, '__proto__')?.value).toEqual({ polluted: true })
+    expect(plain.polluted).toBeUndefined()
     expect(({} as Record<string, unknown>).polluted).toBeUndefined()
     t.binding.detach()
     t2.binding.detach()
