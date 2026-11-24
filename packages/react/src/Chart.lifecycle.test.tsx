@@ -16,6 +16,7 @@ import type { ChartHandle } from './Chart'
 import { ChartStream, type ChartStreamHandle } from './ChartStream'
 import { forEachVariant } from './testing/variants'
 import { chartTooltip } from './testing/tooltip'
+import { stubPointerCapture, type PointerCaptureStub } from './testing/pointer-capture'
 
 const RECT = { left: 0, top: 0, width: 400, height: 300, right: 400, bottom: 300, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
 
@@ -64,11 +65,11 @@ function mount(node: React.ReactElement) {
   return { container, root, host, rerender: (n: React.ReactElement) => act(() => { root.render(n) }) }
 }
 
+let pointerCapture: PointerCaptureStub
 beforeEach(() => {
-  ;(Element.prototype as unknown as Record<string, unknown>).setPointerCapture = vi.fn()
-  ;(Element.prototype as unknown as Record<string, unknown>).releasePointerCapture = vi.fn()
+  pointerCapture = stubPointerCapture()
 })
-afterEach(() => { document.body.innerHTML = '' })
+afterEach(() => { pointerCapture.restore(); document.body.innerHTML = '' })
 
 describe('renderer round trip', () => {
   const rows = [{ cat: 'a', v: 5 }, { cat: 'b', v: 7 }]

@@ -8,6 +8,7 @@ import { useChartStream, type UseChartStreamResult } from './useChartStream'
 import type { ViewDomain } from './interaction'
 import { forEachVariant } from './testing/variants'
 import { FakeWorker } from './testing/fake-worker'
+import { stubPointerCapture, type PointerCaptureStub } from './testing/pointer-capture'
 
 const RECT = { left: 0, top: 0, width: 210, height: 110, right: 210, bottom: 110, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
 
@@ -61,11 +62,11 @@ const xDomain = (ref: React.RefObject<ChartStreamHandle | null>): number[] =>
 const scaleInfo = (scene: unknown, name: string): { domain: number[] } | undefined =>
   ((scene as Record<string, unknown>).__scaleInfo as Array<{ name: string; domain: number[] }> | undefined)?.find((s) => s.name === name)
 
+let pointerCapture: PointerCaptureStub
 beforeEach(() => {
-  ;(Element.prototype as unknown as Record<string, unknown>).setPointerCapture = vi.fn()
-  ;(Element.prototype as unknown as Record<string, unknown>).releasePointerCapture = vi.fn()
+  pointerCapture = stubPointerCapture()
 })
-afterEach(() => { document.body.innerHTML = '' })
+afterEach(() => { pointerCapture.restore(); document.body.innerHTML = '' })
 
 describe('<ChartStream> honours the Chart props its type accepts', () => {
   it('a controlled view reaches the stream: the scale domain and the SVG change', async () => {
