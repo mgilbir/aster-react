@@ -391,7 +391,7 @@ source is gone) all fail. Measured 2026-11-23 with `pnpm --filter @aster-charts/
 | `+ @aster-charts/core/canvas` | core + `@aster-charts/core/canvas` (marginal) | 6.2 |  |
 | `+ @aster-charts/core/hit` | core + `@aster-charts/core/hit` (marginal) | 10.1 |  |
 | `+ @aster-charts/core/signals` | core + `@aster-charts/core/signals` (marginal) | 15.0 |  |
-| `+ @aster-charts/core/load` | core + `@aster-charts/core/load` (marginal) | 5.3 |  |
+| `+ @aster-charts/core/load` | core + `@aster-charts/core/load` (marginal) | 7.7 |  |
 | `+ @aster-charts/core/geo` | core + `@aster-charts/core/geo` (marginal) | 15.9 |  |
 | `+ @aster-charts/core/transforms` | core + `@aster-charts/core/transforms` (marginal) | 38.5 |  |
 | `+ @aster-charts/core/transition` | core + `@aster-charts/core/transition` (marginal) | 3.7 |  |
