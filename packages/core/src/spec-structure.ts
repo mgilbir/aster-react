@@ -15,6 +15,7 @@
  * compiler will actually run.
  */
 import { SpecParseError } from './parse-error.js'
+import type { ScaleType } from './types.js'
 import { MARK_TYPES } from './event-selector.js'
 import { LEGEND_SCALES } from './legend-scales.js'
 
@@ -178,6 +179,14 @@ function checkSort(sort: unknown): void {
   if (!o.field && o.op && o.op !== 'count') throw new SpecParseError('No field provided for sort aggregate op: ' + String(o.op))
 }
 
+/** vega-scale's registered scale types (`isValidScaleType`): vega-parser refuses any other. */
+const SCALE_TYPES: ReadonlySet<string> = new Set<ScaleType>([
+  'identity', 'linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc',
+  'sequential', 'sequential-linear', 'sequential-log', 'sequential-pow', 'sequential-sqrt', 'sequential-symlog',
+  'diverging-linear', 'diverging-log', 'diverging-pow', 'diverging-sqrt', 'diverging-symlog',
+  'quantile', 'quantize', 'threshold', 'ordinal', 'band', 'point', 'bin-ordinal',
+])
+
 /**
  * vega-parser `parseScaleDomain`: a `domainMin` / `domainMax` needs a domain to override; a domain read from data names data sets of
  * the scope, and a discrete scale's domain may be sorted by an aggregate of a field it must name (checked before the data sets of a
@@ -185,6 +194,9 @@ function checkSort(sort: unknown): void {
  */
 export function checkScale(s: unknown, names: Names): void {
   if (!isRecord(s)) return
+  // (vega-parser parseScale: `Unrecognized scale type`, thrown before any view exists and before the scale's own expressions are read; no
+  // type -- or a falsy one -- is vega's default, linear)
+  if (s.type && !SCALE_TYPES.has(s.type as string)) throw new SpecParseError(`Unrecognized scale type: ${JSON.stringify(s.type)}`)
   const domain = s.domain
   if (!domain) {
     if (s.domainMin != null || s.domainMax != null) throw new SpecParseError('No scale domain defined for domainMin/domainMax to override.')

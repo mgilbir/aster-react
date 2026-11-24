@@ -493,6 +493,17 @@ export function vegaOutcome(spec: Spec): string {
   }
 }
 
+/** Vega's outcome with a view built of the parsed spec: what its parser accepts but its code generator then fails on. */
+export function vegaViewOutcome(spec: Spec): string {
+  try { vega.parse({ signals: [{ name: 'flush', update: '1' }] } as never) } catch { /* the leftover names of an earlier refusal */ }
+  try {
+    new vega.View(vega.parse(structuredClone(spec) as never), { renderer: 'none' }).finalize()
+    return 'ok'
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e)
+  }
+}
+
 export function asterOutcome(spec: Spec): string {
   try {
     compileChart(structuredClone(spec) as never)
