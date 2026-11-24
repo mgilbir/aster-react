@@ -78,6 +78,14 @@
  *   N-whitespace     text whitespace is collapsed as SVG's default
  *                    xml:space does.
  *
+ * NOT SEEN (so "canonical SVG equal" does not mean byte-equal; each is pinned by normalize.test.ts "what it does not see"):
+ *   - the root <svg>'s role, aria-roledescription, aria-label and class, its preserveAspectRatio and a `background`
+ *     attribute other than the canvas colour (only width, height, viewBox and the background colour are root fields);
+ *   - <title>, <desc> and <metadata> content (nothing is drawn; a host's screen reader may read them);
+ *   - pointer-events, and the class of a shape that carries no role or aria attribute;
+ *   - an attribute with no value, or an unquoted one (the parser drops it), and text whose first character is a raw `>`;
+ *   - offsets below the 0.0005 precision of N-numfmt.
+ *
  * Paint order is preserved wherever it can matter. The canonical sequence is
  * the lexicographic normal form of the document order modulo swapping ADJACENT
  * records that provably cannot interact: same ancestor effects and painted

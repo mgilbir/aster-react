@@ -141,7 +141,7 @@ pnpm fuzz -- --seeds 3000 --start 200
 A failing seed is written as a standalone spec under
 `packages/conformance/fuzz-repro/`; replay it, fix the engine, then promote it into
 `corpus/` and delete the reproducer. The nightly workflow runs the conformance corpus,
-both schema sweeps, 3000 fuzz seeds and the reproducer replay, plus Firefox and WebKit canvas parity.
+the Vega, Vega-Lite and value sweeps, 3000 fuzz seeds and the reproducer replay, plus Firefox and WebKit canvas parity.
 
 ## Time zones
 
