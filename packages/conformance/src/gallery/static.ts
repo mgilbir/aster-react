@@ -30,6 +30,20 @@ function nondeterminismHint(spec: Record<string, unknown>): string {
   return hints.join('+') || 'unknown'
 }
 
+/**
+ * Why the document the oracle drew cannot be compared, or null. A transform that draws into a canvas fails in Node, which has none;
+ * any other error vega logged, and a data file its loader could not load (a `Loading failed` warning: the chart is drawn without
+ * it), also mean the document is not the one the spec describes, so nothing can pass against it.
+ */
+export function oracleProblem(errors: readonly string[], warnings: readonly string[]): { reason: string; first: string } | null {
+  const noCanvas = errors.find(needsCanvas)
+  if (noCanvas !== undefined) return { reason: 'oracle-needs-canvas (Node has none)', first: noCanvas.split('\n')[0]! }
+  if (errors.length) return { reason: 'oracle-logged-error', first: errors[0]!.split('\n')[0]! }
+  const notLoaded = warnings.find((w) => w.startsWith('Loading failed'))
+  if (notLoaded !== undefined) return { reason: 'oracle-load-failed', first: notLoaded }
+  return null
+}
+
 export async function runStatic(g: GallerySpec): Promise<Outcome> {
   const t0 = Date.now()
   const done = (o: Omit<Outcome, 'id' | 'ms'>): Outcome => ({ id: g.id, ms: Date.now() - t0, ...o })
@@ -48,13 +62,8 @@ export async function runStatic(g: GallerySpec): Promise<Outcome> {
     if (stray.length) throw new Error(stray[0])
     // a transform that draws into a canvas (heatmap, label, wordcloud) fails in Node, which has none: vega logs the error and carries
     // on without its output, so the document it renders is not the one the spec describes (the react path, in Chromium, compares them)
-    const noCanvas = logged.find(needsCanvas)
-    if (noCanvas !== undefined) return done({ status: 'unverifiable', reason: 'oracle-needs-canvas (Node has none)', first: trunc(noCanvas.split('\n')[0]!) })
-    // any other error vega logged, or a data file its loader could not load: the oracle's document is not what the spec describes,
-    // so nothing can pass against it
-    if (logged.length) return done({ status: 'unverifiable', reason: 'oracle-logged-error', first: trunc(logged[0]!.split('\n')[0]!) })
-    const notLoaded = warned.find((w) => w.startsWith('Loading failed'))
-    if (notLoaded !== undefined) return done({ status: 'unverifiable', reason: 'oracle-load-failed', first: trunc(notLoaded) })
+    const problem = oracleProblem(logged, warned)
+    if (problem !== null) return done({ status: 'unverifiable', reason: problem.reason, first: trunc(problem.first) })
   } catch (e) {
     // a view that failed mid-run still has a redraw queued that throws a moment later; let it fire here, not inside the next spec
     await new Promise((r) => setTimeout(r, 60))
