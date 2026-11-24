@@ -1,10 +1,13 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest'
-import { agree, asterDatasets, forceCase, gen, hierarchySpec, SCHEMA, vegaDatasets } from './force-hierarchy-gen.js'
+import { agree, firstDiff, asterDatasets, forceCase, gen, hierarchySpec, SCHEMA, vegaDatasets } from './force-hierarchy-gen.js'
 
 describe('force: every force and parameter combination, bit for bit against vega', () => {
   const N = 220
   it.each(Array.from({ length: N }, (_, i) => i))('case %i', async (i) => { await agree(forceCase(1000 + i), `force seed ${1000 + i}`) }, 60_000)
+  // (the degenerate shapes, once each: no node to move, and no force to move one)
+  it('no node, under random forces', async () => { await agree(forceCase(1000, 'nodes'), 'force with no nodes') })
+  it('no force, over random nodes', async () => { await agree(forceCase(1001, 'forces'), 'force with no forces') })
 
   // bigger graphs, and many bodies on the same few points (a leaf of the quadtree then chains bodies)
   it.each([['spread', 150], ['clumped', 90]] as const)('%s: %i nodes under every force', async (kind, n) => {
@@ -74,4 +77,39 @@ describe('hierarchy layouts: every layout, tiling method, padding, round, size a
       }
     }
   }, 60_000)
+})
+
+// firstDiff is the comparison of every case above: it must see what it claims to (C219). A link force makes the `links` rows hold the
+// node objects, so a node is reached through `links` before `nodes` and `out`; the pair, not the object, is what is skipped.
+describe('firstDiff sees a wrong link end and the order of linked nodes', () => {
+  const spec = { $schema: SCHEMA, width: 100, height: 100, data: [
+    { name: 'nodes', values: [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }] },
+    { name: 'links', values: [{ source: 'a', target: 'b' }, { source: 'b', target: 'c' }, { source: 'c', target: 'd' }, { source: 'a', target: 'd' }] },
+    { name: 'out', source: 'nodes', transform: [{ type: 'force', static: true, iterations: 30, forces: [{ force: 'link', links: 'links', id: 'id', distance: 20 }, { force: 'nbody', strength: -20 }] }] }] }
+  const fresh = async (): Promise<{ a: any; v: any }> => ({ a: asterDatasets(spec).data, v: (await vegaDatasets(spec)).data })
+  it('agrees on the honest run', async () => {
+    const { a, v } = await fresh()
+    expect(a.links[0].source, 'the link rows hold the node objects').toBe(a.out.find((r: any) => r.id === 'a'))
+    expect(firstDiff(a, v)).toBeNull()
+  })
+  it('sees a link that ends on another node', async () => {
+    const { a, v } = await fresh()
+    a.links[3].target = a.links[1].target
+    expect(firstDiff(a, v)).toMatch(/links/)
+  })
+  it('sees nodes in another order', async () => {
+    const { a, v } = await fresh()
+    a.out = [...a.out].reverse()
+    expect(firstDiff(a, v)).not.toBeNull()
+  })
+  it('sees one coordinate moved by 1e-9 (control)', async () => {
+    const { a, v } = await fresh()
+    a.out[0].x += 1e-9
+    expect(firstDiff(a, v)).not.toBeNull()
+  })
+  it('does not loop on a cycle', () => {
+    const x: any = { n: 1 }; x.self = x
+    const y: any = { n: 1 }; y.self = y
+    expect(firstDiff(x, y)).toBeNull()
+  })
 })
