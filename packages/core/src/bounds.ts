@@ -737,7 +737,7 @@ export function boundTypedMark(bounds: Bounds, mark: SceneGroup, miterPaths = fa
       // vega's arc/path/symbol bounds always expand with miter semantics
       // (vega-scenegraph bound/boundStroke.js: boundStroke(bounds, item, true)) — the
       // miterLimit default of 4 makes the expansion miterLimit*sw/2 per side
-      const miter = miterPaths || mark.marktype === 'arc' || mark.marktype === 'path' || mark.marktype === 'symbol' || mark.marktype === 'shape' || (mark.marktype as string) === 'geoshape'
+      const miter = miterPaths || mark.marktype === 'arc' || mark.marktype === 'path' || mark.marktype === 'symbol' || mark.marktype === 'shape'
       // (a rect, rule, symbol, image or arc is measured as its own type: a text, path, radius or angle channel it carries is inert)
       const kind = mark.marktype === 'rect' || mark.marktype === 'rule' || mark.marktype === 'symbol' || mark.marktype === 'image' || mark.marktype === 'arc' ? mark.marktype : undefined
       for (const it of items) boundLeaf(bounds, it, miter, kind)
@@ -753,7 +753,7 @@ export function boundItemOfKind(b: Bounds, it: SceneItem, kind: string): void {
   if (kind === 'leaf') { boundLeaf(b, it); return }
   if (kind === 'text') { b.union(boundText(new Bounds(), { ...it, _kind: 'text' } as SceneItem)); return }
   if (kind === 'path' && it.path == null) { b.add(0, 0); return }
-  const miter = kind === 'arc' || kind === 'path' || kind === 'symbol' || kind === 'shape' || kind === 'geoshape'
+  const miter = kind === 'arc' || kind === 'path' || kind === 'symbol' || kind === 'shape'
   boundLeaf(b, it, miter, kind === 'rect' || kind === 'rule' || kind === 'symbol' || kind === 'image' ? kind : undefined)
 }
 
@@ -889,7 +889,7 @@ function boundIsolated(it: SceneItem, miterPaths = false, kind?: string): Bounds
   }
   // (a symbol, rect, rule or image mark's item is measured as its type: a `path` channel it carries is inert)
   if (it.path != null && kind !== 'symbol' && kind !== 'rect' && kind !== 'rule' && kind !== 'image') {
-    // path/symbol/arc/geoshape items: trace the emitted path, then
+    // path/symbol/arc/shape items: trace the emitted path, then
     // boundStroke, then translate by item x/y (markItemPath bound).
     // Miter expansion applies only to mark items; our baked group-background
     // paths (stroke without an explicit strokeWidth) expand non-miter, like
@@ -901,7 +901,7 @@ function boundIsolated(it: SceneItem, miterPaths = false, kind?: string): Bounds
     // a projected shape bounds from its unrounded geometry, as vega's bound context sees it, not from the path string
     // (the shape is the item's own when a mark's geoshape transform wrote it, its datum's when the data's did)
     const shaped = rec.angle ? undefined : it.path === rec.shape ? it : it.datum && it.path === (it.datum as Record<string, unknown>).shape ? it.datum : undefined
-    const exact = shaped !== undefined ? SHAPE_BOUNDS.get(shaped as object)?.() : undefined
+    const exact = shaped !== undefined ? SHAPE_BOUNDS.get(shaped as object) : undefined
     if (exact) {
       bounds.add(exact[0], exact[1])
       bounds.add(exact[2], exact[3])

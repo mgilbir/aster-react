@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { buildProjection, projectedBounds } from './geo.js'
+import { buildProjection, shapeThrough } from './geo.js'
 
 // vega bounds a shape by running its generator through boundContext, which maps each point through an identity rotation
 // (1*x + 0*y), so a point at infinity becomes NaN and extends nothing.
-describe('projectedBounds', () => {
+describe('shapeThrough bounds', () => {
   it('ignores the points at infinity a degenerate clip emits (stereographic, clipAngle 0)', () => {
     const p = buildProjection({ type: 'stereographic', scale: 60, translate: [100, 60], clipAngle: 0 } as never)
     const cap = { type: 'Polygon', coordinates: [[[-30, 70], [30, 70], [30, 88], [-30, 88], [-30, 70]]] }
-    const b = projectedBounds(p, cap)
+    const b = shapeThrough(p.path, cap).bounds
     expect(b).not.toBeNull()
     expect(b!.every(Number.isFinite)).toBe(true)
   })
@@ -15,7 +15,7 @@ describe('projectedBounds', () => {
   it('bounds an ordinary shape by its unrounded geometry', () => {
     const p = buildProjection({ type: 'equirectangular', scale: 100, translate: [0, 0] } as never)
     // (wound clockwise, the way d3-geo reads an exterior ring: the other way round is the rest of the sphere)
-    const b = projectedBounds(p, { type: 'Polygon', coordinates: [[[0, 0], [0, 10], [10, 10], [10, 0], [0, 0]]] })
+    const b = shapeThrough(p.path, { type: 'Polygon', coordinates: [[[0, 0], [0, 10], [10, 10], [10, 0], [0, 0]]] }).bounds
     // equirectangular: x = scale * lambda, y = -scale * phi (radians), about the translate; the box is the polygon's own, to the
     // last digit (it is the unrounded geometry: a path text rounds to 3 places, 17.453 here)
     const r = 100 * (10 * Math.PI) / 180

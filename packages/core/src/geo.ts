@@ -8,7 +8,7 @@ import {
   equalEarth, equirectangular, gnomonic, identity, mercator, mollweide, naturalEarth1, orthographic, stereographic,
   transverseMercator, type GeoProjection,
 } from './geo-projections.js'
-import { PathWriter, ShapeBounds, Tee, type PointRadius } from './geo-path.js'
+import { PathWriter, ShapeBounds, Tee, type GeoPath, type PointRadius } from './geo-path.js'
 
 type Factory = () => GeoProjection
 
@@ -77,9 +77,7 @@ export function collectGeoJSON(data: unknown): unknown {
  * stay), set the radius its path draws points with, then fit it to the data when asked. An unrecognised
  * type throws.
  */
-export function buildProjection(spec: ResolvedProjection, _width?: number, _height?: number): GeoProjection {
-  void _width
-  void _height
+export function buildProjection(spec: ResolvedProjection): GeoProjection {
   const type = (spec.type || 'mercator') as string
   const factory = projectionFactory(type)
   if (!factory) throw new Error('Unrecognized projection type: ' + type)
@@ -96,38 +94,23 @@ export function buildProjection(spec: ResolvedProjection, _width?: number, _heig
 }
 
 /**
- * Render GeoJSON to an SVG path through a projection. A shape the projection clips away entirely yields
- * '' (the empty path keeps the row, so its path item bounds stay empty rather than falling back to a
- * point bound at the origin).
+ * What a shape draws: its SVG path through `path` (a projection's, or the default path's), and its bounds from the UNROUNDED
+ * geometry. vega-scenegraph bounds a `shape` item by running the shape generator through a bounding context, not by parsing the
+ * 3-digit path string it draws, so a shape that touches a pixel boundary can sit a hair past it and move an ulp-exact layout (`ceil`, a
+ * grid's row height). A shape that draws nothing (no geometry, one the projection clips away, an unknown type) has no path and no
+ * bounds: vega writes such an item with no `d`, and bounds it to nothing.
  */
-export function projectedPath(projection: GeoProjection, geo: unknown, pointRadius?: unknown): string {
-  return projection.path.draw(geo, (pointRadius ?? undefined) as PointRadius | undefined) ?? ''
-}
-
-/**
- * What a shape draws: its SVG path, and its bounds from the UNROUNDED geometry. vega-scenegraph bounds a `shape`
- * item by running the shape generator through a bounding context, not by parsing the 3-digit path string it draws,
- * so a shape that touches a pixel boundary can sit a hair past it and move an ulp-exact layout (`ceil`, a grid's
- * row height). `bounds` is null for a shape that draws nothing; `path` is '' then (the empty path keeps the row,
- * so its path item bounds stay empty rather than falling back to a point bound at the origin).
- */
-export function projectedShape(
-  projection: GeoProjection,
+export function shapeThrough(
+  path: GeoPath,
   geo: unknown,
   pointRadius?: unknown,
-): { path: string; bounds: [number, number, number, number] | null } {
-  const path = projection.path
-  if (!geo) return { path: '', bounds: null }
+): { path: string | null; bounds: [number, number, number, number] | null } {
+  if (!geo) return { path: null, bounds: null }
   const radius = path.radiusFor(geo, (pointRadius ?? undefined) as PointRadius | undefined)
   const writer = new PathWriter(path.digits, radius)
   const box = new ShapeBounds(radius)
   path.feed(geo, new Tee(writer, box))
-  return { path: writer.result() ?? '', bounds: box.result() }
-}
-
-/** The unrounded bounds of a projected shape (see `projectedShape`); null for a shape that draws nothing. */
-export function projectedBounds(projection: GeoProjection, geo: unknown, pointRadius?: unknown): [number, number, number, number] | null {
-  return projectedShape(projection, geo, pointRadius).bounds
+  return { path: writer.result() || null, bounds: box.result() }
 }
 
 export { type GeoProjection }
