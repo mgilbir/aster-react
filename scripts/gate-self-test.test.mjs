@@ -97,7 +97,7 @@ describe('every gate declares how it fails', () => {
 
   it('an `exits` script has a failing exit path', () => {
     for (const g of GATES.filter((x) => 'exits' in x.verdict)) {
-      expect(read(g.verdict.exits), `${g.name}: ${g.verdict.exits}`).toMatch(/process\.exit\(1\)|process\.exitCode = 1/)
+      expect(read(g.verdict.exits), `${g.name}: ${g.verdict.exits}`).toMatch(/process\.exit\(1\)|process\.exitCode = (1|\w+ \? 1 : 0)/)
     }
   })
 })
