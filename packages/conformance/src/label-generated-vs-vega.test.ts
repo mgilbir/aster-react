@@ -52,6 +52,16 @@ function engineRows(c: LabelCase): Row[] {
 const missing = (v: unknown): boolean => v == null || Number.isNaN(v)
 const same = (a: unknown, b: unknown): boolean => a === b || (typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < 1e-9) || (missing(a) && missing(b))
 
+/**
+ * The generated specs (seed 1000 + n) whose picture differs from vega's on a real canvas, with what the first difference is.
+ * Each is a live difference of the label layout (it is still compared every run). Not in ARCHITECTURE's "Deviations from Vega":
+ * it is not intended behaviour, it is an open difference; the cause is not established (the occupancy bitmap of a rule's thin
+ * stroke, where the two rasterizers' antialiasing differs, is the suspect: raster-vs-chromium.test.ts bounds that).
+ */
+const KNOWN_BROWSER_DIFFERENCES: Record<string, string> = {
+  'label-1006': "a rule base: vega places the label 'ff fff' at (92.69, 42.12), Aster leaves it out (opacity 0)",
+}
+
 describe('label: generated specs vs vega-label', () => {
   it(`${SEEDS} generated specs: every label the same x, y, opacity, align and baseline (Node, shared rasterizer)`, { timeout: 600_000 }, async () => {
     const cases = Array.from({ length: SEEDS }, (_, i) => labelCase(i + 1))
@@ -102,16 +112,20 @@ describe('label: generated specs vs vega-label', () => {
     expect(kinds.size).toBe(12)
   })
 
-  it(`${BROWSER_SEEDS} generated specs: about the same pictures as vega's, in Chromium (real canvas)`, { timeout: 900_000 }, async () => {
+  it(`${BROWSER_SEEDS} generated specs: the same pictures as vega's, in Chromium (real canvas), but the pinned ones`, { timeout: 900_000 }, async () => {
     const cases = Array.from({ length: BROWSER_SEEDS }, (_, i) => labelCase(1000 + i, true))
     const inputs: InlineSpec[] = cases.map((c) => ({ id: c.id, spec: c.spec, liveMs: 0 }))
     const out = await runInline(inputs, () => undefined, 4)
     const bad = out.filter((o) => o.status !== 'pass')
-    const report = bad.slice(0, 4).map((o) => `${o.id}: ${o.status} ${o.reason ?? ''} ${o.first ?? ''}\n${JSON.stringify(cases.find((c) => c.id === o.id)!.spec)}`)
-    // The coverage-only canvas agrees with a browser's on which pixels have any alpha except at the odd antialiased edge (that is
-    // raster-vs-chromium.test.ts's to pin), and a layout is a cascade: one pixel moves a label, which moves the ones after it. So
-    // this is a rate: 9-10% of the specs differ today, and a layout that went wrong (a bitmap layer, a mark not drawn, a boundary)
-    // differs in nearly all of them.
-    expect(bad.length / out.length, `${bad.length} of ${out.length} specs differ from vega:\n${report.join('\n\n')}`).toBeLessThanOrEqual(0.15)
+    const report = (list: typeof out): string => list.slice(0, 4).map((o) => `${o.id}: ${o.status} ${o.reason ?? ''} ${o.first ?? ''}\n${JSON.stringify(cases.find((c) => c.id === o.id)!.spec)}`).join('\n\n')
+    // This is the independent reference of the label differential (the Node run above shares Aster's rasterizer with the oracle):
+    // vega on a real canvas against <Chart>. A layout is a cascade -- one pixel moves a label, which moves the ones after it -- so a
+    // spec that differs is pinned BY NAME with what it shows (KNOWN_BROWSER_DIFFERENCES), never admitted by a rate: a new difference
+    // fails here, and one that is fixed fails as FIXED-GAP until its entry is removed (the list can only shrink).
+    const unexpected = bad.filter((o) => !(o.id in KNOWN_BROWSER_DIFFERENCES))
+    expect(unexpected.length, `${unexpected.length} spec(s) differ from vega that are not pinned:\n${report(unexpected)}`).toBe(0)
+    const fixed = Object.keys(KNOWN_BROWSER_DIFFERENCES).filter((id) => !bad.some((o) => o.id === id))
+    expect(fixed, 'FIXED-GAP: these pinned specs now agree with vega: remove their entries').toEqual([])
+    expect(out.length).toBe(BROWSER_SEEDS)
   })
 })

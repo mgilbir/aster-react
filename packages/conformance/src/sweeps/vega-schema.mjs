@@ -22,12 +22,14 @@
 // where the code is densest (a guide is a layout, a text measurement and half a dozen marks), a
 // projection is a formula and a clipping rule whose difference is invisible until it is drawn, a
 // config is the same property table reached by a different piece of code, and the last two are the
-// widest declared surface there is: sixty channels, most of which no chart in any corpus sets. A
+// widest declared surface there is: sixty-nine channels, most of which no chart in any corpus sets. A
 // property is swept when the schema says enough to choose values honestly:
 //
 //   * an **enum**, including one inside a `oneOf` beside a signal reference: every word it lists;
 //   * a **boolean**: both;
 //   * a **number**: a small fixed set, since the schema does not say what a sensible one is;
+//   * a property that is several of these (`tickCount`: interval words or a number; `labelOverlap`: words or a boolean): the
+//     values of every such branch together;
 //   * a **number array** of a stated length: one plausible tuple.
 //
 // Anything else is skipped and *counted*: a free string (there is no honest value to choose), an
@@ -373,7 +375,6 @@ const MARK_BASES = {
   }),
 };
 
-/** Where each family's property is written into the base chart. */
 /**
  * Every projection upstream registers, read from its own registry table.
  *
@@ -756,6 +757,7 @@ const CONFIG_BLOCKS = {
   ),
 };
 
+/** Where each family's property is written into the base chart. */
 function buildFamilies() {
   return {
   // The **bottom** axis, which is the one with a band scale under it: half of what an axis property
@@ -876,7 +878,7 @@ function buildFamilies() {
   mark: (spec, property, value) => {
     spec.marks[0][property] = value;
   },
-  // An **encode channel**, written into the mark's `enter` block as a literal value. Sixty of them
+  // An **encode channel**, written into the mark's `enter` block as a literal value. Sixty-nine of them
   // are declared and a bar chart reads perhaps eight, so this is the widest gap between what the
   // schema says and what any corpus exercises.
   //
@@ -933,10 +935,8 @@ const SHARED_SKIP = {
   interactive: 'no pointer in a static render',
   format: 'a format specifier, which the schema does not enumerate',
   formatType: 'meaningless without a matching format',
-  text: 'the title text itself',
   subtitle: 'the subtitle text itself',
   scheme: 'a scheme name, swept through range instead',
-  reverse: 'covered by the boolean sweep of the scale family',
   bins: 'needs bin boundaries of its own',
   init: 'an initial value for an interactive scale',
   on: 'event handlers, which a static render never fires',
@@ -976,10 +976,6 @@ const FREE_STRINGS = {
   labelFontStyle: 'concatenated into the CSS font string verbatim; see `fontStyle`',
   titleFontStyle: 'concatenated into the CSS font string verbatim; see `fontStyle`',
   subtitleFontStyle: 'concatenated into the CSS font string verbatim; see `fontStyle`',
-  cursor: 'a CSS cursor name, emitted verbatim; no pointer in a static render reads it',
-  ariaRole: 'an ARIA role, emitted verbatim',
-  ariaRoleDescription: 'an ARIA role description, emitted verbatim',
-  description: 'prose, emitted verbatim',
   title: 'the guide title itself, which is text rather than a setting',
   ellipsis: "the string a truncated label ends with; `item.ellipsis || '…'` accepts any",
   lineBreak: 'the separator `text.split(item.lineBreak)` uses; any string is one',
@@ -1030,6 +1026,9 @@ const FAMILY_SKIP = {
     // It wants a colour-ranged base of its own, which is its own change.
     interpolate: 'the space a range interpolates through, which needs a range that has one',
   },
+  title: {
+    text: 'the title text itself',
+  },
   projection: {
     name: 'names the projection every mark and transform here refers to',
     // The family *is* the type: `projection-mercator` sets it, and sweeping it as a property would
@@ -1040,7 +1039,9 @@ const FAMILY_SKIP = {
     // a map is most obviously wrong about.
     scale: null,
   },
+  // (the shared `type` is a scale's; a legend's is `gradient` or `symbol`, which the schema enumerates)
   legend: {
+    type: null,
     fill: 'names the scale a legend describes',
     stroke: 'names the scale a legend describes',
     size: 'names the scale a legend describes',
@@ -1050,6 +1051,18 @@ const FAMILY_SKIP = {
     strokeWidth: 'names the scale a legend describes',
   },
 };
+
+/**
+ * The top-level properties, which the schema states in an `allOf` beside a `$ref` to a scope.
+ *
+ * `width`, `height`, `padding`, `autosize`, `background`, `style` and `description` — everything a
+ * specification says about the drawing as a whole rather than about anything in it.
+ */
+function viewProperties() {
+  const block = schema.allOf.find((branch) => branch.properties);
+  const { $schema: _ignored, config: _alsoIgnored, ...rest } = block.properties;
+  return rest;
+}
 
 /**
  * The properties a family declares, dug out of however the schema spells that family.
@@ -1064,18 +1077,6 @@ const FAMILY_SKIP = {
  * band branch has never heard of it. Nine properties were reachable through no family at all until
  * the scale types got one each.
  */
-/**
- * The top-level properties, which the schema states in an `allOf` beside a `$ref` to a scope.
- *
- * `width`, `height`, `padding`, `autosize`, `background`, `style` and `description` — everything a
- * specification says about the drawing as a whole rather than about anything in it.
- */
-function viewProperties() {
-  const block = schema.allOf.find((branch) => branch.properties);
-  const { $schema: _ignored, config: _alsoIgnored, ...rest } = block.properties;
-  return rest;
-}
-
 function propertiesOf(family) {
   if (family === 'view') return viewProperties();
   // A range name is a *key*, not a declared property: the schema has no word for any of them, so
@@ -1209,6 +1210,12 @@ function buildVocabulary() {
   // `item.dir === 'rtl'` in `vega-scenegraph/src/util/text.js`, which is a two-valued test: a
   // right-to-left run is laid out from the other end, and every other string means left-to-right.
   dir: ['ltr', 'rtl'],
+  // Written into the SVG verbatim, and the comparison reads them: the ARIA attributes are the accessibility structure the
+  // canonicalizer compares (N-structure), and a mark's cursor is its style. One honest value each.
+  description: ['A described item'],
+  ariaRole: ['img'],
+  ariaRoleDescription: ['a picture'],
+  cursor: ['pointer'],
 };
 
 /** `symbolType` is a legend's word for the same twelve names. */
@@ -1230,6 +1237,9 @@ const VOCABULARY_ALIAS = {
   tickCap: 'strokeCap',
 };
 
+/** The one colour tried where the schema says a colour, chosen to be unlike every default. */
+const COLOUR = '#b35a1f';
+
 /**
  * Values that belong to **one family**, where the schema declares a shape rather than a number.
  *
@@ -1246,9 +1256,6 @@ const VOCABULARY_ALIAS = {
  * setting a scale and a translation the composite ignores, and drew at its unfitted default. Left to
  * the array rule it was offered `[4, 2]`, which is not geometry at all.
  */
-/** The one colour tried where the schema says a colour, chosen to be unlike every default. */
-const COLOUR = '#b35a1f';
-
 const FAMILY_VOCABULARY = {
   // A range is set three ways and all three are ordinary: a **scheme** by name, the colours written
   // **out**, and — for a diverging one — a scheme with an `extent` that reads part of it or turns
@@ -1369,7 +1376,7 @@ function branchesOf(fragment, depth = 0) {
   if (nested) return nested.flatMap((branch) => branchesOf(branch, depth + 1));
   // An **encoder value**, which is where a channel's own enumeration lives: a channel is declared
   // as `{"value": {"enum": […]}}` rather than as the enum itself, because a channel may equally be
-  // a field, a scale lookup or a signal. Following the `value` property is what makes the sixty
+  // a field, a scale lookup or a signal. Following the `value` property is what makes the sixty-nine
   // encode channels reachable at all; without it every one of them read as unenumerable.
   if (fragment.properties && fragment.properties.value) {
     return branchesOf(fragment.properties.value, depth + 1);
@@ -1404,23 +1411,58 @@ function valuesFor(fragment, property, family) {
   return null;
 }
 
+/**
+ * The values every enumerable branch of a schema fragment declares, together: every word of every enum branch, the booleans
+ * of a boolean branch, the numbers of a number branch (`tickCount` is interval words AND numbers, `labelOverlap` words AND
+ * booleans). Empty when no branch is enumerable. Shared by both schema sweeps.
+ */
+export function enumerableUnion(branches, numbers) {
+  const values = [];
+  const kinds = [];
+  const seen = new Set();
+  const add = (kind, list) => {
+    let any = false;
+    for (const v of list) {
+      // `null` is in several of these enumerations as "unset", which is what leaving the property out already tests.
+      if (v === null) continue;
+      const key = JSON.stringify(v);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      values.push(v);
+      any = true;
+    }
+    if (any && !kinds.includes(kind)) kinds.push(kind);
+  };
+  const types = (branch) => (Array.isArray(branch.type) ? branch.type : [branch.type]);
+  for (const branch of branches) if (branch.enum) add('enum', branch.enum);
+  for (const branch of branches) if (types(branch).includes('boolean')) add('boolean', [true, false]);
+  for (const branch of branches) if (types(branch).includes('number') || types(branch).includes('integer')) add('number', numbers);
+  return { kind: kinds.join('+'), values };
+}
+
+/**
+ * A case name no earlier case has: the base name, else the base name with the next free number. The count is kept on the BASE
+ * name and the loop runs until the name is free, so a third value that slugs alike gets `-3` (and a base name that is itself
+ * `x-2` cannot collide with the second `x`).
+ */
+export function uniqueName(used, base) {
+  if (!used.has(base)) {
+    used.set(base, 1);
+    return base;
+  }
+  let n = used.get(base);
+  let name;
+  do name = `${base}-${++n}`; while (used.has(name));
+  used.set(base, n);
+  used.set(name, 1);
+  return name;
+}
+
 /** Collects the candidate values a schema fragment declares, or null where there are none. */
 function declaredValues(fragment) {
   const branches = branchesOf(fragment);
-  for (const branch of branches) {
-    // `null` is in several of these enumerations as "unset", which is what leaving the property out
-    // already tests.
-    if (branch.enum) {
-      const values = branch.enum.filter((v) => v !== null);
-      if (values.length) return { kind: 'enum', values };
-    }
-  }
-  for (const branch of branches) {
-    if (branch.type === 'boolean') return { kind: 'boolean', values: [true, false] };
-  }
-  for (const branch of branches) {
-    if (branch.type === 'number') return { kind: 'number', values: NUMBERS };
-  }
+  const union = enumerableUnion(branches, NUMBERS);
+  if (union.values.length) return union;
   // A colour is named by the definition it references rather than by the property's name, so this
   // stays schema-driven: `titleColor` is `oneOf [null, string, colorValue]`, and the bare `string`
   // branch on its own would be skipped as a free string.
@@ -1506,9 +1548,7 @@ export function generate(ctx) {
         // A name that has already been used gets a number: two values can slug the same way
         // (`0` and `-0`, `"a b"` and `"a_b"`) and a second case replacing the first would silently
         // shrink the sweep.
-        let name = `${family}-${property}-${slug(value)}`;
-        if (used.has(name)) name = `${name}-${used.get(name) + 1}`;
-        used.set(name, (used.get(name) || 0) + 1);
+        const name = uniqueName(used, `${family}-${property}-${slug(value)}`);
         cases.push({ name, family, property, spec });
       }
     }
