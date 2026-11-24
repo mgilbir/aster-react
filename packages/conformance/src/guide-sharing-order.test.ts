@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest'
 import * as vl from 'vega-lite'
 import '@aster-charts/core/geo'
 import '@aster-charts/core/transforms'
+import '@aster-charts/core/load'
 import { compileChart, evaluateChart, renderSceneToSvg, renderSpec } from '@aster-charts/core'
 
 const CORPUS = join(dirname(fileURLToPath(import.meta.url)), '..', 'corpus')
@@ -36,8 +37,22 @@ function render(f: string): string {
 }
 
 const forward = new Map<string, string>()
+/** The corpus specs that do not render here, and why: a url dataset needs `loadSpecData` first, which this file does not run. */
+const NOT_RENDERED = new Map([
+  ['data-url-csv.vg.json', 'dataset "table" has a url but no data was loaded for it'],
+  ['data-url-signal.vg.json', 'dataset "pts" has a url but no data was loaded for it'],
+])
 describe('the corpus, forward', () => {
   for (let i = 0; i < SLICES; i++) it(`slice ${i + 1} of ${SLICES}`, () => { for (const f of slice(files, i)) forward.set(f, render(f)) }, 120_000)
+})
+describe('what the forward pass rendered', () => {
+  it('every spec but the named url ones is a real render, not a thrown message compared with itself', () => {
+    // (a throw is the string `ERR <message>`, equal to itself on both passes: the specs that throw are named, with their message)
+    expect(forward.size, 'the forward slices above did not all run').toBe(files.length)
+    const errors = [...forward].filter(([, h]) => h.startsWith('ERR ')).map(([f, h]) => [f, h])
+    expect(errors.map(([f]) => f).sort()).toEqual([...NOT_RENDERED.keys()].sort())
+    for (const [f, h] of errors) expect(h, f).toContain(NOT_RENDERED.get(f!)!)
+  })
 })
 describe('the corpus, shuffled, in the same process', () => {
   for (let i = 0; i < SLICES; i++) {
