@@ -39,12 +39,18 @@ export const gen = (seed: number): Gen => {
   }
 }
 
-/** The first difference between two values, comparing numbers with Object.is and objects by their sorted keys. */
-export function firstDiff(a: unknown, b: unknown, path = '$', seen = new Set<unknown>()): string | null {
+/**
+ * The first difference between two values, comparing numbers with Object.is and objects by their sorted keys. An object is skipped only
+ * when the PAIR (this object, that one) is already compared or being compared (a cycle): the same object reached again against another
+ * one is compared again, so a link that ends on the wrong node, or rows of the nodes in another order, are seen.
+ */
+export function firstDiff(a: unknown, b: unknown, path = '$', seen = new Map<object, Set<object>>()): string | null {
   if (typeof a === 'number' || typeof b === 'number') return Object.is(a, b) ? null : `${path}: ${String(a)} vs ${String(b)}`
   if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return a === b ? null : `${path}: ${String(a)} vs ${String(b)}`
-  if (seen.has(a)) return null
-  seen.add(a)
+  const met = seen.get(a)
+  if (met?.has(b)) return null
+  if (met) met.add(b)
+  else seen.set(a, new Set([b]))
   if (Array.isArray(a) !== Array.isArray(b)) return `${path}: array vs object`
   if (Array.isArray(a) && Array.isArray(b)) {
     // (vega hangs the backing tree on a stratified dataset's array as `root`: only the rows are compared)
@@ -98,9 +104,10 @@ export const SCHEMA = 'https://vega.github.io/schema/vega/v6.json'
 
 // -- force ---------------------------------------------------------------------------------------------------------
 
-export function forceCase(seed: number): any {
+/** `empty` makes the case one with no node, or one with no force: each is a case of its own, not a seventh of the draws (a case with nothing to move compares nothing). */
+export function forceCase(seed: number, empty?: 'nodes' | 'forces'): any {
   const g = gen(seed)
-  const n = g.pick([0, 1, 2, 3, 5, 9, 17, 30, 45])
+  const n = empty === 'nodes' ? 0 : g.pick([1, 2, 3, 5, 9, 17, 30, 45])
   const mode = g.pick(['plain', 'placed', 'coincident', 'fixed', 'mixed'])
   const nodes = Array.from({ length: n }, (_, i) => {
     const row: Record<string, unknown> = { id: g.int(1000, 9999) * 100 + i, w: g.int(1, 9), k: g.pick(['a', 'b', 'c']), tx: g.num(0, 200) }
@@ -116,7 +123,7 @@ export function forceCase(seed: number): any {
     return useId ? { source: nodes[s]!.id, target: nodes[t]!.id } : { source: s, target: t }
   })
   const forceNames = ['center', 'collide', 'nbody', 'link', 'x', 'y']
-  const count = g.int(0, 5)
+  const count = empty === 'forces' ? 0 : g.int(1, 5)
   const forces = Array.from({ length: count }, () => {
     const name = g.pick(forceNames)
     const f: Record<string, unknown> = { force: name }
