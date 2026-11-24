@@ -18,8 +18,9 @@ const FIXTURES = {
   'ci-crash': [c('x-aggregate-ci0', chart({ transform: [{ type: 'aggregate', ops: ['bogus'], fields: ['a'] }] }))],
   // same crash on a non-ci name (control for the masking test)
   'plain-crash': [c('x-plain', chart({ transform: [{ type: 'aggregate', ops: ['bogus'], fields: ['a'] }] }))],
-  // the oracle crashes on an unknown mark, Aster renders it: a node-error
-  'node-error': [c('plain-a', chart()), c('oracle-only-crash', { width: 10, height: 10, marks: [{ type: 'nosuchmark' }] })],
+  // the oracle crashes on a data set named like a member of Object.prototype, Aster renders it (a documented deviation): a node-error
+  // (an unknown mark type no longer serves: Aster refuses it as vega does, C238)
+  'node-error': [c('plain-a', chart()), c('oracle-only-crash', { width: 10, height: 10, data: [{ name: 'toString', values: [{ a: 1 }] }] })],
   // oracle is genuinely random, so two engines legitimately differ on a ci case
   'ci-random': [c('x-aggregate-ci1', {
     width: 80, height: 40, padding: 2, autosize: 'none', background: 'white',
