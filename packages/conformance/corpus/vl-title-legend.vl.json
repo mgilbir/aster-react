@@ -1,5 +1,5 @@
 {
-  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
   "name": "chart",
   "description": "A simple bar chart with embedded data.",
   "title": { "text": "Revenue", "subtitle": "by month", "anchor": "start" },

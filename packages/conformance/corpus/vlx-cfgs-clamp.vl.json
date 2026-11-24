@@ -117,11 +117,23 @@
   "encoding": {
     "x": {
       "field": "x",
-      "type": "quantitative"
+      "type": "quantitative",
+      "scale": {
+        "domain": [
+          3,
+          6
+        ]
+      }
     },
     "y": {
       "field": "y",
-      "type": "quantitative"
+      "type": "quantitative",
+      "scale": {
+        "domain": [
+          4,
+          7
+        ]
+      }
     }
   },
   "config": {
