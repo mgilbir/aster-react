@@ -321,6 +321,8 @@ describe('generated: the expression engine vs real Vega (formula per row)', () =
       const r = makeRng(SEED ^ 0x10c)
       const runtime: any = { scale: () => undefined, data: () => undefined, expr: (e: string) => compileExpr(e, runtime) }
       const bad: string[] = []
+      let compiledCount = 0
+      let changed = 0
       for (let i = 0; i < scaled(120) && bad.length < 8; i++) {
         const expr = r.chance(0.5)
           ? `format(${r.pick(['datum.a', 'datum.b', 'datum.o.v'])}, ${q(numSpec(r))})`
@@ -330,6 +332,7 @@ describe('generated: the expression engine vs real Vega (formula per row)', () =
         // one compiled expression, evaluated over the rows under the default locale, another, and the default again
         const compiled = (() => { try { return compileExpr(expr, runtime) } catch { return undefined } })()
         if (!compiled) continue
+        compiledCount++
         const evalAll = (): unknown => rows.map((row) => { try { return enc(compiled(row, SIGNALS)) } catch (e) { return { error: errorText(e) } } })
         // (one View per row: vega's dataflow stops at the first row that throws, the compiled expression is called per row)
         const viaVega = (): unknown => rows.map((row) => {
@@ -341,11 +344,16 @@ describe('generated: the expression engine vs real Vega (formula per row)', () =
         const during = [evalAll(), viaVega()]
         resetLocales()
         const after = [evalAll(), viaVega()]
+        // the locale must matter: under the other default locale at least one result differs from the one before
+        if (JSON.stringify(during[0]) !== JSON.stringify(before[0])) changed++
         for (const [label, [got, want]] of [['before', before], ['during', during], ['after', after]] as const) {
           if (JSON.stringify(got) !== JSON.stringify(want)) bad.push(`#${i} ${label} ${expr}\n   vega:  ${JSON.stringify(want).slice(0, 400)}\n   aster: ${JSON.stringify(got).slice(0, 400)}`)
         }
       }
       expect(bad).toEqual([])
+      // the test passes if compileExpr refuses everything, or if the locale changes nothing, unless these are held
+      expect(compiledCount, 'expressions that compiled').toBeGreaterThan(scaled(120) * 0.9)
+      expect(changed, 'expressions whose results moved with the default locale').toBeGreaterThan(scaled(120) * 0.1)
     }), 120_000)
 })
 

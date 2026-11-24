@@ -97,11 +97,13 @@ const CASES = scaled(12000)
 const seedOf = (i: number): number => 0xa7c5 + i * 15485863
 const cases = Array.from({ length: CASES }, (_, i) => arcSpec(seedOf(i)))
 
-function compare(label: string, i: number, want: () => unknown, got: () => unknown): void {
+/** `input` names a case that has no entry of the arc list (the bounds pen's draws): what a failure prints in place of the spec. */
+function compare(label: string, i: number, want: () => unknown, got: () => unknown, input?: unknown): void {
   const w = exact(want)
   const g = exact(got)
   if (JSON.stringify(w) !== JSON.stringify(g)) {
-    expect({ case: label, seed: seedOf(i), spec: enc(cases[i]), got: g }).toEqual({ case: label, seed: seedOf(i), spec: enc(cases[i]), got: w })
+    const who = input === undefined ? { seed: seedOf(i), spec: enc(cases[i]) } : { input: enc(input) }
+    expect({ case: label, ...who, got: g }).toEqual({ case: label, ...who, got: w })
   }
 }
 
@@ -162,7 +164,8 @@ describe('the bounds pen\'s arc is vega\'s boundContext arc', () => {
       const turn = r() < 0.5 ? 0 : [30, 90, -45, 180, 400, 1e-9][Math.floor(r() * 6)]!
       if (Math.abs(a1 - a0) < TAU - 1e-8) walked++
       compare('pen', 0, () => { const b = new (vega as any).Bounds(); (vega as any).boundContext(b, turn).arc(cx, cy, rad, a0, a1, ccw); return box(b) },
-        () => { const b = new Bounds(); new BoundsPen(b, turn).arc(cx, cy, rad, a0, a1, ccw); return box(b) })
+        () => { const b = new Bounds(); new BoundsPen(b, turn).arc(cx, cy, rad, a0, a1, ccw); return box(b) },
+        { cx, cy, rad, a0, a1, ccw, turn, draw: i })
     }
     expect(walked).toBeGreaterThan(10000)
   })
