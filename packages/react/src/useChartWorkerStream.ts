@@ -71,7 +71,7 @@ export interface ChartWorkerStreamOptions extends ChartWorkerOptions, Omit<Strea
    * stream's evaluations log (relayed from the worker with each response). `random` is a function and cannot be sent to a
    * worker: with a Worker it is refused with an error, without one it is the stream's source of random numbers.
    */
-  initial?: Omit<RuntimeInput, 'textMetrics' | 'urlPolicy'> & { textMetrics?: WorkerTextMetrics; urlPolicy?: WorkerUrlPolicyInput }
+  initial?: Omit<RuntimeInput, 'textMetrics' | 'urlPolicy' | 'previousScene'> & { textMetrics?: WorkerTextMetrics; urlPolicy?: WorkerUrlPolicyInput }
   /**
    * Host text measurement for every flush: a provider name registered in the worker (an object only works without one).
    * Overrides `initial.textMetrics`. A change applies from the next flush (it never restarts the stream); a stream cannot go

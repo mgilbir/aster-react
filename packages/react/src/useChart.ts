@@ -54,6 +54,8 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
     random: given.random,
     containerSize: useStableContent(given.containerSize),
     measuredSize: useStableContent(given.measuredSize),
+    // (a session keeps its own previous rows and does not read it; named for the exhaustiveness of this record)
+    previousScene: given.previousScene,
   }
   // Every `RuntimeInput` field is a dependency. The record below must name each key of `RuntimeInput` (the type makes a
   // missing one a compile error), so a new engine input cannot silently leave a stale result -- nor be compared by identity

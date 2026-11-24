@@ -260,6 +260,11 @@ interface IncrementalState {
   rows: Map<string, Pin<Row[]>>
   /** The arrays the host gave the datasets (see `hostPulse`: a pulse is taken relative to these). */
   hostRows: Map<string, readonly unknown[]>
+  /**
+   * What stands for this state in the scene it made (`SCENE_STATES`): a caller that hands that scene back as `previousScene` says its
+   * hints are relative to the rows this state was given.
+   */
+  token: object
   /** True once a fast path updated a structure in place (see above). */
   stale: boolean
   /** Where the view's id counter stood (see identifier-ids.ts): the next evaluation numbers new rows from here. */
@@ -308,7 +313,7 @@ interface ScopedRun {
 }
 
 function newState(gen: number): IncrementalState {
-  return { gen, fp: '', scales: new Map(), scaleEntries: new Map(), datasets: new Map(), groups: new Map(), markKeys: new Map(), rows: new Map(), hostRows: new Map(), stale: false, idCounter: 0, scoped: new Map(), numbered: new Map(), copies: new Map(), instances: new Map(), groupMarks: new Map(), channels: new Map(), markSources: new Map(), guides: new Map() }
+  return { gen, fp: '', scales: new Map(), scaleEntries: new Map(), datasets: new Map(), groups: new Map(), markKeys: new Map(), rows: new Map(), hostRows: new Map(), token: {}, stale: false, idCounter: 0, scoped: new Map(), numbered: new Map(), copies: new Map(), instances: new Map(), groupMarks: new Map(), channels: new Map(), markSources: new Map(), guides: new Map() }
 }
 
 /** A top-level leaf mark's items as an encode made them: the encode, the rows, the items in row order and each channel's key. */
@@ -346,6 +351,23 @@ interface GroupMarkRecord {
 
 /** Committed state per compiled chart. Never stored on the IR itself. */
 const STATES = new WeakMap<CompiledChart, IncrementalState>()
+/** The token of the state each committed evaluation's scene was made with (see `hintBases`). */
+const SCENE_STATES = new WeakMap<SceneRoot, object>()
+/** No arrays: the hints of a caller whose previous scene is not the chart's committed state are relative to none of its rows. */
+const NO_BASES: ReadonlyMap<string, unknown> = new Map()
+
+/**
+ * The arrays the hints of `evaluateChart`'s caller are relative to, when it says so by handing back the scene it was given last
+ * (`input.previousScene`): the rows the chart's committed state was made from when that scene is the state's (the caller made the
+ * last evaluation, so its rows are the state's), else none -- another caller evaluated the chart since (DECISIONS Q16), or the scene
+ * is no committed evaluation of this chart, and every hinted dataset is derived in full. One identity comparison, whatever the rows.
+ */
+function hintBases(chart: CompiledChart, input: RuntimeInput): ReadonlyMap<string, unknown> | undefined {
+  const scene = input.previousScene
+  if (scene === undefined) return undefined
+  const committed = STATES.get(chart)
+  return committed !== undefined && (scene !== null && typeof scene === 'object') && SCENE_STATES.get(scene) === committed.token ? committed.hostRows : NO_BASES
+}
 
 /** One evaluation's view of the committed state (shared across fit-loop passes). */
 interface EvalTxn {
@@ -3763,7 +3785,9 @@ export function evaluateChartPending(
   // a spec that makes regular expressions, under `limits.regex: 'refuse'`: refused for its spec, before anything runs
   checkChartRegex(chart, input.limits)
   const txn = beginTxn(engine, chart, unchanged)
-  if (pulseBases !== undefined) txn.pulseBases = pulseBases
+  // (a session names the rows its hints are relative to; an `evaluateChart` caller, by the scene it was given last)
+  const bases = pulseBases ?? hintBases(chart, input)
+  if (bases !== undefined) txn.pulseBases = bases
   const done: { draft?: IncrementalState; failed?: boolean } = {}
   const scene = measured(input, done, () => withLimits(input.limits, () => withTextMetricsProvider(input.textMetrics, () => evaluateChartImpl(chart, input, txn, done))))
   return {
@@ -3774,7 +3798,10 @@ export function evaluateChartPending(
       if (done.failed) {
         const committed = STATES.get(chart)
         if (committed) committed.stale = true
-      } else if (done.draft) STATES.set(chart, done.draft)
+      } else if (done.draft) {
+        STATES.set(chart, done.draft)
+        SCENE_STATES.set(scene, done.draft.token)
+      }
     },
   }
 }
@@ -4513,9 +4540,12 @@ export function withCarry<T>(tctx: Pick<TransformContext, 'ids'>, carry: readonl
  * The pulse the caller gave for host dataset `name`, when it describes how the rows the state this pass reuses was made from became
  * `given`; else null (the dataset is derived in full). A hint is relative to the caller's own previous rows, which the state need
  * not have been made from: one compiled chart may be evaluated by several callers (DECISIONS Q16), each with its own data. So the
- * pulse is taken only for the very array the state was given (the caller changed it in place and says how), or for an array whose
- * rows the pulse says are unchanged are the rows of that array where it says they are: the same objects (a host's immutable update
- * hands them for the rows it did not touch: one pass over the references), or rows equal to them field by field.
+ * pulse is taken for the very array the state was given (the caller changed it in place and says how); for an array the caller
+ * names as the one its hints are relative to (`ctx.pulseBases`: a session's own last rows, or the rows of the state that made the
+ * scene an `evaluateChart` caller hands back as `previousScene`) when that is the state's, by identity; and, from a caller that names
+ * neither, when the rows the pulse says are unchanged are the rows of the state's array where it says they are: the same objects
+ * (one pass over the references), or rows equal to them field by field. A pulse whose shape cannot fit the rows (a `baseLength` that
+ * is not the length before, DECISIONS Q29; a mapping of another length) is not taken either.
  */
 function hostPulse(ctx: EvalContext, name: string, given: unknown): StepPulse | null {
   if (Array.isArray(given)) ctx.draft.hostRows.set(name, given)
@@ -4523,13 +4553,14 @@ function hostPulse(ctx: EvalContext, name: string, given: unknown): StepPulse | 
   if (p === undefined) return null
   const before = ctx.prev?.hostRows.get(name)
   if (before === undefined || !Array.isArray(given)) return null
-  // (the very array, or the array the caller says its pulse is relative to: a session diffs against the rows it handed over last)
-  if (before === given || ctx.pulseBases?.get(name) === before) return p
+  if (before === given) return p
+  // (the caller named the rows its pulse is relative to: they are the state's, or the pulse is someone else's)
+  if (ctx.pulseBases !== undefined) return ctx.pulseBases.get(name) === before && pulseFits(p, before.length, given.length) ? p : null
+  if (!pulseFits(p, before.length, given.length)) return null
   // (the references first, in one tight pass; the changed indices and the field comparison only for a row that is another object)
   let changed: Set<number> | undefined
   const accountedFor = (i: number, a: unknown, b: unknown): boolean => (changed ??= new Set(p.changed)).has(i) || sameHostRow(a, b)
   if (p.from !== undefined) {
-    if (p.from.length !== given.length) return null
     for (let i = 0; i < given.length; i++) {
       const old = p.from[i]!
       if (old < 0) continue
@@ -4539,9 +4570,15 @@ function hostPulse(ctx: EvalContext, name: string, given: unknown): StepPulse | 
     return p
   }
   const base = p.appendOnly ? p.baseLength ?? before.length : given.length
-  if (base !== before.length || base > given.length) return null
   for (let i = 0; i < base; i++) if (given[i] !== before[i] && !accountedFor(i, given[i], before[i])) return null
   return p
+}
+
+/** Whether pulse `p` can describe rows of length `before` becoming rows of length `after` (its mapping, or what it keeps, fits). */
+function pulseFits(p: StepPulse, before: number, after: number): boolean {
+  if (p.from !== undefined) return p.from.length === after
+  const base = p.appendOnly ? p.baseLength ?? before : after
+  return base === before && base <= after
 }
 
 /** A row the pulse says is unchanged: the same row object, or one equal to it field by field (`rowsEqual`: a host may re-create it). */

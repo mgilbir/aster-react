@@ -267,3 +267,79 @@ describe('a text measurer that throws (C111) and a provider set again (C395)', (
     expect(calls).toBe(before)
   })
 })
+
+/**
+ * DECISIONS Q16 (refined): a hint is checked by identity against the caller's own previous scene, not by reading the rows. A caller
+ * that hands back the scene it was given last has its pulse taken for a new array of new row objects (the unchanged rows' items
+ * are kept, not encoded again); a caller whose scene is not the chart's last evaluation (another caller evaluated the same compiled
+ * chart since, or the scene is an older one of its own, or of another chart) has the dataset derived in full, and the scene equals
+ * a fresh evaluation of its rows.
+ */
+describe('a hint is relative to the caller\'s previous scene, checked by identity (Q16)', () => {
+  const spec: VgSpec = {
+    width: 200, height: 100, padding: 0, autosize: 'none',
+    data: [{ name: 't', values: [] }],
+    scales: [{ name: 'x', type: 'linear', domain: [0, 1000], range: [0, 200] }],
+    marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'v' }, y: { value: 1 }, fill: { field: 'c' } } } }],
+  } as VgSpec
+  const rows = (n: number, salt: number): Array<{ v: number; c: string }> => Array.from({ length: n }, (_, i) => ({ v: (i * 7 + salt) % 1000, c: (i + salt) % 3 ? 'red' : 'blue' }))
+  const symbols = (scene: SceneRoot): Array<Record<string, unknown>> => {
+    let out: Array<Record<string, unknown>> = []
+    const walk = (n: unknown): void => {
+      if (n === null || typeof n !== 'object') return
+      if ((n as { marktype?: unknown }).marktype === 'symbol') { out = (n as { items: Array<Record<string, unknown>> }).items; return }
+      for (const c of ((n as { items?: unknown[] }).items ?? [])) walk(c)
+    }
+    walk(scene)
+    return out
+  }
+  const fresh = (data: unknown[]): string => renderSceneToSvg(evaluateChart(compileChart(structuredClone(spec)), { data: { t: data } }))
+
+  it('the caller\'s own last scene: the pulse is taken for new row objects (same-length edit and append)', () => {
+    const chart = compileChart(structuredClone(spec))
+    let data = rows(400, 1)
+    let scene = evaluateChart(chart, { data: { t: data } })
+    for (let k = 0; k < 6; k++) {
+      const before = symbols(scene)
+      const next = structuredClone(data)
+      let hint: Partial<RuntimeInput>
+      if (k % 2 === 0) { next[k * 13] = { v: 999, c: 'green' }; hint = { dataChanges: { t: [k * 13] } } }
+      else { next.push({ v: 5, c: 'green' }); hint = { dataPulse: { t: { changed: [], appendOnly: true, baseLength: data.length, added: [[data.length, next.length]] } } } }
+      scene = evaluateChart(chart, { data: { t: next }, ...hint, previousScene: scene })
+      const after = symbols(scene)
+      // (the item of every row the hint calls unchanged is kept: the pulse was taken)
+      const edited = k % 2 === 0 ? k * 13 : -1
+      expect(before.filter((it, i) => i !== edited && after[i] !== it).length).toBe(0)
+      expect(renderSceneToSvg(scene)).toBe(fresh(next))
+      data = next
+    }
+  })
+
+  it('a scene that is not the chart\'s last evaluation: derived in full, equal to fresh', () => {
+    const chart = compileChart(structuredClone(spec))
+    const other = compileChart(structuredClone(spec))
+    const a0 = rows(300, 1)
+    const b0 = rows(300, 2)
+    const sceneA = evaluateChart(chart, { data: { t: a0 } })
+    const otherScene = evaluateChart(other, { data: { t: a0 } })
+    // another caller evaluates the same compiled chart with rows of its own
+    const sceneB = evaluateChart(chart, { data: { t: b0 } })
+    // caller A's hint, relative to ITS previous rows, with its own previous scene; then with a scene of another chart; then with the
+    // scene of B's evaluation before last (an older scene of the chart)
+    const a1 = structuredClone(a0)
+    a1[3] = { v: 500, c: 'green' }
+    for (const previousScene of [sceneA, otherScene]) {
+      const before = symbols(sceneB)
+      const scene = evaluateChart(chart, { data: { t: a1 }, dataChanges: { t: [3] }, previousScene })
+      expect(renderSceneToSvg(scene)).toBe(fresh(a1))
+      // (nothing of B's items is taken for A's rows)
+      expect(symbols(scene).filter((it, i) => before[i] === it).length).toBe(0)
+      evaluateChart(chart, { data: { t: b0 } })
+    }
+    const b1 = structuredClone(b0)
+    b1[7] = { v: 1, c: 'green' }
+    evaluateChart(chart, { data: { t: a0 } })
+    const scene = evaluateChart(chart, { data: { t: b1 }, dataChanges: { t: [7] }, previousScene: sceneB })
+    expect(renderSceneToSvg(scene)).toBe(fresh(b1))
+  })
+})
