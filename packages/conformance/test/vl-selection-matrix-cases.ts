@@ -245,3 +245,19 @@ group('@aster-charts/vl == vega-lite: a selection projected over an escaped fiel
   ]
   for (const [name, spec] of CASES) add(name, spec)
 })
+
+// The selections over fields whose names are paths, spaced or escaped (C357): vega-lite projects each as written.
+group('@aster-charts/vl == vega-lite: selections over nested, spaced and escaped field names', (add) => {
+  const NESTED = { values: DATA.values.map((d) => ({ ...d, o: { c: d.c, v: d.v, x: d.x }, 'a.b': d.v, 'my c': d.c })) }
+  const view = (param: Param, encoding: Record<string, unknown>): Record<string, any> => ({ data: NESTED, params: [param], mark: 'point', encoding: { color: { condition: { param: 'sel', field: 'c', type: 'nominal' }, value: 'grey' }, ...encoding } })
+  add('a point selection over a nested field', view(sel({ type: 'point', fields: ['o.c'] }), { x: q('x'), y: q('y') }))
+  add('a point selection over a spaced field', view(sel({ type: 'point', fields: ['my c'] }), { x: q('x'), y: q('y') }))
+  add('a point selection over an escaped field', view(sel({ type: 'point', fields: ['a\\.b'] }), { x: q('x'), y: q('y') }))
+  add('a point selection over the encoding of a nested field', view(sel({ type: 'point', encodings: ['x'] }), { x: q('o.x'), y: q('y') }))
+  add('an interval over a nested x', view(sel({ type: 'interval', encodings: ['x'] }), { x: q('o.x'), y: q('y') }))
+  add('an interval over a nested x and y', view(sel({ type: 'interval' }), { x: q('o.x'), y: q('o.v') }))
+  add('an interval over an escaped y', view(sel({ type: 'interval', encodings: ['y'] }), { x: q('x'), y: q('a\\.b') }))
+  add('bound scales over a nested x', view(sel({ type: 'interval' }, { bind: 'scales' }), { x: q('o.x'), y: q('y') }))
+  add('bound scales over an escaped y', view(sel({ type: 'interval' }, { bind: 'scales' }), { x: q('x'), y: q('a\\.b') }))
+  add('a point selection by nested fields, resolve union, in a facet', { data: NESTED, facet: { column: n('g') }, spec: { params: [sel({ type: 'point', fields: ['o.c'], resolve: 'union' } as never)], mark: 'point', encoding: { x: q('x'), y: q('y'), color: { condition: { param: 'sel', field: 'c', type: 'nominal' }, value: 'grey' } } } })
+})

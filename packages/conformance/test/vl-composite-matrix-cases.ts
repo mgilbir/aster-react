@@ -354,6 +354,30 @@ group('names and scales of the overlays and stacks (a named unit, a fill domain,
   add('a boxplot over a nested field', { data: { values: DATA.values.map((d) => ({ ...d, o: { v: d.v } })) }, mark: 'boxplot', encoding: { x: n('c'), y: q('o.v') } })
 })
 
+// The holes the first-pass composite defects went through (C357): a field named by a path or an escaped dot, a variable parameter on a
+// composite unit, a title switched off on the measure, a resolve between the parts of a layer.
+group('composite marks over field names, parameters, resolves and switched-off titles', (add) => {
+  const NESTED = { values: DATA.values.map((d) => ({ ...d, o: { v: d.v, c: d.c }, 'a.b': d.v, 'my v': d.v })) }
+  for (const mark of ['boxplot', 'errorbar', 'errorband']) {
+    const body = (x: unknown, y: unknown, extra: Record<string, unknown> = {}) => ({ data: NESTED, mark, encoding: mark === 'errorband' ? { x: q('x'), y, ...extra } : { x, y, ...extra } })
+    add(`${mark} over a nested measure`, body(n('c'), q('o.v')))
+    add(`${mark} over a nested group`, body(n('o.c'), q('v')))
+    add(`${mark} over a nested colour`, body(n('c'), q('v'), { color: n('o.c') }))
+    add(`${mark} over an escaped measure`, body(n('c'), q('a\\.b')))
+    add(`${mark} over a measure with a space`, body(n('c'), q('my v')))
+    add(`${mark} with a variable param read by a filter`, { data: DATA, params: [{ name: 'cut', value: 2, bind: { input: 'range', min: 0, max: 40 } }], transform: [{ filter: 'datum.v > cut' }], mark, encoding: mark === 'errorband' ? { x: q('x'), y: q('v') } : { x: n('c'), y: q('v') } })
+    add(`${mark} with a variable param on the unit`, { data: DATA, params: [{ name: 'k2', value: 3 }], mark, encoding: mark === 'errorband' ? { x: q('x'), y: q('v') } : { x: n('c'), y: q('v') } })
+    add(`${mark} with a variable param read by the title`, { data: DATA, params: [{ name: 'label', value: 'Mine', bind: { input: 'text' } }], title: { text: { expr: 'label' } }, mark, encoding: mark === 'errorband' ? { x: q('x'), y: q('v') } : { x: n('c'), y: q('v') } })
+    add(`${mark} with a null title on the measure`, body(n('c'), q('v', { title: null })))
+    add(`${mark} with a null axis title on the measure`, body(n('c'), q('v', { axis: { title: null } })))
+  }
+  for (const resolve of ['independent', 'shared']) {
+    add(`a boxplot and a line in a layer, y ${resolve}`, { data: DATA, resolve: { scale: { y: resolve } }, layer: [{ mark: 'boxplot', encoding: { x: n('c'), y: q('v') } }, { mark: 'line', encoding: { x: n('c'), y: q('w', { aggregate: 'mean' }) } }] })
+    add(`an errorbar and a point in a layer, y ${resolve}`, { data: DATA, resolve: { scale: { y: resolve } }, layer: [{ mark: 'errorbar', encoding: { x: n('c'), y: q('v') } }, { mark: 'point', encoding: { x: n('c'), y: q('w', { aggregate: 'mean' }) } }] })
+    add(`two boxplots in a layer, y ${resolve}`, { data: DATA, resolve: { scale: { y: resolve } }, layer: [{ mark: 'boxplot', encoding: { x: n('c'), y: q('v') } }, { mark: { type: 'boxplot', color: 'red' }, encoding: { x: n('c'), y: q('w') } }] })
+  }
+})
+
 group('stack order follows a colour domain', (add) => {
   const ORDERS: Array<[string, unknown]> = [['a list', ['C', 'A', 'B']], ['a shorter list', ['B', 'A']], ['a list with an unknown value', ['Z', 'C', 'A', 'B']]]
   for (const [on, domain] of ORDERS) {
