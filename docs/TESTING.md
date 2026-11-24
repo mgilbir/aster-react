@@ -144,7 +144,7 @@ The repo's default run pins `TZ=UTC`, which hides zone bugs (a UTC scale formatt
 time passes there). The `tz-matrix` gate (`pnpm test:tz`) re-runs the zone-aware unit tests
 (`*.tz.test.ts`), the live scale-spec differential (every case also runs in each zone inside the test) and
 `packages/conformance/corpus-tz` (raw Vega specs rendered by vega and Aster in the same zone)
-under `America/New_York`, `Asia/Kolkata` and `Australia/Lord_Howe` (a half-hour daylight-saving offset the other two cannot catch; `ZONES` in `scripts/test-tz.mjs`; the corpus also runs in UTC). Add a case to `corpus-tz` when a fix depends on
+under `America/New_York`, `Asia/Kolkata` and `Australia/Lord_Howe` (a half-hour daylight-saving offset the other two cannot catch; `ZONES` in `scripts/lib/tz-zones.mjs`; `calendar.tz.test.ts` holds what vega draws in each, recorded by `packages/conformance/scripts/gen-tz-hours.mjs`; the corpus also runs in UTC). Add a case to `corpus-tz` when a fix depends on
 the zone.
 
 ## Reference results
