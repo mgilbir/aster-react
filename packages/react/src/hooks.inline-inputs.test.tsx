@@ -119,6 +119,8 @@ describe('useChart: every RuntimeInput as an inline literal evaluates once', () 
     random: () => random,
     containerSize: () => ({ width: 100, height: 50 }),
     measuredSize: () => ({ width: 100 }),
+    // (the scene a previous evaluation made: a session keeps its own, and the hook does not read this one)
+    previousScene: () => undefined,
   }
   it.each(Object.keys(INLINE) as Array<keyof UseChartOptions>)('%s', async (key) => {
     const { renders, results } = await drive(() => useChart(inlineSpec(), { [key]: INLINE[key]() }))
