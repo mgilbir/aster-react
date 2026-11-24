@@ -332,7 +332,8 @@ export function normalizeRangedLines(node: unknown, inherited: Obj = {}): unknow
   // (the mark's type has done its job: it made the rule)
   if (isObj(node.mark)) {
     consuming(() => node.mark.type)
-    return derive(node, { mark: derive(node.mark, { type: 'rule' }) })
+    // (`$line`: what vega-lite ignores of the line's mark def it ignores of this rule too: mark-props.ts, by the type the spec wrote)
+    return derive(node, { mark: derive(node.mark, { type: 'rule', $line: true }) })
   }
   consuming(() => node.mark)
   return derive(node, { mark: 'rule' })
