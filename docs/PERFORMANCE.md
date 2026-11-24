@@ -409,7 +409,7 @@ row built on a bare `import '...'` then measures nothing and fails).
 `<Chart>` is a shell over `ChartCore` with injected capabilities; that costs a little code in both shells: the property
 reads through the capability objects (a minifier cannot rename them) and the report of a missing capability, which only
 `<SvgChart>` can trigger but both share. `<SvgChart>` is 11.6 kB smaller than `<Chart>` (190.6 minus 179.0): it leaves out the canvas
-renderer, the hit index and the signal loop. Their marginal rows (6.2, 10.1 and 15.0 kB) are each measured on their own,
+renderer, the hit index and the signal loop. Their marginal rows (6.2, 10.1 and 15.4 kB) are each measured on their own,
 so they do not add up to the 11.6 kB gap. The rows that contain no such
 code are checked on the module list, not only the byte count: `pnpm check:bundle` asserts on the esbuild metafile that the
 `<SvgChart>` bundle reads no `core/canvas`, `core/hit` or `core/signals` module, and that with `interaction` it reads hit and
