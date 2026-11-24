@@ -27,6 +27,9 @@ export function setSpatialProgram(encode: object, program: SpatialProgram): void
   PROGRAMS.set(encode, program)
 }
 
+/** The program of an encode set, if it has one (read once per set, with its plan). */
+export const spatialProgramFor = (encode: object): SpatialProgram | undefined => PROGRAMS.get(encode)
+
 const DIMENSIONS = {
   x: { pos: 'x', end: 'x2', center: 'xc', size: 'width' },
   y: { pos: 'y', end: 'y2', center: 'yc', size: 'height' },
@@ -69,13 +72,36 @@ function adjust(o: Record<string, unknown>, has: (k: string) => boolean, d: Dime
 }
 
 /** Adjust an encoded item (`rec`) for the set `encode` it was encoded from. */
-export function adjustSpatial(rec: Record<string, unknown>, encode: Record<string, unknown>, marktype: string): void {
+export function adjustSpatial(rec: Record<string, unknown>, encode: Record<string, unknown>, marktype: string, program: SpatialProgram | undefined): void {
   if (marktype === 'rule') return
   const canSwap = marktype === 'rect' || marktype === 'group' || marktype === 'image'
-  const program = PROGRAMS.get(encode)
+  if (program === undefined) {
+    // one adjustment over the merged set's channels (the hot path: every item of every mark)
+    const has = (k: string): boolean => encode[k] != null
+    const n = (k: string): number => rec[k] as number
+    if (has('x2')) {
+      if (has('x')) {
+        if (canSwap && n('x') > n('x2')) { const t = rec['x']; rec['x'] = rec['x2']; rec['x2'] = t }
+        rec['width'] = n('x2') - n('x')
+      } else {
+        rec['x'] = n('x2') - (n('width') || 0)
+      }
+    }
+    if (has('xc')) rec['x'] = n('xc') - (n('width') || 0) / 2
+    if (has('y2')) {
+      if (has('y')) {
+        if (canSwap && n('y') > n('y2')) { const t = rec['y']; rec['y'] = rec['y2']; rec['y2'] = t }
+        rec['height'] = n('y2') - n('y')
+      } else {
+        rec['y'] = n('y2') - (n('height') || 0)
+      }
+    }
+    if (has('yc')) rec['y'] = n('yc') - (n('height') || 0) / 2
+    return
+  }
   const merged = (k: string): boolean => encode[k] != null
   for (const dim of ['x', 'y'] as const) {
-    const sets = program?.[dim]
+    const sets = program[dim]
     if (sets === undefined) { adjust(rec, merged, DIMENSIONS[dim], canSwap); continue }
     // the enter set, with the values it gave the channels the update set overrides; then the update set over it
     const o: Record<string, unknown> = {}
