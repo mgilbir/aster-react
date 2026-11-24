@@ -73,24 +73,21 @@ describe('animation: a time channel with a timer selection', () => {
   })
 })
 
-describe('animation: refusals (vega-lite 6.4.3 emits marks that read a dataset it never defines for these)', () => {
-  const cases: Array<[string, Record<string, unknown>, RegExp]> = [
+/**
+ * What vega-lite 6.4.3 makes of each spec below, and what vega 6.3.1 makes of that (`pnpm --filter @aster-charts/conformance exec node
+ * scripts/classify-animation-refusals.mjs` prints it): the refusals are two kinds, and the title of each group says which.
+ */
+type Refusal = [string, Record<string, unknown>, RegExp]
+
+describe('animation: refusals of what vega-lite compiles to a chart that vega cannot run (a dataset it never defines, an unknown or duplicate signal) or that it throws on', () => {
+  const cases: Refusal[] = [
     ['a time channel without a timer selection', anim({ params: undefined, transform: undefined }), /exactly one timer selection/],
     ['a timer selection without the filter', anim({ transform: [] }), /needs the transform/],
-    ['a timer selection without a time channel', anim({ encoding: { x: { field: 'x', type: 'quantitative' } } }), /animates the `time` channel/],
     ['a selection by row id (no fields, no encodings)', anim({ params: [{ name: 'anim', select: { type: 'point', on: 'timer' } }] }), /exactly one of `fields` or `encodings`/],
-    ['fields and encodings together', anim({ params: [timer({ encodings: ['time'] })] }), /exactly one of/],
-    ['encodings other than time', anim({ params: [{ name: 'anim', select: { type: 'point', on: 'timer', encodings: ['x'] } }] }), /\["time"\]/],
-    ['a time unit projected through encodings', anim({ params: [{ name: 'anim', select: { type: 'point', on: 'timer', encodings: ['time'] } }], encoding: { x: { field: 'x', type: 'quantitative' }, time: { field: 'year', type: 'temporal', timeUnit: 'year' } } }), /time unit/],
-    ['a second timer selection', anim({ params: [timer(), timer({}, 'other')] }), /only one timer selection/],
-    ['an unknown selection option', anim({ params: [timer({ toggle: true })] }), /select\.toggle/],
-    ['a bound timer', anim({ params: [{ ...timer(), bind: { input: 'checkbox' } }] }), /bind/],
     ['a reserved signal name', anim({ params: [timer({}, 'anim_clock')], transform: [{ filter: { param: 'anim_clock' } }] }), /signal an animation defines/],
     ['a non-timer point selection', anim({ params: [{ name: 'anim', select: { type: 'point', on: 'click', fields: ['year'] } }] }), /exactly one timer selection/],
     ['a param predicate on a non-timer parameter', anim({ transform: [{ filter: { param: 'nope' } }, { filter: { param: 'anim' } }] }), /is not declared in `params`/],
     ['a time channel with a sort', anim({ encoding: { x: { field: 'x', type: 'quantitative' }, time: { field: 'year', type: 'ordinal', sort: 'descending' } } }), /time\.sort/],
-    ['a time channel with an aggregate', anim({ encoding: { x: { field: 'x', type: 'quantitative' }, time: { field: 'year', type: 'ordinal', aggregate: 'max' } } }), /time\.aggregate/],
-    ['an animated layer', { data: { values: ROWS }, layer: [anim()] }, /(not supported|only supported|single top-level unit)/],
     ['an animated concat child', { hconcat: [anim()] }, /(single top-level unit|selection\/param predicates)/],
     ['an animated boxplot', anim({ mark: 'boxplot', encoding: { x: { field: 'c', type: 'nominal' }, y: { field: 'y', type: 'quantitative' }, time: { field: 'year', type: 'ordinal' } } }), /composite mark/],
     ['an animated line with a point overlay', anim({ mark: { type: 'line', point: true } }), /overlay/],
@@ -102,7 +99,29 @@ describe('animation: refusals (vega-lite 6.4.3 emits marks that read a dataset i
       expect(() => compile(spec as never)).toThrowError(message)
     })
   }
+})
 
+describe('animation: refusals of what vega-lite compiles and vega runs (Aster refuses them: an animation it does not implement, or an ambiguous one)', () => {
+  const cases: Refusal[] = [
+    ['a timer selection without a time channel', anim({ encoding: { x: { field: 'x', type: 'quantitative' } } }), /animates the `time` channel/],
+    ['fields and encodings together', anim({ params: [timer({ encodings: ['time'] })] }), /exactly one of/],
+    ['encodings other than time', anim({ params: [{ name: 'anim', select: { type: 'point', on: 'timer', encodings: ['x'] } }] }), /\["time"\]/],
+    ['a time unit projected through encodings', anim({ params: [{ name: 'anim', select: { type: 'point', on: 'timer', encodings: ['time'] } }], encoding: { x: { field: 'x', type: 'quantitative' }, time: { field: 'year', type: 'temporal', timeUnit: 'year' } } }), /time unit/],
+    ['a second timer selection', anim({ params: [timer(), timer({}, 'other')] }), /only one timer selection/],
+    ['an unknown selection option', anim({ params: [timer({ toggle: true })] }), /select\.toggle/],
+    ['a bound timer', anim({ params: [{ ...timer(), bind: { input: 'checkbox' } }] }), /bind/],
+    ['a time channel with an aggregate', anim({ encoding: { x: { field: 'x', type: 'quantitative' }, time: { field: 'year', type: 'ordinal', aggregate: 'max' } } }), /time\.aggregate/],
+    ['an animated layer', { data: { values: ROWS }, layer: [anim()] }, /(not supported|only supported|single top-level unit)/],
+  ]
+  for (const [name, spec, message] of cases) {
+    it(`refuses ${name}`, () => {
+      expect(() => compile(spec as never)).toThrowError(VLCompileError)
+      expect(() => compile(spec as never)).toThrowError(message)
+    })
+  }
+})
+
+describe('animation: refusals', () => {
   it('a frame filter that lands before an aggregate with a raw-table sort is refused, not mis-compiled', () => {
     const spec = anim({
       transform: [{ filter: { param: 'anim' } }],
