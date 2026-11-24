@@ -82,6 +82,13 @@ function multisetLines(o: { records: string[] }, u: { records: string[] }, diffs
   return lines
 }
 
+/** The first place two lists of strings differ, printable; null when they are equal. */
+function firstDifference(oracle: readonly string[], ours: readonly string[]): string | null {
+  if (oracle.length !== ours.length) return `${oracle.length} items with a tooltip in vega-lite's output, ${ours.length} in ours`
+  const i = oracle.findIndex((t, k) => t !== ours[k])
+  return i < 0 ? null : `vega-lite: ${oracle[i]!.slice(0, 160)}  |  ours: ${ours[i]!.slice(0, 160)}`
+}
+
 async function runCase(spec: Record<string, unknown>, plant: boolean): Promise<CaseResult> {
   let vegaOk = false
   try {
@@ -108,6 +115,9 @@ async function runCase(spec: Record<string, unknown>, plant: boolean): Promise<C
     if (vegaDiffs.length) {
       return { vega: { kind: 'fail', lines: [`real vega on our Vega differs from vega-lite's: ${String(vegaDiffs[0]).slice(0, 200)}`] }, aster: null }
     }
+    // (neither SVG carries a tooltip, so the SVGs above cannot see one: the items' tooltips are compared on their own)
+    const tipDiff = firstDifference(oracleChecked.tooltips, checked.tooltips)
+    if (tipDiff) return { vega: { kind: 'fail', lines: [`real vega on our Vega gives different tooltips than on vega-lite's: ${tipDiff}`] }, aster: null }
     vegaOk = true
     const ourSvg = renderSpec((await loadSpecData(ourPlain() as never, TRUSTED_LOAD_OPTIONS)) as never) as string
     const u = canonicalizeSvg(plant ? plantSvg(ourSvg) : ourSvg)
