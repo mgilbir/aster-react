@@ -372,18 +372,12 @@ function layout(data: Rec[], o: LayoutOptions): Word[] {
 
 const Output = ['x', 'y', 'font', 'fontSize', 'fontStyle', 'fontWeight', 'angle']
 
-/** An `expr`-able parameter: a literal, `{field}` / a field name, or `{expr}` (a function of the tuple). */
-function param(p: unknown, ctx: TransformContext, asField = false): unknown {
-  if (typeof p === 'string' && asField) return fieldOf(p)
-  if (p !== null && typeof p === 'object' && !Array.isArray(p)) {
-    const o = p as { field?: unknown; expr?: unknown }
-    if (typeof o.field === 'string') return fieldOf(o.field)
-    if (typeof o.expr === 'string') {
-      const f = ctx.runtime.expr(o.expr)
-      return (d: Row) => f(d, ctx.signals)
-    }
-  }
-  return p
+/**
+ * An `expr`-able parameter: a literal, or the accessor a `{field}` or an `{expr}` was made (param-resolve.ts). `text` is a field
+ * parameter: a name is read off the tuple.
+ */
+function param(p: unknown, asField = false): unknown {
+  return typeof p === 'string' && asField ? fieldOf(p) : p
 }
 
 /**
@@ -448,7 +442,7 @@ export function wordcloudRows(rows: Row[], t: Record<string, unknown>, ctx: Tran
   const as = (t.as as string[] | undefined) ?? Output
   const data = (ctx.inPlace ? rows : rows.map((r) => ({ ...r }))) as Rec[]
 
-  let fontSize: unknown = param(t.fontSize, ctx) || 14
+  let fontSize: unknown = param(t.fontSize) || 14
   let range: readonly number[] | null | undefined
   if (typeof fontSize === 'function') {
     // (vega-parser leaves a parameter the spec does not give undefined: the default [10, 50] of the definition is documentation, and
@@ -480,13 +474,13 @@ export function wordcloudRows(rows: Row[], t: Record<string, unknown>, ctx: Tran
 
   const words = layout(data, {
     size: layoutSize,
-    text: functor(param(t.text, ctx, true)),
-    font: functor(param(t.font, ctx) || 'sans-serif'),
-    fontStyle: functor(param(t.fontStyle, ctx) || 'normal'),
-    fontWeight: functor(param(t.fontWeight, ctx) || 'normal'),
+    text: functor(param(t.text, true)),
+    font: functor(param(t.font) || 'sans-serif'),
+    fontStyle: functor(param(t.fontStyle) || 'normal'),
+    fontWeight: functor(param(t.fontWeight) || 'normal'),
     fontSize: functor(fontSize),
-    rotate: functor(param(t.rotate, ctx) || 0),
-    padding: functor(param(t.padding, ctx) || 1),
+    rotate: functor(param(t.rotate) || 0),
+    padding: functor(param(t.padding) || 1),
     spiral,
     random,
   })

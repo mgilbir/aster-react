@@ -12,7 +12,7 @@ import { exprRows, type ExpressionRuntime } from './expression.js'
 import { type ContourFeature, SHAPE_BOUNDS, geoRegistry, requireGeo, requireTransform } from './registry.js'
 import { isArray, sortData } from './util.js'
 import { densityGrid, placeContours } from './raster-grid.js'
-import { accessorOf, densitySettings } from './raster-params.js'
+import { densitySettings } from './raster-params.js'
 import { PARAM_RULES, checkParams } from './param-rules.js'
 import { tickStep } from './arr.js'
 import { carryOrder, orderOf, placesAt } from './tuple-order.js'
@@ -21,6 +21,7 @@ import { walkPostOrder, walkPreOrder } from './tree-walk.js'
 import { compareOf, fieldOf, numberRange, required, sortBySpec } from './row-keys.js'
 import type { AggregateParams } from './transform-agg.js'
 import { part } from './engine-parts.js'
+import { resolveTransformParams } from './param-resolve.js'
 
 
 /** One group's aggregate tuple (the incremental aggregate re-derives only dirty groups). */
@@ -169,55 +170,16 @@ export function applyTransforms(
   return out
 }
 
-/** Whether a (nested) param value holds a `{signal: ...}` reference. */
-function containsSignal(v: unknown, depth = 0): boolean {
-  if (v === null || typeof v !== 'object' || depth > 6) return false
-  if (isArray(v)) return (v as unknown[]).some((x) => containsSignal(x, depth + 1))
-  const o = v as Record<string, unknown>
-  if (typeof o.signal === 'string' && Object.keys(o).length === 1) return true
-  return Object.keys(o).some((k) => containsSignal(o[k], depth + 1))
-}
-
 /** A parameter value that is a lone `{signal: <expression>}`. */
 function isSignalRef(v: unknown): boolean {
   return v !== null && typeof v === 'object' && !isArray(v) && typeof (v as { signal?: unknown }).signal === 'string' && Object.keys(v as object).length === 1
 }
 
-const signalParams = new WeakMap<object, boolean>()
-
-/**
- * Vega lets any transform parameter be a `{signal: <expression>}`; evaluate
- * those against the current signals before the transform runs. Transforms with
- * no signal param (the common case, and every row-local re-application) are
- * returned untouched.
- */
-function resolveSignalParams(t: CompiledTransform, ctx: TransformContext): CompiledTransform {
-  let has = signalParams.get(t)
-  if (has === undefined) {
-    has = containsSignal(t)
-    signalParams.set(t, has)
-  }
-  if (!has) return t
-  const resolve = (v: unknown, depth: number): unknown => {
-    if (v === null || typeof v !== 'object' || depth > 6) return v
-    if (isArray(v)) return (v as unknown[]).map((x) => resolve(x, depth + 1))
-    const o = v as Record<string, unknown>
-    if (typeof o.signal === 'string' && Object.keys(o).length === 1) {
-      // (vega-parser Scope.signalRef: the name of a declared signal is that signal, not an expression -- `static`,
-      // a reserved word to the expression parser, is a fine signal name)
-      return Object.hasOwn(ctx.signals, o.signal) ? ctx.signals[o.signal] : ctx.runtime.expr(o.signal)({}, ctx.signals)
-    }
-    const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>
-    for (const k of Object.keys(o)) out[k] = resolve(o[k], depth + 1)
-    return out
-  }
-  return resolve(t, 0) as CompiledTransform
-}
-
 function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContext, sourceName: string | undefined, owned: boolean, leaveOrder: boolean): Row[] {
   const rules = PARAM_RULES.get(t0.type as string)
   if (rules) checkParams(t0 as Record<string, unknown>, rules)
-  const t = resolveSignalParams(t0, ctx)
+  // (every parameter as vega reads it: `{signal}`s, fields written `{expr}` / `{field, as}`, comparators -- see param-resolve.ts)
+  const t = resolveTransformParams(t0, ctx)
   switch (t.type) {
     case 'formula': {
       required('formula', t, 'expr', 'as')
@@ -271,11 +233,12 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       const projName = (t as { projection?: unknown }).projection
       const projection = projName != null ? ctx.projections?.get(String(projName)) : undefined
       if (projection != null && !geoRegistry.projectedPath) requireGeo() // throws: addon not loaded
-      const pointRadius = geoPointRadius((t as { pointRadius?: unknown }).pointRadius, ctx)
+      const pointRadius = geoPointRadius((t as { pointRadius?: unknown }).pointRadius)
+      // (a mark's transform runs on its items: the field is read off the item, `datum` -- the default -- being its data, and the
+      // path is written on the item, which is the transform's own)
+      const geoOf = fieldOf(field == null ? 'datum' : field)
       return rows.map((r) => {
-        // (a mark's transform runs on its items: the field is read off the item, `datum` -- the default -- being its data, and the
-        // path is written on the item, which is the transform's own)
-        const geo = getField(r, field == null ? 'datum' : String(field))
+        const geo = geoOf(r)
         // a projected shape's path and its unrounded bounds (for the bound pass) come from one pass over the geometry
         const shape = projection != null && as === 'shape' && geoRegistry.projectedShape ? geoRegistry.projectedShape(projection, geo, pointRadius) : undefined
         const p = shape
@@ -392,11 +355,13 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
   }
 }
 
-/** A geo transform's `pointRadius`: a number, or `{expr}` -- an expression of the GeoJSON object being drawn. */
-export function geoPointRadius(param: unknown, ctx: TransformContext): unknown {
-  if (param == null || typeof param !== 'object' || typeof (param as { expr?: unknown }).expr !== 'string') return param
-  const radius = compileExprTransform((param as { expr: string }).expr, ctx)
-  return (feature: unknown): number => +(radius(feature as Row) as number)
+/**
+ * A geo transform's `pointRadius`: a number, or a function of the GeoJSON object being drawn (written `{expr}` or `{field}`, made an
+ * accessor with the other parameters: d3's path takes `+radius(object)`).
+ */
+export function geoPointRadius(param: unknown): unknown {
+  if (typeof param !== 'function') return param
+  return (feature: unknown): number => +((param as (d: unknown) => unknown)(feature) as number)
 }
 
 export function compileExprTransform(expr: string, ctx: TransformContext) {
@@ -695,10 +660,9 @@ function contourRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCont
   if (values) cells = values
   else {
     const settings = densitySettings(t)
-    const compile = (expr: string): ((d: Row) => unknown) => compileExprTransform(expr, ctx)
-    const x = t.x != null ? accessorOf(t.x, compile) : (d: Row) => (d as unknown as unknown[])[0]
-    const y = t.y != null ? accessorOf(t.y, compile) : (d: Row) => (d as unknown as unknown[])[1]
-    const weight = t.weight != null ? accessorOf(t.weight, compile) : null
+    const x = t.x != null ? fieldOf(t.x) : (d: Row) => (d as unknown as unknown[])[0]
+    const y = t.y != null ? fieldOf(t.y) : (d: Row) => (d as unknown as unknown[])[1]
+    const weight = t.weight != null ? fieldOf(t.weight) : null
     const grid = densityGrid({
       xs: rows.map((r) => x(r)),
       ys: rows.map((r) => y(r)),

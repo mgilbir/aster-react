@@ -9,6 +9,7 @@ import { assertSpecDepth } from './limits.js'
 import { dataInputOf, normalizeSpecLists } from './spec-structure.js'
 import { noteWrittenType, transformTypeOf } from './transform-names.js'
 import { checkExpressions } from './spec-expressions.js'
+import { checkFieldReferences } from './param-resolve.js'
 import { markPlacing } from './tuple-order.js'
 import { markShareable } from './guide-encode.js'
 import { defaultMergedConfig, mergeVegaConfig, vegaDefaultConfig } from './config-defaults.js'
@@ -378,6 +379,8 @@ function compileTransform(t: Record<string, unknown>): CompiledTransform {
     if (key === 'type') continue
     out[key] = t[key]
   }
+  // (a field that is no access path is refused as vega's runtime refuses it, building the view)
+  checkFieldReferences(out)
   return out as CompiledTransform
 }
 

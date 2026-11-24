@@ -413,7 +413,7 @@ describe('accessor helpers (not vector-representable)', () => {
   it('accessor defaults fields to [] and name to undefined', () => {
     const a = accessor((d: unknown) => d)
     expect(accessorFields(a)).toEqual([])
-    expect(accessorName(a)).toBeNull()
+    expect(accessorName(a)).toBeUndefined()
   })
 
   it('accessorName/Fields are null for non-accessors', () => {

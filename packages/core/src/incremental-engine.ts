@@ -12,6 +12,7 @@ import {
   alignIndices, appendedSources, carryByAlignment, carryByMapping, carryBySources, sourceNumbersOf, type SourceNumbers,
 } from './identifier-ids.js'
 import { applyTransforms, exprRowPass, sortOrder, aggregateGroup, type Row } from './transform.js'
+import { fieldsArePlainNames } from './param-resolve.js'
 import { checkRowCount } from './limits.js'
 import { markTuples } from './util.js'
 import { datasetsReadIn } from './step-reuse.js'
@@ -763,6 +764,11 @@ function applyStepWithPulse(
   input: StepPulse, prev: Row[] | undefined, prevStepState: unknown, published: boolean, aliased?: ReadonlySet<string>, carry?: readonly unknown[],
 ): { rows: Row[]; pulse: StepPulse | null; state?: unknown } {
   const type = String(t.type)
+  // (the steps that keep state key or order rows by the raw `groupby` / `fields` / `sort`: a field written as a signal or an
+  // object is resolved per evaluation, by the step itself)
+  if (keepsStepState(type) && !fieldsArePlainNames(t)) {
+    return { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+  }
   if ((type === 'aggregate' || type === 'joinaggregate') && !groupwiseIncremental(t)) {
     return { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
   }
@@ -939,7 +945,7 @@ export function applyPipelineWithPulse(
       pulse = res.pulse
       state.steps.push(cur)
       const next = res.state !== undefined ? res.state
-        : keepsStepState(String(t.type)) ? deriveStepState(t, stepInput, cur, tctx) : undefined
+        : keepsStepState(String(t.type)) && fieldsArePlainNames(t) ? deriveStepState(t, stepInput, cur, tctx) : undefined
       if (next !== undefined) state.stepState.set(key, next)
     }
     // A published signal that moved since the run the pulse is relative to changes what a later step of this pipeline makes of rows

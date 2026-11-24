@@ -31,8 +31,12 @@ export function lcg(seed: number): () => number {
 const accessors = new Map<string, Accessor>()
 const ACCESSOR_CACHE_LIMIT = 4096
 
-/** The accessor of a field spec (`a.b`, `a[0]`, `a\.b`), parsed once per distinct string. */
+/**
+ * The accessor of a field spec (`a.b`, `a[0]`, `a\.b`), parsed once per distinct string. A parameter written `{field, as}` or
+ * `{expr}` reaches a transform already made an accessor (param-resolve.ts): it is that accessor.
+ */
 export function fieldOf(spec: unknown): Accessor {
+  if (typeof spec === 'function') return spec as Accessor
   if (typeof spec !== 'string') return field(spec)
   let found = accessors.get(spec)
   if (found === undefined) {

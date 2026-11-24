@@ -4,8 +4,8 @@
  * expression to be refused is the first of the definition, whatever order the author wrote the keys in), and a key the definition
  * does not list is never read.
  *
- * A name is written with what the parser reads in its value: `=` an expression (a text), `~` a field or other value that may be given
- * as `{expr: text}`, `?` a comparator (`{field, order}` whose parts may be `{signal}` or `{expr}`), `@` the name of a projection (or a
+ * A name is written with what the parser reads in its value: `=` an expression (a text), `~` a field (a name, or `{field, as}` /
+ * `{expr: text, as}`), `%` a value vega lets be computed per tuple (a constant, or `{field}` / `{expr: text}`), `?` a comparator (`{field, order}` whose parts may be `{signal}` or `{expr}`), `@` the name of a projection (or a
  * scale) of the scope, `^` the name of a data set of the scope, `#` the data set a lookup indexes (with the `key` after it), `*` objects of
  * sub-parameters (see `SUB_PARAMS`); a bare name takes a value, or a `{signal}` for one. `!` before the name: the parameter is required;
  * `[]` after it: it is a list (of such values; a `{signal}` stands for a whole list but for sub-parameters, which must be a list). The live differential
@@ -43,12 +43,12 @@ const PARAMS: Readonly<Record<string, string>> = {
   stack: '~field ~groupby[] ?sort offset as[]',
   contour: '!size[] values[] ~x ~y ~weight cellSize bandwidth count nice thresholds[] smooth',
   geojson: '~fields[] ~geojson',
-  geopath: '@projection ~field ~pointRadius as',
+  geopath: '@projection ~field %pointRadius as',
   geopoint: '!@projection !~fields[] as[]',
-  geoshape: '@projection ~field ~pointRadius as',
+  geoshape: '@projection ~field %pointRadius as',
   graticule: 'extent[] extentMajor[] extentMinor[] step[] stepMajor[] stepMinor[] precision',
-  heatmap: '~field ~color ~opacity resolve as',
-  isocontour: '~field thresholds[] levels nice resolve zero smooth ~scale ~translate[] as',
+  heatmap: '~field %color %opacity resolve as',
+  isocontour: '~field thresholds[] levels nice resolve zero smooth %scale %translate[] as',
   kde2d: '!size[] !~x !~y ~weight ~groupby[] cellSize bandwidth[] counts as',
   force: 'static restart iterations alpha alphaMin alphaTarget velocityDecay *forces[] as[]',
   label: '!size[] ?sort anchor[] offset[] padding lineAnchor markIndex avoidBaseMark ^avoidMarks[] method as[]',
@@ -62,7 +62,7 @@ const PARAMS: Readonly<Record<string, string>> = {
   loess: '!~x !~y ~groupby[] bandwidth as[]',
   regression: '!~x !~y ~groupby[] method order extent[] params as[]',
   voronoi: '!~x !~y size[] extent[] as',
-  wordcloud: 'size[] ~font ~fontStyle ~fontWeight ~fontSize fontSizeRange[] ~rotate ~text spiral ~padding as[]',
+  wordcloud: 'size[] %font %fontStyle %fontWeight %fontSize fontSizeRange[] %rotate ~text spiral %padding as[]',
   crossfilter: '!~fields[] !query[]',
   resolvefilter: '!ignore !filter',
 }
@@ -71,7 +71,7 @@ const PARAMS: Readonly<Record<string, string>> = {
 const SUB_PARAMS: Readonly<Record<string, ReadonlyArray<{ key: Readonly<Record<string, string>>; params: string }>>> = {
   'density.distribution': [{ key: {function: 'normal'}, params: 'mean stdev' }, { key: {function: 'lognormal'}, params: 'mean stdev' }, { key: {function: 'uniform'}, params: 'min max' }, { key: {function: 'kde'}, params: '!~field ^from bandwidth' }, { key: {function: 'mixture'}, params: '*distributions[] weights[]' }],
   'density.distribution.distributions': [{ key: {function: 'normal'}, params: 'mean stdev' }, { key: {function: 'lognormal'}, params: 'mean stdev' }, { key: {function: 'uniform'}, params: 'min max' }, { key: {function: 'kde'}, params: '!~field ^from bandwidth' }],
-  'force.forces': [{ key: {force: 'center'}, params: 'x y' }, { key: {force: 'collide'}, params: '~radius strength iterations' }, { key: {force: 'nbody'}, params: '~strength theta distanceMin distanceMax' }, { key: {force: 'link'}, params: '^links ~id ~distance ~strength iterations' }, { key: {force: 'x'}, params: 'strength ~x' }, { key: {force: 'y'}, params: 'strength ~y' }],
+  'force.forces': [{ key: {force: 'center'}, params: 'x y' }, { key: {force: 'collide'}, params: '%radius strength iterations' }, { key: {force: 'nbody'}, params: '%strength theta distanceMin distanceMax' }, { key: {force: 'link'}, params: '^links ~id %distance %strength iterations' }, { key: {force: 'x'}, params: 'strength ~x' }, { key: {force: 'y'}, params: 'strength ~y' }],
 }
 
 export type ParamKind = 'expression' | 'field' | 'compare' | 'value'
@@ -85,6 +85,8 @@ export interface TransformParam {
   readonly required: boolean
   readonly list: boolean
   readonly ref?: ParamRef
+  /** a value computed per tuple when written `{field}` or `{expr}`, a constant otherwise (vega's `expr: true` on a parameter that is no field) */
+  readonly computed?: boolean
   /** the kinds of object a sub-parameter can be, each told by its key */
   readonly sub?: ReadonlyArray<SubParams>
 }
@@ -94,7 +96,7 @@ export interface SubParams {
   readonly params: readonly TransformParam[]
 }
 
-const KINDS: Readonly<Record<string, ParamKind>> = { '=': 'expression', '~': 'field', '?': 'compare' }
+const KINDS: Readonly<Record<string, ParamKind>> = { '=': 'expression', '~': 'field', '%': 'field', '?': 'compare' }
 const REFS: Readonly<Record<string, ParamRef>> = { '@': 'projection', '^': 'data', '#': 'index' }
 const cache = new Map<string, readonly TransformParam[]>()
 
@@ -110,7 +112,7 @@ function readParams(words: string, path: string): readonly TransformParam[] {
     const name = kind || ref || mark === '*' ? w.slice(1) : w
     // bounded: the fixed table of transform parameters
     const sub = mark === '*' ? (SUB_PARAMS[`${path}.${name}`] ?? []).map((s) => ({ key: s.key, params: readParams(s.params, `${path}.${name}`) })) : undefined
-    return { name, kind: kind ?? 'value', required, list, ...(ref ? { ref } : {}), ...(sub ? { sub } : {}) }
+    return { name, kind: kind ?? 'value', required, list, ...(ref ? { ref } : {}), ...(mark === '%' ? { computed: true } : {}), ...(sub ? { sub } : {}) }
   })
 }
 
