@@ -869,6 +869,17 @@ const TZS = ['America/New_York', 'Asia/Kolkata', 'Australia/Lord_Howe', 'Europe/
   add(S, 'nested fields', { type: 'geojson', fields: ['o.lon', 'o.lat'] }, pts.map((p) => ({ o: p })))
 }
 
+{
+  // A generating transform appends its tuples to the pulse it is given: on a dataset that already has rows they follow the rows
+  // (`sequence` above does the same). Found through differential-transform-names, which could not compare it (C210).
+  const S = 'graticule'
+  const rows = [{ a: 1 }, { a: 2 }]
+  add(S, 'defaults', { type: 'graticule' }, [])
+  add(S, 'appends to a non-empty source', { type: 'graticule' }, rows)
+  add(S, 'step and extent', { type: 'graticule', extent: [[-30, -20], [30, 20]], step: [15, 10] }, [])
+  add(S, 'extent major and minor, precision', { type: 'graticule', extentMajor: [[-90, -45], [90, 45]], extentMinor: [[-60, -30], [60, 30]], stepMajor: [45, 30], stepMinor: [15, 10], precision: 5 }, rows)
+  add(S, 'a mark after other steps', [{ type: 'formula', expr: 'datum.a * 2', as: 'b' }, { type: 'graticule', step: [30, 30] }], rows)
+}
 
 if (prevTz === undefined) delete process.env.TZ
 else process.env.TZ = prevTz
