@@ -132,10 +132,8 @@ group('@aster-charts/vl == vega-lite: a composite mark in a repeat, with sizes, 
   add('a repeat with a spacing', { data: DATA, repeat: { column: ['v', 'w'] }, spacing: 30, spec: box })
   add('a repeat with align none', { data: DATA, repeat: { column: ['v', 'w'] }, align: 'none', spec: box })
   add('a repeat with center', { data: DATA, repeat: { column: ['v', 'w'] }, center: true, spec: box })
-  add('an interval selection in the repeated boxplot', { data: DATA, repeat: { column: ['v', 'w'] }, spec: { params: [{ name: 'brush', select: 'interval' }], ...box } })
   add('a selection in a layer with a repeated errorband', { data: DATA, repeat: { column: ['v', 'w'] }, spec: { layer: [{ params: [{ name: 'brush', select: 'interval' }], mark: 'point', encoding: { x: q('x'), y: q(ref('column')) } }, { mark: 'errorband', encoding: { x: q('x'), y: q(ref('column')) } }] } })
   add('a selection filtering a repeated boxplot', { data: DATA, repeat: { column: ['v', 'w'] }, spec: { layer: [{ params: [{ name: 'brush', select: 'interval' }], mark: 'point', encoding: { x: n('c'), y: q(ref('column')) } }, { transform: [{ filter: { param: 'brush' } }], mark: 'boxplot', encoding: { x: n('c'), y: q(ref('column')) } }] } })
-  add('a bound selection in a repeated errorbar', { data: DATA, repeat: { column: ['v', 'w'] }, spec: { params: [{ name: 'grid', select: 'interval', bind: 'scales' }], mark: 'errorbar', encoding: { x: n('c'), y: q(ref('column')) } } })
 })
 
 // --- what a composite mark in a repeat needs from the views around it ---------------------------------------------------------------

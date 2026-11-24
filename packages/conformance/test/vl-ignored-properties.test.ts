@@ -86,7 +86,6 @@ for (const k of ['theta2Offset', 'radius2Offset']) pair(`arc: ${k} with no secon
 // what a composite mark does not read
 pair('errorbar: a tooltip in its mark def', (w) => ({ data, mark: { type: 'errorbar', ...(w ? { tooltip: true } : {}) }, encoding: { x: { field: 'a', type: 'nominal' }, y: { field: 'b', type: 'quantitative' } } }))
 pair('errorbar: an error value', (w) => ({ data, mark: 'errorbar', encoding: { x: { field: 'a', type: 'nominal' }, y: { field: 'b', type: 'quantitative' }, ...(w ? { yError: { value: 2 } } : {}) } }))
-pair('boxplot: a selection on the mark', (w) => ({ data, ...(w ? { params: [{ name: 'sel', select: 'interval' }] } : {}), mark: 'boxplot', encoding: { x: { field: 'a', type: 'nominal' }, y: { field: 'b', type: 'quantitative' } } }))
 
 describe('what @aster-charts/vl ignores, vega-lite ignores', () => {
   for (const [name, withIt, without] of cases) {

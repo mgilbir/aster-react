@@ -117,7 +117,10 @@ describe('what a composite mark does with its parameters', () => {
     }
   })
   it('keeps them for a unit faceted by a channel', () => sameDrawing({ ...unit, encoding: { ...unit.encoding, column: { field: 'g', type: 'nominal' } }, params: [{ name: 'cut', value: 5 }], transform: [{ filter: 'datum.v > cut' }] }))
-  it('refuses a selection parameter, which vega-lite drops with a warning', () => {
+  it('refuses a selection parameter, which vega-lite drops with a warning (also in a repeat, and bound to the scales)', () => {
+    const box = { mark: 'boxplot', encoding: { x: { field: 'c', type: 'nominal' }, y: { field: 'v', type: 'quantitative' } } }
+    expect(() => compile({ data: NESTED, repeat: { column: ['v', 'w'] }, spec: { params: [{ name: 'brush', select: 'interval' }], ...box } } as never)).toThrow(/selection parameter "brush"/)
+    expect(() => compile({ data: NESTED, repeat: { column: ['v', 'w'] }, spec: { params: [{ name: 'grid', select: 'interval', bind: 'scales' }], ...box, mark: 'errorbar' } } as never)).toThrow(/selection parameter "grid"/)
     for (const mark of ['boxplot', 'errorbar', 'errorband']) {
       expect(() => compile({ ...unit, mark, params: [{ name: 'brush', select: 'interval' }] } as never), mark).toThrow(/selection parameter "brush" on a/)
       expect(() => compile({ ...unit, mark, params: [{ name: 'cut', value: 5 }, { name: 'brush', select: 'point' }] } as never), mark).toThrow(/selection parameter "brush"/)
