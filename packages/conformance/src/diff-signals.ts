@@ -178,6 +178,8 @@ function readOf(scene: SceneRoot, points: ReadonlyArray<readonly [number, number
   for (const [k, v] of datasetsOfScene(scene)) datasets[k] = normalise(v)
   return {
     svg: `${svg.root}\u0000${svg.records.join('\u0000')}`,
+    // (the accessibility structure of the SVG: a stale aria-label, role or class on a kept node is a difference)
+    structure: svg.structure.join('\n'),
     scene: JSON.stringify(normalise(scene)),
     keys: keyOrders(scene.items, []).join('\n'),
     datasets: JSON.stringify(datasets),
@@ -201,7 +203,7 @@ function firstDifference(inc: string, fresh: string): string {
   return ''
 }
 
-interface SignalPhaseResult { compared: number; skipped: number; mismatch?: string }
+interface SignalPhaseResult { compared: number; mismatch?: string }
 
 /** The signals `withGuideProbes` adds: names no spec of the corpus uses. */
 const GUIDE_PROBES = { paint: 'asterGuideProbePaint', ticks: 'asterGuideProbeTicks' }
@@ -289,7 +291,13 @@ function signalSteps(spec: Record<string, unknown>, data: { name: string; rows: 
     try { return { ok: true, value: f() } } catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) } }
   }
   const first = attempt(() => session.evaluate(spec as unknown as VgSpec, inputOf()))
-  if (!first.ok) return { compared: 0, skipped: steps + 1 }
+  if (!first.ok) {
+    // (the first evaluation threw: a fresh chart of the same input must throw the same, or the session differs)
+    const fresh = attempt(() => evaluateChart(compileChart(spec as unknown as VgSpec), inputOf()))
+    if (fresh.ok) return { compared: 0, mismatch: `the first evaluation: only the session threw (${first.error.slice(0, 120)})` }
+    if (fresh.error !== first.error) return { compared: 0, mismatch: `the first evaluation: the session threw ${JSON.stringify(first.error.slice(0, 100))}, a fresh chart ${JSON.stringify(fresh.error.slice(0, 100))}` }
+    return { compared: 1 }
+  }
   // the points the hit index is asked about: a grid over the whole SVG and a few anywhere in it
   const width = (first.value as { width?: number }).width ?? view.width
   const height = (first.value as { height?: number }).height ?? view.height
@@ -299,7 +307,6 @@ function signalSteps(spec: Record<string, unknown>, data: { name: string; rows: 
 
   const initial: Array<[Write, unknown]> = []
   let compared = 0
-  let skipped = 0
   for (let step = 0; step <= steps; step++) {
     let what: string
     if (step < steps) {
@@ -327,12 +334,17 @@ function signalSteps(spec: Record<string, unknown>, data: { name: string; rows: 
     const input = inputOf()
     const inc = attempt(() => readOf(session.evaluate(spec as unknown as VgSpec, input), points))
     const full = attempt(() => readOf(evaluateChart(compileChart(spec as unknown as VgSpec), input), points))
-    if (!inc.ok && !full.ok) { skipped++; continue }
-    if (!inc.ok || !full.ok) return { compared, skipped, mismatch: `${what}: only the ${inc.ok ? 'fresh chart' : 'session'} threw (${(inc.ok ? (full as { error: string }).error : inc.error).slice(0, 120)})` }
+    // (both threw: the same error is agreement, a step compared; another error is a difference)
+    if (!inc.ok && !full.ok) {
+      if (inc.error !== full.error) return { compared, mismatch: `${what}: the session threw ${JSON.stringify(inc.error.slice(0, 100))}, a fresh chart ${JSON.stringify(full.error.slice(0, 100))}` }
+      compared++
+      continue
+    }
+    if (!inc.ok || !full.ok) return { compared, mismatch: `${what}: only the ${inc.ok ? 'fresh chart' : 'session'} threw (${(inc.ok ? (full as { error: string }).error : inc.error).slice(0, 120)})` }
     for (const key of Object.keys(full.value)) {
-      if (inc.value[key] !== full.value[key]) return { compared, skipped, mismatch: `${what}: the ${key} differs${firstDifference(inc.value[key]!, full.value[key]!)}` }
+      if (inc.value[key] !== full.value[key]) return { compared, mismatch: `${what}: the ${key} differs${firstDifference(inc.value[key]!, full.value[key]!)}` }
     }
     compared++
   }
-  return { compared, skipped }
+  return { compared }
 }
