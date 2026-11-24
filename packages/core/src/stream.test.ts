@@ -129,9 +129,14 @@ describe('stream batch order', () => {
     const next = [row(1), row(2), row(3), row(40)]
     stream.push({ data: { t: next } })
     const pending = stream.pending()
-    // The snapshot diff is authoritative: only the row that differs is reported.
-    expect(pending.datasets.get('t')?.changed ?? []).not.toContain(1)
-    stream.flush()
+    // The snapshot is authoritative: the explicit "row 1 changed" is not delivered; the dataset is announced as replaced
+    // (structural, no row-level pulse), and the flush says the same. (The assertion this replaces, that row 1 is not among the
+    // changed rows of the pending entry, held vacuously: there is no entry.)
+    expect(pending.datasets.has('t')).toBe(false)
+    expect(pending.structural.has('t')).toBe(true)
+    const flushed = stream.flush()!
+    expect(flushed.pulse.datasets.has('t')).toBe(false)
+    expect(flushed.pulse.structural.has('t')).toBe(true)
     expect(renderSceneToSvg(stream.scene()!)).toBe(fresh(titled, { data: { t: next } }))
   })
 
@@ -537,10 +542,17 @@ describe('stream image url policy', () => {
     const stream = createChartStream(imgSpec, {
       initial: { urlPolicy: { allow: (u) => u.host === 'good.example', onDeny: (u) => { denied.push(u) } } },
     })
-    stream.flush()
+    const first = stream.flush()!
     expect(denied).toEqual(['https://evil.example/b.png'])
+    // the denied image is dropped from what is drawn; the allowed one stays
+    const svg1 = renderSceneToSvg(first.scene)
+    expect(svg1).toContain('https://good.example/a.png')
+    expect(svg1).not.toContain('evil.example')
     stream.push({ append: { t: [{ u: 'https://evil.example/c.png' }] } })
-    stream.flush()
+    const second = stream.flush()!
     expect(denied).toContain('https://evil.example/c.png')
+    const svg2 = renderSceneToSvg(second.scene)
+    expect(svg2).toContain('https://good.example/a.png')
+    expect(svg2).not.toContain('evil.example')
   })
 })

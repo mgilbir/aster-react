@@ -2,7 +2,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { compileChart, evaluateChart, registerExpressionFunction, renderSceneToSvg } from './index.js'
 import { bindSceneSignals, parseEventSelector, stampDatumAttrs } from './signals.js'
-import type { VgSpec } from './types.js'
+import type { SceneGroup, SceneRoot, VgSpec } from './types.js'
 
 const specWithEventSignal = {
   width: 200,
@@ -464,7 +464,7 @@ describe('signal event streams', () => {
 
 describe('group scopes in the signal loop', () => {
   /** Two sibling group marks that declare `signals` (and one mark each, so `inScope` has a group), over a view with its own. */
-  const bindGroups = (groupSignals: unknown[], top: unknown[], hooks: Parameters<typeof bindSceneSignals>[3] = {}) => {
+  const bindGroups = (groupSignals: unknown[], top: unknown[], hooks: Parameters<typeof bindSceneSignals>[3] = {}, opts: Parameters<typeof bindSceneSignals>[4] = {}) => {
     const group = (name: string, x: number): Record<string, unknown> => ({
       type: 'group', name, signals: groupSignals, encode: { update: { x: { value: x }, y: { value: 0 }, width: { value: 80 }, height: { value: 80 } } },
       marks: [{ type: 'rect', encode: { update: { x: { value: 0 }, y: { value: 0 }, width: { value: 10 }, height: { value: 10 } } } }],
@@ -479,7 +479,7 @@ describe('group scopes in the signal loop', () => {
     const store: Record<string, unknown> = {}
     const calls: string[] = []
     const ids = scene.items.map((g) => g.scopeSignals?.id)
-    const binding = bindSceneSignals(svg, scene, store, { onSignal: (n) => calls.push(n), ...hooks })
+    const binding = bindSceneSignals(svg, scene, store, { onSignal: (n) => calls.push(n), ...hooks }, opts)
     return { svg, scene, store, calls, ids, binding }
   }
 
@@ -517,10 +517,29 @@ describe('group scopes in the signal loop', () => {
   })
 
   it('a selector string in a scope defaults to the scope source: only events whose item is in the scope', () => {
-    const t = bindGroups([{ name: 'n', value: 0, on: [{ events: 'click', update: 'n + 1' }] }], [])
-    // no item under the pointer (jsdom picks nothing here): nothing is in scope
-    fire(t.svg, 'click')
+    // (C658) the picker answers the rect of the left group for a point left of x=80, the rect of the right group right of x=100,
+    // and nothing in between: each click counts in the scope its item lies in, and in no other
+    const where: { scene?: SceneRoot } = {}
+    const rectOf = (i: number): object => {
+      const find = (g: SceneGroup): object | undefined => {
+        if (g.marktype === 'rect' && g.role === 'mark') return g.items[0] as object
+        for (const c of g.items ?? []) if (Array.isArray((c as SceneGroup).items)) { const r = find(c as SceneGroup); if (r) return r }
+        return undefined
+      }
+      return find(where.scene!.items[i] as SceneGroup)!
+    }
+    const t = bindGroups([{ name: 'n', value: 0, on: [{ events: 'click', update: 'n + 1' }] }], [], {}, {
+      pick: (x) => (x < 80 ? { item: rectOf(0), marktype: 'rect' } : x >= 100 ? { item: rectOf(1), marktype: 'rect' } : null),
+    })
+    where.scene = t.scene
+    fire(t.svg, 'click', { clientX: 90, clientY: 5 })
     expect(Object.keys(t.store)).toEqual([])
+    fire(t.svg, 'click', { clientX: 5, clientY: 5 })
+    fire(t.svg, 'click', { clientX: 6, clientY: 5 })
+    fire(t.svg, 'click', { clientX: 150, clientY: 5 })
+    expect(t.store[`${t.ids[0]}:n`]).toBe(2)
+    expect(t.store[`${t.ids[1]}:n`]).toBe(1)
+    expect(Object.keys(t.store).sort()).toEqual([`${t.ids[0]}:n`, `${t.ids[1]}:n`].sort())
     t.binding.detach()
   })
 })
