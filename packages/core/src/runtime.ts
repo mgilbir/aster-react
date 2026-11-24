@@ -33,6 +33,7 @@ import { implicit as implicitCategory } from './scale-discrete.js'
 const DISCRETE_TYPES = new Set(['band', 'point', 'ordinal'])
 import { ITEM_MARK, geoRegistry, requireGeo } from './registry.js'
 import { chartLocale, formatEnvironmentKey, type Locale } from './locale.js'
+import { adjustSpatial, ENTER_COPY } from './spatial.js'
 import type {
   CompiledAxis,
   CompiledChart,
@@ -5400,7 +5401,7 @@ function reencodeChannels(mark: CompiledMark, ctx: EvalContext, prevGroup: Scene
     const key = channelKeyOf(channels[c]!, encode[channels[c]!] as object, ctx)
     if (key === null || record.keys[c] === null) return null
     if (key !== record.keys[c]) {
-      if (COUPLED_CHANNELS.has(channels[c]!)) return null
+      if (COUPLED_CHANNELS.has(channels[c]!) || channels[c]!.startsWith(ENTER_COPY)) return null
       changed.push(channels[c]!)
     }
   }
@@ -7048,6 +7049,8 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
       }
     }
     failEncode(ctx, encode, first)
+    // (the enter set's copies of the channels its update overrides are no channels: see spatial.ts)
+    for (const key of Object.keys(prec)) if (key.startsWith(ENTER_COPY)) delete prec[key]
     return partial
   }
   // a gradient object as a paint (`{gradient: 'linear', stops: [...]}`): its definition joins the scene's defs
@@ -7055,34 +7058,8 @@ function resolveEncodeSet(encode: Record<string, EncodeValue | EncodeValue[]>, d
   if (fillPaint !== null && typeof fillPaint === 'object') registerGradient(fillPaint, ctx)
   const strokePaint = rec['stroke']
   if (strokePaint !== null && typeof strokePaint === 'object') registerGradient(strokePaint, ctx)
-  // Post-process: vega-runtime's `adjustSpatial`, which acts on the CHANNELS the encode defines
-  // (not on whether their values came out finite): x2/xc/y2/yc become x/y/width/height. Rule
-  // marks skip it entirely (their x2/y2 are line endpoints, not edges); rect/group/image swap so
-  // x/y is the min edge. The arithmetic is JS's, so a NaN or missing operand gives NaN, which the
-  // renderers read as 0 (`item.width || 0`) exactly as vega's do.
-  if (marktype !== 'rule') {
-    const canSwap = marktype === 'rect' || marktype === 'group' || marktype === 'image'
-    const has = (k: string): boolean => encode[k] != null
-    const n = (k: string): number => rec[k] as number
-    if (has('x2')) {
-      if (has('x')) {
-        if (canSwap && n('x') > n('x2')) { const t = rec['x']; rec['x'] = rec['x2']; rec['x2'] = t }
-        rec['width'] = n('x2') - n('x')
-      } else {
-        rec['x'] = n('x2') - (n('width') || 0)
-      }
-    }
-    if (has('xc')) rec['x'] = n('xc') - (n('width') || 0) / 2
-    if (has('y2')) {
-      if (has('y')) {
-        if (canSwap && n('y') > n('y2')) { const t = rec['y']; rec['y'] = rec['y2']; rec['y2'] = t }
-        rec['height'] = n('y2') - n('y')
-      } else {
-        rec['y'] = n('y2') - (n('height') || 0)
-      }
-    }
-    if (has('yc')) rec['y'] = n('yc') - (n('height') || 0) / 2
-  }
+  // vega-runtime's `adjustSpatial`, per encode set (spatial.ts): x2/xc/y2/yc become x/y/width/height
+  adjustSpatial(rec, encode, marktype)
 
   // The URL channels go through the policy as the item is made (outside the encode's own error handling: a refusal is the
   // policy's error, not an encode failure). An item then only ever holds what the policy made of them, so an item kept from an

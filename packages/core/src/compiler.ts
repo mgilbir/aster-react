@@ -15,6 +15,7 @@ import { SpecParseError } from './parse-error.js'
 import { checkFieldReferences } from './param-resolve.js'
 import { markPlacing } from './tuple-order.js'
 import { markShareable } from './guide-encode.js'
+import { ENTER_COPY, setSpatialProgram, spatialProgramOf } from './spatial.js'
 import { defaultMergedConfig, mergeVegaConfig, vegaDefaultConfig } from './config-defaults.js'
 import { isSignalRef, paddingOf, staticAutosize, viewProperty, viewSignals } from './view-props.js'
 import type {
@@ -278,8 +279,36 @@ function frameEncodeOf(spec: VgSpec): { frameEncode: NonNullable<CompiledChart['
     const v = frameStyleValue(spec, k)
     if (v !== undefined) aria[k] = (v !== null && typeof v === 'object' && 'signal' in v ? { signal: (v as { signal: string }).signal } : { value: v }) as EncodeValue
   }
-  if (own === undefined && Object.keys(aria).length === 0) return undefined
-  return { frameEncode: { ...aria, ...(own?.enter ?? {}), ...(own?.update ?? {}) } as NonNullable<CompiledChart['frameEncode']> }
+  // The root group's encode is vega-parser's `rootEncode` under the view's own: x and y 0 in `enter`, the size signals in `update`.
+  // Its defaults (config.group, then the view's styles) can only add the edges `x2`, `xc`, `y2`, `yc` to its spatial channels
+  // (the others are its own), and they land in `enter`: an `xc` places the root group at `xc` (vega adjusts each set on its own).
+  const ownEnter = (own?.enter ?? {}) as Record<string, EncodeValue>
+  const ownUpdate = (own?.update ?? {}) as Record<string, EncodeValue>
+  const enter: Record<string, EncodeValue> = { x: { value: 0 }, y: { value: 0 } } as Record<string, EncodeValue>
+  const update: Record<string, EncodeValue> = { width: { signal: 'width' }, height: { signal: 'height' } } as Record<string, EncodeValue>
+  const has = (k: string): boolean => Object.hasOwn(enter, k) || Object.hasOwn(update, k) || hasOwnChannel({ enter: ownEnter, update: ownUpdate }, k)
+  let spatialDefaults = false
+  for (const k of ['x2', 'xc', 'y2', 'yc']) {
+    const v = frameStyleValue(spec, k)
+    if (v === undefined || has(k)) continue
+    spatialDefaults = true
+    if (v && typeof v === 'object' && (v as { signal?: unknown }).signal) update[k] = { signal: (v as { signal: string }).signal } as EncodeValue
+    else enter[k] = { value: v } as EncodeValue
+  }
+  Object.assign(enter, ownEnter)
+  Object.assign(update, ownUpdate)
+  const keys = (set: Record<string, unknown>): Set<string> => new Set(Object.keys(set).filter((k) => set[k] != null))
+  const program = spatialDefaults || own !== undefined ? spatialProgramOf('group', keys(enter), keys(update)) : undefined
+  if (program === undefined && !spatialDefaults) {
+    if (own === undefined && Object.keys(aria).length === 0) return undefined
+    return { frameEncode: { ...aria, ...ownEnter, ...ownUpdate } as NonNullable<CompiledChart['frameEncode']> }
+  }
+  const merged: Record<string, EncodeValue | EncodeValue[]> = { ...aria, ...enter, ...update }
+  if (program) {
+    for (const dim of [program.x, program.y]) for (const k of dim?.enter ?? []) if (dim!.update.includes(k)) merged[ENTER_COPY + k] = enter[k]!
+    setSpatialProgram(merged, program)
+  }
+  return { frameEncode: merged as NonNullable<CompiledChart['frameEncode']> }
 }
 
 /** The cell background fill. */
@@ -636,108 +665,79 @@ function markRoleOf(m: Record<string, unknown>): string {
   return m.type === 'group' ? 'scope' : (typeof m.role === 'string' && m.role) || 'mark'
 }
 
+/** What a mark's encode sets are once its defaults are in them: the channels of vega's `enter` and `update` sets. */
+interface EncodeSets { enter: Set<string>; update: Set<string> }
+
+/** vega-parser encode/util.js `has`: the mark's own `enter` or `update` set gives the channel a (truthy) entry. */
+const hasOwnChannel = (enc: Record<string, Record<string, unknown> | undefined>, key: string): boolean =>
+  !!(enc.enter && Object.hasOwn(enc.enter, key) && enc.enter[key]) || !!(enc.update && Object.hasOwn(enc.update, key) && enc.update[key])
+
 /**
- * Apply config.style defaults (marktype style first, then named styles, last
- * wins) as encode channels the mark does not encode. This mirrors vega's style
- * lookup order (vega-parser/mark.js + vega-encode's style encoder).
+ * A mark's defaults, as vega-parser's encode/defaults.js gives them: a mark whose role is `mark` takes the channels of
+ * `config.mark` then `config[type]` (a mark the spec calls the `frame` takes `config.group`; a group, a guide's role or a role of its
+ * own takes none), each skipped where the mark encodes the channel and a solid paint skipped where it encodes either paint; then the
+ * channels of each style the mark NAMES (`style`, a name or a list; never its type), in order, each skipped where the mark encodes
+ * it. A later source overrides an earlier one. A default is a value that lands in the `enter` set, or a `{signal}` that lands in
+ * `update`; the mark's own channels win over them in each set.
+ *
+ * The mark's `update` becomes the merged set the runtime evaluates (enter under update); the channels of each set are returned, for
+ * the spatial adjustment vega makes per set (spatial.ts).
  */
-function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string, Record<string, unknown>>, cfgMarktype?: Record<string, Record<string, unknown>>): void {
-  const names = new Set<string>()
-  if (m.type) names.add(String(m.type))
-  const style = m.style
-  if (typeof style === 'string') names.add(style)
-  else if (Array.isArray(style)) for (const s of style) names.add(String(s))
+function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string, Record<string, unknown>>, cfgMarktype?: Record<string, Record<string, unknown>>): EncodeSets {
   const enc = (m.encode ?? {}) as Record<string, Record<string, EncodeValue | EncodeValue[]>>
-  const update = { ...(enc.enter ?? {}), ...(enc.update ?? {}) }
-  m.encode = { ...enc, update }
-  // vega-parser defaults.js applies sources in precedence order (config
-  // blocks, then styles, last wins) with a per-source skip rule: the config
-  // phase guards the solid paints — a config fill/stroke default is skipped
-  // whenever EITHER paint is encoded (defaults.js: `(key === 'fill' || key
-  // === 'stroke') && (has('fill', encode) || has('stroke', encode))`), while
-  // style blocks only skip channels the mark itself encodes.
-  const sources: Array<{ props: Record<string, unknown>; pairGuard: boolean }> = []
-  const markProps: Record<string, unknown> = {}
-  // vega's generic mark block (config.mark) seeds every mark's defaults;
-  // the per-marktype block (config.arc etc.) then overrides.
-  // (only a mark whose role is `mark` takes them -- a group mark, a mark of a guide's role and one with a role of its own
-  // do not; a mark the spec calls the `frame` takes `config.group`, as the view's root group does)
+  const has = (key: string): boolean => hasOwnChannel(enc, key)
+  const defaults: Record<string, EncodeValue> = {}
+  const apply = (key: string, value: unknown): void => {
+    defaults[key] = (value && typeof value === 'object' && (value as { signal?: unknown }).signal ? { signal: (value as { signal: string }).signal } : { value }) as EncodeValue
+  }
+  // (a default is a channel of the mark's items like any other: it may not name the engine's own slots, item-slots.ts)
+  const refuseEngineSlot = (key: string): void => {
+    if (isEngineSlot(key)) throw new SpecParseError(engineSlotMessage(key, 'a config style or mark default'))
+  }
   const role = markRoleOf(m)
+  const props: Record<string, unknown> = {}
   if (cfgMarktype && role === 'mark') {
-    const gm = cfgMarktype['mark']
-    if (gm && typeof gm === 'object') Object.assign(markProps, gm)
-    const st = m.type ? ownGet(cfgMarktype, String(m.type)) : undefined
-    if (st && typeof st === 'object') Object.assign(markProps, st)
+    const gm = ownGet(cfgMarktype, 'mark')
+    if (gm && typeof gm === 'object') Object.assign(props, gm)
+    const st = ownGet(cfgMarktype, String(m.type))
+    if (st && typeof st === 'object') Object.assign(props, st)
   } else if (cfgMarktype && role === 'frame') {
     const st = ownGet(cfgMarktype, 'group')
-    if (st && typeof st === 'object') Object.assign(markProps, st)
+    if (st && typeof st === 'object') Object.assign(props, st)
   }
-  sources.push({ props: markProps, pairGuard: true })
-  for (const name of names) {
-    const st = ownGet(cfgStyle, name)
-    if (st && typeof st === 'object') sources.push({ props: st, pairGuard: false })
+  for (const key of Object.keys(props)) {
+    if (SKIPPED_DEFAULTS.has(key)) continue
+    refuseEngineSlot(key)
+    const skip = has(key) || ((key === 'fill' || key === 'stroke') && (has('fill') || has('stroke')))
+    if (!skip) apply(key, props[key])
   }
-  // rule marks have no xc/yc semantics in vega: config/style channels for
-  // them are silently ignored (only an explicit mark encode reaches them)
-  const isRule = String(m.type) === 'rule'
-  // A symbol mark has no rect/arc/text geometry channels: config blocks that
-  // carry them (e.g. config.point.width / x2 / startAngle) are inert in vega.
-  const isSymbol = String(m.type) === 'symbol'
-  const isRectLike = String(m.type) === 'rect' || String(m.type) === 'bar' || String(m.type) === 'tick'
-  // A rect understands x2/y2 (they override width/height) and the corner
-  // radii; only the non-rect geometry and text channels are inert.
-  const rectInert = new Set([
-    'startAngle', 'endAngle', 'innerRadius', 'outerRadius', 'radius',
-    'radius2', 'theta', 'theta2', 'padAngle', 'size', 'text', 'url',
-    'align', 'baseline', 'dx', 'dy', 'limit', 'lineHeight', 'font',
-    'fontSize', 'fontStyle', 'fontWeight',
-  ])
-  const symbolInert = new Set([
-    'width', 'height', 'x2', 'y2', 'startAngle', 'endAngle', 'innerRadius',
-    'outerRadius', 'radius', 'radius2', 'theta', 'theta2', 'padAngle',
-    'cornerRadius', 'cornerRadiusTopLeft', 'cornerRadiusTopRight',
-    'cornerRadiusBottomLeft', 'cornerRadiusBottomRight', 'text', 'url',
-    'align', 'baseline', 'dx', 'dy', 'limit', 'lineHeight', 'font',
-    'fontSize', 'fontStyle', 'fontWeight',
-  ])
-  // vega runs adjustSpatial on each encode block separately: a default that
-  // lands in `enter` (style/config defaults are plain values) is resolved
-  // against the enter positions only. An update-only mark therefore does not
-  // see a style x2/y2/width/height (it has no enter x to pair with), while an
-  // enter-encoded mark does — probed: config.style.rect.x2 affects a Vega
-  // enter mark but not a Vega-Lite update mark.
-  const updateOnly = enc.enter == null
-  const spatialKeys = new Set(['x', 'y', 'x2', 'y2', 'xc', 'yc', 'width', 'height'])
-  // Sources accumulate into `defaults` with increasing precedence (a later
-  // style overrides an earlier source's value); only the mark's OWN encode
-  // suppresses a default. Writing straight into `update` made the first source
-  // that set a channel (e.g. config.symbol.size) shadow every later style
-  // (style point's size), which vega's applyDefaults does not do.
-  const own = new Set(Object.keys(update))
-  const defaults: Record<string, EncodeValue | EncodeValue[]> = {}
-  for (const { props, pairGuard } of sources) {
-    for (const [k, v] of Object.entries(props)) {
-      if (k === 'name' || k === 'interactive' || k === 'zindex' || k === 'style') continue
-      // (a default is a channel of the mark's items like any other: it may not name the engine's own slots, item-slots.ts)
-      if (isEngineSlot(k)) throw new SpecParseError(engineSlotMessage(k, 'a config style or mark default'))
-      if (updateOnly && spatialKeys.has(k)) continue
-      if (isRule && (k === 'xc' || k === 'yc')) continue
-      if (isSymbol && symbolInert.has(k)) continue
-      if (isRectLike && rectInert.has(k)) continue
-      let skip = own.has(k)
-      if (!skip && pairGuard && (k === 'fill' || k === 'stroke')) {
-        skip = own.has('fill') || own.has('stroke')
-      }
-      if (!skip) {
-        defaults[k] = (v && typeof v === 'object' && ('value' in v || 'signal' in v || 'field' in v))
-          ? (v as EncodeValue)
-          : { value: v }
-      }
+  // (vega-util `array(style)`: a name is a list of one)
+  const style = m.style
+  for (const name of style == null ? [] : Array.isArray(style) ? style : [style]) {
+    const block = ownGet(cfgStyle, String(name))
+    if (!block || typeof block !== 'object') continue
+    for (const key of Object.keys(block)) {
+      if (SKIPPED_DEFAULTS.has(key)) continue
+      refuseEngineSlot(key)
+      if (!has(key)) apply(key, block[key])
     }
   }
-  // (vega applies the defaults in the `enter` set, ahead of the mark's own channels: an encode that throws partway leaves the item with them)
-  m.encode = { ...enc, update: { ...defaults, ...update } }
+  const enterDefaults: Record<string, EncodeValue> = {}
+  const updateDefaults: Record<string, EncodeValue> = {}
+  for (const [key, v] of Object.entries(defaults)) ((v as { signal?: unknown }).signal ? updateDefaults : enterDefaults)[key] = v
+  const enter = { ...enterDefaults, ...(enc.enter ?? {}) }
+  const update = { ...updateDefaults, ...(enc.update ?? {}) }
+  // (vega skips a null channel: it is in neither set)
+  const keysOf = (set: Record<string, unknown>): Set<string> => new Set(Object.keys(set).filter((k) => set[k] != null))
+  m.encode = { ...enc, enter, update: { ...enter, ...update } }
+  return { enter: keysOf(enter), update: keysOf(update) }
 }
+
+/**
+ * Config keys that are properties of the mark, not channels of its items: Aster reads them from the mark itself (`interactive`,
+ * `zindex`, `name`, `style`), so a config block's copy is no channel.
+ */
+const SKIPPED_DEFAULTS = new Set(['name', 'interactive', 'zindex', 'style'])
 
 /**
  * vega reads `from.facet.groupby` through `array(...)`: a bare field name is a one-field
@@ -767,7 +767,7 @@ let markSeq = 0
 
 function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Record<string, unknown>>, cfgMarktype?: Record<string, Record<string, unknown>>, scopeScales: CompiledScale[] = []): CompiledMark {
   const m: Record<string, unknown> = { ...m0, type: markTypeOf(m0.type) }
-  if (cfgStyle || cfgMarktype) applyStyleDefaults(m, cfgStyle ?? {}, cfgMarktype)
+  const sets = applyStyleDefaults(m, cfgStyle ?? {}, cfgMarktype)
   const out: CompiledMark = {
     type: m.type as string,
     name: (m.name as string) ?? 'marks',
@@ -778,7 +778,16 @@ function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Reco
   // `enter` overridden per-channel by `update`.
   if (m.encode !== undefined) {
     const enc = m.encode as Record<string, Record<string, EncodeValue | EncodeValue[]>>
-    const merged = { ...(enc.enter ?? {}), ...(enc.update ?? {}) }
+    const merged: Record<string, EncodeValue | EncodeValue[]> = { ...(enc.update ?? {}) }
+    // vega adjusts the spatial channels per set: where the sets split a dimension's edges, the merged set carries the enter set's
+    // own value of each channel the update set overrides, and the program that runs the two adjustments in order (spatial.ts)
+    const program = spatialProgramOf(String(m.type), sets.enter, sets.update)
+    if (program) {
+      for (const dim of [program.x, program.y]) {
+        for (const k of dim?.enter ?? []) if (dim!.update.includes(k)) merged[ENTER_COPY + k] = enc.enter![k]!
+      }
+      setSpatialProgram(merged, program)
+    }
     out.encode = { ...enc, update: merged }
   }
   if (m.role !== undefined) out.role = m.role as string
