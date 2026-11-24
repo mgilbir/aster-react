@@ -300,7 +300,7 @@ const BUDGETS = {
   // view properties as signals (fix/view-signal-refs: view-props.ts, the view layout read from the view signals before and after the pass): measured 2026-11-22 on a clean build, base fix/178-paint-url-escape -> branch (kB gzip): 175.7 -> 177.1; ceiling is the measured value + 0.5.
   // the audit-a10 scale and geo fixes (fix/audit-a10-scales-geo: own-method scale options with vega's warnings, parsed signal references,
   // bounded log ticks and calendar searches, the projection copy handle, shape clips, the strict projection build): measured
-  // 2026-11-24 on a clean build, base origin/main 7d438d0 -> branch (kB gzip): 177.1 -> 177.7; ceiling is the measured value + 0.5.
+  // 2026-11-24 on a clean build at 177.7 kB gzip (ceiling was 177.6, set at 177.1 + 0.5 by the change above); ceiling is the measured value + 0.5.
   '@aster-charts/core': 178.2 * 1024,
   // signal-change reuse (group marks, channels, marks drawn from marks, derived structures kept with engine nodes) on the canvas layer: measured 2026-11-15 on a clean build at 11.8 kB gzip (ceiling was 11.8); ceiling is the measured value + 0.5.
   // row passes, step state from the step, the binding shell and kept legends/titles/group guides: measured 2026-11-15 on a clean build at 12.5 kB gzip (ceiling was 12.3); ceiling is the measured value + 0.5.
