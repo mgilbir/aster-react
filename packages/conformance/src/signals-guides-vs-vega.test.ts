@@ -144,10 +144,16 @@ describe('an axis orient that is a signal', () => {
   }
   it('with config.axisX / axisY / axisTop picked by the value', async () => {
     const cfg = { axisX: { tickColor: 'red' }, axisY: { tickColor: 'green' }, axisTop: { domainColor: 'blue' } }
-    // (the config blocks named for an orient are null for every other value in vega -- an orient signal's `ifOrient`
-    // ends in `(null)` -- which the engine does not model; 'sideways' is left out of this one)
-    for (const v of ['top', 'bottom', 'left', 'right']) {
+    // (the config blocks named for an orient are null for every other value in vega -- an orient signal's `ifOrient` ends in
+    // `(null)`: a value that is none of the four, `''` and null included, takes none of axisX / axisY / axisTop; held for each)
+    for (const v of ['top', 'bottom', 'left', 'right', 'sideways', '', null]) {
       expect(await compare({ ...withSignal(chart(), 'side', v), config: cfg }), String(v)).toEqual([])
+      // ... over a band scale too (its own config blocks: axisBand)
+      const band = base({
+        scales: [{ name: 'x', type: 'band', domain: { data: 't', field: 'k' }, range: 'width', padding: 0.1 }],
+        axes: [{ orient: { signal: 'side' }, scale: 'x' }], marks: [],
+      })
+      expect(await compare({ ...withSignal(band, 'side', v), config: { ...cfg, axisBand: { tickOffset: 2 } } }), `band, ${String(v)}`).toEqual([])
     }
   })
   it('any orient but the four is a vertical axis at the origin whose layout never runs (static)', async () => {
