@@ -43,10 +43,22 @@ describe('single-call allocators are bounded before they allocate', () => {
   }, T)
 
   it('sequence transform with only a time budget is cut off by the clock inside the loop', async () => {
+    // Below the rows ceiling (1e8 rows is refused by the ceiling before the loop runs, which said nothing of the clock: C200). The
+    // clock is VIRTUAL, as in the fit-loop test below: each read advances it by one, so the budget is a count of clock reads. Half
+    // the reads of a whole run land inside the sequence's loop, which is most of them; a loop that did not read the clock would
+    // leave the budget to run out at a checkpoint after it.
     const r = await attack(`
-      core.renderSpec({ data: [{ name: 't', transform: [{ type: 'sequence', start: 0, stop: 1e8, as: 'x' }] }] },
-        { limits: { maxTimeMs: 50 } })`)
-    expectLimit(r, /maxTimeMs|maxRows/, 50)
+      const spec = { data: [{ name: 't', transform: [{ type: 'sequence', start: 0, stop: 900000, as: 'x' }] }] }
+      const realNow = performance.now
+      let reads = 0
+      performance.now = () => ++reads
+      try {
+        core.renderSpec(spec, { limits: { maxTimeMs: 1e12 } })
+        const total = reads
+        reads = 0
+        core.renderSpec(spec, { limits: { maxTimeMs: Math.floor(total / 2) } })
+      } finally { performance.now = realNow }`)
+    expectLimit(r, /maxTimeMs exceeded during sequence$/)
   }, T)
 
   it('expression sequence(0, 5e7) in a formula', async () => {
