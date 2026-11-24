@@ -67,8 +67,12 @@ an expression or a generated dataset/signal/scale name.
   takes the `url` channel (field or value).
 - Composition: layer, hconcat, vconcat, concat, facet (row/column/wrap), repeat, with every nesting the
   Vega-Lite schema allows except those listed under "Throws"; `resolve` for scales, axes and legends; shared scales and legends.
+  In a facet, an independent scale or legend of any channel is drawn in each cell (`child_color`, over the cell's rows).
+  `{"repeat": ...}` references are replaced where vega-lite replaces them: a channel's field, datum and sort, and a
+  condition's field.
 - Sizing: numbers, `{"step": n}`, and `"container"` on a top-level unit or layer (vega-lite's
-  containerSize signals and an autosize fit / fit-x / fit-y over the padding).
+  containerSize signals and an autosize fit / fit-x / fit-y over the padding) or on a facet's spec (each cell takes
+  the container's size, `child_width` / `child_height`).
 - Transforms: filter, calculate, bin, timeUnit, aggregate, joinaggregate, window, stack, fold,
   flatten, pivot, impute, lookup, sample, density, loess, regression, quantile, extent.
 - Channels: x, y, x2, y2, xOffset, yOffset, xError(2), yError(2), theta, theta2, radius, radius2, color, fill,
@@ -183,9 +187,11 @@ The list below is the features refused by name, each checked by `test/readme-ref
   reads it; on a channel the mark does not draw the condition is dropped with the channel.)
 - Scales and encodings: channel-level `band` (except on longitude / latitude, where vega-lite ignores it); the positional mark-def constants `x` / `x2` / `y` / `y2`, except
   `x` / `y` on point, circle, square and text.
-- Layout: `width` / `height: "container"` on a composition (only a top-level unit or layer), `data: null`, config keys
+- Layout: `width` / `height: "container"` on a composition (only a top-level unit or layer, or a facet's spec), a
+  `{"repeat": ...}` reference in a transform (vega-lite 6.4.3 leaves it in its output as a field that reads nothing), a
+  repeat's `row` / `column` given as a string (vega-lite reads it as the list of its characters), `data: null`, config keys
   outside the supported list, a wrapped facet (a single `facet` field) around or inside another facet, a selection or
-  a map inside a facet inside a facet, independent x / y scales in a facet that holds another facet, a concat in a
+  a map inside a facet inside a facet, independent scales or legends in a facet that holds another facet, a concat in a
   layer (the Vega-Lite schema forbids it), layer repeats combined with row / column, layers whose scales are
   incompatible or conflict, a facet of layers over different data, `argmax` / `argmin` as an op of a `window`
   transform, sort arrays of DateTime objects.

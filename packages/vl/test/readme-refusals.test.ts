@@ -54,6 +54,8 @@ const REFUSED: Array<[string, Record<string, unknown>, RegExp]> = [
   ['a condition that gives a field or a datum on a position channel', unit('point', { x: { condition: { test: 'datum.b > 1', field: 'c', type: 'quantitative' }, value: 1 }, y: q('b') }), /on a position channel/],
   ['the positional mark-def constants', unit({ type: 'bar', x: 5 }, { y: q('b') }), /positional mark-def constants/],
   ['`width` / `height: "container"` on a composition', { data, width: 'container', hconcat: [{ mark: 'point', encoding: { x: q('b') } }] }, /"container" is only supported/],
+  ['a\n  `{"repeat": ...}` reference in a transform', { data, repeat: ['b'], spec: { transform: [{ filter: { field: { repeat: 'repeat' }, gt: 1 } }], mark: 'point', encoding: { x: q('b') } } }, /reference in a transform is not supported/],
+  ['repeat\'s `row` / `column` given as a string', { data, repeat: { row: 'b' }, spec: { mark: 'point', encoding: { x: { field: { repeat: 'row' }, type: 'quantitative' } } } }, /reads the string "b" as the list of its characters/],
   ['`data: null`', { data: null, mark: 'point' }, /data: null/],
   ['config keys\n  outside the supported list', unit('point', { x: q('b') }, { config: { nonsense: 1 } }), /config property/],
   ['a wrapped facet', { data, facet: { row: { field: 'a' } }, spec: { facet: { field: 'b', type: 'nominal' }, spec: { mark: 'point', encoding: { x: q('b') } } } }, /wrapped facet/],

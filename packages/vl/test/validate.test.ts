@@ -117,7 +117,7 @@ const REJECTED: Array<[string, unknown, RegExp]> = [
   ['an unknown resolve channel', { data: DATA, resolve: { scale: { banana: 'shared' } }, hconcat: [unit()] }, /unknown scale channel "banana"/],
   ['a bad resolve value', { data: DATA, resolve: { scale: { color: 'both' } }, hconcat: [unit()] }, /"shared" or "independent"/],
   ['resolve on a unit', unit({ resolve: { scale: { y: 'independent' } } }), /no meaning on a single unit/],
-  ['an independent colour scale in a facet', { data: DATA, facet: { row: cn }, spec: unit(), resolve: { scale: { color: 'independent' } } }, /independent scale resolution of color inside a facet/],
+  ['an independent colour scale in a facet that holds another facet', { data: DATA, facet: { row: cn }, spec: { facet: { column: cn }, spec: unit({ encoding: { x: xq, color: cn } }) }, resolve: { scale: { color: 'independent' } } }, /independent scales or legends in a facet that holds another facet/],
   ['an independent x scale in a wrapped facet', { data: DATA, facet: cn, spec: unit({ encoding: { x: cn, y: yq } }), resolve: { scale: { x: 'independent' } } }, /wrapped facet/],
 ]
 
