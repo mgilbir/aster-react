@@ -201,10 +201,22 @@ describe('maps: composition', () => {
     const cell = { width: 100, height: 80, projection: {}, layer: [{ data: geoData, mark: 'geoshape' }, { data: pts, mark: 'circle', encoding: { longitude: lon, latitude: lat } }] }
     const vg = compileFrozen({ hconcat: [cell, cell] })
     const signals = find(vg, 'geojson').map((t) => t.signal)
-    expect(new Set(signals).size).toBe(signals.length)
-    for (const p of vg.projections) {
-      for (const s of signals.filter((x: string) => p.fit.signal.includes(x))) expect(s.startsWith(p.name.replace('projection', ''))).toBe(true)
-    }
+    expect(signals).toEqual(['concat_0_layer_1_geojson_0', 'concat_1_layer_1_geojson_0'])
+    // two cells with the same projection share the one projection (as vega-lite merges them), fitted to what BOTH cells draw
+    expect(vg.projections).toHaveLength(1)
+    expect(vg.projections[0].name).toBe('projection')
+    expect(vg.projections[0].fit.signal).toBe(`[data('source_0'), ${signals[0]}, data('source_0'), ${signals[1]}]`)
+  })
+
+  it('cells with different projections each fit their own geojson signal, and no other cell\'s', () => {
+    const cell = (type: string) => ({ width: 100, height: 80, projection: { type }, layer: [{ data: geoData, mark: 'geoshape' }, { data: pts, mark: 'circle', encoding: { longitude: lon, latitude: lat } }] })
+    const vg = compileFrozen({ hconcat: [cell('mercator'), cell('equirectangular')] })
+    const signals = find(vg, 'geojson').map((t) => t.signal)
+    expect(signals).toEqual(['concat_0_layer_1_geojson_0', 'concat_1_layer_1_geojson_0'])
+    expect(vg.projections.map((p: any) => [p.name, p.fit.signal])).toEqual([
+      ['concat_0_projection', `[data('source_0'), ${signals[0]}]`],
+      ['concat_1_projection', `[data('source_0'), ${signals[1]}]`],
+    ])
   })
 
   it('maps inside a facet are refused: vega-lite fits them to a dataset it never defines', () => {
