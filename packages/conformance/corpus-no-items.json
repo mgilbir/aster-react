@@ -1,0 +1,48 @@
+{
+ "specs": [
+  {
+   "name": "color-legend-all-nan-domain",
+   "why": "by design: every stdev is NaN, so the legend labelled NaN and the axes are what is compared (C596)"
+  },
+  {
+   "name": "grid-nan-band-range",
+   "why": "by design: a guide-only spec (a band scale whose range is NaN)"
+  },
+  {
+   "name": "legend-discretizing-labels",
+   "why": "by design: a guide-only spec (the labels of a discretizing legend)"
+  },
+  {
+   "name": "legend-encode-parts",
+   "why": "by design: a guide-only spec (encode blocks of legend parts)"
+  },
+  {
+   "name": "scope-root-and-group-scales",
+   "why": "by design: a guide-only spec (scales of the root and of a group scope)"
+  },
+  {
+   "name": "time-scale-string-guide-encode",
+   "why": "by design: a guide-only spec (a time scale with string guide encodings)"
+  },
+  {
+   "name": "vlx-anim-empty-false-first-frame-blank",
+   "why": "by design: empty:false makes the first frame blank"
+  },
+  {
+   "name": "vlx-geo-geoshape-empty-data",
+   "why": "lane a28 (ranges 4-6): the oracle draws no mark item in the headless run; give it data that draws, or state why none is the point"
+  },
+  {
+   "name": "vlx-geo-repeat-map-color-fields",
+   "why": "lane a28 (ranges 4-6): the oracle draws no mark item in the headless run; give it data that draws, or state why none is the point"
+  },
+  {
+   "name": "vlx-image-value-url",
+   "why": "lane a28 (ranges 4-6): the oracle draws no mark item in the headless run; give it data that draws, or state why none is the point"
+  },
+  {
+   "name": "wordcloud",
+   "why": "lane a28 (ranges 4-6): the oracle draws no mark item in the headless run; give it data that draws, or state why none is the point"
+  }
+ ]
+}

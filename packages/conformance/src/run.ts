@@ -9,7 +9,7 @@
  *
  * Environment: ASTER_CORPUS_DIR picks another corpus directory, relative to the package (default `corpus`; the time-zone matrix uses
  * `corpus-tz`); ASTER_CORPUS_FILTER keeps the entries whose name matches the regular expression.
- * Exit codes: 0 every entry matches the oracle, 1 a difference (or a missing corpus directory), 2 bad usage (an unknown option).
+ * Exit codes: 0 every entry matches the oracle (and, over the whole default corpus, no two entries render alike beyond corpus-distinct.json), 1 a difference (or a missing corpus directory), 2 bad usage (an unknown option).
  *
  * Convention: most entries set explicit numeric width/height and `autosize: 'none'` so
  * layout is deterministic and comparable. Nothing enforces it, and not every entry
@@ -23,8 +23,9 @@ import '@aster-charts/core/geo' // registers the geo projections and contours fo
 import '@aster-charts/core/transforms' // registers kde/regression/loess/pack/treemap/wordcloud/voronoi
 import { renderSpec } from '@aster-charts/core'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
-import { renderWithVega } from './render-vega.js'
+import { renderWithVegaCounted } from './render-vega.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
+import { canonicalHash, checkIdentical, checkNoItems, groupIdentical, readIdenticalTable, readNoItemsTable } from './corpus-distinct.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
 
 cli({ url: import.meta.url })
@@ -55,19 +56,19 @@ function vegaSpecFor(entry: CorpusEntry): { spec: Record<string, unknown>; viaLi
   return { spec: compiled, viaLite: true }
 }
 
-async function runOne(entry: CorpusEntry): Promise<{ pass: boolean; diffs: string[]; error?: string }> {
+async function runOne(entry: CorpusEntry): Promise<{ pass: boolean; diffs: string[]; error?: string; oracleHash?: string; markItems?: number }> {
   try {
     const { spec } = vegaSpecFor(entry)
-    const [oracleSvg, ourSvg] = await Promise.all([
+    const [oracleRender, ourSvg] = await Promise.all([
       // (vega changes the rows of an inline dataset in place -- a force layout rewrites its link rows -- so it gets a copy)
-      renderWithVega(structuredClone(spec)),
+      renderWithVegaCounted(structuredClone(spec)),
       // url datasets resolve through the load addon, exactly what a real host does
       loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS).then((loaded) => renderSpec(loaded as never)),
     ])
-    const oracle = canonicalizeSvg(oracleSvg)
+    const oracle = canonicalizeSvg(oracleRender.svg)
     const ours = canonicalizeSvg(ourSvg)
     const diffs = diffCanonical(oracle, ours)
-    return { pass: diffs.length === 0, diffs }
+    return { pass: diffs.length === 0, diffs, oracleHash: canonicalHash(oracle), markItems: oracleRender.markItems }
   } catch (err) {
     return { pass: false, diffs: [], error: err instanceof Error ? err.message : String(err) }
   }
@@ -91,9 +92,13 @@ export async function runCorpus(): Promise<boolean> {
   }
 
   let passed = 0
+  const hashes = new Map<string, string>()
+  const noItems: string[] = []
   const failures: Array<{ name: string; diffs: string[]; error?: string }> = []
   for (const entry of entries) {
     const result = await runOne(entry)
+    if (result.oracleHash) hashes.set(entry.name, result.oracleHash)
+    if (result.markItems === 0) noItems.push(entry.name)
     if (result.pass) {
       passed++
       console.log(`PASS  ${entry.name}`)
@@ -107,7 +112,25 @@ export async function runCorpus(): Promise<boolean> {
 
   console.log(`\n[conformance] ${passed}/${entries.length} passed`)
   if (failures.length) console.log(`[conformance] failing: ${failures.map((f) => f.name).join(', ')}`)
-  return failures.length === 0
+  // The corpus is a set of distinct checks that each compare something of the data: only the whole default corpus can be held to that
+  // (a filter or another directory renders a part).
+  let distinct = true
+  if (!filter && !process.env.ASTER_CORPUS_DIR) {
+    const here = join(dirname(fileURLToPath(import.meta.url)), '..')
+    const names = new Set(entries.map((e) => e.name))
+    const identical = readIdenticalTable(join(here, 'corpus-identical.json'))
+    const empty = readNoItemsTable(join(here, 'corpus-no-items.json'))
+    const problems = [
+      ...checkIdentical(groupIdentical(hashes), identical, names),
+      ...checkNoItems(noItems, empty, names),
+    ]
+    for (const p of problems) console.log(`FAIL  ${p}`)
+    console.log(
+      `[conformance] distinct: ${problems.length ? `${problems.length} problem(s)` : `ok (${identical.groups.length} known identical group(s) still to fix, ${empty.specs.length} entry(ies) listed as drawing no item of their own)`}`,
+    )
+    distinct = problems.length === 0
+  }
+  return failures.length === 0 && distinct
 }
 
 const ok = await runCorpus()

@@ -13,7 +13,7 @@
  *     only through Aster hid invalid Vega). Messages that vega-lite's
  *     own output also triggers (data-dependent noise) are not counted.
  *  3. Real vega's rendering of OUR Vega must equal its rendering of
- *     vega-lite's output (canonicalized SVG): the emitted spec means the same
+ *     vega-lite's output (canonicalized SVG, and the tooltip of every item, which no SVG carries): the emitted spec means the same
  *     thing as the reference in the engine that defines the semantics.
  *  4. (corpus/ only) Aster's rendering of our Vega must equal that reference.
  *
@@ -82,6 +82,13 @@ function multisetLines(o: { records: string[] }, u: { records: string[] }, diffs
   return lines
 }
 
+/** The first place two lists of strings differ, printable; null when they are equal. */
+function firstDifference(oracle: readonly string[], ours: readonly string[]): string | null {
+  if (oracle.length !== ours.length) return `${oracle.length} items with a tooltip in vega-lite's output, ${ours.length} in ours`
+  const i = oracle.findIndex((t, k) => t !== ours[k])
+  return i < 0 ? null : `vega-lite: ${oracle[i]!.slice(0, 160)}  |  ours: ${ours[i]!.slice(0, 160)}`
+}
+
 async function runCase(spec: Record<string, unknown>, aster: boolean): Promise<Outcome> {
   try {
     const oracleVg = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, unknown> } }).compile(spec).spec
@@ -104,6 +111,9 @@ async function runCase(spec: Record<string, unknown>, aster: boolean): Promise<O
     if (vegaDiffs.length) {
       return { kind: 'fail', lines: [`real vega on our Vega differs from vega-lite's: ${String(vegaDiffs[0]).slice(0, 200)}`] }
     }
+    // (neither SVG carries a tooltip, so the SVGs above cannot see one: the items' tooltips are compared on their own)
+    const tipDiff = firstDifference(oracleChecked.tooltips, checked.tooltips)
+    if (tipDiff) return { kind: 'fail', lines: [`real vega on our Vega gives different tooltips than on vega-lite's: ${tipDiff}`] }
     if (!aster) return { kind: 'pass' }
     const ourSvg = renderSpec((await loadSpecData(ourPlain() as never)) as never)
     const u = canonicalizeSvg(ourSvg as string)
