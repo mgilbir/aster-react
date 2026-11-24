@@ -36,6 +36,18 @@ const cycling = (name: string, values: unknown[]): object => (!cycle ? {} : {
   on: [{ events: 'click', update: values.map((v, i) => `${name} === ${JSON.stringify(v)} ? ${JSON.stringify(values[(i + 1) % values.length])} : `).join('') + JSON.stringify(values[0]) }],
 })
 
+/**
+ * The signal `name`, moved on a click through `values` (any JSON values, arrays included: a counter signal steps through the list and
+ * the signal reads the list at it), or only set by the host when `cycle` is off.
+ */
+const stepping = (name: string, values: unknown[]): object[] => (!cycle ? [signalled(name, values[0])] : [
+  signalled(`${name}Step`, 0, { on: [{ events: 'click', update: `(${name}Step + 1) % ${values.length}` }] }),
+  signalled(name, values[0], { update: `${JSON.stringify(values)}[${name}Step]` }),
+])
+
+/** an axis's formatType and format, which go together */
+const FORMAT_PAIRS = [['number', ',.0f'], ['time', '%b %Y'], ['utc', '%Y-%m-%d'], ['time', '%a %d']]
+
 const CURVES = ['linear', 'linear-closed', 'basis', 'basis-closed', 'basis-open', 'bundle', 'cardinal', 'cardinal-closed', 'cardinal-open',
   'catmull-rom', 'catmull-rom-closed', 'catmull-rom-open', 'monotone', 'natural', 'step', 'step-after', 'step-before']
 
@@ -92,7 +104,7 @@ const CASES: Case[] = [
     values: [[0, 50], [10, 90], ['#000', '#f00'], ['steelblue', 'orange', 'green']],
     firstNeedsNone: true,
     spec: (s, c) => (cycle = c, {
-      ...VIEW, signals: [signalled(s, [0, 50])], data: [{ name: 't', values: POINTS }],
+      ...VIEW, signals: stepping(s, [[0, 50], [10, 90], ['#000', '#f00'], ['steelblue', 'orange', 'green']]), data: [{ name: 't', values: POINTS }],
       scales: [X, Y, { name: 'v', type: 'linear', domain: { data: 't', field: 'y' }, range: { signal: s } }],
       marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, width: { value: 8 }, y: { scale: 'y', field: 'y' }, y2: { value: 120 }, fill: { scale: 'v', field: 'y' } } } }],
     } as VgSpec),
@@ -100,10 +112,11 @@ const CASES: Case[] = [
   {
     name: "an axis's format and formatType by signal",
     family: 'time',
-    values: [['number', ',.0f'], ['time', '%b %Y'], ['utc', '%Y-%m-%d'], ['time', '%a %d']],
+    values: FORMAT_PAIRS,
     firstNeedsNone: true,
     spec: (s, c) => (cycle = c, {
-      ...VIEW, signals: [signalled(`${s}Type`, 'number'), signalled(`${s}Format`, ',.0f')], data: [{ name: 't', values: POINTS }],
+      // (a click moves the pair: a type and a format that do not go together are an error in vega too)
+      ...VIEW, signals: [...stepping(`${s}Pair`, FORMAT_PAIRS), signalled(`${s}Type`, 'number', cycle ? { update: `${s}Pair[0]` } : {}), signalled(`${s}Format`, ',.0f', cycle ? { update: `${s}Pair[1]` } : {})], data: [{ name: 't', values: POINTS }],
       scales: [{ name: 'x', type: 'linear', domain: { data: 't', field: 'd' }, range: 'width' }, Y],
       axes: [{ scale: 'x', orient: 'bottom', format: { signal: `${s}Format` }, formatType: { signal: `${s}Type` } }],
       marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'd' }, y: { scale: 'y', field: 'y' } } } }],
@@ -157,7 +170,10 @@ const CASES: Case[] = [
     family: 'reshape',
     values: [['zero', 5, 'value'], ['center', 10, 'mean'], ['normalize', 20, 'max']],
     spec: (s, c) => (cycle = c, {
-      ...VIEW, signals: [signalled(`${s}Offset`, 'zero'), signalled(`${s}Bins`, 5), signalled(`${s}Method`, 'value')],
+      ...VIEW, signals: [
+        signalled(`${s}Offset`, 'zero', cycling(`${s}Offset`, ['zero', 'center', 'normalize'])), signalled(`${s}Bins`, 5, cycling(`${s}Bins`, [5, 10, 20])),
+        signalled(`${s}Method`, 'value', cycling(`${s}Method`, ['value', 'mean', 'max'])),
+      ],
       data: [{ name: 't', values: POINTS, transform: [
         { type: 'bin', field: 'y', extent: [0, 11], maxbins: { signal: `${s}Bins` } },
         { type: 'impute', field: 'y', key: 'x', groupby: ['c'], method: { signal: `${s}Method` }, value: 0 },
@@ -172,7 +188,7 @@ const CASES: Case[] = [
     family: 'time',
     values: [['year'], ['year', 'month'], ['month', 'date'], ['week']],
     spec: (s, c) => (cycle = c, {
-      ...VIEW, signals: [signalled(s, ['year'])], data: [{ name: 't', values: POINTS, transform: [{ type: 'timeunit', field: 'd', units: { signal: s } }] }],
+      ...VIEW, signals: stepping(s, [['year'], ['year', 'month'], ['month', 'date'], ['week']]), data: [{ name: 't', values: POINTS, transform: [{ type: 'timeunit', field: 'd', units: { signal: s } }] }],
       scales: [{ name: 'x', type: 'linear', domain: { data: 't', field: 'unit0' }, range: 'width' }, Y],
       marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'unit0' }, y: { scale: 'y', field: 'y' } } } }],
     } as VgSpec),
@@ -192,6 +208,8 @@ describe('a family chosen by a signal is named whole, and draws the same with wh
       it(`${c.name}${handler ? ', and moved on by a click' : ', set by the host'}`, async () => {
         const sig = 'pick'
         const spec = c.spec(sig, handler)
+        // the title says what the spec has: the handler variant carries a handler on a click, the host-set one carries none
+        expect(JSON.stringify(spec).includes('"events":"click"'), 'a click handler is in the spec of the handler variant only').toBe(handler)
         expect(specNeeds(spec).parts, 'the detector names the family').toContain(c.family)
         const readBy: Array<readonly EnginePart[]> = []
         for (const v of c.values) {
