@@ -114,7 +114,8 @@ export function schemaProperties(name: keyof typeof NAMED): ReadonlySet<string> 
 /** What went wrong, and where: the keys from the value checked down to the offending one, innermost first (the path is only built for a refusal). */
 interface Problem {
   readonly keys: (string | number)[]
-  readonly msg: string
+  /** what is wrong, in words (worked out only for the refusal that is thrown) */
+  readonly msg: () => string
   /** how far into the value it was found: a union reports the alternative that got furthest */
   depth: number
   /** the value is not the one constant a property takes (a `type: "boxplot"`): the alternative is not the one meant */
@@ -127,7 +128,7 @@ const isNamesOnly = (t: Type): boolean => t.enums !== undefined && t.mask === 0 
 /** Is `p` a better account of what is wrong than `q`: not a mismatched constant, then further in. */
 const better = (p: Problem, q: Problem | undefined): boolean => q === undefined || (!p.weak && q.weak === true) || (p.weak === q.weak && p.depth > q.depth)
 
-const problem = (msg: string): Problem => ({ keys: [], msg, depth: 0 })
+const problem = (msg: () => string): Problem => ({ keys: [], msg, depth: 0 })
 function below(p: Problem, key: string | number): Problem {
   p.keys.push(key)
   p.depth++
@@ -142,6 +143,27 @@ export function isLiteralValue(v: object): boolean {
   return literals.has(v)
 }
 
+/** An object as the walk reads it: its keys that hold something, and their values, each read once (the compile's copy of the spec
+ * counts reads: consume.ts). */
+interface Entries {
+  readonly v: Obj
+  readonly keys: readonly string[]
+  readonly vals: readonly unknown[]
+}
+function entriesOf(v: Obj): Entries {
+  const keys: string[] = []
+  const vals: unknown[] = []
+  for (const k of Object.keys(v)) {
+    const x = v[k]
+    if (x === undefined) continue
+    keys.push(k)
+    vals.push(x)
+  }
+  return { v, keys, vals }
+}
+const isExprRefEntries = (o: Entries): boolean => o.keys.length === 1 && o.keys[0] === 'expr' && typeof o.vals[0] === 'string'
+const has = (o: Entries, k: string): boolean => o.keys.includes(k)
+
 const isExprRef = (v: Obj): boolean => {
   for (const k in v) if (k !== 'expr') return false
   return typeof v.expr === 'string'
@@ -149,7 +171,7 @@ const isExprRef = (v: Obj): boolean => {
 
 function check(v: unknown, ti: number): Problem | undefined {
   if (v === undefined) return undefined
-  if (ti === INLINE_DATASET) return Array.isArray(v) || typeof v === 'string' || isObj(v) ? undefined : problem(`must be ${expected(typeAt(ti))}, got ${show(v)}`)
+  if (ti === INLINE_DATASET) return Array.isArray(v) || typeof v === 'string' || isObj(v) ? undefined : problem(() => `must be ${expected(typeAt(ti))}, got ${show(v)}`)
   const t = typeAt(ti)
   if (t.mask & ANY) {
     if (v !== null && typeof v === 'object' && !(t.expr && isObj(v) && isExprRef(v))) literals.add(v)
@@ -157,37 +179,37 @@ function check(v: unknown, ti: number): Problem | undefined {
   }
   if (t.enums?.has(v)) return undefined
   if (t.enums?.size === 1 && isNamesOnly(t)) {
-    return { keys: [], msg: `must be ${expected(t)}, got ${show(v)}`, depth: 0, weak: true }
+    return { keys: [], msg: () => `must be ${expected(t)}, got ${show(v)}`, depth: 0, weak: true }
   }
   switch (typeof v) {
     case 'string':
       if (t.mask & STRING) return undefined
       if (t.strs.some(([lo, hi]) => (lo === null || v.length >= lo) && (hi === null || v.length <= hi))) return undefined
-      return problem(`must be ${expected(t)}, got ${show(v)}${t.enums ? suggest(v, [...t.enums].filter((x): x is string => typeof x === 'string')) : ''}`)
+      return problem(() => `must be ${expected(t)}, got ${show(v)}${t.enums ? suggest(v, [...t.enums].filter((x): x is string => typeof x === 'string')) : ''}`)
     case 'number':
       if (Number.isFinite(v)) {
         if (t.mask & NUMBER) return undefined
         if ((t.mask & INTEGER) && Number.isInteger(v)) return undefined
         if (t.nums.some(([lo, hi, int]) => (lo === null || v >= lo) && (hi === null || v <= hi) && (int !== 1 || Number.isInteger(v)))) return undefined
       }
-      return problem(`must be ${expected(t)}, got ${show(v)}`)
+      return problem(() => `must be ${expected(t)}, got ${show(v)}`)
     case 'boolean':
-      return t.mask & BOOLEAN ? undefined : problem(`must be ${expected(t)}, got ${show(v)}`)
+      return t.mask & BOOLEAN ? undefined : problem(() => `must be ${expected(t)}, got ${show(v)}`)
     case 'object':
-      if (v === null) return t.mask & NULL ? undefined : problem(`must be ${expected(t)}, got null`)
+      if (v === null) return t.mask & NULL ? undefined : problem(() => `must be ${expected(t)}, got null`)
       if (Array.isArray(v)) return checkArray(v, t)
-      return checkObject(v as Obj, t)
+      return checkObject(entriesOf(v as Obj), t)
   }
-  return problem(`must be ${expected(t)}, got ${show(v)}`)
+  return problem(() => `must be ${expected(t)}, got ${show(v)}`)
 }
 
 function checkArray(v: unknown[], t: Type): Problem | undefined {
-  if (t.arrays.length === 0) return problem(`must be ${expected(t)}, got an array`)
+  if (t.arrays.length === 0) return problem(() => `must be ${expected(t)}, got an array`)
   let best: Problem | undefined
   for (const [item, lo, hi] of t.arrays) {
     let p: Problem | undefined
-    if (lo >= 0 && v.length < lo) p = problem(`must have at least ${lo} item${lo === 1 ? '' : 's'}, got ${v.length}`)
-    else if (hi >= 0 && v.length > hi) p = problem(`must have at most ${hi} item${hi === 1 ? '' : 's'}, got ${v.length}`)
+    if (lo >= 0 && v.length < lo) p = problem(() => `must have at least ${lo} item${lo === 1 ? '' : 's'}, got ${v.length}`)
+    else if (hi >= 0 && v.length > hi) p = problem(() => `must have at most ${hi} item${hi === 1 ? '' : 's'}, got ${v.length}`)
     else {
       for (let i = 0; i < v.length && p === undefined; i++) {
         const q = check(v[i], item)
@@ -200,21 +222,22 @@ function checkArray(v: unknown[], t: Type): Problem | undefined {
   return best
 }
 
-function checkObject(v: Obj, t: Type): Problem | undefined {
-  if (t.expr && isExprRef(v)) return undefined
+function checkObject(o: Entries, t: Type): Problem | undefined {
+  const v = o.v
+  if (t.expr && isExprRefEntries(o)) return undefined
   if (t.mask & OBJECT) {
     literals.add(v)
     return undefined
   }
   // (an {"expr"} where the schema takes no ExprRef, nor any object: vega-lite does not read it as an expression, and as the object
   // it is it is no value of the position's type - an object of a known shape whose keys it would not have)
-  if (t.maps.length === 0 && isExprRef(v)) return problem(`must be ${expected(t)}, got an {"expr"} reference (an expression is not allowed here)`)
+  if (t.maps.length === 0 && isExprRefEntries(o)) return problem(() => `must be ${expected(t)}, got an {"expr"} reference (an expression is not allowed here)`)
   const n = t.shapes.length + t.maps.length
-  if (n === 0) return problem(`must be ${expected(t)}, got ${show(v)}`)
+  if (n === 0) return problem(() => `must be ${expected(t)}, got ${show(v)}`)
   // (where a value goes - a primitive, or else a DateTime, an ExprRef ... - an object that has none of their properties is not one
   // of them: `{"a": 1}` as a domain value or a datum)
-  if (((t.mask & ~NULL) !== 0 || t.enums !== undefined) && t.maps.length === 0 && !t.shapes.some((si) => knowsAny(v, shapeAt(si)))) return problem(`must be ${expected(t)}, got ${show(v)}`)
-  if (n === 1 && t.maps.length === 0) return checkShape(v, shapeAt(t.shapes[0]!))
+  if (((t.mask & ~NULL) !== 0 || t.enums !== undefined) && t.maps.length === 0 && !t.shapes.some((si) => knowsAny(o, shapeAt(si)))) return problem(() => `must be ${expected(t)}, got ${show(v)}`)
+  if (n === 1 && t.maps.length === 0) return checkShape(o, shapeAt(t.shapes[0]!))
   // (several alternatives: the object is the one that has the most of its keys and all of its required ones - the others are
   // properties vega-lite ignores there; it passes if one of those takes it. When none does, the refusal is the one of the alternative
   // that got furthest into the object, or else of the one whose properties the keys fit best)
@@ -223,8 +246,8 @@ function checkObject(v: Obj, t: Type): Problem | undefined {
   let closestFit = -1
   for (const si of t.shapes) {
     const s = shapeAt(si)
-    const [known, complete, fit] = keysFit(v, s)
-    if (complete && (strictKeys === 0 || known === Object.keys(v).length)) {
+    const [known, complete, fit] = keysFit(o, s)
+    if (complete && (strictKeys === 0 || known === o.keys.length)) {
       const tier = tiers.get(known)
       if (tier === undefined) tiers.set(known, [si])
       else tier.push(si)
@@ -237,7 +260,7 @@ function checkObject(v: Obj, t: Type): Problem | undefined {
   for (const known of [...tiers.keys()].sort((a, b) => b - a)) {
     let allWeak = true
     for (const si of tiers.get(known)!) {
-      const p = checkShape(v, shapeAt(si))
+      const p = checkShape(o, shapeAt(si))
       if (p === undefined) return undefined
       if (!p.weak) allWeak = false
       if (better(p, best)) best = p
@@ -245,12 +268,12 @@ function checkObject(v: Obj, t: Type): Problem | undefined {
     if (!allWeak) break
   }
   for (const m of t.maps) {
-    const p = checkMap(v, m)
+    const p = checkMap(o, m)
     if (p === undefined) return undefined
     best ??= p
   }
   if (best !== undefined) return best
-  return closest >= 0 ? checkShape(v, shapeAt(closest)) : problem(`must be ${expected(t)}, got ${show(v)}`)
+  return closest >= 0 ? checkShape(o, shapeAt(closest)) : problem(() => `must be ${expected(t)}, got ${show(v)}`)
 }
 
 /**
@@ -258,18 +281,13 @@ function checkObject(v: Obj, t: Type): Problem | undefined {
  * object no alternative takes (its keys that `s` has and its required keys that are there, then whether `s` has the first key: the
  * one a spec writes first says what the object is - `field` on an `x2`, `repeat` on a view).
  */
-function keysFit(v: Obj, s: Shape): [known: number, complete: boolean, fit: number] {
+function keysFit(o: Entries, s: Shape): [known: number, complete: boolean, fit: number] {
   let known = 0
-  let first = -1
-  for (const k of Object.keys(v)) {
-    if (v[k] === undefined) continue
-    const has = s.props.has(k) || s.additional !== -1
-    if (first === -1) first = has ? 1 : 0
-    if (has) known++
-  }
+  for (const k of o.keys) if (s.additional !== -1 || s.props.has(k)) known++
+  const first = o.keys.length > 0 && (s.additional !== -1 || s.props.has(o.keys[0]!)) ? 1 : 0
   let required = 0
-  for (const r of s.required) if (v[r] !== undefined) required++
-  return [known, required === s.required.length, (known + required) * 2 + Math.max(first, 0)]
+  for (const r of s.required) if (has(o, r)) required++
+  return [known, required === s.required.length, (known + required) * 2 + first]
 }
 
 /**
@@ -280,32 +298,26 @@ function keysFit(v: Obj, s: Shape): [known: number, complete: boolean, fit: numb
 let strictKeys = 0
 
 /** Does `v` have at least one of the properties of `s` (or none at all)? */
-function knowsAny(v: Obj, s: Shape): boolean {
-  let empty = true
-  for (const k of Object.keys(v)) {
-    if (v[k] === undefined) continue
-    if (s.props.has(k)) return true
-    empty = false
-  }
-  return empty
+function knowsAny(o: Entries, s: Shape): boolean {
+  if (o.keys.length === 0) return true
+  for (const k of o.keys) if (s.props.has(k)) return true
+  return false
 }
 
-function checkShape(v: Obj, s: Shape): Problem | undefined {
+function checkShape(o: Entries, s: Shape): Problem | undefined {
   const config = s === shapeAt(NAMED.Config)
   if (config) strictKeys++
   try {
-    let count = 0
-    for (const k of Object.keys(v)) {
-      const x = v[k]
-      if (x === undefined) continue
-      count++
+    for (let i = 0; i < o.keys.length; i++) {
+      const k = o.keys[i]!
+      const x = o.vals[i]
       let ti = s.props.get(k)
       if (ti === undefined) {
         if (s.additional === -2) continue
         if (s.additional === -1) {
           // (outside the config, a property the definition does not have is left to validate.ts and the consumption check)
           if (strictKeys === 0) continue
-          return problem(`unknown property ${JSON.stringify(k)}${suggest(k, s.props.keys())}`)
+          return problem(() => `unknown property ${JSON.stringify(k)}${suggest(k, s.props.keys())}`)
         }
         ti = s.additional
       }
@@ -316,18 +328,18 @@ function checkShape(v: Obj, s: Shape): Problem | undefined {
         return below(p, k)
       }
     }
-    for (const r of s.required) if (v[r] === undefined) return problem(`needs \`${r}\``)
-    if (count < s.minProperties) return problem('must not be empty')
+    for (const r of s.required) if (!has(o, r)) return problem(() => `needs \`${r}\``)
+    if (o.keys.length < s.minProperties) return problem(() => 'must not be empty')
     return undefined
   } finally {
     if (config) strictKeys--
   }
 }
 
-function checkMap(v: Obj, ti: number): Problem | undefined {
-  for (const k of Object.keys(v)) {
-    const p = check(v[k], ti)
-    if (p !== undefined) return below(p, k)
+function checkMap(o: Entries, ti: number): Problem | undefined {
+  for (let i = 0; i < o.keys.length; i++) {
+    const p = check(o.vals[i], ti)
+    if (p !== undefined) return below(p, o.keys[i]!)
   }
   return undefined
 }
@@ -381,5 +393,5 @@ function pathOf(keys: readonly (string | number)[]): string {
  */
 export function checkSchema(spec: unknown): void {
   const p = check(spec, ROOT)
-  if (p !== undefined) throw new VLCompileError(`${pathOf(p.keys) || '<spec>'}: ${p.msg} (Vega-Lite ${SCHEMA_VERSION} schema)`)
+  if (p !== undefined) throw new VLCompileError(`${pathOf(p.keys) || '<spec>'}: ${p.msg()} (Vega-Lite ${SCHEMA_VERSION} schema)`)
 }
