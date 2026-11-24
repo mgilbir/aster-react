@@ -172,8 +172,8 @@ const filter = process.argv.slice(2).find((a) => !a.startsWith('--'))
 await runGate({
   name: 'conformance-vl',
   counters: {
-    compared: { floor: 672, what: "Vega-Lite entries whose Aster rendering was compared with real vega's (check 4)" },
-    'vega-checked': { floor: 672, what: 'Vega-Lite entries whose emitted Vega real vega rendered like vega-lite\'s (checks 1-3)' },
+    compared: { floor: 683, what: "Vega-Lite entries whose Aster rendering was compared with real vega's (check 4)" },
+    'vega-checked': { floor: 683, what: 'Vega-Lite entries whose emitted Vega real vega rendered like vega-lite\'s (checks 1-3)' },
   },
   partial: Boolean(filter),
   run: (gate) => main(gate, filter),
