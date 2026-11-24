@@ -21,10 +21,8 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
-// Local-time parsing in the vectors was recorded with TZ=UTC; pin it here too
-// so `Jan 1, 2020`-style cases match on any machine. Must run before the
-// first Date parse in this file's worker.
-process.env.TZ = 'UTC'
+// Local-time parsing in the vectors was recorded with TZ=UTC (a suite that records another zone says so in `tz`): every suite pins
+// its zone when it runs (expectSuite), so `Jan 1, 2020`-style cases match on any machine, in any order, under any `-t` filter.
 
 import {
   accessor, accessorFields, accessorName, ascending, extent, field, isArray,
@@ -258,13 +256,40 @@ function proj(c: unknown): unknown {
   }
 }
 
+/** Runs `body` in the zone a suite records (UTC when it records none) and puts the zone the file was started in back after. */
+function inSuiteZone(tz: string | undefined, body: () => void): void {
+  const before = process.env.TZ
+  process.env.TZ = tz ?? 'UTC'
+  try {
+    body()
+  } finally {
+    if (before === undefined) delete process.env.TZ
+    else process.env.TZ = before
+  }
+}
+
+describe('the zone a suite runs in', () => {
+  it('is its own: a suite without one runs in UTC whatever the suite before it left, and nothing is left behind', () => {
+    const offset = () => new Date(2020, 0, 1).getTimezoneOffset()
+    const start = process.env.TZ
+    inSuiteZone('America/New_York', () => expect(offset()).toBe(300))
+    inSuiteZone(undefined, () => expect(offset()).toBe(0))
+    inSuiteZone('Asia/Kolkata', () => expect(offset()).toBe(-330))
+    inSuiteZone(undefined, () => expect(offset()).toBe(0))
+    expect(process.env.TZ).toBe(start)
+  })
+})
+
 function expectSuite(name: string, suite: Suite, run: (args: unknown[], want: unknown, extra?: { variant?: string }) => void): void {
   describe(name, () => {
     it(`matches ${suite.oracle} (${suite.cases.length} cases)`, () => {
       // The suite records the zone it was pinned to (local-time behaviour,
       // DST transitions); Node re-reads process.env.TZ per call.
-      if (suite.tz) process.env.TZ = suite.tz
-      for (const { args, want, variant } of suite.cases) run(args.map(dec), want, { variant })
+      // A suite without a zone runs in UTC, not in the zone the previous suite left behind (C576); the zone the file was started in
+      // is put back after.
+      inSuiteZone(suite.tz, () => {
+        for (const { args, want, variant } of suite.cases) run(args.map(dec), want, { variant })
+      })
     })
   })
 }
