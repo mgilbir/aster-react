@@ -3,8 +3,9 @@ import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, afterEach } from 'vitest'
-import { handleChartWorkerStreamRequest, type ChartWorkerStreamRequest } from './worker'
+import { handleChartWorkerStreamRequest } from './worker'
 import { useChartWorkerStream, type WorkerChartStreamResult } from './useChartWorkerStream'
+import { FakeWorker } from './testing/fake-worker'
 
 const spec = {
   $schema: 'https://vega.github.io/schema/vega/v6.json',
@@ -18,21 +19,6 @@ const spec = {
     x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, size: { value: 20 },
   } } }],
 } as never
-
-class FakeWorker {
-  listeners = new Set<(event: MessageEvent) => void>()
-  streams = new Map<number, never>()
-  terminated = false
-  addEventListener(type: string, fn: (event: MessageEvent) => void): void { if (type === 'message') this.listeners.add(fn) }
-  removeEventListener(_type: string, fn: (event: MessageEvent) => void): void { this.listeners.delete(fn) }
-  postMessage(request: ChartWorkerStreamRequest): void {
-    const response = handleChartWorkerStreamRequest(request, this.streams as never)
-    queueMicrotask(() => {
-      for (const fn of this.listeners) fn({ data: response } satisfies Partial<MessageEvent> as MessageEvent)
-    })
-  }
-  terminate(): void { this.terminated = true }
-}
 
 describe('worker streaming', () => {
   afterEach(() => { document.body.innerHTML = '' })
@@ -103,9 +89,16 @@ describe('worker streaming', () => {
       await new Promise((r) => setTimeout(r, 20))
     })
     expect(host.querySelector('[data-testid="probe"]')!.getAttribute('data-count')).toBe('3')
+    // the worker is what streamed it: it received the init and the batch, and holds the stream it answers for
+    expect(fake.posted.map((p) => p.op)).toEqual(['init', 'flush'])
+    expect(fake.posted[1]).toMatchObject({ batches: [{ append: { t: [{ x: 2, y: 3 }] } }] })
+    expect(fake.streams.size).toBe(1)
     expect(result!.pulse()?.datasets.get('t')?.addedRanges).toEqual([[2, 3]])
     act(() => { result!.close() })
     expect(result!.push({ append: { t: [{ x: 3, y: 4 }] } })).toBe(false)
     act(() => { root.unmount() })
+    // the stream it opened is closed in the worker; the worker, which the caller supplied, is not the hook's to terminate
+    expect(fake.streams.size).toBe(0)
+    expect(fake.terminated).toBe(false)
   })
 })

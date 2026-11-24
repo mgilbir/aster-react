@@ -9,9 +9,9 @@ import { useChartStream } from './useChartStream'
 import { useChartWorkerStream, type WorkerChartStreamResult } from './useChartWorkerStream'
 import {
   handleChartWorkerRequest, handleWorkerMessage, registerWorkerUrlPolicy, useChartWorker,
-  type ChartWorkerStreamRequest,
 } from './worker'
 import { forEachVariant } from './testing/variants'
+import { FakeWorker } from './testing/fake-worker'
 
 const wait = (ms = 30): Promise<void> => new Promise((r) => setTimeout(r, ms))
 const rows = (n: number, from = 0) => Array.from({ length: n }, (_, i) => ({ x: from + i, y: from + i }))
@@ -21,21 +21,6 @@ const spec = (n = 2): never => ({
   scales: [{ name: 'x', type: 'linear', domain: [0, 100], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 100], range: 'height' }],
   marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' } } } }],
 }) as never
-
-class FakeWorker {
-  listeners = new Map<string, Set<(e: unknown) => void>>()
-  streams = new Map<number, CoreStream>()
-  posted: ChartWorkerStreamRequest[] = []
-  addEventListener(t: string, fn: (e: unknown) => void): void { (this.listeners.get(t) ?? this.listeners.set(t, new Set()).get(t)!).add(fn) }
-  removeEventListener(t: string, fn: (e: unknown) => void): void { this.listeners.get(t)?.delete(fn) }
-  postMessage(request: ChartWorkerStreamRequest): void {
-    const wire = structuredClone(request)
-    this.posted.push(wire)
-    const response = handleWorkerMessage(wire, this.streams)
-    if (response) queueMicrotask(() => { for (const fn of this.listeners.get('message') ?? []) fn({ data: structuredClone(response) }) })
-  }
-  terminate(): void { /* no-op */ }
-}
 
 function probe<T>(useIt: () => T): { result: () => T; root: ReturnType<typeof createRoot> } {
   let cur: T
@@ -91,7 +76,8 @@ describe('maxQueuedRows reaches the stream (hooks)', () => {
     await act(async () => { await wait() })
     expect(m.result().stats().maxQueuedRows).toBe(5)
     let tooBig = true; let fits = false
-    act(() => {
+    // (the pushes schedule the flush on a microtask: the act that holds them is awaited, so the flush is inside it too)
+    await act(async () => {
       tooBig = m.result().push({ append: { t: rows(10) } })
       fits = m.result().push({ append: { t: rows(3) } })
     })

@@ -3,12 +3,11 @@ import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import type { ChartStream as CoreChartStream } from '@aster-charts/core'
 import { ChartStream, ChartWorkerStream, type ChartStreamHandle } from './ChartStream'
-import { handleWorkerMessage, type ChartWorkerStreamRequest } from './worker'
 import { useChartStream, type UseChartStreamResult } from './useChartStream'
 import type { ViewDomain } from './interaction'
 import { forEachVariant } from './testing/variants'
+import { FakeWorker } from './testing/fake-worker'
 
 const RECT = { left: 0, top: 0, width: 210, height: 110, right: 210, bottom: 110, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
 
@@ -30,22 +29,6 @@ const dataSpec = (rows: Array<{ a: number; b: number }>, extra: Record<string, u
 }) as never
 
 const base = [{ a: 0, b: 0 }, { a: 10, b: 10 }]
-
-class FakeWorker {
-  listeners = new Set<(event: unknown) => void>()
-  streams = new Map<number, CoreChartStream>()
-  posted: ChartWorkerStreamRequest[] = []
-  addEventListener(type: string, fn: (event: unknown) => void): void { if (type === 'message') this.listeners.add(fn) }
-  removeEventListener(type: string, fn: (event: unknown) => void): void { if (type === 'message') this.listeners.delete(fn) }
-  postMessage(request: ChartWorkerStreamRequest): void {
-    const wire = structuredClone(request)
-    this.posted.push(wire)
-    const response = handleWorkerMessage(wire, this.streams)
-    // A real worker clones the response: functions and live scale maps never arrive.
-    if (response) queueMicrotask(() => { for (const fn of this.listeners) fn({ data: structuredClone(response) }) })
-  }
-  terminate(): void { /* no-op */ }
-}
 
 const wait = (ms = 30): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
