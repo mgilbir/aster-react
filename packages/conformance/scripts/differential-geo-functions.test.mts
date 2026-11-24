@@ -10,7 +10,7 @@ import '../../core/src/addon-geo.ts'
 import { compileExpr, type ExpressionRuntime } from '../../core/src/expression.ts'
 import { geoRegistry } from '../../core/src/registry.ts'
 import { exact, quietLogger } from './differential-util.mts'
-import { Rand, seedOf } from './geo-gen.mts'
+import { Rand, seedOf, withoutEmptyRings } from './geo-gen.mts'
 
 const PROJECTIONS = [
   { name: 'merc', type: 'mercator', scale: 100, translate: [200, 150] },
@@ -58,6 +58,11 @@ const GEO: unknown[] = [
   ] },
   { type: 'GeometryCollection', geometries: [{ type: 'Point', coordinates: [1, 2] }, { type: 'LineString', coordinates: [[0, 0], [10, 10]] }] },
   { type: 'Sphere' },
+  // empty rings: vega's measure of one (through no projection) depends on what its d3 measured before, so the oracle is asked about the
+  // shape without them (docs/ARCHITECTURE.md, Deviations from Vega); through a projection d3's clip throws, and so does Aster's
+  { type: 'Polygon', coordinates: [[]] },
+  { type: 'MultiPolygon', coordinates: [[[]], poly([[0, 50], [10, 50], [10, 60], [0, 60], [0, 50]]).coordinates[0]!].map((p, i) => (i === 0 ? p : [p])) },
+  poly([[0, 0]]),
   { type: 'MultiPolygon', coordinates: [poly([[170, 10], [-170, 10], [-170, 20], [170, 20], [170, 10]]).coordinates, poly([[0, 50], [10, 50], [10, 60], [0, 60], [0, 50]]).coordinates] },
   null, undefined, {}, 'x', 5, [],
 ]
@@ -68,7 +73,9 @@ describe('geo expression functions vs real vega (live)', () => {
       for (const g of GEO) {
         for (const proj of [null, undefined, '', ...PROJECTIONS.map((p) => p.name), 'nope']) {
           const code = `${fn}(a, b)`
-          expect(viaAster(code, [proj, g]), `${fn} ${String(proj)} ${JSON.stringify(g)}`).toEqual(await viaVega(code, [proj, g]))
+          // (no projection: the sphere's measures, where an empty ring adds nothing in Aster; a name is looked up as vega looks it up)
+          const sphere = typeof proj !== 'string' || !PROJECTIONS.some((p) => p.name === proj)
+          expect(viaAster(code, [proj, g]), `${fn} ${String(proj)} ${JSON.stringify(g)}`).toEqual(await viaVega(code, [proj, sphere ? withoutEmptyRings(g) : g]))
         }
       }
     })

@@ -417,3 +417,32 @@ export function randomSpec(r: Rand): Spec {
   }
 }
 
+
+/**
+ * A GeoJSON object with its empty rings (`[]`, or one position) taken out; a polygon left with none becomes an empty MultiPolygon.
+ * d3-geo's measures close an empty ring against whatever vertex a previous call left in module state, so what they answer for one
+ * depends on the history of the process; Aster's measures add nothing for it (docs/ARCHITECTURE.md, Deviations from Vega), so
+ * the oracle's answer for a geometry with empty rings is d3's own for the same geometry without them. Anything that is not a
+ * GeoJSON object comes back as it is.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function withoutEmptyRings(g: any): any {
+  if (!g || typeof g !== 'object') return g
+  const real = (ring: unknown): boolean => !Array.isArray(ring) || ring.length > 1
+  switch (g.type) {
+    case 'Feature': return { ...g, geometry: withoutEmptyRings(g.geometry) }
+    case 'FeatureCollection': return Array.isArray(g.features) ? { ...g, features: g.features.map(withoutEmptyRings) } : g
+    case 'GeometryCollection': return Array.isArray(g.geometries) ? { ...g, geometries: g.geometries.map(withoutEmptyRings) } : g
+    case 'Polygon': {
+      // (a polygon of no rings at all is not an empty ring: d3 refuses it, and so does Aster)
+      if (!Array.isArray(g.coordinates) || g.coordinates.length === 0) return g
+      const kept = g.coordinates.filter(real)
+      return kept.length ? { ...g, coordinates: kept } : { type: 'MultiPolygon', coordinates: [] }
+    }
+    case 'MultiPolygon':
+      return Array.isArray(g.coordinates)
+        ? { ...g, coordinates: g.coordinates.filter((p: unknown) => !Array.isArray(p) || p.length === 0 || p.some(real)).map((p: unknown) => (Array.isArray(p) ? p.filter(real) : p)) }
+        : g
+    default: return g
+  }
+}
