@@ -46,7 +46,7 @@ forEachVariant(['svg'], (Chart, variant) => {
       ],
       marks: [
         {
-          type: 'point',
+          type: 'symbol',
           from: { data: 'table' },
           encode: {
             update: {
