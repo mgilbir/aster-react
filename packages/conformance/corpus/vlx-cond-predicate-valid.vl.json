@@ -30,7 +30,7 @@
         "o": {
           "v": 7
         },
-        "IMDB Rating": 7.4,
+        "IMDB Rating": null,
         "d": "x2"
       },
       {
@@ -69,7 +69,7 @@
         "o": {
           "v": 9
         },
-        "IMDB Rating": 6.9,
+        "IMDB Rating": null,
         "d": "x2"
       },
       {
@@ -129,24 +129,13 @@
     "color": {
       "condition": {
         "test": {
-          "or": [
-            {
-              "field": "v",
-              "lt": 3
-            },
-            {
-              "field": "v",
-              "lte": 5
-            },
-            {
-              "field": "y",
-              "valid": true
-            }
-          ]
+          "field": "IMDB Rating",
+          "valid": true
         },
         "value": "firebrick"
       },
       "value": "grey"
     }
-  }
+  },
+  "description": "valid is false for the two rows whose rating is null"
 }

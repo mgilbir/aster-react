@@ -2,6 +2,8 @@
   "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
   "padding": 5,
   "autosize": "none",
+  "width": 300,
+  "height": 200,
   "data": {
     "name": "table",
     "values": [
@@ -111,26 +113,21 @@
       }
     ]
   },
-  "facet": {
-    "column": {
-      "field": "g",
-      "type": "nominal"
-    }
-  },
-  "spacing": 40,
-  "spec": {
-    "mark": "point",
-    "encoding": {
-      "x": {
-        "field": "x",
-        "type": "quantitative"
-      },
-      "y": {
-        "field": "y",
-        "type": "quantitative"
+  "mark": "bar",
+  "encoding": {
+    "x": {
+      "field": "IMDB Rating",
+      "type": "quantitative",
+      "bin": {
+        "divide": [
+          3
+        ],
+        "maxbins": 20
       }
     },
-    "width": 90,
-    "height": 70
+    "y": {
+      "aggregate": "count",
+      "type": "quantitative"
+    }
   }
 }

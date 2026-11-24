@@ -120,7 +120,6 @@
       "type": "quantitative",
       "bin": {
         "steps": [
-          1,
           3,
           5
         ],

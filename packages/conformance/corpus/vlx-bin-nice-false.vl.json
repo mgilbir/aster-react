@@ -116,7 +116,7 @@
   "mark": "bar",
   "encoding": {
     "x": {
-      "field": "v",
+      "field": "IMDB Rating",
       "type": "quantitative",
       "bin": {
         "nice": false,
