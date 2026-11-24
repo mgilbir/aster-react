@@ -69,6 +69,8 @@ const REFUSED: Array<[string, Record<string, unknown>, RegExp]> = [
   ['`axis: null` on a layer after one that draws the axis', { data, layer: [{ mark: 'bar', encoding: { x: n('a'), y: q('b') } }, { mark: 'line', encoding: { x: n('a'), y: { ...q('c'), axis: null } } }] }, /`axis: null` on a layer after one that draws/],
   ['a layer in a facet that keeps its own x / y scales', { data, facet: { column: n('a') }, spec: { layer: [{ mark: 'point', encoding: { x: q('b'), y: q('b') } }, { mark: 'point', encoding: { x: q('b'), y: q('c') } }], resolve: { scale: { y: 'independent' } } } }, /a layer in a facet that keeps its own y scales/],
   ['Names that are members of Object.prototype', unit('bar', { x: n('a'), y: { ...q('valueOf'), aggregate: 'sum' } }), /encoding\.y\.field: a field named "valueOf" is not supported: Vega keeps names in plain objects/],
+  ['Names with a backslash of their own', unit('point', { x: q('x\\\\y') }), /encoding\.x\.field: a field named "x\\\\\\\\y" is not supported here: it holds a backslash/],
+  ['A selection projected over a nested field', unit('point', { x: q('b') }, { params: [{ name: 'p', select: { type: 'point', fields: ['o.v'] } }] }), /select\.fields: a selection cannot be projected over the nested field "o\.v"/],
 ]
 
 /** Features the README used to list as refused, that compile now. */

@@ -201,6 +201,17 @@ The list below is the features refused by name, each checked by `test/readme-ref
   vega-lite's chart is the chart of any other name: a field only a fold, a bin transform, a stack transform, a pivot, a
   density or a quantile reads, a binned x / y / colour, `x2`, and a parameter (all but `__proto__`); each place is held to
   vega-lite for every member by `vl-prototype-names.test.ts` (conformance).
+- Names with a backslash of their own: a field path with an escaped backslash (`x\\y`, the column `x\y`) wherever
+  vega-lite 6.4.3 writes the field into a Vega `field` property, which it does without escaping the backslash, so its
+  chart reads another column (a scale domain, an aggregate, a bin, a time unit, a facet, a sort, an impute, a
+  regression, a repeat); and an output name (`as`) holding any backslash, or any escape in a field a regression, a
+  flatten or a repeat also writes as a name. Where vega-lite reads the field right (a tooltip, a text, an href, a
+  url, a description, a key, an order, `x2`, a predicate, a fold, a joinaggregate, a window, a lookup, a pivot, a
+  stack, a density, a quantile, a loess, an extent) it is drawn as there; each place is held to vega-lite by
+  `vl-escaped-names.test.ts` (conformance).
+- A selection projected over a nested field (`fields: ["o.v"]`, or a channel of one): vega-lite reads the flattened
+  copy it makes under the name `o.v`, which the compiler names otherwise. (An escaped field, `a\.b`, is a column of
+  the row and is projected as in vega-lite.)
 
 ## Where it matches vega-lite on purpose, rather than the specification
 
