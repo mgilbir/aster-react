@@ -21,7 +21,7 @@ describe('the primitives', () => {
   it('a read consumes; a peek does not; a write without a read does not', () => {
     expect(run({ a: 1, b: 2, c: 3 }, (s) => { void s.a; peek(() => s.b); s.c = 4 })).toEqual(['b', 'c'])
   })
-  it('the first read settles the property: later reads see the value, writes stay', () => {
+  it('a read sees the value; a write makes the property plain data, and later reads see what was written', () => {
     run({ a: 1 }, (s) => {
       expect(s.a).toBe(1)
       s.a = 5
@@ -54,6 +54,28 @@ describe('the primitives', () => {
       expect(unconsumedPaths()).toEqual(['d'])
       void t.dd
     })).toEqual([])
+  })
+  it('a copy put over a property does not consume what it overwrote: unread, that is still refused', () => {
+    expect(run({ a: 1, b: 2 }, (s) => {
+      transfer(s, 'b', s, 'a')
+      expect(s.a).toBe(2)
+    })).toEqual(['a'])
+    expect(run({ a: 1, b: 2, c: 3 }, (s) => {
+      void s.a
+      pick(s, ['c'], s)
+      transfer(s, 'b', s, 'a')
+      void s.a
+    })).toEqual(['c'])
+  })
+  it('a property deleted and assigned again is data: a copy of it holds the new value and stands for nothing', () => {
+    expect(run({ a: 1, b: 2 }, (s) => {
+      delete s.a
+      s.a = 5
+      void s.b
+      const d = derive(s)
+      expect(d.a).toBe(5)
+      expect(Object.getOwnPropertyDescriptor(d, 'a')!.get).toBeUndefined()
+    })).toEqual(['a'])
   })
   it('a spread or a destructuring is a read (what the primitives are for)', () => {
     expect(run({ a: 1, b: 2 }, (s) => { const { a: _a, ...rest } = s; void rest })).toEqual([])
