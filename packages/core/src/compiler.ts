@@ -245,7 +245,8 @@ function comparesTuples(spec: unknown): boolean {
     if (v === null || typeof v !== 'object' || seen.has(v)) return false
     seen.add(v)
     if (Array.isArray(v)) return v.some(walk)
-    return Object.values(v as Record<string, unknown>).some(walk)
+    // (a dataset's inline rows are data, not expressions: never read -- a host's row may be read only where the chart draws it)
+    return Object.keys(v).some((k) => !(k === 'values' && Array.isArray((v as Record<string, unknown>)[k])) && walk((v as Record<string, unknown>)[k]))
   }
   return walk(spec)
 }
