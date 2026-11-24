@@ -444,30 +444,44 @@ describe('lazily materialised superseded scenes', () => {
 
   it('a chain of superseded scenes reads correctly in any order, including never-read-until-later', () => {
     const chart = compileChart(spec as never)
-    const scenes: SceneRoot[] = [evaluateChart(chart, { data: { t: rowsN(3) } })]
+    let rows = rowsN(3)
+    const scenes: SceneRoot[] = [evaluateChart(chart, { data: { t: rows } })]
     const snaps = [xs(groups(scenes[0]!)[0]!)]
-    for (let n = 3; n < 9; n++) {
-      // alternate appends and same-length edits
-      const next = n % 2 ? rowsN(n + 1) : rowsN(n, 1)
-      const input = n % 2
-        ? { data: { t: next }, dataPulse: ap(n) }
-        : { data: { t: next }, dataChanges: { t: [1] } }
-      // an edit step keeps the length: the previous length is n
-      const sc = evaluateChart(chart, input.dataChanges ? { data: { t: rowsN(n + 0, 1) }, dataChanges: { t: [1] } } : input)
+    const svgs = [renderSceneToSvg(scenes[0]!)]
+    expect(svgs[0]).toBe(renderSceneToSvg(fresh(spec, { data: { t: rows } })))
+    for (let step = 0; step < 6; step++) {
+      // alternate truthful appends (one row after the previous rows, row 1 as it stood) and same-length edits of row 1
+      // (bumped, then back): each hint describes exactly the change from the rows before
+      const prev = rows
+      const append = step % 2 === 0
+      rows = append ? [...prev, { v: prev.length }] : prev.map((r, i) => (i === 1 ? { v: r.v === 77 ? 1 : 77 } : r))
+      const sc = evaluateChart(chart, append ? { data: { t: rows }, dataPulse: ap(prev.length) } : { data: { t: rows }, dataChanges: { t: [1] } })
+      // every scene of the chain is the fresh scene of its rows
+      expect(renderSceneToSvg(sc), `step ${step}`).toBe(renderSceneToSvg(fresh(spec, { data: { t: rows } })))
       scenes.push(sc)
       snaps.push(xs(groups(sc)[0]!))
+      svgs.push(renderSceneToSvg(sc))
     }
+    // (the chain is what its comment says: three appends and three edits, the bump toggled on and off)
+    expect(snaps.map((x) => x.length)).toEqual([3, 4, 4, 5, 5, 6, 6])
+    expect(snaps.map((x) => x[1])).toEqual([1, 1, 77, 77, 1, 1, 77])
     // read newest first, then a middle one, then oldest, then everything again
     const order = [scenes.length - 1, 3, 0, 5, 1, 2, 4, 6].filter((i) => i < scenes.length)
     for (const i of order) expect(xs(groups(scenes[i]!)[0]!), `scene ${i}`).toEqual(snaps[i])
-    for (let i = 0; i < scenes.length; i++) expect(xs(groups(scenes[i]!)[0]!), `scene ${i} again`).toEqual(snaps[i])
+    for (let i = 0; i < scenes.length; i++) {
+      expect(xs(groups(scenes[i]!)[0]!), `scene ${i} again`).toEqual(snaps[i])
+      expect(renderSceneToSvg(scenes[i]!), `scene ${i} svg`).toBe(svgs[i])
+    }
   })
 
   it('an unreferenced old scene is collectable and a newer scene never keeps it alive', async () => {
     const { setFlagsFromString } = await import('node:v8')
     const vm = await import('node:vm')
+    // (the flag is switched on only to fetch `gc`, and off again at once: later tests in this worker run as they would alone)
+    const hadGc = typeof (globalThis as { gc?: unknown }).gc === 'function'
     setFlagsFromString('--expose-gc')
     const gc = vm.runInNewContext('gc') as () => void
+    if (!hadGc) setFlagsFromString('--no-expose-gc')
     const chart = compileChart(spec as never)
     const refs: Array<WeakRef<object>> = []
     let newest!: SceneRoot
@@ -484,6 +498,12 @@ describe('lazily materialised superseded scenes', () => {
     const alive = refs.slice(0, -2).filter((r) => r.deref() !== undefined).length
     expect(alive).toBe(0)
     expect(groups(newest)[0]!.items).toHaveLength(60)
+  })
+
+  it('leaves the worker as it found it: a context made after the test above has no `gc` (C512)', async () => {
+    const vm = await import('node:vm')
+    const hadGc = typeof (globalThis as { gc?: unknown }).gc === 'function'
+    expect(vm.runInNewContext('typeof gc')).toBe(hadGc ? 'function' : 'undefined')
   })
 })
 
