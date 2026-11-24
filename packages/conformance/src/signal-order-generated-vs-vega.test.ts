@@ -99,10 +99,12 @@ async function vegaResult(c: Case): Promise<string> {
   type View = { runAsync(): Promise<unknown>; signal(n: string): unknown; data(n: string): unknown[]; finalize(): void }
   let view: View | undefined
   try {
-    const made = new vega.View(vega.parse(structuredClone(c.spec) as never), { renderer: 'none', logLevel: vega.None }) as unknown as View
+    let errors = 0
+    const logger = { level() { return logger }, error() { errors++; return logger }, warn() { return logger }, info() { return logger }, debug() { return logger } }
+    const made = new vega.View(vega.parse(structuredClone(c.spec) as never), { renderer: 'none', logger } as never) as unknown as View
     view = made
     await made.runAsync()
-    return norm({ signals: c.signals.map((n) => made.signal(n)), data: c.data.map((n) => rowsOf(made.data(n))) })
+    return norm({ signals: c.signals.map((n) => made.signal(n)), data: c.data.map((n) => rowsOf(made.data(n))), errors: errors > 0 })
   } catch (e) {
     return `threw ${(e as Error).message}`
   } finally {
@@ -112,10 +114,12 @@ async function vegaResult(c: Case): Promise<string> {
 
 function asterResult(c: Case): string {
   try {
-    const scene = evaluateChart(compileChart(structuredClone(c.spec) as never), { logger: { error() {}, warn() {}, info() {}, debug() {} } as never })
+    let errors = 0
+    const scene = evaluateChart(compileChart(structuredClone(c.spec) as never), { logger: { error() { errors++ }, warn() {}, info() {}, debug() {} } as never })
     const params = (scene as unknown as { signalParams: Record<string, unknown> }).signalParams
     const ds = datasetsOfScene(scene)
-    return norm({ signals: c.signals.map((n) => params[n]), data: c.data.map((n) => rowsOf(ds.get(n))) })
+    // (and whether the run logged an error: an operator run before what it reads fails where vega's does not)
+    return norm({ signals: c.signals.map((n) => params[n]), data: c.data.map((n) => rowsOf(ds.get(n))), errors: errors > 0 })
   } catch (e) {
     return `threw ${(e as Error).message}`
   }
