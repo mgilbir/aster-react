@@ -44,7 +44,9 @@ const REFUSED: Array<[string, Record<string, unknown>, RegExp]> = [
   ['`timeUnit.maxbins`', unit('bar', { x: { field: 'd', type: 'temporal', timeUnit: { maxbins: 5 } }, y: q('c') }), /timeUnit\.maxbins/],
   ['errorbar / errorband over a binned channel', unit('errorbar', { x: { field: 'b', type: 'quantitative', bin: 'binned' }, y: q('c') }), /over a binned/],
   ['a `datum`\n  condition on fillOpacity', unit('point', { x: q('b'), fillOpacity: { condition: { test: 'datum.b > 1', datum: 2 }, value: 1 } }), /datum conditions/],
-  ['a field condition that reads a field other than the\n  channel\'s own', unit('point', { x: q('b'), color: { condition: { test: 'datum.b > 1', field: 'c', type: 'quantitative' }, field: 'b', type: 'quantitative' } }), /channel's own field/],
+  // (a field condition on a field definition is not in the schema, so it is refused as that: it was listed as "a field condition that
+  // reads a field other than the channel's own")
+  ['A value the Vega-Lite schema does not allow where it stands', unit('point', { x: q('b'), color: { condition: { test: 'datum.b > 1', field: 'c', type: 'quantitative' }, field: 'b', type: 'quantitative' } }), /^\[aster\/vl\] encoding\.color\.condition: .*\(Vega-Lite 6\.4\.3 schema\)$/],
   ['an array of conditions that holds a field condition', unit('point', { x: q('b'), color: { condition: [{ test: 'datum.b > 1', field: 'a', type: 'nominal' }], value: 'g' } }), /must be value conditions/],
   ['`impute` or\n  pre-binned data (`binned`) on a channel other than x and y', unit('line', { x: q('b'), y: q('c'), color: { ...n('a'), impute: { value: 0 } } }), /`impute` only applies/],
   ['the `geojson` type on a channel other than shape', unit('point', { x: q('b'), color: { field: 'a', type: 'geojson' } }), /geojson type only applies/],
@@ -61,7 +63,7 @@ const REFUSED: Array<[string, Record<string, unknown>, RegExp]> = [
   ['a concat in a\n  layer', { data, layer: [{ hconcat: [{ mark: 'point' }] }] }, /not allowed inside `layer`/],
   ['layer repeats combined with row / column', { data, repeat: { layer: ['b', 'c'], row: ['b'] }, spec: { mark: 'point', encoding: { x: { field: { repeat: 'layer' }, type: 'quantitative' } } } }, /layer repeats combined/],
   ['layers whose scales are\n  incompatible or conflict', { data, layer: [{ mark: 'point', encoding: { x: n('a') } }, { mark: 'point', encoding: { x: q('b') } }] }, /independent x scales over layers sized differently/],
-  ['a facet of layers over different data', { facet: { row: { field: 'a' } }, spec: { layer: [{ data, mark: 'point' }, { data: { values: [{ a: 1 }] }, mark: 'line' }] } }, /different data sources/],
+  ['a facet of layers over different data', { data, facet: { row: { field: 'a' } }, spec: { layer: [{ data, mark: 'point' }, { data: { values: [{ a: 1 }] }, mark: 'line' }] } }, /different data sources/],
   ['`argmax` / `argmin` as an op of a `window`', unit('point', { x: q('b') }, { transform: [{ window: [{ op: 'argmax', field: 'b', as: 'm' }] }] }), /window op "argmax"/],
   ['sort arrays of DateTime objects', unit('point', { x: { field: 'd', type: 'temporal', sort: [{ year: 2020 }] } }), /DateTime objects/],
   ['is valid Vega-Lite but @aster-charts/vl does not implement it here, so it would be ignored', unit('point', { x: q('b'), color: { ...n('a'), header: { title: 'h' } } }), /encoding\.color\.header\.title: is valid Vega-Lite but/],
