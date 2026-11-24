@@ -34,9 +34,10 @@ function reference(source: string, flags: string): RNode {
   /** A v-mode class operand: its set and its multi-character strings (and whether a property of strings is among them). */
   interface CS { set: CharSet; strings: number[][]; any: boolean }
   const classOf = (n: AST.CharacterClass | AST.ExpressionCharacterClass | AST.ClassIntersection | AST.ClassSubtraction | AST.ClassSetOperand): CS => {
+    // (regexpp types a range as no class operand, though a class holds ranges)
+    if ((n as { type: string }).type === 'CharacterClassRange') { const r = n as unknown as AST.CharacterClassRange; return { set: exactSet([[r.min.value, r.max.value]]), strings: [], any: false } }
     switch (n.type) {
       case 'Character': return { set: one(n.value), strings: [], any: false }
-      case 'CharacterClassRange': return { set: exactSet([[n.min.value, n.max.value]]), strings: [], any: false }
       case 'CharacterSet':
         if (n.kind === 'property' && n.strings) return { set: exactSet([]), strings: [], any: true }
         return { set: escapeSet(n as AST.EscapeCharacterSet), strings: [], any: false }
@@ -100,7 +101,7 @@ function reference(source: string, flags: string): RNode {
         if (n.kind === 'start') return { t: 'assert', kind: 'start' }
         if (n.kind === 'end') return { t: 'assert', kind: 'end' }
         if (n.kind === 'word') return { t: 'assert', kind: n.negate ? 'nonword' : 'word' }
-        return { t: 'look', n: alts(n.alternatives), behind: n.kind === 'lookbehind', negate: n.negate }
+        { const look = n as AST.LookaheadAssertion | AST.LookbehindAssertion; return { t: 'look', n: alts(look.alternatives), behind: look.kind === 'lookbehind', negate: look.negate } }
       case 'Backreference': return { t: 'backref' }
       default: throw new Error('unexpected node ' + (n as { type: string }).type)
     }
