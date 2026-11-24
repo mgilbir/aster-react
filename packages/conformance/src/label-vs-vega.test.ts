@@ -189,6 +189,18 @@ const GROUP_CASES: Array<[string, Spec]> = [
   ['group areas, reduced-search, not avoiding the base mark', groupFrame(areaInner, { method: 'reduced-search', avoidBaseMark: false }, [stack])],
 ]
 
+/** Of the four series of each case, how many labels vega places (and so Aster, by compare()): the layout leaves some out in six of the eight. */
+const GROUP_PLACED: Record<string, number> = {
+  'group lines, labels after the last point': 2,
+  'group lines, labels before the first point (lineAnchor start)': 4,
+  'group lines, several anchors': 3,
+  'group lines, padding null': 2,
+  'group areas, naive': 4,
+  'group areas, reduced-search': 4,
+  'group areas, floodfill': 3,
+  'group areas, reduced-search, not avoiding the base mark': 4,
+}
+
 // a dataset's tuples, with no mark behind them: the boundary is each tuple's own x, y
 const tuples = points(120).map((p) => ({ text: p.name, x: (p.x / 100) * (W - 40) + 20, y: (p.y / 100) * (H - 40) + 20, fontSize: 9 }))
 const DATA_CASES: Array<[string, Spec]> = [
@@ -231,7 +243,9 @@ describe('label (vs vega-label, in a child process with a canvas stand-in)', () 
     it(name, () => {
       const { n, placed } = compare(spec, 'lab')
       expect(n).toBe(SERIES.length)
-      expect(placed).toBeGreaterThan(0)
+      // how many of the four are placed, as vega places them (compare() holds each label to vega's): pinned, so a case where all are
+      // placed and one where only some are both stay what they are
+      expect(placed).toBe(GROUP_PLACED[name])
     }, 60_000)
   }
 })
