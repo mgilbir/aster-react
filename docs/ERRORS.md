@@ -311,7 +311,12 @@ names like any other (upstream treats them as signals everywhere or fails on the
 Most of these are thrown by the **runtime** while the chart is evaluated, not by `compileChart`. Besides the expressions (see
 above), the compiler checks the shape of the spec (`[aster] compileChart expects a Vega spec object`, `[aster] spec.scales must be
 an array of scale definitions`, `[aster] a scale definition must be an object`) and, as `vega.parse` does, the names a spec uses:
-an unknown transform `type` is a `SpecParseError` from `compileChart` (so from every host, before any data is read). The
+an unknown transform `type` is a `SpecParseError` from `compileChart` (so from every host, before any data is read). So is a mark
+`type` vega does not draw -- an unknown name, a Vega-Lite mark (`circle`, `square`, `bar`, `tick`, `point`, `geoshape`), another
+spelling, a non-string or a missing type: `SpecParseError: Cannot read properties of undefined (reading 'tag')`, the text vega's
+renderer fails with on such a mark. A transform field that is no access path (an object that is neither `{signal}`, `{expr}`
+nor `{field}`, a number, a `{field}` naming none, an empty comparator field) is `SyntaxError: Unexpected token ']'`, as vega's
+runtime refuses it building the view. The
 rows below are plain `Error`s with an `[aster]` prefix and no `code`, thrown on the first `renderSpec`/`evaluateChart`.
 
 | Situation | Error |

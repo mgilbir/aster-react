@@ -6,7 +6,8 @@
  */
 import { dict, ownGet } from './util.js'
 import { assertSpecDepth } from './limits.js'
-import { dataInputOf, normalizeSpecLists } from './spec-structure.js'
+import { dataInputOf, normalizeSpecLists, VEGA_MARK_TYPES } from './spec-structure.js'
+import { SpecParseError } from './parse-error.js'
 import { noteWrittenType, transformTypeOf } from './transform-names.js'
 import { checkExpressions } from './spec-expressions.js'
 import { checkFieldReferences } from './param-resolve.js'
@@ -744,11 +745,22 @@ function normalizeFrom(from: CompiledMark['from']): CompiledMark['from'] {
   return { ...from, facet: { ...facet, groupby } } as CompiledMark['from']
 }
 
+/**
+ * A mark's type: one of the mark types vega draws, written as its name. Anything else (an unknown name, a Vega-Lite mark such as
+ * `circle`, `bar` or `geoshape`, another spelling, none) is refused, with the error vega's renderer fails with: never an empty or a
+ * guessed mark. A list holding one name (`['rect']`), which vega looks up by name and draws with quirks of its own (no scope for
+ * `['group']`, another ARIA role for `['text']`), is refused too: a documented deviation (docs/ARCHITECTURE.md).
+ */
+function markTypeOf(type: unknown): string {
+  if (typeof type !== 'string' || !VEGA_MARK_TYPES.has(type)) throw new SpecParseError("Cannot read properties of undefined (reading 'tag')")
+  return type
+}
+
 // (reset per chart: the same spec compiles to the same numbers, so scenes of equal charts are equal)
 let markSeq = 0
 
 function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Record<string, unknown>>, cfgMarktype?: Record<string, Record<string, unknown>>, scopeScales: CompiledScale[] = []): CompiledMark {
-  const m = { ...m0 }
+  const m: Record<string, unknown> = { ...m0, type: markTypeOf(m0.type) }
   if (cfgStyle || cfgMarktype) applyStyleDefaults(m, cfgStyle ?? {}, cfgMarktype)
   const out: CompiledMark = {
     type: m.type as string,

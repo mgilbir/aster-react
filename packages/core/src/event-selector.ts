@@ -28,8 +28,8 @@ export interface StreamDef {
   merge?: StreamDef[]
 }
 
-/** The mark types a qualifier can name when the caller does not say otherwise. */
-const MARK_TYPES: Record<string, true> = {
+/** The mark types a qualifier can name when the caller does not say otherwise: vega's mark types, and `*`. */
+export const MARK_TYPES: Readonly<Record<string, true>> = {
   '*': true, arc: true, area: true, group: true, image: true, line: true, path: true, rect: true, rule: true, shape: true, symbol: true, text: true, trail: true,
 }
 
