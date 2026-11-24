@@ -42,10 +42,11 @@ const ASTER_NAME: Record<string, string> = {
   curveBasis: 'basis', curveBasisClosed: 'basis-closed', curveBasisOpen: 'basis-open', curveBundle: 'bundle',
   curveCardinal: 'cardinal', curveCardinalClosed: 'cardinal-closed', curveCardinalOpen: 'cardinal-open',
   curveCatmullRom: 'catmull-rom', curveCatmullRomClosed: 'catmull-rom-closed', curveCatmullRomOpen: 'catmull-rom-open',
-  curveLinear: 'linear', curveLinearClosed: 'linear-closed', curveMonotoneX: 'monotone-x', curveMonotoneY: 'monotone-y',
+  curveLinear: 'linear', curveLinearClosed: 'linear-closed', curveMonotoneX: 'monotone', curveMonotoneY: 'monotone',
   curveNatural: 'natural', curveStep: 'step', curveStepAfter: 'step-after', curveStepBefore: 'step-before',
 }
-const asterCurveOf = (curveName: string, opts: Opts) => aster.resolveCurve(ASTER_NAME[curveName], 'vertical', opts.beta ?? opts.tension ?? opts.alpha)
+/** vega names the two monotone curves `monotone`, and the mark's orient picks one (vertical: x, horizontal: y). */
+const asterCurveOf = (curveName: string, opts: Opts) => aster.resolveCurve(ASTER_NAME[curveName], curveName === 'curveMonotoneY' ? 'horizontal' : 'vertical', opts.beta ?? opts.tension ?? opts.alpha)
 const column = (points: number[][], i: number): Float64Array => Float64Array.from(points, (p) => p[i] as number)
 
 const lineOf = (api: Api, curve: string, opts: Opts, points: number[][], defined: boolean, digits: number | null | undefined) => exact(() => {
