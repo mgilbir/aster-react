@@ -61,6 +61,8 @@ function dataRefKey(v: unknown): string {
 const ROWS_MARKER = '\u0000rows'
 /** What a skeleton starts with when the spec cannot be written as text (a cycle, a function): it is different every time. */
 const UNCACHEABLE = '\u0000uncacheable'
+/** Makes each such skeleton its own (a clock would repeat inside one millisecond: two calls would then be answered alike). */
+let uncacheableCount = 0
 
 /**
  * The values JSON writes alike that a spec built in code tells apart (a signal of `Infinity` draws otherwise than one of `-Infinity`,
@@ -147,7 +149,7 @@ export function skeletonOf(spec: VgSpec): string {
     return JSON.stringify(copy, skeletonReplacer) ?? ''
   } catch {
     // Non-serializable spec (cycles/functions): no caching, always re-evaluate.
-    return `${UNCACHEABLE}:${refId(spec as object)}:${Date.now()}`
+    return `${UNCACHEABLE}:${refId(spec as object)}:${++uncacheableCount}`
   }
 }
 
