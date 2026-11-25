@@ -130,12 +130,13 @@ export class RowBag {
     if (this.droppedCount === 0) return this.held
     const held = this.held
     meterTick('aggregate', held.length)
-    const kept = new Array<Row>(held.length - this.droppedCount)
-    let at = 0
+    // (a frame that ends outside its partition drops rows it never held: more drops than rows, and a row dropped that is not
+    // held is no row of the bag, so the length is not `held - dropped` and the bag is filled as the rows are met)
+    const kept: Row[] = []
     for (let i = 0; i < held.length; ++i) {
       const row = held[i]!
       if (this.dropped.delete(row)) continue
-      kept[at++] = row
+      kept.push(row)
     }
     this.dropped = new Set()
     this.droppedCount = 0

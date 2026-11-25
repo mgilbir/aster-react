@@ -171,7 +171,7 @@ function diff(a: unknown, b: unknown, path = '$', seen = new Map<unknown, Set<un
 }
 
 
-interface Tally { cases: number; compared: number; threw: number; crashed: number; crashedAlike: number; answered: number; draws: number }
+interface Tally { cases: number; compared: number; threw: number; crashed: number; crashedAlike: number; answered: number; refused: number; draws: number }
 
 /** Run one case through both sides; the mismatch description, or null. `crashed` counts Vega's incidental TypeErrors (not comparable). */
 async function check(c: Case, tally: Tally): Promise<string | null> {
@@ -184,10 +184,13 @@ async function check(c: Case, tally: Tally): Promise<string | null> {
     if (want.error instanceof TypeError && !/^AggregateOps\[op\]/.test(msg)) {
       tally.crashed++
       if (process.env.ASTER_GEN_DEBUG) console.log('CRASH', JSON.stringify(c.t).slice(0, 300), msg)
-      // Aster runs the case too, and is counted: it crashes alike (it reads the same rows) or it answers
+      // Aster runs the case too, and is counted: it answers (the documented "oracle crashes are not reproduced"), refuses with a
+      // message of its own (`[aster] ...`: what a user can act on), or fails with the engine's own TypeError, as vega does -- the
+      // last is no outcome it may have, and none is pinned
       const got = runAster(c, false)
-      if (got.error) tally.crashedAlike++
-      else tally.answered++
+      if (!got.error) tally.answered++
+      else if (/^\[aster\] /.test(got.error.message)) tally.refused++
+      else tally.crashedAlike++
       return null
     }
     tally.threw++
@@ -590,16 +593,19 @@ function genTimeunit(r: Rng): Case {
 /**
  * The cases of each suite on which vega crashes with an engine TypeError (`crashes`, at the default case counts: measured, and pinned
  * exactly, so one more or fewer is looked at; a run with `ASTER_DIFF_SCALE` draws more cases and may crash more, in proportion), and
- * how many of those Aster ANSWERS (`answered`: the documented "oracle crashes are not reproduced", docs/ARCHITECTURE.md) where it does
- * not crash alike. They are the window frames that end outside the partition (a frame over peers reads the rows at both of its ends).
+ * how many of those Aster ANSWERS (`answered`: the documented "oracle crashes are not reproduced", docs/ARCHITECTURE.md) and how many it
+ * REFUSES with a message of its own (`refused`: `[aster] ...`). None may fail with the engine's own TypeError (`crashedAlike` is 0
+ * for every suite). The answered ones are the window frames that end outside the partition (a frame over peers reads the rows at
+ * both of its ends; an empty one has no first or last value, `null`, as `nth_value` of a frame too short); the refused ones are a
+ * `flatten` of a field a row does not hold.
  */
-const SUITES: Array<{ name: string; seed: number; count: number; gen: (r: Rng) => Case; crashes: number; answered: number }> = [
+const SUITES: Array<{ name: string; seed: number; count: number; gen: (r: Rng) => Case; crashes: number; answered: number; refused?: number }> = [
   { name: 'aggregate', seed: 0xa601, count: 700, gen: (r) => genAggregateLike(r, 'aggregate'), crashes: 0, answered: 0 },
   { name: 'joinaggregate', seed: 0xa602, count: 350, gen: (r) => genAggregateLike(r, 'joinaggregate'), crashes: 0, answered: 0 },
-  { name: 'window', seed: 0xa603, count: 900, gen: genWindow, crashes: 133, answered: 93 },
+  { name: 'window', seed: 0xa603, count: 900, gen: genWindow, crashes: 133, answered: 133 },
   { name: 'window stores over several fields', seed: 0xa60b, count: 500, gen: genWindowStores, crashes: 0, answered: 0 },
   { name: 'transform chains', seed: 0xa60c, count: 1500, gen: genChain, crashes: 0, answered: 0 },
-  { name: 'sort ties after a re-ordering', seed: 0xa60d, count: 1500, gen: genTieChain, crashes: 29, answered: 0 },
+  { name: 'sort ties after a re-ordering', seed: 0xa60d, count: 1500, gen: genTieChain, crashes: 29, answered: 0, refused: 29 },
   { name: 'pivot', seed: 0xa604, count: 300, gen: genPivot, crashes: 0, answered: 0 },
   { name: 'bin', seed: 0xa605, count: 700, gen: genBin, crashes: 0, answered: 0 },
   { name: 'stack', seed: 0xa606, count: 350, gen: genStack, crashes: 0, answered: 0 },
@@ -613,7 +619,7 @@ describe('generated transform differential vs real Vega (live, same engine)', { 
   for (const s of SUITES) {
     it(`${s.name}: ${scaled(s.count)} seeded cases`, async () => {
       const r = makeRng(s.seed)
-      const tally: Tally = { cases: 0, compared: 0, threw: 0, crashed: 0, crashedAlike: 0, answered: 0, draws: 0 }
+      const tally: Tally = { cases: 0, compared: 0, threw: 0, crashed: 0, crashedAlike: 0, answered: 0, refused: 0, draws: 0 }
       const bad: string[] = []
       let failures = 0
       const prevTz = process.env.TZ
@@ -653,8 +659,10 @@ describe('generated transform differential vs real Vega (live, same engine)', { 
       if (scaled(1) === 1) {
         expect(tally.crashed, `vega crashed on ${tally.crashed} of ${tally.cases}`).toBe(s.crashes)
         expect(tally.answered, `Aster answered ${tally.answered} of the ${tally.crashed} cases on which vega crashed`).toBe(s.answered)
-      }
-      else expect(tally.crashed, `vega crashed on ${tally.crashed} of ${tally.cases}`).toBeLessThanOrEqual(Math.ceil(s.crashes * scaled(1) * 1.5))
+        expect(tally.refused, `Aster refused ${tally.refused} of the ${tally.crashed} cases on which vega crashed, with a message of its own`).toBe(s.refused ?? 0)
+      } else expect(tally.crashed, `vega crashed on ${tally.crashed} of ${tally.cases}`).toBeLessThanOrEqual(Math.ceil(s.crashes * scaled(1) * 1.5))
+      // (at any scale) no case ends in the engine's own error: it answered, or said what is wrong
+      expect(tally.crashedAlike, `Aster failed with the engine's TypeError on ${tally.crashedAlike} of the ${tally.crashed} cases on which vega crashed`).toBe(0)
       if (s.name === 'aggregate' || s.name === 'joinaggregate') expect(tally.draws, 'ci0/ci1 must draw from the source').toBeGreaterThan(0)
     })
   }
