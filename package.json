@@ -49,6 +49,7 @@
     "conformance:intersect": "pnpm --filter @aster-charts/conformance run conformance:intersect",
     "conformance:geometry": "pnpm --filter @aster-charts/conformance run conformance:geometry",
     "conformance:selections": "pnpm --filter @aster-charts/conformance run conformance:selections",
+    "conformance:url-reload": "pnpm --filter @aster-charts/conformance run conformance:url-reload",
     "verify:publish": "node scripts/verify-publish.mjs"
   },
   "devDependencies": {

@@ -88,6 +88,11 @@ export const GATES = [
     verdict: { selfTest: { narrow: { args: ['--filter=point toggle: false'] }, none: { args: ['--filter=no-such-case'] } } },
   },
   {
+    name: 'url-reload-browser', args: ['--filter', '@aster-charts/conformance', 'run', 'conformance:url-reload'], tags: ['browser'],
+    why: 'url data that follows a signal changed inside the chart (a bound select / radio / range, an event handler, a derived signal, a group dataset, a url changed while the first still loads): real vega reloads it, and <Chart urlLoad> draws the same SVG and makes the same requests, in Chromium',
+    verdict: { selfTest: { narrow: { args: ['--filter=bound select'] }, none: { args: ['--filter=no-such-case'] } } },
+  },
+  {
     name: 'intersect-browser', args: ['conformance:intersect'], tags: ['browser'],
     why: 'the intersect() expression function (vega-lite geo interval selections) over every mark type, boxes and filters vs real vega in Chromium (arc and path outlines need a canvas context), directly and through the event loop on each renderer',
     verdict: { selfTest: { narrow: { args: ['--filter=m_rect2'] }, none: { args: ['--filter=no-such-scope'] } } },
