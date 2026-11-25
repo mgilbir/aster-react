@@ -607,7 +607,7 @@ function nearestOf(items: SceneItem[], tx: number, ty: number, x: number, y: num
  * kept the mark (`keptInto`).
  */
 const MARK_ENTRIES = { svg: new WeakMap<SceneGroup, KeptEntries>(), canvas: new WeakMap<SceneGroup, KeptEntries>() }
-interface KeptEntries { gx: number; gy: number; unbounded: boolean; entries: Entry[]; root: object }
+interface KeptEntries { gx: number; gy: number; skewX: number; skewY: number; entries: Entry[]; root: object }
 
 /**
  * The entries one of the view's own guides (an axis, a legend, a title: a group of the scene's top level) made, flags and clips
@@ -663,14 +663,21 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
     if (b === undefined) groupBounds.set(group, (b = groupLayoutBounds(group, true)))
     return b
   }
+  /**
+   * (tx, ty) is the frame the bounds are asked in: the pointer in it is the pointer less (tx, ty), and a frame that is not a number
+   * on an axis (a group above is positioned by a string that is no number there) makes the pointer's coordinate NaN, which no edge
+   * excludes -- see `skewX`.
+   */
   const boundsClip = (group: SceneGroup, tx: number, ty: number): Clip => {
     // (vega's `contains`, "not outside": an edge as `Number` reads it, and one that is not a number excludes nothing; empty bounds
     // hold nothing)
     const b = boundsOf(group)
     const lo = (v: number): number => { const n = +v; return Number.isNaN(n) ? -Infinity : n }
     const hi = (v: number): number => { const n = +v; return Number.isNaN(n) ? Infinity : n }
-    return { x1: tx + lo(b.x1), y1: ty + lo(b.y1), x2: tx + hi(b.x2), y2: ty + hi(b.y2) }
+    return { x1: along(tx, lo(b.x1), -Infinity), y1: along(ty, lo(b.y1), -Infinity), x2: along(tx, hi(b.x2), Infinity), y2: along(ty, hi(b.y2), Infinity) }
   }
+  /** An edge of bounds asked in a frame at `frame` on one axis: where the frame is, the edge; where it is no number, no edge (`open`). */
+  const along = (frame: number, edge: number, open: number): number => (Number.isNaN(frame) ? open : frame + edge)
   /**
    * (canvas index) The bounds vega's pick asks of each group MARK among `nodes` (a group's marks, the root's), before its items: the
    * union of its group items' bounds (an edge that is not a number leaves that edge out of the union), cut to the frame when the mark
@@ -695,7 +702,7 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
         const mb = new Bounds()
         for (let i = k; i < end; i++) mb.union(boundsOf(nodes[i]!))
         const m = rec(first).markClip === true ? mb.intersect(new Bounds().set(0, 0, fw, fh)) : mb
-        const clip: Clip = { x1: gx + lo(m.x1), y1: gy + lo(m.y1), x2: gx + hi(m.x2), y2: gy + hi(m.y2) }
+        const clip: Clip = { x1: along(gx, lo(m.x1), -Infinity), y1: along(gy, lo(m.y1), -Infinity), x2: along(gx, hi(m.x2), Infinity), y2: along(gy, hi(m.y2), Infinity) }
         out ??= []
         for (let i = k; i < end; i++) out[i] = clip
       }
@@ -727,10 +734,15 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
 
   // (tx, ty): where the frame of the group around the marks is; (fw, fh): its size, what a mark's `clip` clips to
   /**
-   * (canvas index) Inside a group whose position reads as a string that is not a number, vega's pick runs on NaN coordinates: every
-   * bounds it asks about "contains" them, so no bounds test excludes anything there (the geometry, drawn at the origin, still does).
+   * (canvas index) The frame vega's pick asks bounds in, less the frame the content is drawn in. vega's pick subtracts a group item's
+   * position `(x || 0, y || 0)` from the pointer, as the item holds it, and the renderers translate by it only when it is two finite
+   * numbers (see `drawnOffset`): so inside a group positioned by a string that is no number on one axis (`"15px"`, 32) the geometry is
+   * drawn untranslated while its bounds are asked at a pointer that is NaN on that axis -- which no edge excludes, so no bounds test
+   * excludes anything on it -- and at the pointer less the position on the other. Left to the axis a position is a number on, as vega
+   * does, and added up through the groups inside: a NaN stays one.
    */
-  let unbounded = false
+  let skewX = 0
+  let skewY = 0
   const walk = (group: SceneGroup, tx: number, ty: number, fw: number, fh: number, outer?: SceneGroup): void => {
     // (where vega's renderers draw the group's content: see `drawnOffset`)
     const [ox, oy] = drawnOffset(group)
@@ -742,18 +754,21 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
       const ry = +((group.y || 0) as number)
       // (an infinite position puts the pointer at an infinite distance in the group's frame: its bounds never hold it)
       if (rx === Infinity || rx === -Infinity || ry === Infinity || ry === -Infinity) return
-      if (Number.isNaN(rx) || Number.isNaN(ry)) {
-        const was = unbounded
-        unbounded = true
+      if (rx !== ox || ry !== oy) {
+        const [wasX, wasY] = [skewX, skewY]
         // (the group item's own bounds are asked in the frame around it, where its position does not matter)
-        try { walkGroup(group, tx, ty, gx, gy, fw, fh, outer, !was) } finally { unbounded = was }
+        const boundsX = tx + skewX
+        const boundsY = ty + skewY
+        skewX += rx - ox
+        skewY += ry - oy
+        try { walkGroup(group, tx, ty, gx, gy, fw, fh, outer, boundsX, boundsY) } finally { skewX = wasX; skewY = wasY }
         return
       }
     }
     if (!type || type === 'group') walkGroup(group, tx, ty, gx, gy, fw, fh, outer)
     else walkMark(group, type, tx, ty, gx, gy, fw, fh)
   }
-  const walkGroup = (group: SceneGroup, tx: number, ty: number, gx: number, gy: number, fw: number, fh: number, outer?: SceneGroup, selfBounded: boolean = !unbounded): void => {
+  const walkGroup = (group: SceneGroup, tx: number, ty: number, gx: number, gy: number, fw: number, fh: number, outer?: SceneGroup, boundsX: number = tx + skewX, boundsY: number = ty + skewY): void => {
     {
       // a group item's own box (vega-scenegraph marks/group.js): its background is painted under the content, its
       // foreground over it. What the pointer meets is the painted rectangle -- the fill inside it, the stroke along it --
@@ -770,7 +785,7 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
       // vega looks for a group item, its box and what it holds, only within its bounds: they hold all of it, unless its box is
       // left out of them (`noBound`), where its box takes the pointer only as far as what it holds reaches
       // (vega's canvas pick tests every group item's bounds first, an axis' and a legend's too: they bound what it finds there)
-      const bounds = ((scope && group.noBound === true) || canvas) && selfBounded ? boundsClip(group, tx, ty) : null
+      const bounds = (scope && group.noBound === true) || canvas ? boundsClip(group, boundsX, boundsY) : null
       // a group mark's own `clip` clips its items to the frame of the group around them
       // (vega's canvas pick looks for a clipped group item, its box included, only inside the box -- and inside its rounded
       // outline when it has corners: marks/group.js `hitCorner` -- where the browser also finds the stroke past it)
@@ -787,7 +802,7 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
           // (a legend entry's front stroke belongs to the entry box before it)
           let entryBox: SceneItem | undefined
           const nodes = group.items ?? []
-          const markClips = canvas && !unbounded ? groupMarkClips(nodes, w, h, gx, gy) : undefined
+          const markClips = canvas ? groupMarkClips(nodes, w, h, gx + skewX, gy + skewY) : undefined
           for (let k = 0; k < nodes.length; k++) {
             const item = nodes[k]!
             if (isGroup(item)) { withClip(markClips?.[k] ?? null, () => walk(item, gx, gy, w, h, guide ?? outer)); continue }
@@ -803,7 +818,7 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
               }
               for (let i = before; i < entries.length; i++) entries[i]!.guide = true
             }
-            if (canvas && !unbounded) measuredBy(before, 'leaf', gx, gy)
+            if (canvas) measuredBy(before, 'leaf', gx + skewX, gy + skewY)
             clipFrom(before)
           }
         })
@@ -821,12 +836,12 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
       // (a mark of a scene the engine returned holds what it held: at the same place, its entries are the ones made before, see
       // `MARK_ENTRIES`; each index takes copies, which the clips and flags below are written onto)
       const kept = type !== 'text' && isEngineNode(group) ? keptEntries.get(group) : undefined
-      if (kept !== undefined && keptInto(kept.root, scene) && Object.is(kept.gx, gx) && Object.is(kept.gy, gy) && kept.unbounded === unbounded) {
+      if (kept !== undefined && keptInto(kept.root, scene) && Object.is(kept.gx, gx) && Object.is(kept.gy, gy) && Object.is(kept.skewX, skewX) && Object.is(kept.skewY, skewY)) {
         for (const t of kept.entries) entries.push({ ...t })
       } else {
         addMark(group, type, gx, gy)
-        if (canvas && !unbounded) measuredBy(e0, type, gx, gy, type === 'line' || type === 'area' || type === 'trail' ? group : undefined, group, fw, fh)
-        if (type !== 'text' && isEngineNode(group)) keptEntries.set(group, { gx, gy, unbounded, entries: entries.slice(e0).map((e) => ({ ...e })), root: scene })
+        if (canvas) measuredBy(e0, type, gx + skewX, gy + skewY, type === 'line' || type === 'area' || type === 'trail' ? group : undefined, group, fw, fh)
+        if (type !== 'text' && isEngineNode(group)) keptEntries.set(group, { gx, gy, skewX, skewY, entries: entries.slice(e0).map((e) => ({ ...e })), root: scene })
       }
       clipFrom(e0)
     })

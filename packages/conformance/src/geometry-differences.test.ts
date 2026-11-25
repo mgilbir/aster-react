@@ -15,7 +15,6 @@ describe('the known differences of conformance:geometry', () => {
     expect(classify(diff({ size: [310, Number.NaN] }))).toBe('view-not-finite')
     expect(classify(diff({ vega: side({ rejected: ['g@transform'] }) }))).toBe('svg-attribute-rejected')
     expect(classify(diff({ aster: side({ type: 'text' }) }))).toBe('svg-text-glyphs')
-    expect(classify(diff({ renderer: 'canvas', vega: side({ groups: [['15px', 32.6, 60, 90]] }) }))).toBe('canvas-group-one-axis-not-a-number')
     expect(classify(diff({ renderer: 'canvas', vega: side({ bounds: [1, -1e15, 30, 40] }) }))).toBe('canvas-beyond-float-precision')
   })
   it('an SVG class does not excuse a canvas difference, nor the reverse', () => {
@@ -23,9 +22,10 @@ describe('the known differences of conformance:geometry', () => {
     expect(classify(diff({ renderer: 'svg', vega: side({ bounds: [1, -1e15, 30, 40] }) }))).toBeNull()
     expect(classify(diff({ renderer: 'canvas', vega: side({ type: 'text' }) }))).toBeNull()
   })
-  it('a group that is a number on both axes, or on neither, is not the one-axis class', () => {
-    expect(classify(diff({ renderer: 'canvas', vega: side({ groups: [[1, 2, 3, 4]] }) }))).toBeNull()
-    expect(classify(diff({ renderer: 'canvas', vega: side({ groups: [['a', 'b', 3, 4]] }) }))).toBeNull()
+  it('a group positioned by a string that is no number on one axis is no known difference any more: the index asks its bounds on the other', () => {
+    for (const groups of [[['15px', 32.6, 60, 90]], [[1, 'a', 3, 4]], [[1, 2, 3, 4]], [['a', 'b', 3, 4]]]) {
+      expect(classify(diff({ renderer: 'canvas', vega: side({ groups }) })), JSON.stringify(groups)).toBeNull()
+    }
   })
   it('every class names itself, and the expected-differences table says why (and names no class that does not exist)', () => {
     expect(new Set(KNOWN_DIFFERENCES.map((k) => k.id)).size).toBe(KNOWN_DIFFERENCES.length)
