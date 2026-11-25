@@ -103,7 +103,7 @@ jobs:
       - id: sweep-vl
         name: Vega-Lite schema sweep
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        run: pnpm sweep-vl -- --floor 31505 --min-ok 30789 --max-node-error 17 --vega-check
+        run: pnpm sweep-vl -- --floor 31505 --min-ok 30789 --max-node-error 1 --vega-check
 
       - id: sweep-vega
         name: Vega schema sweep
