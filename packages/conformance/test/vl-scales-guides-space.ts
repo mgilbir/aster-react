@@ -137,9 +137,8 @@ crossed5()
 
 function crossed6(): void {
   const list: Case[] = []
-  for (const mark of ['bar', 'area', 'line']) {
-    list.push([`${mark}, an order list`, { mark, encoding: { x: n('n'), y: q('q', { aggregate: 'sum' }), color: n('g'), order: [{ field: 'g', type: 'nominal' }, { field: 'o', type: 'ordinal', sort: 'descending' }] } }])
-  }
+  // (an `order` written as a list: a15 drew it as vega-lite does, unordered; a14 refuses it with DECISIONS Q9's reason, and its differential
+  // and README pin that refusal. OPEN DECISION for the lead, STACK-LOG step 24: the three cases return here if the list is accepted again.)
   const prebinned = { field: 'b0', type: 'quantitative', bin: 'binned' }
   // (a bar or a tick over a pre-binned position with no second channel is laid out by its relative band size: DECISIONS / ROUTED, the encoding lane's)
   for (const mark of ['area', 'line', 'point', 'rule']) {
