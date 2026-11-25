@@ -53,7 +53,8 @@ function asterHost(spec: Spec): { fire: (s: Step) => void; items: () => Item[] }
     host.appendChild(svg)
     dirty = false
     const hit = buildHitIndex(scene)
-    binding = bindSceneSignals(svg, scene, store, { onSignal: () => { dirty = true } }, { owner: host, pick: (x, y) => hit.pick(x, y) })
+    // (vega's view is made with `hover: false`, so its handlers alone encode: the binding's view hover is off as well)
+    binding = bindSceneSignals(svg, scene, store, { onSignal: () => { dirty = true }, onEncode: () => { dirty = true } }, { owner: host, pick: (x, y) => hit.pick(x, y), hover: false })
   }
   render()
   cleanups.push(() => binding?.release())

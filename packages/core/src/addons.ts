@@ -267,6 +267,8 @@ function walkSpec(spec: Json, refuseUrls: boolean, hostSignals?: Readonly<Record
     }
     if (key === 'marks') {
       if (node.type === 'group' && node.layout != null) found.parts.add('layout')
+      // (a mark with a `hover` set reacts to the pointer: vega's view.hover() runs in the signal loop)
+      if (isObj(node.encode) && node.encode.hover != null) found.eventLoop = true
       // (a path mark's path string is read for its bounds and its outline)
       if (node.type === 'path') found.parts.add('svgpath')
     }
@@ -462,8 +464,8 @@ export interface SpecNeeds {
   parts: readonly EnginePart[]
   /**
    * Whether an interactive host binds the signal event loop for it (the `signals` part, which no evaluation reads): the view or a
-   * group mark declares signals (`on` streams, a selection's, or values a host may set). A host that listens to signals binds it
-   * whatever the spec says.
+   * group mark declares signals (`on` streams, a selection's, or values a host may set), or a mark has a `hover` encode set (vega's
+   * view hover runs in the loop). A host that listens to signals binds it whatever the spec says.
    */
   eventLoop: boolean
 }
