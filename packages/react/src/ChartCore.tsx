@@ -410,8 +410,9 @@ function ChartView({
   // Without the interaction capability there is no hit index, so a tooltip
   // cannot resolve its datum: it stays off (and a JS caller that asked for one is told, below).
   const tooltipEnabled = interaction != null && (tooltip || renderTooltip != null)
-  // Without the canvas capability the chart renders as SVG (and a JS caller that asked for canvas is told).
-  const renderer = requestedRenderer === 'canvas' && canvasCap == null ? 'svg' : requestedRenderer
+  // Without the canvas capability the chart renders as SVG (and a JS caller that asked for canvas is told), as it does for a name that
+  // is no renderer of ours (`"webgl"`).
+  const renderer = requestedRenderer === 'canvas' && canvasCap != null ? 'canvas' : 'svg'
   const containerRef = React.useRef<HTMLDivElement>(null)
   // `null` until measured: the spec's own size renders meanwhile (and on the server).
   const [measured, setMeasured] = React.useState<{ width: number; height: number } | null>(null)
@@ -682,11 +683,13 @@ function ChartView({
       .filter(([, v]) => v !== undefined && v !== false).map(([k]) => k).join(', ')
     : ''
   const canvasUnavailable = requestedRenderer === 'canvas' && canvasCap == null
-  const capabilityKey = `${canvasUnavailable ? 'c' : ''}|${interactionPropsUsed}|${eventStreamsUnbound ? 'e' : ''}`
+  const unknownRenderer = requestedRenderer !== 'svg' && requestedRenderer !== 'canvas' ? String(requestedRenderer) : ''
+  const capabilityKey = `${canvasUnavailable ? 'c' : ''}${unknownRenderer ? `r${unknownRenderer}` : ''}|${interactionPropsUsed}|${eventStreamsUnbound ? 'e' : ''}`
   React.useEffect(() => {
     const fix = "pass interaction={interaction} from '@aster-charts/react/interaction'"
     const problems = [
       canvasUnavailable && 'renderer="canvas" needs <Chart>: <SvgChart> has no canvas renderer, so it renders SVG',
+      unknownRenderer && `renderer=${JSON.stringify(unknownRenderer)} is no renderer ("svg" or "canvas"), so it renders SVG`,
       interactionPropsUsed && `${interactionPropsUsed} need hit testing and the signal event loop and are ignored: ${fix}`,
       eventStreamsUnbound && `this spec has event streams (signal.on) but no event loop is bound: ${fix}`,
     ]

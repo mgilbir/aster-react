@@ -69,7 +69,8 @@ export type { FormatLocaleDefinition } from './format.js'
 export type { TimeLocaleDefinition } from './time-format.js'
 export { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 export { buildScale, type Scale } from './scales.js'
-export { applyTransforms, sortRows, type Row } from './transform.js'
+export type { ScaleContext } from './scale-domain.js'
+export { applyTransforms, sortRows, type Row, type TransformContext } from './transform.js'
 export {
   AsterLimitError, checkSpecLimits, checkSceneLimits, checkSvgLength, createLimitClock, withLimits, HARD_MAX_SPEC_DEPTH, HARD_CAPS,
   type LimitClock, type LimitMeter, type SpecLimits,

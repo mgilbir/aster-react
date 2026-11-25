@@ -19,19 +19,24 @@ import {
   type VgSpec,
 } from '@aster-charts/core'
 import { createChartSession, patchSceneDom, renderSceneToDomElement } from '@aster-charts/core/dom'
-import { stampDatumAttrs } from '@aster-charts/core/signals'
 import { normalizeChartSpec } from './spec.js'
 
-export interface HydrateChartOptions extends RuntimeInput {
-  /** Stamp `data-datum` so tooltips/event targeting work after hydration. */
-  tooltips?: boolean
-}
+/**
+ * What `hydrateChart` takes: the evaluation's input (`width`, `height`, `data`, `limits`, ...). It binds no tooltip, event
+ * loop or hit index (an interactive chart is `<Chart>`), so there is nothing else to switch on (a former `tooltips` option only
+ * wrote `data-datum` attributes that nothing read, DECISIONS Q20).
+ */
+export type HydrateChartOptions = RuntimeInput
 
 /** Render a self-contained SVG string (same engine and budgets as the client). */
 export function renderChartToStaticMarkup(spec: VgSpec, input: RuntimeInput = {}): string {
   return renderSpec(normalizeChartSpec(spec), input)
 }
 
+/**
+ * What `hydrateChart` returns. It is one static patch: the call makes its own session, and the result holds no session, update or
+ * dispose, so showing new data is another `hydrateChart` on the same container (it patches the svg it left there).
+ */
 export interface HydratedChart {
   scene: SceneRoot
   svg: SVGSVGElement
@@ -48,10 +53,8 @@ export function hydrateChart(
   spec: VgSpec,
   input: HydrateChartOptions = {},
 ): HydratedChart {
-  const { tooltips, ...runtime } = input
   const session = createChartSession()
-  const scene = session.evaluate(normalizeChartSpec(spec), runtime)
-  if (tooltips) stampDatumAttrs(scene.items)
+  const scene = session.evaluate(normalizeChartSpec(spec), input)
   const existing = container.querySelector('svg')
   if (existing) {
     patchSceneDom(existing, scene)
