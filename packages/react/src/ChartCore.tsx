@@ -1867,8 +1867,13 @@ const A11yOverlay = React.memo(function A11yOverlay({ tree, tabStopId, onNodeKey
       role="group"
       aria-label={tree.label}
       style={{ position: 'absolute', inset: 0, zIndex: 30, pointerEvents: 'none' }}
+      // (every element of the overlay is drawn from the scene, and a server that drew another scene than the client -- its text
+      // measurer, its time zone -- wrote other positions and labels: React keeps the server's attributes where they differ and
+      // reports it once per element. The overlay is made anew from the client's scene once hydration is over, `key` above, so
+      // the difference is not the host's to act on; this is React's own switch for markup that is meant to differ)
+      suppressHydrationWarning
     >
-      {tree.summary != null && <span className="sr-only" style={srOnly}>{tree.summary}</span>}
+      {tree.summary != null && <span className="sr-only" style={srOnly} suppressHydrationWarning>{tree.summary}</span>}
       {tree.nodes.map((node) => {
         const slider = node.role === 'slider'
         const domRole = node.kind === 'title' ? 'heading'
@@ -1890,6 +1895,7 @@ const A11yOverlay = React.memo(function A11yOverlay({ tree, tabStopId, onNodeKey
             aria-valuemax={slider ? node.domain?.[1] : undefined}
             aria-valuenow={slider && node.domain ? (node.domain[0] + node.domain[1]) / 2 : undefined}
             tabIndex={node.id === tabStopId ? 0 : -1}
+            suppressHydrationWarning
             onKeyDown={(e) => onNodeKeyDown(node, e)}
             style={{
               position: 'absolute',
