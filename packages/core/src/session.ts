@@ -15,9 +15,8 @@
  * - re-compiles the IR only when the structural skeleton actually changed
  *
  * Caveat (same as Vega's): dataset arrays are tracked by reference. Mutating
- * an array in place without replacing it is invisible to the cache. The same goes for the spec: evaluating the very object the
- * session evaluated last costs nothing of its size (its skeleton is the one it made), so a spec edited in place and handed back is
- * not seen -- pass a new object. A development build warns about it (row-watch.ts `checkSpecInPlace`).
+ * an array in place without replacing it is invisible to the cache. A spec is compared by content: a spec that is DEEP-FROZEN
+ * (checked once per object, remembered) cannot change, so evaluating it again reads none of it; any other spec is compared as before.
  */
 import { compileChart } from './compiler.js'
 import { dict, ownGet } from './util.js'
@@ -31,7 +30,7 @@ import { getTextMetricsProvider } from './text-metrics.js'
 import { expressionRegistryEpoch } from './expression.js'
 import { assertSpecDepth, checkSpecLimits, checkSceneLimits, createLimitClock, withLimits, activeMeter } from './limits.js'
 import { diffRows, type DataPulse } from './pulse.js'
-import { checkChartRows, checkSpecInPlace } from './row-watch.js'
+import { checkChartRows } from './row-watch.js'
 import type { CompiledChart, RuntimeInput, SceneRoot, VgSpec } from './types.js'
 
 /**
@@ -77,14 +76,39 @@ function keepDistinct(this: unknown, _key: string, value: unknown): unknown {
 }
 
 /**
- * The rows of a nested dataset (a group mark's `data`) that are many: their text is made once per array, by identity, as the
- * top-level datasets' rows are tracked by it (an array changed in place is not seen: the file header). A spec rebuilt on each render
- * around rows that are the same array is then not stringified again in its rows, whose text is most of the spec's.
+ * The rows of a nested dataset (a group mark's `data`) that are many and deep-frozen: their text is made once per array (a frozen
+ * array cannot change). A spec rebuilt on each render around the same frozen rows is then not stringified again in its rows.
  */
 const NESTED_ROWS_MIN = 32
 const NESTED_ROWS = new WeakMap<object, string>()
+
+/** Objects known to be deep-frozen: neither they nor anything they reach can change, so what was read of them stays true. */
+const DEEP_FROZEN = new WeakSet<object>()
+/** Whether `root` and everything it reaches is frozen (answered once per object: later calls are one lookup). */
+export function isDeepFrozen(root: unknown): boolean {
+  if (root === null || typeof root !== 'object') return false
+  if (DEEP_FROZEN.has(root)) return true
+  const seen = new Set<object>()
+  const stack: object[] = [root]
+  // bounded: each object is met once
+  while (stack.length) {
+    const o = stack.pop()!
+    if (seen.has(o) || DEEP_FROZEN.has(o)) continue
+    if (!Object.isFrozen(o)) return false
+    seen.add(o)
+    for (const k of Reflect.ownKeys(o)) {
+      const d = Object.getOwnPropertyDescriptor(o, k)
+      if (d === undefined) continue
+      if (!('value' in d)) return false // (a getter can answer anything)
+      const v = d.value as unknown
+      if (v !== null && (typeof v === 'object' || typeof v === 'function')) stack.push(v as object)
+    }
+  }
+  for (const o of seen) DEEP_FROZEN.add(o)
+  return true
+}
 function skeletonReplacer(this: unknown, key: string, value: unknown): unknown {
-  if (key === 'values' && Array.isArray(value) && value.length >= NESTED_ROWS_MIN) {
+  if (key === 'values' && Array.isArray(value) && value.length >= NESTED_ROWS_MIN && isDeepFrozen(value)) {
     let text = NESTED_ROWS.get(value)
     if (text === undefined) NESTED_ROWS.set(value, (text = `${ROWS_MARKER}:${JSON.stringify(value, keepDistinct)}`))
     return text
@@ -418,16 +442,11 @@ export function createChartSession(): ChartSession {
       if (typeof process !== 'undefined') throw e
     }
     clock.check('compile')
-    // The spec this session evaluated last, as an object: its skeleton is the one made then (the walk that bounds its depth, and the
-    // text of all of it, are made for a spec object once; see the header on a spec edited in place).
+    // The spec this session evaluated last, when it is deep-frozen: it cannot have changed, so its skeleton is the one made then (the
+    // walk that bounds its depth and the text of all of it are made for it once). Any other spec is read each time.
     // (a spec that cannot be written as text is never cached: its skeleton is made anew each time, see `skeletonOf`)
-    const again = lastSpec !== null && spec === lastSpec && !lastSkeleton.startsWith(UNCACHEABLE)
+    const again = lastSpec !== null && spec === lastSpec && !lastSkeleton.startsWith(UNCACHEABLE) && isDeepFrozen(spec)
     const skeleton = again ? lastSkeleton : skeletonOf(spec)
-    try {
-      if (again && process.env.NODE_ENV !== 'production') checkSpecInPlace(session, spec, skeleton, input as never, skeletonOf)
-    } catch (e) {
-      if (typeof process !== 'undefined') throw e
-    }
     const metaKey = metaKeyOf(skeleton, input)
     const key = fingerprint(spec, input, skeleton)
     const currentRaw = rawDatasets(spec, input)
