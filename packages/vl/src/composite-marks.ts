@@ -385,6 +385,14 @@ function readErrorMark(unit: Obj, kind: 'errorbar' | 'errorband', config: Obj): 
     return rest
   }
   const continuous = withoutAggregate(encoding[axis])!
+  // vega-lite makes the statistics of an error mark before the flat copy of a nested path exists, and reads a name with a dot in it as a
+  // path: its aggregates read nothing, and it draws no bar (an errorbar) or nulls (an errorband). Q9: refused, not drawn differently.
+  if (typeof continuous.field === 'string') {
+    const pieces = splitAccessPath(continuous.field)
+    if (pieces.length > 1 || pieces[0] !== continuous.field) {
+      throw new VLCompileError(`encoding.${axis}.field: the ${kind} measure ${JSON.stringify(continuous.field)} is a nested path or a name with a dot in it: vega-lite 6.4.3 cannot read it (its statistics are made before the field is flattened, so it draws no bar or nulls); name a plain column, made by a calculate`)
+    }
+  }
   const others: Obj = {}
   for (const [channel, def] of Object.entries(encoding)) {
     if (channel !== axis && channel !== `${axis}2` && channel !== `${axis}Error` && channel !== `${axis}Error2`) others[channel] = def
@@ -405,7 +413,6 @@ function readErrorMark(unit: Obj, kind: 'errorbar' | 'errorband', config: Obj): 
     tooltip,
     transform: [
       ...((outer.transform as Obj[] | undefined) ?? []),
-      ...flatCopyOf(a.continuous.field as string),
       ...lifted.timeUnits,
       ...(aggregate.length ? [{ aggregate, groupby: input === 'raw' ? lifted.groupby : [] }] : []),
       ...stats.calculate,

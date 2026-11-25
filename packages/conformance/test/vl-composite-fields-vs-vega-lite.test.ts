@@ -89,12 +89,17 @@ function twinOf(spec: Record<string, any>, measure: Form): Record<string, any> {
 
 describe('composite marks over every form of field name draw what vega-lite draws', () => {
   for (const seed of SEEDS) {
-    const { spec, measure } = genSpec(seed)
+    const { spec, measure, mark } = genSpec(seed)
     it(`seed ${seed}: ${JSON.stringify(spec.mark)} of ${JSON.stringify(spec.encoding)}`, async () => {
-      // A measure that is a nested path or a column with a dot in its name is read by vega-lite's statistics before the flat copy they read
-      // is made, unless a channel names the measure: then its aggregates read nothing, and it draws no bar, or nulls (the bars of an error
-      // mark; the box of a boxplot with no outliers or a min-max one). Where the oracle does not draw what it draws over a plain column, the
-      // bars must be the plain column's; everywhere else the picture is the oracle's.
+      if (measure !== 'plain' && mark !== 'boxplot') {
+        // vega-lite draws no bar (or nulls) for an error mark over a nested path or a name with a dot (its statistics read the field
+        // before it is flattened): Q9, the spec is refused, naming the field
+        expect(() => compile(plain(spec) as never)).toThrow(/is a nested path or a name with a dot in it/)
+        return
+      }
+      // A boxplot's measure that is nested or dotted is read by vega-lite's statistics before the flat copy they read exists unless a
+      // channel names it (an outlier-less or min-max box): where the oracle does not draw what it draws over a plain column, the bars
+      // must be the plain column's; everywhere else the picture is the oracle's.
       const twin = twinOf(spec, measure)
       const oracle = oracleOf(spec)
       const oracleTwin = oracleOf(twin)
