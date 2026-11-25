@@ -524,7 +524,7 @@ function ChartView({
   // spec object with identical content costs nothing), mirroring Vega's
   // "skip work when nothing is dirty" behavior.
   const sessionRef = React.useRef<ReturnType<typeof createChartSession> | null>(null)
-  if (sessionRef.current == null) sessionRef.current = createChartSession()
+  if (sessionRef.current == null) sessionRef.current = createChartSession({ runningView: true })
   const sceneRef = React.useRef<SceneRoot | null>(null)
 
   const currentView = controlledView !== undefined ? controlledView : internalView

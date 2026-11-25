@@ -102,7 +102,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
   const frameStrokeCap = resolveFrameString(spec, 'strokeCap')
   const frameStrokeJoin = resolveFrameString(spec, 'strokeJoin')
   // (an `autosize` signal is read when the chart is evaluated; this is the property as vega-parser makes it the signal's value)
-  const { type: autosize, contains: autosizeContains } = staticAutosize(viewValue('autosize'))
+  const { type: autosize, contains: autosizeContains, resize: autosizeResize } = staticAutosize(viewValue('autosize'))
   const configRange = (cfg as { range?: Record<string, unknown> }).range
 
   const data: CompiledData[] = []
@@ -170,6 +170,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
     projections,
     configRange,
     autosizeContains,
+    ...(autosizeResize === true ? { autosizeResize: true } : {}),
     style: cfgStyle,
     ...(cfg.lineBreak != null ? { lineBreak: cfg.lineBreak } : {}),
     ...(cfg.events != null && typeof cfg.events === 'object' ? { eventConfig: cfg.events as CompiledChart['eventConfig'] } : {}),

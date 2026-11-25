@@ -313,9 +313,19 @@ function walkSpec(spec: Json, refuseUrls: boolean, hostSignals?: Readonly<Record
       if (k === 'values') {
         const signal = key === 'on' && typeof node[k] === 'string' ? (node[k] as string) : valuesSignal(node[k])
         if (signal !== undefined) stack.push([signal, depth + 1, 'signal'])
+        // (an axis's or a legend's `values` list is one expression, vega's objectProperty: every `{signal}` in it is evaluated)
+        else if ((key === 'axes' || key === 'legends') && Array.isArray(node[k])) {
+          const visit = (v: unknown, d: number): void => {
+            if (!isObj(v) || d > 32) return
+            if (typeof v.signal === 'string') { stack.push([v.signal, depth + 1, 'signal']); return }
+            for (const x of Array.isArray(v) ? v : Object.values(v)) visit(x, d + 1)
+          }
+          visit(node[k], 0)
+        }
         continue
       }
-      // (a `value` is read too: the engine evaluates a `{signal}` an encode entry's value holds)
+      // (a `value` is walked too, which finds more than the engine reads: an encode entry's value is the object it holds, a
+      // `{signal}` in it included, C397 -- naming an add-on the chart never asks for only loads it early)
       if (refusedUrl && k === 'format') continue
       stack.push([node[k], depth + 1, k])
     }

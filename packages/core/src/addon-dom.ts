@@ -24,4 +24,4 @@ export {
   type DomDesc,
   type DomRenderOptions,
 } from './dom.js'
-export { createChartSession, skeletonOf as chartSkeleton, type ChartSession } from './session.js'
+export { createChartSession, skeletonOf as chartSkeleton, type ChartSession, type ChartSessionOptions } from './session.js'

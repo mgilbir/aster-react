@@ -140,11 +140,13 @@ What works, and how it differs from Vega, precisely:
   declared on the composition, a brush or a point per facet cell, bound scales shared by cells, a legend binding).
 - A scale event (`{scale: "x"}`, which an unbound interval selection listens to so that its brush follows its
   scale) fires when the chart is bound to a scene whose scale differs from the previous one's.
-- **Deviation:** a signal write is a fresh render, where Vega keeps the autosize, padding and axis-tick order it first computed
-  ([Signals](#signals)). The selections gate holds this exactly and with no tolerance: a step passes when Aster equals Vega's
+- **A running view** ([Signals](#signals)): `<Chart>` continues its view across signal writes and data changes as Vega's does --
+  an axis keeps the ticks it still shows in their order, and the view keeps its first autosize until `width`, `height` or
+  `padding` change. **Deviation:** once the rows a mark is drawn from came or went (other than rows appended after the others),
+  Vega's item order is its join's, which Aster cannot tell from the rows: from that write on, the chart renders as a NEW Vega view
+  of the same state would. The selections gate holds this exactly and with no tolerance: a step passes when Aster equals Vega's
   retained render, or when it equals the render of a NEW Vega view initialised with the same signals and stores (and Vega's own
-  retained render differs); those steps are counted against a ceiling (`--max-retained`, like `sweep-signals`). Set
-  `autosize: "none"` for a pan/zoom chart whose plot must not move.
+  retained render differs); those steps are counted against a ceiling (`--max-retained`, like `sweep-signals`).
 - **Deviation:** `modify(name, ..., tuple)` / `remove` compare a tuple read back from `data()` by value, where Vega compares tuple
   identity ([Deviations from Vega](ARCHITECTURE.md#deviations-from-vega)).
 - **Selections in concat, facet and repeat views** (linked brushing, a brush per facet cell, a selection declared on the
@@ -357,11 +359,18 @@ after the one that asked for it. A cycle through streams (a game) settles as veg
 two handlers of ONE source vega's queue pops first (their ranks are equal; the order depends on everything else in the queue,
 every mark that reads a signal included): Aster runs them in the order they were queued.
 
-**Deviation from Vega: a signal write is a fresh render.** Aster is a pure function of (spec, data, signals): the scene
-after a write equals the scene a fresh chart renders with those signal values. Vega's own second render can differ from
-its own fresh render of the same signals, because it retains dataflow state: autosize runs once and again only when
-width, height or padding change (vega-view `initializeResize`; a new `autosize` value waits for one of them), so a chart whose
-content outgrows the view keeps its first size. The signals sweep
+**A running view, and where it stops (C766).** Vega's view retains dataflow state from one run to the next: autosize runs once
+and again only when width, height or padding change (vega-view `initializeResize`; `autosize.resize: true` runs it every time), so a
+chart whose content outgrows the view keeps its first size; an axis joins its tick items by value, so the ticks it still shows
+keep their order and new ones come after them; a mark joins its items by tuple, so items whose rows went are taken out and new ones
+join after the others. Aster stays a pure function of its inputs: an evaluation given the scene it continues
+(`RuntimeInput.retainFrom`; `createChartSession({ runningView: true })` passes its last scene, and `<Chart>`'s session is one) keeps
+that scene's tick order, the categories an ordinal scale given no domain was asked for (a legend over it keeps its entries, as
+vega's scale object does: C70) and, for `autosize` `pad`, its padding, exactly as vega's view does, and equals a fresh evaluation given the
+same scene. **Deviation:** a mark's item order after its rows came or went is the join's history, which the rows do not tell:
+such an evaluation, and every one that continues it, renders as a fresh view of its input (never a mix of the two renders). A fit
+view (`fit`, `fit-x`, `fit-y`) is sized again on every evaluation, as a fresh view is. `evaluateChart` and `renderSpec` without
+`retainFrom` are the first render of their input. The signals sweep
 (`pnpm sweep-signals`, 166 cases) counts those cases as `retained` when Aster equals Vega's fresh render and Vega's
 incremental render differs: 103 ok, 60 retained, 1 both-refused, 2 node-error, 0 differ, with a ceiling on `retained`
 that can only be lowered (`scripts/gates.mjs`).
