@@ -776,6 +776,14 @@ export function copyTupleWith<T extends object>(r: T, more: Record<string, unkno
   return c
 }
 
+/**
+ * Say that row `r` stands for the tuple `t` stands for: a host's row equal to the one it replaces, in an array the host's session found
+ * equal to the one before (the rows are the same tuples: vega's view keeps them). Recorded only while origins are (see above).
+ */
+export function standFor(r: object, t: object): void {
+  if (linking && r !== t) ORIGINS.set(r, ORIGINS.get(t) ?? t)
+}
+
 /** The row a copy stands for (the first row of the chain of copies it was made by), or the row itself (see above). */
 export function tupleOrigin(r: object): object {
   return ORIGINS.get(r) ?? r
