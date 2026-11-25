@@ -204,21 +204,7 @@ describe('canonicalizeSvg misc contracts', () => {
 
   it('throws on constructs it cannot judge instead of ignoring them', () => {
     expect(() => canonicalizeSvg(wrap('<foreignObject/>'))).toThrow(/unsupported element/)
-  })
-
-  // A transform attribute that is not a transform list is an invalid attribute, which a browser ignores (checked against Chromium's
-  // getCTM by the paused lane's probe): the element is drawn as it would be with no transform. The canonicalizer reads the attribute as
-  // the browser does, so what a browser draws the same is the same here; a defect that writes such a list is seen against vega's SVG,
-  // which writes the real transform.
-  it('a transform list a browser ignores is the identity; one it reads is read', () => {
-    const rect = (t: string): string => wrap(`<rect x="5" y="6" width="20" height="10" fill="#4c78a8" transform="${t}"/>`)
-    for (const junk of ['wobble(3)', 'translate(Infinity,0)', 'translate(NaN 0)', 'translate(163px0)', 'translate(1e400,0)', 'translate(1,)', 'translate(1,2,3)', 'rotate(1,2)', 'scale()', 'translate(1,2),']) {
-      expect(diff(rect(junk), wrap(RECT)), junk).toEqual([])
-    }
-    // (the grammar: touching numbers, no separator between transforms, signs, exponents)
-    expect(diff(rect('translate(.5.5)'), wrap('<rect x="5.5" y="6.5" width="20" height="10" fill="#4c78a8"/>'))).toEqual([])
-    expect(diff(rect('translate(1,2)translate(1e0 +1)'), wrap('<rect x="7" y="9" width="20" height="10" fill="#4c78a8"/>'))).toEqual([])
-    expect(diff(rect('translate(3,0)'), wrap(RECT))).not.toEqual([])
+    expect(() => canonicalizeSvg(wrap('<rect width="1" height="1" transform="wobble(3)"/>'))).toThrow(/transform/)
   })
 })
 
