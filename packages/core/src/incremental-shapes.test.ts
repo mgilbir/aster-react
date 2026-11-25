@@ -27,6 +27,7 @@ import { createChartSession } from './session.js'
 import { datasetsOfScene, renderSceneToSvg } from './index.js'
 import { diffRows, type RowDiff } from './pulse.js'
 import { stampKey } from './content-stamp.js'
+import { datumText, ENCODE_LOG, encodeIdentOf, type EncodeLog } from './encode-handlers.js'
 import './addon-transforms.js'
 import './addon-geo.js'
 import type { RuntimeInput, SceneRoot, VgSpec } from './types.js'
@@ -62,6 +63,11 @@ interface Scenario {
   mutable: readonly string[]
   /** makes a row of dataset `name` */
   row: (r: Rnd, name: string, i: number) => Row
+  /**
+   * The log of requests the host's store holds (encode-handlers.ts), the same at every step: made from `session`, the state the event
+   * loop keeps for it. A fresh evaluation is given a session of its own.
+   */
+  log?: (session: object) => EncodeLog
 }
 
 const GROUPS = ['A', 'B', 'C', 'D']
@@ -276,8 +282,71 @@ function keyedPaintOrder(r: Rnd): Scenario {
   }
 }
 
+
+/** The items of the named leaf mark in a scene (its group's items), at any depth. */
+function itemsOfMark(node: unknown, name: string): Array<Record<string, unknown>> | null {
+  const n = node as { marktype?: string; name?: string; items?: unknown[] } | null
+  if (n === null || typeof n !== 'object') return null
+  if (n.marktype !== undefined && n.marktype !== 'group' && n.name === name) return (n.items ?? []) as Array<Record<string, unknown>>
+  for (const c of n.items ?? []) {
+    const f = itemsOfMark(c, name)
+    if (f !== null) return f
+  }
+  return null
+}
+
+/**
+ * A mark with `on` triggers, whose items the host's log holds property writes for (what the loop records when a trigger's `modify`
+ * runs, C73): written onto the items the evaluation makes before the mark's sort and the marks drawn from it, a write to a channel
+ * the mark's `update` owns taken back, the others kept for as long as the item has the datum it had when the write was made -- while
+ * rows come, go, move and change.
+ */
+function markWrites(r: Rnd): Scenario {
+  const pipe = pipeline(r)
+  const sorted = r() < 0.4
+  const pts = {
+    type: 'symbol', name: 'pts', from: { data: 't' },
+    on: [{ trigger: 'go', modify: 'item()', values: '{foo: 1}' }],
+    ...(sorted ? { sort: { field: 'foo' } } : {}),
+    encode: {
+      enter: { fill: { value: '#4c78a8' }, ...(r() < 0.5 ? { opacity: { value: 0.8 } } : {}) },
+      update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'v' }, size: { value: 60 }, ...(r() < 0.4 ? { fill: { signal: "datum.k === 'a' ? 'tomato' : '#4c78a8'" } } : {}) },
+    },
+  }
+  const dependent = pick(r, [
+    { type: 'text', encode: { update: { x: { value: 4 }, y: { value: 12 }, text: { signal: "join(pluck(data('pts'), 'foo'), ',') + ':' + length(data('pts'))" } } } },
+    { type: 'rule', from: { data: 'pts' }, encode: { update: { x: { field: 'x' }, x2: { field: 'x' }, y: { field: 'y' }, y2: { value: 120 }, stroke: { signal: "datum.fill === 'red' ? 'red' : 'blue'" } } } },
+  ])
+  const scales = [
+    { name: 'x', type: 'linear', domain: [0, 20], range: 'width' },
+    { name: 'y', type: 'linear', domain: [0, 10], range: 'height' },
+  ]
+  const nested = r() < 0.4
+  const marks = [pts, dependent]
+  const spec = { ...FRAME, signals: [{ name: 'go', value: 0 }], data: [hostData(r, 't', { transform: [...pipe] })], scales, marks: nested ? [{ type: 'group', encode: { update: { width: { signal: 'width' }, height: { signal: 'height' } } }, marks }] : marks } as unknown as VgSpec
+  const data = { t: rowsOf(r, int(r, 2, 8)) }
+  // (the items the first scene makes: the log names them as the loop does, by the idents the evaluation stamped, and the datums they hold)
+  const probe = evaluateChart(compileChart(clone(spec)), { logger: quiet, data: clone(data) })
+  const items = itemsOfMark(probe, 'pts') ?? []
+  const writes: EncodeLog['writes'][number][] = []
+  let seq = 0
+  for (const item of items.slice(0, 4)) {
+    const ident = encodeIdentOf(item)
+    if (ident === undefined || r() < 0.3) continue
+    seq++
+    for (const [field, value] of [['fill', pick(r, ['red', 'gold'])], ['size', 500], ['foo', int(r, 0, 5)], ['bar', 'b']] as const) {
+      if (r() < 0.6) writes.push({ ident, field, value, datum: datumText(item.datum), seq })
+    }
+  }
+  return {
+    spec, data, mutable: ['t'], row: plainRow,
+    log: (session) => Object.freeze({ session, rev: 1, requests: Object.freeze([]), writes: Object.freeze(writes.slice()) }),
+  }
+}
+
 export const SHAPES: ReadonlyArray<readonly [string, (r: Rnd) => Scenario]> = [
   ['keys, zindex and colour objects', keyedPaintOrder],
+  ['mark triggers: writes onto items', markWrites],
   ['mark-from-mark', markFromMark],
   ['group-scoped reads', groupScopedReads],
   ['fitted projection', fittedProjection],
@@ -420,6 +489,18 @@ function brokenStamp(seen: readonly Published[]): string | null {
 // ---------------------------------------------------------------------------
 
 const quiet = { error() {}, warn() {}, info() {}, debug() {} }
+
+/** The signals a scenario's evaluations are given: its own, and the log of requests the host's store holds (made from `session`). */
+function signalsOf(sc: Scenario, session: object): Record<string, unknown> | undefined {
+  if (!sc.signals && !sc.log) return undefined
+  const signals: Record<string, unknown> = sc.signals ? clone(sc.signals) : {}
+  if (sc.log) (signals as Record<symbol, unknown>)[ENCODE_LOG] = sc.log(session)
+  return signals
+}
+function inputOf(sc: Scenario, data: Data, session: object): RuntimeInput {
+  const signals = signalsOf(sc, session)
+  return { logger: quiet, data: clone(data), ...(signals ? { signals } : {}), ...(sc.extra ? clone(sc.extra) : {}) }
+}
 interface Fail { shape: string; seed: number; delivery: Delivery; step: number; ops: string[]; detail: string }
 
 export function runScenario(shape: string, gen: (r: Rnd) => Scenario, seed: number, steps: number, delivery: Delivery): Fail | null {
@@ -429,6 +510,7 @@ export function runScenario(shape: string, gen: (r: Rnd) => Scenario, seed: numb
   const session = delivery === 'session' ? createChartSession() : null
   let data = sc.data
   const ops: string[] = []
+  const incSession = {}
   let stamps: Published[] = []
   let stampFail: Fail | undefined
   // (DECISIONS Q14: `datasetsOfScene(scene)` is that scene's rows, whatever evaluations came after it)
@@ -441,18 +523,19 @@ export function runScenario(shape: string, gen: (r: Rnd) => Scenario, seed: numb
       ops.push(op)
       data = update(r, sc, data, op)
     }
-    const input = (): RuntimeInput => ({ logger: quiet, data: clone(data), ...(sc.signals ? { signals: clone(sc.signals) } : {}), ...(sc.extra ? clone(sc.extra) : {}) })
+    // (the evaluations of the chart under test keep one session, as the event loop does; a fresh evaluation has a session of its own)
+    const input = (fresh = false): RuntimeInput => inputOf(sc, data, fresh ? {} : incSession)
     let inc: SceneRoot
     try {
       // (the session is handed new arrays for the datasets that changed and the very arrays it was given for the others, as a host's
       // immutable state does; the chart is handed what its hints describe)
-      if (session) inc = session.evaluate(clone(sc.spec), { logger: quiet, data: { ...data }, ...(sc.signals ? { signals: sc.signals } : {}), ...(sc.extra ? clone(sc.extra) : {}) })
+      if (session) inc = session.evaluate(clone(sc.spec), { logger: quiet, data: { ...data }, ...(sc.signals || sc.log ? { signals: signalsOf(sc, incSession) } : {}), ...(sc.extra ? clone(sc.extra) : {}) })
       else inc = evaluateChart(chart!, { ...input(), ...(step > 0 ? hints(delivery, prev, data) : {}), ...(namesScene(delivery) && last !== undefined ? { previousScene: last } : {}) })
     } catch (e) {
       return { shape, seed, delivery, step, ops, detail: `incremental threw ${(e as Error).message}` }
     }
     last = inc
-    const fresh = evaluateChart(compileChart(clone(sc.spec)), input())
+    const fresh = evaluateChart(compileChart(clone(sc.spec)), input(true))
     const d = compare(fresh, inc)
     if (d !== null) return { shape, seed, delivery, step, ops, detail: d }
     // (the stamp invariant is reported apart: a scene that is still right over an array written behind its stamp is a failure too,
@@ -500,6 +583,7 @@ export function runShared(shape: string, gen: (r: Rnd) => Scenario, seed: number
   const chart = compileChart(clone(sc.spec))
   const callers = [sc.data, update(r, sc, sc.data, 'replace')]
   const scenes: Array<SceneRoot | undefined> = [undefined, undefined]
+  const sessions = [{}, {}]
   const ops: string[] = []
   for (let step = 0; step <= steps; step++) {
     const who = step < 2 || !namesScene(delivery) ? step % 2 : int(r, 0, 1)
@@ -507,7 +591,7 @@ export function runShared(shape: string, gen: (r: Rnd) => Scenario, seed: number
     let data = prev
     if (step > 1) { const op = pick(r, OPS); ops.push(`${who}:${op}`); data = update(r, sc, prev, op) }
     callers[who] = data
-    const input = (): RuntimeInput => ({ logger: quiet, data: clone(data), ...(sc.signals ? { signals: clone(sc.signals) } : {}), ...(sc.extra ? clone(sc.extra) : {}) })
+    const input = (): RuntimeInput => inputOf(sc, data, sessions[who]!)
     let inc: SceneRoot
     try {
       inc = evaluateChart(chart, { ...input(), ...(step > 1 ? hints(delivery, prev, data) : {}), ...(namesScene(delivery) && scenes[who] !== undefined ? { previousScene: scenes[who] } : {}) })
@@ -515,7 +599,7 @@ export function runShared(shape: string, gen: (r: Rnd) => Scenario, seed: number
       return { shape, seed, delivery, step, ops, detail: `incremental threw ${(e as Error).message}` }
     }
     scenes[who] = inc
-    const d = compare(evaluateChart(compileChart(clone(sc.spec)), input()), inc)
+    const d = compare(evaluateChart(compileChart(clone(sc.spec)), inputOf(sc, data, {})), inc)
     if (d !== null) return { shape, seed, delivery, step, ops, detail: d }
   }
   return null
@@ -549,7 +633,8 @@ describe('a false appendOnly pulse (a wrong baseLength) is detected (Q29)', () =
         const sc = gen(r)
         const chart = compileChart(clone(sc.spec))
         let data = sc.data
-        const input = (): RuntimeInput => ({ logger: quiet, data: clone(data), ...(sc.signals ? { signals: clone(sc.signals) } : {}), ...(sc.extra ? clone(sc.extra) : {}) })
+        const session = {}
+        const input = (): RuntimeInput => inputOf(sc, data, session)
         let last = evaluateChart(chart, input())
         for (let step = 1; step <= STEPS; step++) {
           const prev = data
@@ -557,7 +642,7 @@ describe('a false appendOnly pulse (a wrong baseLength) is detected (Q29)', () =
           const lie: NonNullable<RuntimeInput['dataPulse']> = {}
           for (const n of sc.mutable) lie[n] = { changed: [], appendOnly: true, baseLength: prev[n]!.length + pick(r, [-1, 1, 2]) }
           const inc = last = evaluateChart(chart, { ...input(), dataPulse: lie, ...(named ? { previousScene: last } : {}) })
-          const d = compare(evaluateChart(compileChart(clone(sc.spec)), input()), inc)
+          const d = compare(evaluateChart(compileChart(clone(sc.spec)), inputOf(sc, data, {})), inc)
           if (d !== null) { fails.push(`seed ${seed} step ${step}: ${d}`); break }
         }
       }

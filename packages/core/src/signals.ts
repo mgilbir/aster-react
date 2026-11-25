@@ -45,7 +45,7 @@
  * resolves events as vega's canvas handler does (`ViewEvents`).
  */
 import type { HostElement, HostEvent, HostEventTarget } from './host-types.js'
-import type { CompiledChart, CompiledData, CompiledSignalDef, SceneGroup, SceneItem, SceneNode, SceneRoot, SignalOnDef } from './types.js'
+import type { CompiledChart, CompiledData, CompiledMark, CompiledSignalDef, SceneGroup, SceneItem, SceneNode, SceneRoot, SignalOnDef } from './types.js'
 import { isEngineNode, isRootItem, keptInto, rootItemOf } from './scene-registry.js'
 import { compileExpr, evalSignal, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import type { Changeset } from './modify.js'
@@ -59,7 +59,7 @@ import { activeMeter, AsterLimitError, checkRowCount, withLimits, type SpecLimit
 import type { Timer } from './timer.js'
 import { part } from './engine-parts.js'
 import { clientToSvg } from './pointer.js'
-import { ENCODE_LOG, encodeIdentOf, encodeLogOf, encodeSetsOf, hasSetIn, withRequest } from './encode-handlers.js'
+import { datumText, ENCODE_LOG, encodeIdentOf, encodeLogOf, encodeSetsOf, hasSetIn, itemMarkNameOf, withRequest, withWrites } from './encode-handlers.js'
 
 /** What `pick` / the DOM fallback resolve an event position to: a scene item and where it sits. */
 export interface PickedItem {
@@ -772,7 +772,10 @@ function bindSignalEventsDefs(
 
   /** vega-functions modify.js: queue the edit; the dataset is pulsed in a run of its own once the one that asked has finished. */
   const modifyData = (name: string, insert: unknown, remove: unknown, toggle: unknown, modifyTuple: unknown, values: unknown): number => {
-    if (!datasets.has(name)) throw new Error(`Cannot modify the unknown data set "${name}"`)
+    if (!datasets.has(name)) {
+      if (markNames.has(name)) return modifyMark(name, insert, remove, toggle, modifyTuple, values)
+      throw new Error(`Cannot modify the unknown data set "${name}"`)
+    }
     if (!handling) throw new Error('modify() is only available while an event is being handled')
     const { planModify, newChangeset } = part('modify')
     return planModify(rawOf(name), () => {
@@ -788,6 +791,64 @@ function bindSignalEventsDefs(
       }
       return m.cs
     }, currentAll(insert), currentAll(remove), toggle, current(modifyTuple), values)
+  }
+  /** The names of the chart's named marks (vega: a named mark is a data set of its items: `modify` takes it). */
+  const markNames = new Set<string>()
+  const triggerSites: Array<{ name: string; on: Array<Record<string, unknown>>; scopeDefs: CompiledSignalDef[] | null }> = []
+  const markSitesOf = (marks: readonly CompiledMark[] | undefined, scopeDefs: CompiledSignalDef[] | null): void => {
+    for (const m of marks ?? []) {
+      if (m.userName !== undefined) {
+        markNames.add(m.userName)
+        if (m.on?.length) triggerSites.push({ name: m.userName, on: m.on, scopeDefs })
+      }
+      markSitesOf(m.marks, m.signalDefs?.length ? m.signalDefs : scopeDefs)
+    }
+  }
+  markSitesOf((chart as { marks?: readonly CompiledMark[] }).marks, null)
+  /** vega-functions modify.js `data.changes` for a mark: the edits of the stamp the mark's items are being modified in */
+  const modifyingMarks = new Map<string, { stamp: number; mods: Array<{ tuple: object; field: string; value: unknown }> }>()
+  /**
+   * vega-functions modify.js over a named mark: its input is the collector of the mark's items, and `modify(tuple, values)` sets each
+   * property of `values` on the item (a tuple that is not one of the mark's items is left alone), then pulses the items: the mark's
+   * `update` set runs on the modified item again and its transforms (a `force` reads `fx` and `fy`) with it. The writes are asked of the
+   * evaluation the host makes next (encode-handlers.ts), as the re-encoding of an item is.
+   */
+  const modifyMark = (name: string, insert: unknown, remove: unknown, toggle: unknown, modifyTuple: unknown, values: unknown): number => {
+    if (!handling) throw new Error('modify() is only available while an event is being handled')
+    const items = sceneRuntime.data(name) as unknown[] | undefined
+    // (vega: `!(input.value.length || insert || toggle)`: nothing to do)
+    if (!(items?.length || insert || toggle)) return 0
+    // (a mark's `on` takes `modify` only -- vega-parser says so; `insert`, `remove` and `toggle` of a call are for data sets)
+    if (insert || remove || toggle) throw new Error('Marks only support modify triggers.')
+    let m = modifyingMarks.get(name)
+    if (!m || m.stamp < flow.clock) {
+      const mine = (m = { stamp: flow.clock, mods: [] })
+      modifyingMarks.set(name, mine)
+      flow.runAfter(() => {
+        modifyingMarks.delete(name)
+        writeItems(name, mine.mods)
+      }, 1)
+    }
+    if (modifyTuple) {
+      if (typeof modifyTuple === 'function') throw new Error('modify parameter must be a data tuple, not a function')
+      if (typeof modifyTuple === 'object') for (const key in values as object) m.mods.push({ tuple: modifyTuple, field: key, value: (values as Record<string, unknown>)[key] })
+    }
+    return 1
+  }
+  /** Record the property writes of a mark's `modify` for the host's next evaluation (see `modifyMark`); a tuple that is not an item of the mark is skipped. */
+  const writeItems = (name: string, mods: ReadonlyArray<{ tuple: object; field: string; value: unknown }>): void => {
+    const byItem = new Map<string, { datum: string; props: Array<readonly [string, unknown]> }>()
+    for (const mod of mods) {
+      const ident = encodeIdentOf(mod.tuple)
+      if (ident === undefined || itemMarkNameOf(mod.tuple) !== name) continue
+      let w = byItem.get(ident)
+      if (w === undefined) byItem.set(ident, (w = { datum: datumText((mod.tuple as { datum?: unknown }).datum), props: [] }))
+      w.props.push([mod.field, mod.value])
+    }
+    for (const [ident, w] of byItem) {
+      ;(signals as Record<symbol, unknown>)[ENCODE_LOG] = withWrites(encodeLogOf(signals), state, ident, w.datum, w.props)
+      encodeAsked = true
+    }
   }
   /** vega-functions data.js setdata: `df.pulse(input, changeset().remove(truthy).insert(tuples))`, applied when the dataset's operator runs. */
   const setData = (name: string, tuples: unknown): number => {
@@ -1540,6 +1601,25 @@ function bindSignalEventsDefs(
     for (const sc of scopes) {
       for (const d of sc.defs) if (d.push !== 'outer') signalOp(sc, d)
       lambdasOf(sc)
+    }
+    // vega-parser parseMark: each trigger of a named mark is an operator of the mark's scope (a group item's, for a mark in a group that
+    // declares signals: one per item), as a data set's is, and edits the mark's items through `modify`. It is first run when what it
+    // reads changes: when the view is built the mark's items are not there yet (its collector is ranked after the signals), and `modify`
+    // of no items does nothing.
+    for (const site of triggerSites) {
+      const inScopes = site.scopeDefs === null ? [null] : scopes.filter((sc) => sc.defs === site.scopeDefs)
+      for (const scope of inScopes) {
+        for (const on of site.on) {
+          const arg = (v: unknown): string => (v == null ? 'null' : `${v as string}`)
+          const text = 'if(' + `${on.trigger as string}` + ',modify(' + JSON.stringify(site.name) + ',' + [on.insert, on.remove, on.toggle, on.modify, on.values].map(arg).join(',') + '),0)'
+          let deps = new Set<string>()
+          try { deps = depKeys(scope, text) } catch { /* refused when the spec was compiled */ }
+          const trigger = node(`trigger of mark "${site.name}"`, () => {
+            try { evalSignal(runtimeFor(scope).expr(text), params(scope)) } catch (e) { fail(` (trigger of mark "${site.name}")`, e); throw new Logged() }
+          })
+          make(trigger, deps, true)
+        }
+      }
     }
 
     for (const { op, deps, react } of created) {

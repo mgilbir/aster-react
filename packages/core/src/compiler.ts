@@ -4,7 +4,7 @@
  * through `@aster-charts/vl` (packages/vl), the from-scratch Vega-Lite compiler, which
  * emits the Vega this compiler consumes.
  */
-import { namedSetsOf } from './encode-handlers.js'
+import { handlesItems } from './encode-handlers.js'
 import { dict, ownGet } from './util.js'
 import { SpecParseError } from './parse-error.js'
 import { parseExpressionCached } from './expr-parser.js'
@@ -815,6 +815,9 @@ function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Reco
     name: (m.name as string) ?? 'marks',
     seq: markSeq++,
   }
+  // a named mark's triggers (vega parses them for a named mark only): the event loop runs them
+  if (m.name != null) out.userName = String(m.name)
+  if (m.name != null && Array.isArray(m.on) && m.on.length) out.on = m.on as Array<Record<string, unknown>>
   // Vega evaluates `enter` when an item is created and `update` on every
   // pulse; in static rendering every item is created, so the effective set is
   // `enter` overridden per-channel by `update`.
@@ -833,7 +836,7 @@ function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Reco
     out.encode = { ...enc, update: merged }
     // (a mark a signal handler can re-encode with a set of its own keeps the channels its spec's `update` writes: the channels a
     // run of `update` takes back from such a set, encode-handlers.ts)
-    if (namedSetsOf(out).length) {
+    if (handlesItems(out)) {
       const own = (m0.encode as { update?: unknown } | null | undefined)?.update
       out.updateChannels = own !== null && typeof own === 'object' ? Object.keys(own) : []
     }
