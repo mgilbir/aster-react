@@ -158,3 +158,32 @@ describe('a row diff sees values as the scene does', () => {
     expect(renderSceneToSvg(session.evaluate(signed, input))).toBe(renderSceneToSvg(evaluateChart(compileChart(signed), input)))
   })
 })
+
+describe('a dataset with a row that is not an object is not diffed, wherever the row is (C122)', () => {
+  const o = (v: number): Record<string, number> => ({ v })
+  // each shape of diffRows looks at every row through one of its loops: the same-length one, the prefix, the suffix, the paired
+  // middle, the added rows, the removed ones. A primitive (or null) in any of those places refuses the diff.
+  const cases: Array<[string, unknown[], unknown[]]> = [
+    ['same length, in the previous', [o(1), 2, o(3)], [o(1), o(2), o(3)]],
+    ['same length, in the next', [o(1), o(2), o(3)], [o(1), 'x', o(3)]],
+    ['same length, null', [o(1), o(2)], [o(1), null]],
+    ['in the common prefix, changed', [3, o(1), o(2)], [4, o(1), o(2), o(3)]],
+    ['in the common suffix, changed', [o(1), o(2), 5], [o(0), o(1), o(2), 6]],
+    ['in a paired middle row', [o(1), o(2), o(9)], [o(1), true, o(3), o(9)]],
+    ['in an added row', [o(1), o(2)], [o(1), o(2), 7]],
+    ['in an added row, in the middle', [o(1), o(9)], [o(1), 7, o(9)]],
+    ['in a removed row', [o(1), 7, o(9)], [o(1), o(9)]],
+  ]
+  for (const [name, a, b] of cases) {
+    it(name, () => {
+      expect(diffRows(a, b)).toBeNull()
+    })
+  }
+  it('the same primitive at the same index is the same row; 0 and -0 are not looked at as equal', () => {
+    // (a primitive row that is identical in both is nothing to compare; a changed one refuses the diff)
+    expect(diffRows([5, o(1)], [5, o(2)])?.changed).toEqual([1])
+    expect(diffRows([5, o(1)], [6, o(1)])).toBeNull()
+    expect(diffRows([0], [-0])).toBeNull()
+    expect(diffRows([o(1), o(2)], [o(1), o(2)])?.changed).toEqual([])
+  })
+})
