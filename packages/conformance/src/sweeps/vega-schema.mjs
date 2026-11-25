@@ -1436,7 +1436,8 @@ export function enumerableUnion(branches, numbers) {
   const types = (branch) => (Array.isArray(branch.type) ? branch.type : [branch.type]);
   for (const branch of branches) if (branch.enum) add('enum', branch.enum);
   for (const branch of branches) if (types(branch).includes('boolean')) add('boolean', [true, false]);
-  for (const branch of branches) if (types(branch).includes('number') || types(branch).includes('integer')) add('number', numbers);
+  // (`numbers` is a list, or a function of the branch that says which numbers it can take)
+  for (const branch of branches) if (types(branch).includes('number') || types(branch).includes('integer')) add('number', typeof numbers === 'function' ? numbers(branch) : numbers);
   return { kind: kinds.join('+'), values };
 }
 
