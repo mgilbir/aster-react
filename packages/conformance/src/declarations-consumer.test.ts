@@ -20,6 +20,9 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const CORE = join(HERE, '..', '..', 'core')
 const exportsOf = (pkg: string): string[] => Object.keys((JSON.parse(readFileSync(join(HERE, '..', '..', pkg, 'package.json'), 'utf8')) as { exports: Record<string, unknown> }).exports).filter((k) => k !== './package.json')
 
+/** The declaration files every program reads (the libs, the packages' dist), parsed once: a parse of lib.dom.d.ts is most of a program's cost. */
+const parsed = new Map<string, ts.SourceFile | undefined>()
+
 /** Compile `source` as a module living in this package (so `@aster-charts/*` resolves to the workspace's dist). */
 function diagnose(source: string, lib: string[]): string[] {
   const file = join(HERE, '__consumer__.ts')
@@ -29,7 +32,12 @@ function diagnose(source: string, lib: string[]): string[] {
   }
   const host = ts.createCompilerHost(options)
   const read = host.getSourceFile.bind(host)
-  host.getSourceFile = (name, languageVersion, ...rest) => (name === file ? ts.createSourceFile(name, source, languageVersion) : read(name, languageVersion, ...rest))
+  host.getSourceFile = (name, languageVersion, ...rest) => {
+    if (name === file) return ts.createSourceFile(name, source, languageVersion)
+    const key = `${languageVersion}:${name}`
+    if (!parsed.has(key)) parsed.set(key, read(name, languageVersion, ...rest))
+    return parsed.get(key)
+  }
   const fileExists = host.fileExists.bind(host)
   host.fileExists = (name) => name === file || fileExists(name)
   const program = ts.createProgram({ rootNames: [file], options, host })
@@ -71,7 +79,7 @@ describe('the declarations need no DOM lib (C688)', () => {
     expect(diagnose(call.replace('THING', 'document.body'), WITH_DOM)).toEqual([])
     expect(diagnose(call.replace('THING', '3'), WITH_DOM).join('\n')).toMatch(/not assignable to parameter of type 'Element'/)
     expect(diagnose(call.replace('THING', '{}'), ES)).toEqual([])
-  })
+  }, 120_000)
 })
 
 describe('what the docs tell a host to write compiles (C278, C538)', () => {
@@ -88,7 +96,7 @@ createChartStream({}).push({ data: { t: b }, pulse: { t: d } })
     expect(diagnose(src, WITH_DOM)).toEqual([])
     // the twin: something that is neither shape is refused, so the lines above were really checked
     expect(diagnose(head + "export const input: RuntimeInput = { dataPulse: { t: { added: 3 } } }\n", WITH_DOM)).not.toEqual([])
-  })
+  }, 120_000)
 
   it('the scene fields the docs name are declared (C538)', () => {
     const src = head + `
@@ -101,7 +109,7 @@ export const maxTimeMs: number | undefined = scene.__limits?.maxTimeMs
 `
     expect(diagnose(src, WITH_DOM)).toEqual([])
     expect(diagnose(head + 'declare const item: SceneItem\nexport const nope = item.imagee\n', WITH_DOM)).not.toEqual([])
-  })
+  }, 120_000)
 
   it('what bindSceneSignals reads off a scene needs no cast to be passed by hand (C538)', () => {
     const src = `import type { SceneRoot } from '@aster-charts/core'
@@ -111,5 +119,5 @@ declare const scene: SceneRoot
 if (scene.compiled && scene.runtime) bindSignalEvents(el, scene.compiled, scene.runtime, scene.signalParams ?? {}, {}, {}, { limits: scene.__limits, scene })
 `
     expect(diagnose(src, WITH_DOM)).toEqual([])
-  })
+  }, 120_000)
 })
