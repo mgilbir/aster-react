@@ -327,6 +327,28 @@ their mark, group instance and row, so the binding needs the scene's picker (`pi
 read from the DOM is no scene item and asks nothing). The items of leaf marks are re-encoded; a group mark's own items are not.
 Pinned against vega by `encode-handlers-vs-vega.test.ts`.
 
+### A named mark's `on` triggers (`modify`, C73)
+
+`on: [{trigger, modify, values}]` on a named mark runs as vega's does (vega-parser `parseTrigger`): the operator
+`if(trigger, modify("<mark>", null, null, null, <modify>, <values>), 0)` runs when what it reads changes and, when the trigger
+holds, sets each property of `values` on the mark's item `modify` names (an item of another mark, or no item, is left alone;
+`modify()` of a mark takes `modify` and `values` only, `insert`, `remove` and `toggle` throw `Marks only support modify
+triggers.`). The event loop records each write beside the encode requests, and the next evaluation applies them, before the mark's
+transforms and sort: the mark's `update` set runs on a modified item again, so a write to a channel it writes is taken back at once;
+any other channel (one only `enter` writes, `cursor`, a property no set knows: a `force` layout reads `fx` and `fy`) stays for as
+long as the item has the datum it had when it was written. A trigger runs when what it reads changes, not when the view is built
+(the mark's items are not there yet, as in vega), and a trigger that reads the mark's own `data('<mark>')` runs without end, as in
+vega: hold the item in a signal. One operator per group item for a mark inside a group that declares signals. The items of leaf
+marks take writes; a group mark's own items do not. Pinned against vega by `mark-triggers-vs-vega.test.ts`.
+
+**A force layout that goes on** (`force-continued-vs-vega.test.ts`). vega's `force` transform keeps its simulation: a pulse runs it
+again (alpha 1, its iterations, from the positions and velocities the nodes have) only when its parameters changed or `restart`
+holds while the pulse changed something; a pin (`fx`, `fy`) alone moves nothing until a tick runs, and the first tick sets the node
+to its pin. An evaluation that continues a view (`RuntimeInput.retainFrom`, which `<Chart>` passes) does the same over the nodes the
+scene it continues had (same mark and data, `static` layout); without it the layout is made from the inputs, as the first run of
+vega's is, and a pin is applied from the first tick. The rows a `link` force binds are the layout's own: a change of the link rows
+alone does not run it again.
+
 ### Timers and animation
 
 `timer` event streams (`{"type": "timer", "throttle": 16.7}`, `"timer{100}"`) run on a scheduler with d3-timer's schedule (the one
@@ -421,7 +443,7 @@ that signal's value unless it is `'default'`. Moving off the items resets it; wi
 `cursor: default`, as Vega does. The cursor is React state rendered through the container's `style` (a re-render keeps it,
 a pointermove over the same item renders nothing); a `style.cursor` of the host is shown where the chart says `default`.
 Item cursors need hit testing (`<Chart>`, or `<SvgChart interaction={interaction}>`), on the SVG and the canvas renderer;
-the `cursor` signal works in every variant. Not supported: `config.events.globalCursor` (Vega then writes `document.body`;
+the `cursor` signal works in every variant. The view's own `encode.update.cursor` (a Vega-Lite `view: {cursor}`) is the cursor of the root group item, which the hit index holds like any other item: where the frame is painted (a fill, a `transparent` one too, or a stroke, along it) and nothing else is under the pointer, it is the item (C279). Not supported: `config.events.globalCursor` (Vega then writes `document.body`;
 a chart does not style the page).
 
 ## Accessibility
