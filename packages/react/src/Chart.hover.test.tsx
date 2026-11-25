@@ -9,7 +9,7 @@
 import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, expect, afterEach } from 'vitest'
 import { forEachVariant } from './testing/variants'
 
 const spec = (): Record<string, unknown> => ({
