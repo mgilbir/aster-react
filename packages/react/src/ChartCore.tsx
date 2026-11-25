@@ -1002,7 +1002,9 @@ function ChartView({
     const hasStreams = signalDefs?.some((d) => d.on?.length) ?? false
     // Bind when there is anything to drive/listen to, or when any signal exists
     // so ChartHandle.setSignal works on a purely imperative spec.
-    if (!hasStreams && !hasSignalListeners && !signalDefs?.length) return
+    // (a mark with a `hover` set reacts to the pointer through the loop as well: vega's view.hover(), on as vega-embed has it)
+    const hovers = hasHoverSet((scene as unknown as { compiled?: { marks?: HoverMarks } }).compiled?.marks)
+    if (!hasStreams && !hasSignalListeners && !signalDefs?.length && !hovers) return
     // (`htmlProp` is in the dependencies, not the markup string: it changes only when React is handed another svg to write, which
     // the binding must follow. The string is emptied after the first commit and so differs at the first re-render, which is no new svg.)
     // The binding mutates the signal object it is given: hand it a copy.
@@ -1014,6 +1016,8 @@ function ChartView({
         signalListenersRef.current?.[name]?.(name, value)
         onSignalRef.current?.(name, value)
       },
+      // (an item asked to be encoded again -- a handler's `encode: <set>`, the hover -- with no signal changed: the store moves on)
+      onEncode: (all) => { signalStore.write({}, all) },
       // (a timer stream rewrites its store on every tick; only a tick that changes it is the animation's next frame)
       onData: (name, rows, fromTimer) => {
         const advanced = fromTimer && !sameRows(dataStore.get()[name] as unknown[] | undefined, rows)
@@ -2128,4 +2132,11 @@ const canvasStyle: React.CSSProperties = { position: 'relative', zIndex: 1, disp
 const srOnly: React.CSSProperties = {
   position: 'absolute', width: 1, height: 1, padding: 0, margin: -1,
   overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap', border: 0,
+}
+
+type HoverMarks = ReadonlyArray<{ encode?: Readonly<Record<string, unknown>>; marks?: HoverMarks }>
+/** Whether a mark of a compiled chart, at any depth, has a `hover` encode set. */
+function hasHoverSet(marks: HoverMarks | undefined): boolean {
+  for (const m of marks ?? []) if (m.encode?.hover != null || hasHoverSet(m.marks)) return true
+  return false
 }

@@ -81,7 +81,7 @@ import { part, requestPart } from './engine-parts.js'
 import { guideReading, type GuideKind } from './guide-model.js'
 import { ExpressionFailure, isSignal, isUnencoded, itemAriaOf, propsOf, type GuideStyles, type UserEncode } from './guide-encode.js'
 import { entryReadsItem } from './expr-reads.js'
-import { encodeLogOf, hasNamedSetsIn, keptItems, namedSetsOf, stampEncodeIdent, type EncodeLog } from './encode-handlers.js'
+import { encodeLogOf, hasNamedSetsIn, keptItems, namedSetsOf, stampEncodeIdent, stampEncodeSets, type EncodeLog } from './encode-handlers.js'
 import { defaultMergedConfig } from './config-defaults.js'
 
 // The legend builder and the grid layout are parts the React shells load on demand (engine-parts.ts): read from their slots when a
@@ -6819,7 +6819,8 @@ function applyEncodeRequests(mark: CompiledMark, items: SceneItem[], ctx: EvalCo
   let uid = MARK_UIDS.get(mark)
   if (uid === undefined) MARK_UIDS.set(mark, (uid = ++markUid))
   const prefix = `${uid}|${ctx.scope.path.join('.')}|`
-  for (let i = 0; i < items.length; i++) stampEncodeIdent(items[i]!, prefix + i)
+  const sets = mark.encode?.update != null ? [...namedSetsOf(mark), 'update'] : namedSetsOf(mark)
+  for (let i = 0; i < items.length; i++) { stampEncodeIdent(items[i]!, prefix + i); stampEncodeSets(items[i]!, sets) }
   const log = ctx.encodeLog
   if (log === undefined) return items
   const kept = keptItems(log.session)
@@ -6849,7 +6850,10 @@ function applyEncodeRequests(mark: CompiledMark, items: SceneItem[], ctx: EvalCo
     if (item === undefined || set == null || typeof set !== 'object') continue
     const res = resolveEncodeSet(set, (item as { datum?: Row }).datum ?? {}, ctx, mark.type, mark) as unknown as Record<string, unknown>
     const p = print(item)
-    for (const c of Object.keys(set)) if (Object.hasOwn(res, c)) k.channels.set(c, { value: res[c], print: p })
+    // (the mark's `update` set is the spec's own, which the compiled `update` holds with the `enter` channels merged in: a request
+    // for it -- vega's hover leave -- runs the channels the spec's update writes, not those only `enter` writes)
+    const only = r.set === 'update' ? owned : undefined
+    for (const c of Object.keys(set)) if ((only === undefined || only.has(c)) && Object.hasOwn(res, c)) k.channels.set(c, { value: res[c], print: p })
   }
   for (const [id, k] of kept) {
     if (!id.startsWith(prefix)) continue
@@ -6867,6 +6871,7 @@ function applyEncodeRequests(mark: CompiledMark, items: SceneItem[], ctx: EvalCo
     if (!any) continue
     const next = { ...item, ...over } as SceneItem
     stampEncodeIdent(next, id)
+    stampEncodeSets(next, sets)
     out[at] = next
   }
   return out

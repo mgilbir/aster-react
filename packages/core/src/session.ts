@@ -18,6 +18,7 @@
  * an array in place without replacing it is invisible to the cache. A spec is compared by content: a spec that is DEEP-FROZEN
  * (checked once per object, remembered) cannot change, so evaluating it again reads none of it; any other spec is compared as before.
  */
+import { encodeLogOf } from './encode-handlers.js'
 import { compileChart } from './compiler.js'
 import { assertSpecObject } from './spec-guards.js'
 import { dict, ownGet, sameTuple } from './util.js'
@@ -288,6 +289,9 @@ function metaKeyOf(skeleton: string, input: RuntimeInput): string {
   for (const name of Object.keys(input.signals ?? {}).sort()) {
     parts.push(`s ${name}=${valueKey(input.signals![name])}`)
   }
+  // (the items the event loop asked to be encoded again, under a symbol key of the signals: another request is another scene)
+  const log = encodeLogOf(input.signals)
+  if (log !== undefined) parts.push(`enc=#${refId(log.session)}:${log.rev}`)
   return `${skeleton}\u0000${parts.join('\u0001')}`
 }
 

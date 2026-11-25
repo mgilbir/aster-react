@@ -247,6 +247,12 @@ Updating a signal calls `onSignal(name, value)` and `signalListeners[name](name,
 external store consumed with `useSyncExternalStore`, so each event is one normal React state transition (no tearing
 under concurrent rendering).
 
+A mark's `hover` encode set works as in vega's view with `hover()` on (vega-embed's default for a Vega spec): the pointer
+entering an item encodes it with `hover`, leaving it runs the mark's `update` set, so a channel only `hover` writes stays as
+hover left it (vega's behaviour, not a reset). A hover that raises `zindex` paints the item over its mark's others. The
+`exit` set is accepted as vega accepts it: an item whose row goes is encoded with it and leaves the scene, so nothing of it is
+drawn (vega without a transition shows the same).
+
 ```tsx
 import * as React from 'react'
 import { Chart, type ChartHandle } from '@aster-charts/react'
