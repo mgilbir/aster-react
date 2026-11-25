@@ -62,10 +62,13 @@ export function frameBackgroundData(scene: SceneRoot, plotW0: number, plotH0: nu
   // vega's rectangle path reads `item.width || 0` / `item.height || 0`: a view size that is NaN draws a zero-size frame
   const plotW = plotW0 || 0
   const plotH = plotH0 || 0
-  const frameInset = scene.frameStroke && scene.frameStrokeWidth == null ? 0.5 : 0
+  // (vega-scenegraph marks/group.js offset: a stroke between 0.5 and 1.5 wide is inset by 0.5 - |width - 1| to sit on the pixel grid;
+  // a stroke with no width is 1 wide)
+  const strokeWidth = scene.frameStrokeWidth == null ? 1 : Number(scene.frameStrokeWidth)
+  const frameInset = scene.frameStroke && strokeWidth > 0.5 && strokeWidth < 1.5 ? 0.5 - Math.abs(strokeWidth - 1) : 0
   return scene.frameCornerRadius != null && scene.frameCornerRadius > 0
     ? roundedFrameData(frameInset, frameInset, plotW, plotH, Math.min(scene.frameCornerRadius, plotW / 2, plotH / 2))
-    : new PathData(EXACT).M(frameInset ? 0.5 : 0, frameInset ? 0.5 : 0).h(plotW).v(plotH).hBack(plotW).Z()
+    : new PathData(EXACT).M(frameInset, frameInset).h(plotW).v(plotH).hBack(plotW).Z()
 }
 
 /** The root frame's background path text (see {@link frameBackgroundData}). */
