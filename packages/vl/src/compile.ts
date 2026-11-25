@@ -9137,11 +9137,20 @@ function defFormat(def: FieldDef): { format: string | undefined; formatType: str
   return { format: guide?.format as string | undefined, formatType: guide?.formatType as string | undefined }
 }
 
+/** The name of the column of a field path (`o.v` for `o.v`, `a.b` for `a\\.b`), or undefined for a path that is not one. */
+function columnName(path: string): string | undefined {
+  try { return splitAccessPath(path).join('.') } catch { return undefined }
+}
+
 function fieldTextExpr(def0: FieldDef, opts: { lineBreaks: boolean; spec: VLSpec; expr?: 'datum' | 'parent'; format?: string; formatType?: string; normalizeStack?: boolean }): string {
   // (a pre-binned field with no field that says where its bin ends is shown as the plain field it is)
   const def = def0.bin && isPrebinned(def0) && def0.binParams!.end === undefined ? { ...def0, bin: undefined } : def0
   // (a binned field is shown from its bin's start and end, never from the `_range` text that positions it)
-  const name = def.bin ? binNames(def.binParams!, def.field).start : aggFieldName(def)
+  const plainName = def.bin ? binNames(def.binParams!, def.field).start : aggFieldName(def)
+  // (the text reads a nested or escaped field by the name of its column, `o.v`, as vega-lite writes `datum["o.v"]`; the compiler's own flat key is
+  // for what the compiler reads)
+  const columnOfField = def.flatExpr !== undefined && !def.argAgg ? columnName(def.source) ?? def.field : def.field
+  const name = def.flatExpr !== undefined && plainName === def.field && !def.argAgg ? columnName(def.source) ?? plainName : plainName
   // (a datum is shown as the constant it is, read where a field would be: valueref.ts formatSignalRef over a datum def)
   const refOf = (n: string): string => (def.datumOnly ? datumExpr(def.datum) : opts.expr === 'parent' ? `parent[${JSON.stringify(n)}]` : dref(n))
   // a normalized stack shows its share: end - start (vega-lite fieldToFormat)
@@ -9154,7 +9163,7 @@ function fieldTextExpr(def0: FieldDef, opts: { lineBreaks: boolean; spec: VLSpec
   if (isObject(fmt) && !('signal' in fmt) && !('expr' in fmt)) for (const k of Object.keys(fmt)) ignore(fmt, k, 'vega-lite formats the text of a field by a string format only')
   // addLineBreaksToTooltip comes first: a discrete field (a binned one included) shows its own value, line breaks joined
   if (opts.lineBreaks && (def.type === 'nominal' || def.type === 'ordinal') && def.tu === undefined && opts.format === undefined && guideFmt === undefined && guideFmtType === undefined) {
-    const raw = refOf(def.field)
+    const raw = refOf(columnOfField)
     return `isValid(${raw}) ? isArray(${raw}) ? join(${raw}, '\\n') : ${raw} : ""+${raw}`
   }
   const binEnd = def.bin ? refOf(binNames(def.binParams!, def.field).end) : ''
@@ -9195,7 +9204,7 @@ function fieldTextExpr(def0: FieldDef, opts: { lineBreaks: boolean; spec: VLSpec
   if (def.type === 'geojson') return `isValid(${f}) ? ${f} : ""+${f}`
   // (vega-lite addLineBreaksToTooltip reads a discrete field by its own name, not the aggregate's: `datum["c"]` for the `max` of c)
   if (opts.lineBreaks && (def.type === 'nominal' || def.type === 'ordinal') && def.tu === undefined && opts.format === undefined && guideFmt === undefined && guideFmtType === undefined) {
-    const raw = refOf(def.field)
+    const raw = refOf(columnOfField)
     return `isValid(${raw}) ? isArray(${raw}) ? join(${raw}, '\\n') : ${raw} : ""+${raw}`
   }
   // (tooltip.ts addLineBreaksToTooltip joins a list of a discrete field that has no format of any kind: a format object is one that is
