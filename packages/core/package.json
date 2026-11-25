@@ -69,6 +69,10 @@
       "browser": "./dist/canvas-deferred.js",
       "default": "./dist/part-canvas.js"
     },
+    "./lean/load": {
+      "types": "./dist/lean-load.d.ts",
+      "default": "./dist/lean-load.js"
+    },
     "./lean/stream": {
       "types": "./dist/stream.d.ts",
       "default": "./dist/stream.js"

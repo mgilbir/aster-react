@@ -411,7 +411,7 @@ name; it overrides or supplies the rows of the spec dataset of that name. A row 
 that supplies every row itself and draws specs it did not write (the data counterpart of `urlPolicy`; see
 [LIMITS.md](LIMITS.md#refusing-url-datasets-urldata)). Any other value is a `TypeError`. `urlDatasets(spec)` returns the names of a
 spec's url datasets (top level and nested groups, in document order), and `checkUrlData(spec, urlData)` throws the refusal
-`urlData: 'refuse'` would, for a host that checks a spec before handing it over. `emptyUrlData(spec)` returns a copy of the spec in which every url dataset has `values: []` and no `format` (the shape a load gives, without its rows), the same object when there is none: what `<Chart urlLoad>` draws until a load arrives.
+`urlData: 'refuse'` would, for a host that checks a spec before handing it over.
 
 `random` (`RuntimeInput.random`, `() => number` in [0, 1)) is the chart's source of random numbers, the per-chart counterpart of
 vega's `setRandom`: expression `random()`, `sampleNormal` / `sampleLogNormal` / `sampleUniform`, the `sample` transform and the
@@ -661,10 +661,10 @@ families its charts use before the first chart than when it renders. The tables 
 expression). Every public entry of `@aster-charts/core` already carries the parts its functions read, so a host of the synchronous API
 never needs these; they are what the React shells use.
 
-**`@aster-charts/core/lean`, `/lean/hit`, `/lean/signals`, `/lean/canvas`, `/lean/stream`, `/lean/all` (internal).** The engine as `@aster-charts/react`'s shells use it, not covered by semver: under the `browser` export condition the parts of the
+**`@aster-charts/core/lean`, `/lean/hit`, `/lean/signals`, `/lean/canvas`, `/lean/stream`, `/lean/load`, `/lean/all` (internal).** The engine as `@aster-charts/react`'s shells use it, not covered by semver: under the `browser` export condition the parts of the
 engine are left out and loaded on demand, anywhere else every part is there. `/lean` re-exports `buildA11yTree`, `chartInfoFromScene`,
 `renderSceneToSvg`, `AsterLimitError`, `checkSvgLength`, `createPointMapper`, `resolveCursor`, `createCursorTracker`, `sceneHasCursor`, `consoleLogger`, `checkChartRows`,
-`shareRowWatch`, `checkUrlData`, `createChartSession`, `chartSkeleton`, `hasDenseSymbolMarks`, `patchSceneDom`,
+`shareRowWatch`, `checkUrlData`, `emptyUrlData` (a spec's url datasets emptied, what `<Chart urlLoad>` draws before its first load), `createChartSession`, `chartSkeleton`, `hasDenseSymbolMarks`, `patchSceneDom`,
 `renderSceneToDomElement`, the add-on and part functions above (`addonsNeeded`, `loadAddons`, `loadAddonsFor`, `missingAddons`,
 `notLoaded`, `specNeeds`, `partsNeeded`, `partsNotLoaded`, `loadParts`, `loadPartsFor`, `preloadParts`), and `ENGINE_PARTS`, `part(name)` (a loaded
 part; throws for an empty slot), `partLoaded(name)`, `withdrawParts(names)` (a test seam that empties slots and returns a function
@@ -674,7 +674,7 @@ in, and vega's pan / zoom in it, for the shells' pan and zoom) and `tickStep` (t
 `/lean/hit` is `@aster-charts/core/hit`; `/lean/canvas` exports `loadCanvasPart()`, which loads the canvas renderer for
 `<Chart renderer="canvas">` (and, outside a browser build, `part`, the renderer itself); `/lean/signals` exports `loadSignalsPart()`,
 which loads the signal event loop (the `signals` part: `bindSceneSignals`) for a chart the shells bind it for, a spec that declares
-signals (`specNeeds(spec).eventLoop`) or a host that listens to them; `/lean/stream` is the chart stream (`createChartStream`,
+signals (`specNeeds(spec).eventLoop`) or a host that listens to them; `/lean/load` exports `datasetUrls(spec, { signals, limits })` (the urls `loadSpecData` would request, with no request: `<Chart urlLoad>` compares it to decide whether a signal change loads); `/lean/stream` is the chart stream (`createChartStream`,
 `getStreamFlushFailure`); `/lean/all` exports nothing: importing it puts every part in its slot (what `@aster-charts/react/all` imports).
 
 #### `@aster-charts/core/dom`
@@ -765,8 +765,7 @@ for a dotless name, a special-use or private-use suffix, a non-public IPv4 addre
 mapped, NAT64 and 6to4 forms judged by the IPv4 address they carry), and anything that is not a host. `readData(data, format?)` reads
 data by a Vega `format` spec (`type`, `parse`, ...) the way vega-loader's `read` does, through the registered reader of the type and then
 `coerceRows`; `coerceRows(rows, parse)` converts the columns that `parse` names (a column type, a `date:<pattern>` /
-`utc:<pattern>`, or `'auto'` to infer from the first row) and returns copies. `AsterUrlError` is re-exported here. `datasetUrls(spec, { signals, limits })` returns the urls `loadSpecData` would request for those signal values, in
-document order, and requests nothing: a host that keeps url data current compares it before and after a signal change (`<Chart urlLoad>` does).
+`utc:<pattern>`, or `'auto'` to infer from the first row) and returns copies. `AsterUrlError` is re-exported here.
 
 #### `@aster-charts/core/geo` and `@aster-charts/core/transforms`
 
