@@ -461,7 +461,7 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
   if (spec.transform !== undefined) validateTransforms(spec.transform, at('transform'))
   // (`"container"`: a top-level view's, or a facet's cells' - vega-lite sizes each cell by the container, child_width / child_height)
   validateSize(spec, at, (top || parent === 'facet') && (kind === 'unit' || kind === 'layer'))
-  if (spec.params !== undefined) validateParams(spec.params, at('params'), kind !== 'layer' && selOk, kind, spec, at('params'))
+  if (spec.params !== undefined) validateParams(spec.params, at('params'), kind !== 'layer' && selOk, kind, spec, at('params'), top)
   if (spec.resolve !== undefined) validateResolve(spec.resolve, at('resolve'), kind, isObj(spec.encoding) && (spec.encoding.row != null || spec.encoding.column != null || spec.encoding.facet != null))
   if (spec.projection !== undefined) validateProjection(spec.projection, at('projection'))
   if (spec.view !== undefined) validateViewBackground(spec.view, kind, at('view'))
@@ -781,7 +781,7 @@ function pushdownProblem(node: unknown): string | undefined {
   return isObj(node.spec) ? pushdownProblem(node.spec) : undefined
 }
 
-function validateParams(params: unknown, path: string, selectionOk: boolean, kind: Kind, view?: Obj, viewPath?: string): void {
+function validateParams(params: unknown, path: string, selectionOk: boolean, kind: Kind, view?: Obj, viewPath?: string, top = true): void {
   if (!Array.isArray(params)) mustBe(path, 'an array of parameter definitions')
   params.forEach((p, i) => {
     const at = `${path}[${i}]`
@@ -807,6 +807,9 @@ function validateParams(params: unknown, path: string, selectionOk: boolean, kin
       return
     }
     // variable parameter
+    // (vega-lite declares a variable parameter's signal at the top of the spec only: the chart it compiles for one inside a view of a
+    // composition reads a signal it never declares, which Vega refuses with "Unrecognized signal name", DECISIONS Q9)
+    if (!top) fail(at, `a variable parameter (${JSON.stringify(p.name)}) inside a view of a composition: vega-lite does not declare its signal there (its chart fails in Vega with "Unrecognized signal name"); declare it in the top-level \`params\``)
     keysOf(p, set('name value expr bind react description push'), at, 'parameter')
     if (p.expr !== undefined && typeof p.expr !== 'string') mustBe(`${at}.expr`, 'an expression string')
     if (p.push !== undefined) fail(`${at}.push`, '`push` is not a Vega-Lite parameter property (it is Vega\'s signal scoping, which vega-lite sets itself where it needs it)')

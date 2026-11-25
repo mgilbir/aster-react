@@ -658,8 +658,13 @@ function hasTopFacet(spec: VLSpec): boolean {
  * tick without) is 'vertical'.
  */
 function inferOrient(spec: VLSpec, mark: string, markRaw: unknown, fields: FieldDef[]): string {
-  return markOrient(spec, mark, markRaw, fields) ?? 'vertical'
+  const orient = markOrient(spec, mark, markRaw, fields)
+  // (stack.ts reads the orientation as it is, `undefined` for none: a bar over a measure and a span, say, stacks the measure)
+  for (const f of fields) RAW_ORIENT.set(f, orient)
+  return orient ?? 'vertical'
 }
+/** The orientation a unit's marks have before a mark with none is read as vertical, by each of the unit's fields. */
+const RAW_ORIENT = new WeakMap<FieldDef, string | undefined>()
 
 /**
  * The orientation of a mark, or `undefined` when its encoding leaves it none (a bar or a tick over two non-measures, say). Marks read
@@ -2494,7 +2499,7 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
           throw new VLCompileError(`a ${t.type} transform without \`groupby\` inside a facet's \`spec\` is not supported: vega-lite 6.4.3 crashes on it (it adds the facet fields to an absent groupby); give a groupby, or put the transform on the facet`)
         }
         if (t.type === 'stack' || t.type === 'aggregate' || t.type === 'joinaggregate' || t.type === 'window' || t.type === 'pivot' || t.type === 'impute') {
-          if (Array.isArray(t.groupby)) t.groupby = [...t.groupby, ...facetKeys]
+          if (Array.isArray(t.groupby)) { WITHOUT_FACET_KEYS.set(t, t.groupby); t.groupby = [...t.groupby, ...facetKeys] }
         }
       }
     }
@@ -2554,6 +2559,26 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
       baseDs0.transform = [...((baseDs0.transform as Record<string, unknown>[] | undefined) ?? []), ...hoisted]
     }
   }
+  // The bins of the layers' encodings are made once over every row, above the facet (data/subtree.ts moveFacetDown stops at a node that
+  // needs the whole data: a bin's extent), so every cell is binned alike. The layers' pipelines start with them: they move up with the
+  // transforms of the layer spec, each once.
+  if (layeredInner && !innerOwnData) {
+    const baseDs0 = innerData.find((d) => d.name === baseName)
+    if (baseDs0 !== undefined) {
+      const hoisted = new Set<string>()
+      for (const d of innerData.filter((x) => x.source === baseName)) {
+        const ts = (d.transform as Record<string, unknown>[] | undefined) ?? []
+        let n = 0
+        while (n < ts.length && (ts[n]!.type === 'extent' || ts[n]!.type === 'bin') && !USER_TRANSFORMS.has(ts[n]!)) n++
+        if (n === 0) continue
+        for (const t of ts.slice(0, n)) {
+          const key = JSON.stringify(t)
+          if (!hoisted.has(key)) { hoisted.add(key); baseDs0.transform = [...((baseDs0.transform as Record<string, unknown>[] | undefined) ?? []), t] }
+        }
+        d.transform = ts.slice(n)
+      }
+    }
+  }
   const cellData: Record<string, unknown>[] = []
   const cellMap = new Map<string, string>([[baseName, FACET]])
   if (rawFacet && rawTail !== undefined) {
@@ -2574,7 +2599,10 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
       if (srcRef !== undefined && cellMap.has(srcRef)) {
         const cellName = `${d.name as string}_cell`
         cellMap.set(d.name as string, cellName)
-        cellData.push({ name: cellName, source: cellMap.get(srcRef), ...(d.transform !== undefined ? { transform: d.transform } : {}) })
+        // (a cell holds the rows of one facet value: the transforms the layers derive there group by what they group by, without the facet's
+        // fields that the datasets outside the cells (the scales' domains) add)
+        const inCell = (d.transform as Record<string, unknown>[] | undefined)?.map((t) => (WITHOUT_FACET_KEYS.has(t) ? { ...t, groupby: WITHOUT_FACET_KEYS.get(t) } : t))
+        cellData.push({ name: cellName, source: cellMap.get(srcRef), ...(inCell !== undefined ? { transform: inCell } : {}) })
       }
     }
   }
@@ -4741,6 +4769,8 @@ function referencedPaths(encoding: unknown): string[] {
 const USER_TRANSFORMS = new WeakSet<object>()
 /** The user transforms written on a facet itself (they run once, before the cells), as opposed to the ones inside its `spec`. */
 const FACET_LEVEL_TRANSFORMS = new WeakSet<object>()
+/** A transform below a facet, and the groupby it had before the facet's fields were added to it. */
+const WITHOUT_FACET_KEYS = new WeakMap<object, unknown[]>()
 /** The transforms of a layer's leaf declared on the root of the layer tree (or on a facet around it): above the fork into the layers. */
 const ABOVE_LAYERS_TRANSFORMS = new WeakSet<object>()
 
@@ -5111,7 +5141,8 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     out.push({
       type: 'stack',
       // (stack.ts: the stacked field is not a group of its own - a dimension or an offset that reads it stacks as one group)
-      groupby: [stackDim, ...fields.filter((f) => f.channel === (dimensionChannel === 'x' ? 'xOffset' : 'yOffset')).map((f) => aggFieldName(f))].filter((g) => g && g !== stackField),
+      // (stack.ts: a binned dimension is grouped by both ends of its bin)
+      groupby: [stackDim, ...(dimDef !== undefined && dimDef.bin && !midDim && !isPrebinned(dimDef) && dimDef.binParams !== undefined ? [binNames(dimDef.binParams, dimDef.field).end] : []), ...fields.filter((f) => f.channel === (dimensionChannel === 'x' ? 'xOffset' : 'yOffset')).map((f) => aggFieldName(f))].filter((g) => g && g !== stackField),
       field: stackField,
       sort: stackSortParams(fields, seriesFields, measureChannel, isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}),
       as: [`${stackField}_start`, `${stackField}_end`],
@@ -6280,7 +6311,10 @@ function positionalDomain(def: FieldDef, dataName: string, mark: string, orient:
  * Notably a bar with orient:horizontal over a nominal x and quantitative y
  * still stacks y upstream.
  */
-function potentialStackChannel(mark: string, orient: string, fields: FieldDef[]): 'x' | 'y' | undefined {
+function potentialStackChannel(mark: string, orientOf: string, fields: FieldDef[]): 'x' | 'y' | undefined {
+  // (stack.ts potentialStackedChannel reads the mark def's orient, which is none where the encoding gives it none)
+  const known = fields.find((f) => RAW_ORIENT.has(f))
+  const orient = known !== undefined ? RAW_ORIENT.get(known) : orientOf
   const xDef = fields.find((f) => f.channel === 'x')
   const yDef = fields.find((f) => f.channel === 'y')
   // (stack.ts: a datum, or the field of a condition, is not a field of the encoding)
@@ -7177,6 +7211,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   let ruleOrientOut: string | undefined
   // (the Vega channel that places a tick's size axis: its align / baseline)
   let tickSizeAt: string | undefined
+  /** The size axis of a tick that has no extent along it (a pre-binned field with no second channel): nothing places it, nothing is filled in. */
+  let tickNoExtent: 'x' | 'y' | undefined
   const xOffsetDefM = fields.find((f) => f.channel === 'xOffset' && f.field)
   const yOffsetDefM = fields.find((f) => f.channel === 'yOffset' && f.field)
   const xOffsetPresent = xOffsetDefM != null
@@ -7281,7 +7317,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       return true
     }
     const rectEnd = (ch: 'x' | 'y'): Record<string, unknown> => (mark === 'rect' ? secondOrSize(spec, mark, ch)?.ref : undefined) ?? zeroOrMinRef(ch)
-    if (orient === 'vertical') {
+    // (an encoding that gives the bar no orientation, two spans, stacks the measure it has: placed as a horizontal bar's, which stacks x)
+    const stackAxisOnX = mark === 'bar' && RAW_ORIENT.has(xDef ?? yDef!) && RAW_ORIENT.get(xDef ?? yDef!) === undefined && potentialStackChannel(mark, orient, fields) === 'x'
+    if (orient === 'vertical' && !stackAxisOnX) {
       if (xDef) {
         const sc = positionalScaleType(mark, xDef)
         if (mark === 'rect' && xDef.timeUnit == null && !xDef.bin && sc !== 'band' && placeRect('x', xDef)) {
@@ -7700,7 +7738,11 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
       // position-rect.ts rectPosition: a binned / time-unit size axis spans its bin (tick.ts calls rectPosition for it)
       const binnedSizeAxis = !isBand && !sizeDef && !sizeGiven && (sizeField.bin || (sizeField.tu && sizeField.type === 'temporal'))
         && !fields.some((f) => (f.channel === `${sizeAxis}2` && !binsItself(sizeField)) || f.channel === `${sizeAxis}Offset`)
-      if (binnedSizeAxis) {
+      if (binnedSizeAxis && isPrebinned(sizeField) && !fields.some((f) => f.channel === `${sizeAxis}2` && f.field)) {
+        tickNoExtent = sizeAxis
+        // (position-rect.ts rectBinPosition: a pre-binned field with no second channel is placed by nothing - the tick has no extent along
+        // its size axis, as vega-lite compiles it)
+      } else if (binnedSizeAxis) {
         setBinnedRect(update, sizeAxis, sizeField, spec, mark)
       } else if (sizeUsed) {
         update[isBand ? `${sizeAxis}c` : sizeAt] = { scale: sizeAxis, field: aggFieldName(sizeField), ...(isBand ? centred(sizeField, sizeAxis) : {}) }
@@ -7766,7 +7808,9 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         if (isObject(spec.mark)) ignore(spec.mark, pos === 'x' ? 'width' : 'height', 'a rule that does not range along an axis reads no size of it')
         continue
       }
-      if (def2 || (!def && !xDef && !yDef)) continue
+      // (two constant positions: each axis is a range from the constant, the rule has no orientation)
+      const constantPosition = (c: 'x' | 'y'): boolean => { const e = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>)[c] : undefined; return isObject(e) && e.value !== undefined }
+      if (def2 || (!def && !xDef && !yDef && !(constantPosition('x') && constantPosition('y')))) continue
       const own = secondOrSize(spec, mark, pos)
       if (own === undefined) {
         // (a constant position is no field with a scale: its range starts at the edge of the view, the zero of the axis, position-range.ts)
@@ -7912,6 +7956,16 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
         else update[thickness ? `${ch}c` : ch] = { value: d.value }
       }
     }
+    // (position-range.ts pointPosition2OrSize: the end of a range whose start is a constant is its second channel's field, read as it is: the
+    // constant has no scale to place it on)
+    if (mark === 'bar' || mark === 'rect' || mark === 'rule' || mark === 'area') {
+      for (const ch of ['x', 'y'] as const) {
+        const d = enc[ch]
+        if (!isObject(d) || d.value === undefined || d.field !== undefined || d.datum !== undefined || update[`${ch}2`] !== undefined) continue
+        const second = fields.find((f) => f.channel === `${ch}2` && f.field && !f.datumOnly)
+        if (second !== undefined) update[`${ch}2`] = { field: aggFieldName(second) }
+      }
+    }
     // (a field without a scale is laid out as a constant is: it has no band, nor a range of its own)
     for (const ch of ['x', 'y'] as const) {
       const def = fields.find((f) => f.channel === ch && f.noScale && !f.fromCondition)
@@ -7939,6 +7993,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     fillMissingPositions(update, mark, fields, orient, scaleConfigOf(spec), ruleOrientOut, !barSizeApplies ? undefined : typeof md0.size === 'number' && md0.size !== 0 ? md0.size : isObject(md0.size) && (typeof md0.size.signal === 'string' || typeof md0.size.expr === 'string') ? { signal: (md0.size.signal ?? md0.size.expr) as string } : undefined, markOrient(spec, mark, spec.mark, fields) === undefined, tickSizeAt, mark === 'bar' || mark === 'tick' ? ownRectSizing(barSizeApplies ? md0 : { ...md0, size: undefined }, cfgType, cfgMark) : undefined, givenPositions, (mark === 'bar' || mark === 'tick') && sizeUsed !== undefined ? { scale: 'size', field: aggFieldName(sizeUsed) } : undefined, (pos) => { const o = secondOrSize(spec, mark, pos); return o && { ...o, at: o.size ? alignedPositionChannel(spec, mark, pos) : pos } })
   }
 
+  if (tickNoExtent !== undefined) for (const k of [tickNoExtent, `${tickNoExtent}c`, `${tickNoExtent}2`, tickNoExtent === 'x' ? 'width' : 'height']) delete update[k]
   // (valueref.ts: a position's value "width" / "height" is the edge of the view, the group's size)
   for (const [chs, edge] of [[['x', 'x2', 'xc'], 'width'], [['y', 'y2', 'yc'], 'height']] as const) {
     for (const ch of chs) {
