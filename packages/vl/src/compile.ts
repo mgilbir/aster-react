@@ -4871,7 +4871,14 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
       casts.push({ type: 'formula', expr: ff.expr, as: joined })
     }
   }
-  for (const f of fields) if (f.flatExpr !== undefined) addFlat(f.source)
+  for (const f of fields) {
+    if (f.flatExpr === undefined) continue
+    addFlat(f.source)
+    // (the rows carry the joined copy `o.v` of this field's path, as vega-lite's parse writes it: its text reads that column - unless an aggregate of
+    // the encoding groups the rows by the compiler's own key, which is all the groups keep)
+    const pieces = splitAccessPath(f.source)
+    if (pieces.length > 1 && !fields.some((g) => g.aggregate) && castDone.has(`flat:${pieces.join('.')}`) && !derivedKeys.has(pieces[0]!) && !producedNames.has(pieces.join('.'))) JOINED_COPY.add(f.raw)
+  }
   for (const p of referencedPaths(spec.encoding)) addFlat(p)
   // (a point selection over `fields` tests the flat copy of each nested path, which vega-lite adds whether or not an encoding reads it)
   for (const param of selectionParamsOf(spec)) {
@@ -9137,11 +9144,18 @@ function defFormat(def: FieldDef): { format: string | undefined; formatType: str
   return { format: guide?.format as string | undefined, formatType: guide?.formatType as string | undefined }
 }
 
+/** The channel definitions whose nested field has a joined copy (`o.v`) in the rows, written by the compiler's casts (not produced by a transform). */
+const JOINED_COPY = new WeakSet<object>()
+
 function fieldTextExpr(def0: FieldDef, opts: { lineBreaks: boolean; spec: VLSpec; expr?: 'datum' | 'parent'; format?: string; formatType?: string; normalizeStack?: boolean }): string {
   // (a pre-binned field with no field that says where its bin ends is shown as the plain field it is)
   const def = def0.bin && isPrebinned(def0) && def0.binParams!.end === undefined ? { ...def0, bin: undefined } : def0
   // (a binned field is shown from its bin's start and end, never from the `_range` text that positions it)
-  const name = def.bin ? binNames(def.binParams!, def.field).start : aggFieldName(def)
+  const plainName = def.bin ? binNames(def.binParams!, def.field).start : aggFieldName(def)
+  // (the text reads a nested field by the column the rows carry it under, `o.v`, as vega-lite writes `datum["o.v"]`, where the compiler made that
+  // copy; a field a transform produces has none, and is read by the compiler's own key)
+  const joined = JOINED_COPY.has(def.raw) && plainName === def.field && !def.argAgg ? splitAccessPath(def.source).join('.') : undefined
+  const name = joined ?? plainName
   // (a datum is shown as the constant it is, read where a field would be: valueref.ts formatSignalRef over a datum def)
   const refOf = (n: string): string => (def.datumOnly ? datumExpr(def.datum) : opts.expr === 'parent' ? `parent[${JSON.stringify(n)}]` : dref(n))
   // a normalized stack shows its share: end - start (vega-lite fieldToFormat)
@@ -9154,7 +9168,7 @@ function fieldTextExpr(def0: FieldDef, opts: { lineBreaks: boolean; spec: VLSpec
   if (isObject(fmt) && !('signal' in fmt) && !('expr' in fmt)) for (const k of Object.keys(fmt)) ignore(fmt, k, 'vega-lite formats the text of a field by a string format only')
   // addLineBreaksToTooltip comes first: a discrete field (a binned one included) shows its own value, line breaks joined
   if (opts.lineBreaks && (def.type === 'nominal' || def.type === 'ordinal') && def.tu === undefined && opts.format === undefined && guideFmt === undefined && guideFmtType === undefined) {
-    const raw = refOf(def.field)
+    const raw = refOf(joined ?? def.field)
     return `isValid(${raw}) ? isArray(${raw}) ? join(${raw}, '\\n') : ${raw} : ""+${raw}`
   }
   const binEnd = def.bin ? refOf(binNames(def.binParams!, def.field).end) : ''
@@ -9195,7 +9209,7 @@ function fieldTextExpr(def0: FieldDef, opts: { lineBreaks: boolean; spec: VLSpec
   if (def.type === 'geojson') return `isValid(${f}) ? ${f} : ""+${f}`
   // (vega-lite addLineBreaksToTooltip reads a discrete field by its own name, not the aggregate's: `datum["c"]` for the `max` of c)
   if (opts.lineBreaks && (def.type === 'nominal' || def.type === 'ordinal') && def.tu === undefined && opts.format === undefined && guideFmt === undefined && guideFmtType === undefined) {
-    const raw = refOf(def.field)
+    const raw = refOf(joined ?? def.field)
     return `isValid(${raw}) ? isArray(${raw}) ? join(${raw}, '\\n') : ${raw} : ""+${raw}`
   }
   // (tooltip.ts addLineBreaksToTooltip joins a list of a discrete field that has no format of any kind: a format object is one that is
