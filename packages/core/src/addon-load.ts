@@ -627,6 +627,17 @@ function planLoads(spec: Json, tasks: LoadTask[], hostSignals: Readonly<Record<s
 }
 
 /**
+ * The urls `loadSpecData(spec, { signals, limits })` would request, in document order, and nothing else: no request is made.
+ * A `{signal}` url is evaluated as the load evaluates it (over its own scope's signals and the host's `signals`, under `limits`).
+ * A host that keeps a spec's url data current compares this list before and after a signal change and loads only when it differs.
+ */
+export function datasetUrls(spec: VgSpec, opts: Pick<LoadOptions, 'signals' | 'limits'> = {}): string[] {
+  const tasks: LoadTask[] = []
+  withLimits(opts.limits, () => planLoads(spec as unknown as Json, tasks, opts.signals))
+  return tasks.map((t) => t.url)
+}
+
+/**
  * Fetch every `url` dataset in the spec - top level and inside group marks -
  * and inline its values, so the synchronous compile/evaluate/render pipeline
  * can run unchanged. Datasets already carrying `values` are left untouched.
