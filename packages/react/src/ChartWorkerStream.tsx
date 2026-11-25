@@ -8,10 +8,11 @@ import type { VgSpec } from '@aster-charts/core'
 import { Chart } from './Chart.js'
 import {
   useSizeBatch, initialContainer, useSyncSize, useStreamInput, useInitialInput, useReportOnce, useNormalizedSpec,
-  type ChartStreamHandle, type StreamErrorHandler, type CommonStreamProps,
+  type ChartWorkerStreamHandle, type StreamErrorHandler, type CommonStreamProps,
 } from './stream-shared.js'
 import { useStableContent } from './spec.js'
 import { useChartWorkerStream, type ChartWorkerStreamOptions } from './useChartWorkerStream.js'
+export type { ChartWorkerStreamHandle } from './stream-shared.js'
 import type { WorkerTextMetrics, WorkerUrlPolicyInput } from './worker.js'
 
 export interface ChartWorkerStreamProps extends Omit<CommonStreamProps, 'textMetrics'> {
@@ -24,7 +25,7 @@ export interface ChartWorkerStreamProps extends Omit<CommonStreamProps, 'textMet
   onStreamError?: StreamErrorHandler
 }
 
-export const ChartWorkerStream = React.forwardRef<ChartStreamHandle, ChartWorkerStreamProps>(
+export const ChartWorkerStream = React.forwardRef<ChartWorkerStreamHandle, ChartWorkerStreamProps>(
   function ChartWorkerStream({
     spec, streamOptions, onStreamError, width, height, className, style,
     limits, textMetrics, urlPolicy, urlData, signals, view, random, onError, ...chartProps

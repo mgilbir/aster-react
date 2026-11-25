@@ -11,7 +11,9 @@ import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { SVG_CHART_INTERACTION_PROPS, SVG_CHART_SHARED_HANDLE, SVG_CHART_SHARED_PROPS } from './svg-chart-types.js'
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, expectTypeOf } from 'vitest'
+import type { DataPulse, StreamFlush, StreamStats } from '@aster-charts/core'
+import type { ChartStreamHandle, ChartWorkerStreamHandle } from './index.js'
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -113,4 +115,22 @@ describe('the documented <SvgChart> examples compile', () => {
   it('compile (the `@ts-expect-error` line in the second must really be an error)', () => {
     expect(compile(examples.map(([f]) => f), paths).map(where)).toEqual([])
   }, 120_000)
+})
+
+describe('the refs of the stream components are typed as their hooks are (C275)', () => {
+  // (checked by `pnpm typecheck`, which compiles this file: a handle member typed `unknown` again fails there)
+  it('<ChartStream>: flush, pending, pulse and stats return what the stream returns', () => {
+    expectTypeOf<ChartStreamHandle['flush']>().toEqualTypeOf<() => StreamFlush | null>()
+    expectTypeOf<ChartStreamHandle['pending']>().toEqualTypeOf<() => DataPulse>()
+    expectTypeOf<ChartStreamHandle['pulse']>().toEqualTypeOf<() => DataPulse | null>()
+    expectTypeOf<ChartStreamHandle['stats']>().toEqualTypeOf<() => StreamStats>()
+    expect(true).toBe(true)
+  })
+
+  it('<ChartWorkerStream>: the worker hook\'s shapes, a type of its own', () => {
+    expectTypeOf<ChartWorkerStreamHandle['flush']>().toEqualTypeOf<() => void>()
+    expectTypeOf<ChartWorkerStreamHandle['stats']>().toEqualTypeOf<() => StreamStats | null>()
+    expectTypeOf<ChartWorkerStreamHandle['pending']>().toEqualTypeOf<() => null>()
+    expect(true).toBe(true)
+  })
 })

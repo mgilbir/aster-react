@@ -18,7 +18,7 @@ import { describe, expect, it, afterEach } from 'vitest'
 import { renderSpec } from '@aster-charts/core'
 import { compile } from '@aster-charts/vl'
 import { ChartStream, type ChartStreamHandle } from './ChartStream'
-import { ChartWorkerStream } from './ChartWorkerStream'
+import { ChartWorkerStream, type ChartWorkerStreamHandle } from './ChartWorkerStream'
 import type { ChartHandle } from './chart-types'
 import { forEachVariant } from './testing/variants'
 
@@ -129,7 +129,7 @@ describe('the streaming components size the stream to the container they measure
         const el = host()
         const root = createRoot(el)
         cleanup.push(() => root.unmount())
-        const ref = React.createRef<ChartStreamHandle>()
+        const ref = React.createRef<ChartStreamHandle & ChartWorkerStreamHandle>()
         await act(async () => { root.render(<Stream ref={ref} spec={spec as never} a11y={false} streamOptions={{ autoFlush: true }} {...props} />) })
         // the stream flushes what the inner chart measured
         for (let i = 0; i < 5; i++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) })

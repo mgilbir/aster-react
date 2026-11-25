@@ -5,7 +5,7 @@ import { act } from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { AsterLimitError, AsterStreamBackpressureError, type ChartStream as CoreStream } from '@aster-charts/core'
 import { ChartStream, type ChartStreamHandle } from './ChartStream'
-import { ChartWorkerStream } from './ChartWorkerStream'
+import { ChartWorkerStream, type ChartWorkerStreamHandle } from './ChartWorkerStream'
 import { useChartStream } from './useChartStream'
 import { useChartWorkerStream, type WorkerChartStreamResult } from './useChartWorkerStream'
 import {
@@ -151,7 +151,7 @@ describe('worker stream: failed flush is reported and discarded in the worker', 
   it('<ChartWorkerStream> reports once with the failure info', async () => {
     const worker = new FakeWorker()
     const onStreamError = vi.fn()
-    const ref = React.createRef<ChartStreamHandle>()
+    const ref = React.createRef<ChartWorkerStreamHandle>()
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
