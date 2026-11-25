@@ -840,6 +840,8 @@ interface EvalContext {
   projectionError?: unknown
   /** a signal ranked last threw: the pass's post-run work (the layout that grows the padding) did not happen */
   postRunLost?: boolean
+  /** a dataset re-ranked past the view's operators threw this round: the failure it recorded and what it replaced (see buildDatasetsOf) */
+  lateData?: { entry: AbortPoint; before: LateTaint | undefined; postRunLost: boolean | undefined }
   /** a late signal of the view threw: what was ranked after it did not run (see `abortAtThrowingSignal`) */
   lateTaint?: LateTaint
   /** a dataset a `{signal}` values made holds primitive tuples (see PRIMITIVE_TUPLE): the marks join them as vega does */
@@ -1628,15 +1630,22 @@ function signalReadsDataflow(chart: CompiledChart, defs: ReadonlyMap<string, num
 }
 
 /** The signals, scales and datasets of a view that read (directly or through each other) a signal that threw. */
-interface LateTaint { signals: Set<string>; scales: Set<string>; data: Set<string> }
+/**
+ * What a late operator that threw took with it: the signals, scales and datasets ranked after it because they read it. `joined`
+ * (a dataset that threw past the view's other operators, see buildDatasetsOf): the datasets whose operators never ran at all, so a
+ * mark drawn from one was never joined -- it is not in the scene (where a mark whose encode reads a late signal is, unencoded).
+ */
+interface LateTaint { signals: Set<string>; scales: Set<string>; data: Set<string>; joined?: boolean }
 
-function lateTaintOf(chart: CompiledChart, failed: readonly string[]): LateTaint {
-  const t: LateTaint = { signals: new Set(failed), scales: new Set(), data: new Set() }
+function lateTaintOf(chart: CompiledChart, failed: readonly string[], failedData: readonly string[] = []): LateTaint {
+  const t: LateTaint = { signals: new Set(failed), scales: new Set(), data: new Set(failedData), ...(failedData.length ? { joined: true } : {}) }
   const reads = (node: unknown): boolean => {
     let hit = false
     walkStrings(node, (str, owner) => {
       if (hit || owner === null) return
       if (['signal', 'expr', 'test', 'update', 'init'].some((k) => owner[k] === str) && expressionIdentifiers(str).some((id) => t.signals.has(id))) hit = true
+      // (a dataset it reads: a `{data}` reference, a lookup's `from`, or by name in an expression)
+      else if (t.data.size && ((t.data.has(str) && (owner.data === str || owner.from === str)) || (datasetsReadIn(str) ?? []).some((n) => t.data.has(n)))) hit = true
     })
     return hit
   }
@@ -1665,7 +1674,7 @@ function readsTaint(part: unknown, ctx: EvalContext): boolean {
   let hit = false
   walkStrings(part, (str, owner) => {
     if (hit || owner === null) return
-    if (['signal', 'expr', 'test', 'update'].some((k) => owner[k] === str) && expressionIdentifiers(str).some((id) => t.signals.has(id))) hit = true
+    if (['signal', 'expr', 'test', 'update'].some((k) => owner[k] === str) && (expressionIdentifiers(str).some((id) => t.signals.has(id)) || (t.data.size > 0 && (datasetsReadIn(str) ?? []).some((n) => t.data.has(n))))) hit = true
     if (typeof owner.scale === 'string' && owner.scale === str && t.scales.has(str)) hit = true
     if (t.data.has(str) && (owner.data === str || owner.from === str)) hit = true
   })
@@ -4747,6 +4756,16 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
   ctx.datasetAborted = false
   ctx.failedDatasets = undefined
   ctx.failedFrom = undefined
+  // (a re-ranked dataset that threw on an earlier round is judged anew too: its failure and what it took with it are taken back)
+  if (ctx.lateData !== undefined) {
+    const at = ctx.abort.failures.indexOf(ctx.lateData.entry)
+    if (at >= 0) ctx.abort.failures.splice(at, 1)
+    ctx.lateTaint = ctx.lateData.before
+    ctx.postRunLost = ctx.lateData.postRunLost
+    ctx.lateData = undefined
+  }
+  const postRunBefore = ctx.postRunLost
+  let lateError: { error: unknown } | undefined
   const sources = new Map<string, CompiledChart['data'][number]>()
   for (const d of ctx.chart.data) sources.set(d.name, d)
   const { rank: dsRank, order: dsOrder } = datasetRanksOf(ctx.chart)
@@ -4973,7 +4992,13 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       } else {
         // vega: a transform that throws is logged and the dataset publishes nothing (the rest of
         // its pipeline never runs, so everything downstream of it is empty / never built).
-        reportEvalError(ctx, e)
+        // (the first to throw, when it is a dataset vega re-ranked -- it reads a signal a later dataset writes, and vega-runtime connects
+        // the parameters once every operator is made -- is ranked after every other operator of the view: reported as the pass's
+        // failure, at that place, below)
+        if (ctx.failedFrom === undefined && dsRank.get(name)! > ctx.chart.data.length) {
+          refuseUnrecoverable(e)
+          lateError = { error: e }
+        } else reportEvalError(ctx, e)
         ;(ctx.failedDatasets ??= new Set()).add(name)
         ctx.failedFrom = Math.min(ctx.failedFrom ?? Infinity, dsRank.get(name)!)
         rows = []
@@ -5004,9 +5029,25 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       }
       build(name, new Set())
     }
-    // (a dataset vega re-ranked past the scales and marks fails after some of them ran -- the ones that read nothing re-ranked,
-    // and the joins of marks over datasets that were not; this stops all of them: see datasetRanksOf)
-    if (ctx.failedDatasets?.size) ctx.encodeAborted = ctx.datasetAborted = true
+    if (ctx.failedDatasets?.size && lateError !== undefined) {
+      // A dataset vega re-ranked past the scales and marks (C211) threw after every operator of the view that reads nothing re-ranked
+      // ran: the datasets before and after it, the scales, the marks, the guides, the title, the layout. What reads the failed
+      // datasets (and what reads that) never ran, and the run's post-run work was dropped, as for a late signal (see
+      // abortAtThrowingSignal): the pass stops there.
+      const before = ctx.lateTaint
+      // (every dataset vega re-ranked is ranked after the view's other operators, and so is every scale whose parameters read data or
+      // anything made after it, see scaleIsLate: what reads them is made after the throw too)
+      const lateData = [...new Set([...ctx.failedDatasets, ...ctx.chart.data.map((d) => d.name).filter((n) => dsRank.get(n)! > ctx.chart.data.length)])]
+      const t = lateTaintOf(ctx.chart, [...(before?.signals ?? [])], lateData)
+      const root = rootScope(ctx.chart)
+      for (const sc of ctx.chart.scales) if (scaleIsLate(sc, root, ctx.chart)) t.scales.add(sc.name)
+      ctx.lateTaint = t
+      ctx.failed = true
+      ctx.postRunLost = true
+      const entry: AbortPoint = { path: [], axis: Infinity, lateSignal: true, error: lateError.error }
+      ctx.abort.failures.push(entry)
+      ctx.lateData = { entry, before, postRunLost: postRunBefore }
+    } else if (ctx.failedDatasets?.size) ctx.encodeAborted = ctx.datasetAborted = true
   } finally {
     ctx.buildOnDemand = undefined
   }
@@ -6377,6 +6418,8 @@ function evaluateMark(
   prevGroup?: SceneGroup | null,
   given?: GivenPulse,
 ): SceneGroup | SceneGroup[] | null {
+  // (a mark drawn from a dataset that never ran, a re-ranked one that threw or what reads it, was never joined: it is not there)
+  if (ctx.lateTaint?.joined === true && readsTaint({ from: mark.from }, ctx)) return null
   // (the encode of a mark that reads what a late signal took with it never ran: its items are the join's)
   if (ctx.lateTaint !== undefined && !ctx.bareEncode && readsTaint({ encode: mark.encode, from: mark.from }, ctx)) ctx = { ...ctx, bareEncode: true }
   // A leaf mark's gradient definitions are collected apart, so the mark's list is exact: the scene's defs dedupe, and an item that
