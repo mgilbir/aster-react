@@ -1000,6 +1000,8 @@ function ChartView({
     // Bind when there is anything to drive/listen to, or when any signal exists
     // so ChartHandle.setSignal works on a purely imperative spec.
     if (!hasStreams && !hasSignalListeners && !signalDefs?.length) return
+    // (`htmlProp` is in the dependencies, not the markup string: it changes only when React is handed another svg to write, which
+    // the binding must follow. The string is emptied after the first commit and so differs at the first re-render, which is no new svg.)
     // The binding mutates the signal object it is given: hand it a copy.
     // `event.item` (mark type / name / role / datum / enclosing group) comes from the scene hit index, the
     // same one that serves tooltips and clicks, so `@name:click` and `symbol:click` work without tooltips.
@@ -1030,7 +1032,7 @@ function ChartView({
       binding.detach()
       if (signalBindingRef.current === binding) signalBindingRef.current = null
     }
-  }, [interactive, scene, displayScene, renderer, interaction, canvasCap, domMarkup, denseSvg, hasSignalListeners, mergedSignals, signalStore, dataStore, timerEdits, inputData, stableLogger, preventDefault, eventSources, hitIndexFor, liveContainerSize])
+  }, [interactive, scene, displayScene, renderer, interaction, canvasCap, htmlProp, denseSvg, hasSignalListeners, mergedSignals, signalStore, dataStore, timerEdits, inputData, stableLogger, preventDefault, eventSources, hitIndexFor, liveContainerSize])
 
   // Canvas backend: size the backing store for devicePixelRatio and paint the scene whenever it changes: the appended marks of an
   // append-only scene, nothing for a scene that paints the same pixels, else all of it.

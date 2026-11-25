@@ -82,8 +82,6 @@ forEachVariant(['signals'], (Chart) => {
       const add = vi.spyOn(window, 'addEventListener')
       try {
         const m = mount(chart(), { window: ['pointermove'] })
-        // (the chart binds once more on its first re-render, whatever the props: this settles it, and is the baseline)
-        m.rerender({ window: ['pointermove'] })
         const bound = add.mock.calls.length
         expect(bound).toBeGreaterThan(0)
         // a new object with the same content (an inline literal re-created by the parent's render): the binding is kept
