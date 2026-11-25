@@ -1295,11 +1295,11 @@ function makeTransformed(
   hierarchies: Map<string, unknown>,
   projections: ProjectionRegistry,
 ): NonNullable<ExpressionRuntime['transformed']> {
-  return (name, raw) => {
+  return (name, raw, within) => {
     const d = chart.data.find((x) => x.name === name)
     const rows = d?.values != null ? readData(raw as never, d.format, false, undefined, dataLocale(chart)) : copiedRows(ingestRows(raw as Row[]), 'transformed rows')
     if (!d?.transform.length) return rows
-    return applyTransforms(rows, d.transform, { runtime, signals: engineParams(signalParams), hierarchies, projections }, name)
+    return applyTransforms(rows, d.transform, { runtime: within ?? runtime, signals: engineParams(signalParams), hierarchies, projections }, name)
   }
 }
 

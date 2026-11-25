@@ -76,9 +76,11 @@ export interface ExpressionRuntime {
   encode?: (item: unknown, set: string) => void
   /**
    * The rows dataset `name` publishes for the input rows `raw`: its transform pipeline run over them. The
-   * event loop shows a dataset it modified through this, before the next evaluation computes it for real.
+   * event loop shows a dataset it modified through this, before the next evaluation computes it for real. `runtime`: the
+   * runtime the pipeline's expressions run in, when it is not the evaluation's own (the loop runs a dataset's filters against the
+   * selection store as it has just edited it).
    */
-  transformed?: (name: string, raw: readonly unknown[]) => unknown[]
+  transformed?: (name: string, raw: readonly unknown[], runtime?: ExpressionRuntime) => unknown[]
   /**
    * `inScope(item)`: whether the item lies within the group whose scope the expression runs in (vega-functions
    * inscope.js reads `this.context.group`). Absent, the expression runs in the root scope, whose group is the root of

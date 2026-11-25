@@ -51,7 +51,7 @@ import { compileExpr, evalSignal, type CompiledExpr, type ExpressionRuntime } fr
 import type { Changeset } from './modify.js'
 import { normalizeEvents, filterCode } from './stream-defs.js'
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
-import { array, dict, heldSignalName, isArray, isDate, toNumber, ownGet, setOwn, markTupleAlways, MARK_NODE, ROOT_MARK_NODE, scopedSignalName } from './util.js'
+import { array, dict, heldSignalName, ownGet, setOwn, markTupleAlways, MARK_NODE, ROOT_MARK_NODE, scopedSignalName } from './util.js'
 import { dataKey, expressionReads, testedStoresIn } from './expr-reads.js'
 import { follow, node, Propagation, type SignalNode } from './signal-propagation.js'
 import { consoleLogger, type Logger } from './logger.js'
@@ -281,17 +281,6 @@ interface StreamState {
   evt: ExtEvent | null
   /** Delivers a debounced event into the CURRENT binding (null while unbound). */
   deliver: ((e: ExtEvent) => void) | null
-}
-
-/** vega-selections' rewrite of a tested tuple: a Date value (or a list starting with one) becomes a number, in the tuple itself. */
-function numericTuple(t: unknown): void {
-  const values = t !== null && typeof t === 'object' ? (t as { values?: unknown }).values : undefined
-  if (!Array.isArray(values)) return
-  for (let i = 0; i < values.length; i++) {
-    const v: unknown = values[i]
-    if (isDate(v)) values[i] = toNumber(v)
-    else if (isArray(v) && isDate(v[0])) values[i] = v.map(toNumber)
-  }
 }
 
 /** A timer stream of one owner: it outlives the bindings (a host re-binds after every render) until `release`. */
@@ -709,18 +698,44 @@ function bindSignalEventsDefs(
   const currentAll = (v: unknown): unknown => (Array.isArray(v) ? v.map(current) : current(v))
   const rawOf = (name: string): Array<Record<string, unknown>> =>
     inputRows.get(name) ?? (opts.data?.[name] as Array<Record<string, unknown>> | undefined) ?? (datasets.get(name)?.values as Array<Record<string, unknown>> | undefined) ?? []
-  /** whether the dataset has rows its filter is called on: its own, or those of the datasets it draws from */
-  const testsAgainstRows = (name: string): boolean => {
-    const d = datasets.get(name)
-    const from = d?.source === undefined ? [] : Array.isArray(d.source) ? d.source : [d.source]
-    return from.length ? from.some((src) => (dataOf(src)?.length ?? 0) > 0) : (dataOf(name)?.length ?? 0) > 0
-  }
   const dataOf = (name: string): unknown[] | undefined => {
     const raw = inputRows.get(name)
     if (!raw) return sceneRuntime.data(name)
     let rows = liveRows.get(name)
     if (!rows) liveRows.set(name, (rows = sceneRuntime.transformed ? sceneRuntime.transformed(name, raw) : raw))
     return rows
+  }
+
+  /**
+   * Run the pipelines of the datasets that test the selection store `store` (as `{store: rows}` has just been written), against the
+   * tuples the store holds, as vega's dataflow does when the store changes: the filters (and formulas) that read it evaluate their
+   * expressions row by row, and each test rewrites the Date values of the tuples it reaches (see selections.ts). The rows a filter
+   * meets are those its dataset's pipeline gives it, from the rows of the datasets it is drawn from: the store as it is now, the
+   * others as the loop holds them. What is tested, field by field and tuple by tuple, is the expression's own business.
+   */
+  const testStore = (store: string, tuples: Array<Record<string, unknown>>, testers: readonly string[]): void => {
+    if (!sceneRuntime.transformed) return
+    const transformed = sceneRuntime.transformed
+    const sim: ExpressionRuntime = {
+      ...bindRuntime,
+      data: (n) => (n === store ? tuples : dataOf(n)),
+      expr: (code) => compileExpr(code, sim),
+    }
+    const made = new Map<string, unknown[]>()
+    const output = (n: string, depth: number): unknown[] => {
+      const have = made.get(n)
+      if (have !== undefined) return have
+      const d = datasets.get(n)
+      if (d === undefined || depth > datasets.size) return []
+      // (a dataset drawn from others starts from their rows; any other from its own, as the host gave them)
+      const rows = d.source !== undefined ? array(d.source).flatMap((s) => output(String(s), depth + 1)) : rawOf(n)
+      const out = transformed(n, rows, sim)
+      made.set(n, out)
+      return out
+    }
+    for (const n of testers) {
+      try { output(n, 0) } catch (e) { fail(` (test of selection "${store}" by data "${n}")`, e) }
+    }
   }
 
   // ---- the dataflow: one native event (or setSignal) is one run of it ---------------------------
@@ -1444,10 +1459,10 @@ function bindSignalEventsDefs(
         pulsed.delete(name)
         const rows = part('modify').applyChangeset(rawOf(name), cs, writable)
         // vega's dataflow runs a dataset whose filter tests this store as soon as the store changes, and testing a tuple turns its Date
-        // values into numbers in the tuple itself, which a signal holding it then shows: done here at the write, for a store some dataset
-        // tests (the loop does not run the filters; the host's next evaluation does, on its own rows)
-        // (a filter tests a tuple only against a row: a dataset with none to test leaves the Dates)
-        if (testedStores.get(name)?.some(testsAgainstRows)) for (const t of cs.add) numericTuple(t)
+        // values into numbers in the tuple itself (field by field, up to the first field that fails: vega-selections `testPoint`),
+        // which a signal holding it then shows: the same tests, run here at the write over the rows the filters meet
+        const testers = testedStores.get(name)
+        if (testers !== undefined) testStore(name, rows, testers)
         // (under limits a dataset an event edits stays within `maxRows`, as any dataset does)
         checkRowCount(rows.length, `dataset "${name}" edited by an event`)
         inputRows.set(name, rows)
