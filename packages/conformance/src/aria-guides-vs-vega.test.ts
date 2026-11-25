@@ -15,7 +15,7 @@ import * as vega from 'vega'
 import { buildA11yTree, compileChart, evaluateChart, renderSceneToSvg } from '@aster-charts/core'
 import { renderSceneToDomElement } from '@aster-charts/core/dom'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
-import { expectKnownDifference } from '../scripts/known-differences.mts'
+import { expectKnownDifference } from './known-differences.js'
 
 type Spec = Record<string, unknown>
 
