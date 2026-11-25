@@ -1758,10 +1758,35 @@ function abortAtThrowingViewLayout(ctx: EvalContext): void {
  */
 const SIGNAL_ORDERS = new WeakMap<CompiledChart, CompiledSignalDef[] | SpecParseError>()
 function signalsInDataflowOrder(chart: CompiledChart): CompiledSignalDef[] {
-  const defs = chart.signalDefs ?? []
-  let out = SIGNAL_ORDERS.get(chart)
-  if (out instanceof SpecParseError) throw out
-  if (out) return out
+  return cachedOrder(SIGNAL_ORDERS, chart, chart.signalDefs ?? [])
+}
+
+/**
+ * The signals a group mark's scope declares, in the order vega's dataflow runs them (the same ranks as the view's: see
+ * `rankSignals`), without those that push to the enclosing scope (they declare nothing here). Every group item of the mark has the
+ * same signals, so the order is worked out once per mark.
+ */
+const SCOPE_ORDERS = new WeakMap<CompiledMark, CompiledSignalDef[] | SpecParseError>()
+function scopeSignalsInOrder(mark: CompiledMark): CompiledSignalDef[] {
+  return cachedOrder(SCOPE_ORDERS, mark, (mark.signalDefs ?? []).filter((d) => d.push !== 'outer'))
+}
+
+function cachedOrder<K extends object>(cache: WeakMap<K, CompiledSignalDef[] | SpecParseError>, key: K, defs: readonly CompiledSignalDef[]): CompiledSignalDef[] {
+  const kept = cache.get(key)
+  if (kept instanceof SpecParseError) throw kept
+  if (kept) return kept
+  try {
+    const out = rankSignals(defs)
+    cache.set(key, out)
+    return out
+  } catch (e) {
+    if (!(e instanceof SpecParseError)) throw e
+    cache.set(key, e)
+    throw e
+  }
+}
+
+function rankSignals(defs: readonly CompiledSignalDef[]): CompiledSignalDef[] {
   // vega-dataflow's ranks: each signal's operator is added in declaration order, then connected to what its update / init reads
   // (`connect`): one that reads an operator ranked after it is ranked anew past everything, and so is, depth first, every operator
   // that reacts to it. A `react: false` reader is ranked after what it reads but does not react to it (no edge to walk), and a
@@ -1788,13 +1813,9 @@ function signalsInDataflowOrder(chart: CompiledChart): CompiledSignalDef[] {
       graph.connect(nodes[i]!, reads[i]!)
     })
   } catch (e) {
-    const refused = new SpecParseError((e as Error).message)
-    SIGNAL_ORDERS.set(chart, refused)
-    throw refused
+    throw new SpecParseError((e as Error).message)
   }
-  out = defs.map((d, i) => [d, nodes[i]!.order] as const).sort((a, b) => a[1] - b[1]).map(([d]) => d)
-  SIGNAL_ORDERS.set(chart, out)
-  return out
+  return defs.map((d, i) => [d, nodes[i]!.order] as const).sort((a, b) => a[1] - b[1]).map(([d]) => d)
 }
 
 /**
@@ -7485,26 +7506,28 @@ function markClip(mark: CompiledMark, ctx: EvalContext): boolean {
 function scopeSignalValues(mark: CompiledMark, ctx: EvalContext, id: string, base: Record<string, unknown>, instance: number[]): { params: Record<string, unknown>; values: Record<string, unknown> } {
   const params = dict<unknown>(base)
   const values: Record<string, unknown> = {}
-  const defs = (mark.signalDefs ?? []).filter((d) => d.push !== 'outer')
   // (a signal that throws stops the pass at the first operators of the instance: see AbortPoint)
   const evalIn = (code: string): unknown => {
     try { return evalSignal(ctx.runtime.expr(code), params) } catch (e) { failPass(ctx, { axis: -2, signals: true, path: instance }, e); return undefined }
   }
-  for (const d of defs) {
-    if (typeof d.update === 'string') continue
-    const key = scopedSignalName(id, d.name)
-    const v = Object.hasOwn(ctx.signalParams, key) ? ctx.signalParams[key] : typeof d.init === 'string' ? evalIn(d.init) : d.value
+  // each signal once, after the ones it reads (vega's ranks: the same as the view's, see `rankSignals`), whatever order they are declared in
+  let ordered: CompiledSignalDef[]
+  try {
+    ordered = scopeSignalsInOrder(mark)
+  } catch (e) {
+    // (signals that read each other in a circle: vega's subflow logs the cycle and goes no further, as for a signal that throws)
+    failPass(ctx, { axis: -2, signals: true, path: instance }, new Error((e as Error).message))
+    return { params, values }
+  }
+  for (const d of ordered) {
+    let v: unknown
+    if (typeof d.update === 'string') v = evalIn(d.update)
+    else {
+      const key = scopedSignalName(id, d.name)
+      v = Object.hasOwn(ctx.signalParams, key) ? ctx.signalParams[key] : typeof d.init === 'string' ? evalIn(d.init) : d.value
+    }
     params[d.name] = v
     values[d.name] = v
-  }
-  // derived signals read the others (and each other): a few rounds settle any acyclic chain
-  const derived = defs.filter((d) => typeof d.update === 'string')
-  for (let round = 0; round < Math.max(1, derived.length) && derived.length; round++) {
-    for (const d of derived) {
-      const v = evalIn(d.update!)
-      params[d.name] = v
-      values[d.name] = v
-    }
   }
   return { params, values }
 }
