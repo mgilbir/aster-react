@@ -24,7 +24,7 @@ const datumRef = (name: string): string => `datum[${JSON.stringify(name)}]`
  */
 const fieldRead = (f: string): string => {
   const pieces = splitAccessPath(f)
-  return pieces.length === 1 ? datumRef(pieces[0]!) : `(${guardedPathRef(f)})`
+  return pieces.length === 1 ? datumRef(pieces[0]!) : quotedRef(pieces.join('.'))
 }
 /**
  * The flat copy of a nested field the statistics read: vega-lite's parse step writes `o.v` (the path joined) for the field `o.v`, but only
