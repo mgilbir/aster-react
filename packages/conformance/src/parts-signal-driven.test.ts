@@ -76,28 +76,9 @@ const CASES: Case[] = [
       marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, fill: { scale: 'c', field: 'c' } } } }],
     } as VgSpec),
   },
-  {
-    name: "a scale's colour interpolator by signal",
-    family: 'color',
-    values: ['rgb', 'hcl', 'hcl-long', 'lab', 'hsl', 'hsl-long', 'cubehelix', 'cubehelix-long'],
-    spec: (s, c) => (cycle = c, {
-      ...VIEW, signals: [signalled(s, 'rgb', cycling(s, ['rgb', 'hcl', 'lab']))], data: [{ name: 't', values: POINTS }],
-      scales: [X, Y, { name: 'c', type: 'linear', domain: { data: 't', field: 'y' }, range: ['#3366cc', '#ffcc00'], interpolate: { signal: s } }],
-      marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, width: { value: 8 }, y: { scale: 'y', field: 'y' }, y2: { value: 120 }, fill: { scale: 'c', field: 'y' } } } }],
-      legends: [{ fill: 'c' }],
-    } as VgSpec),
-  },
-  {
-    name: "a numeric scale's interpolator by signal, from number and round to colour spaces",
-    family: 'color',
-    values: ['number', 'round', 'hcl', 'rgb', 'lab'],
-    firstNeedsNone: true,
-    spec: (s, c) => (cycle = c, {
-      ...VIEW, signals: [signalled(s, 'number', cycling(s, ['number', 'hcl', 'round']))], data: [{ name: 't', values: POINTS }],
-      scales: [X, Y, { name: 'w', type: 'linear', domain: { data: 't', field: 'y' }, range: [2, 30], interpolate: { signal: s } }],
-      marks: [{ type: 'text', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, text: { scale: 'w', field: 'y' } } } }],
-    } as VgSpec),
-  },
+  // (a scale's `interpolate` given as a `{signal}` is no family chosen at runtime: vega's parser reads it with no scope and crashes, and
+  // `compileChart` refuses it the same way, a SpecParseError -- Q12, differential-scale-options.test.mts. Its two cases are gone with
+  // the extension they drew.)
   {
     name: "a continuous scale's range by signal, from numbers to colours",
     family: 'color',
