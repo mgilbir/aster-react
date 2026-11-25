@@ -106,6 +106,8 @@ items, a mark re-evaluates only the channels that read what changed, and what th
 mark is kept with it. A scene the session returns is the engine's: the next evaluation keeps the nodes it can and never
 writes into them. You may write into a scene you were given and draw that scene again (every renderer draws what you wrote),
 but a later evaluation builds on what its nodes held when they were made, so draw its scene, not the one you wrote into.
+An item's `datum` (a group item's too) is a copy of its row, so writing a field of it changes neither the spec's `values` nor
+your data; the copy is shallow, so an object or array a row holds is the row's own, and writing INTO it writes into the row.
 
 `dataChanges` is `Record<string, number[]>`: per dataset, the indices (into the NEW row array) whose values changed.
 It is only valid when the array keeps its length and order; the session then reuses the previous scene items of every
