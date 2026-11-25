@@ -925,12 +925,9 @@ function validateSelection(p: Obj, at: string): void {
   }
   if (sel.fields !== undefined) {
     if (!Array.isArray(sel.fields) || !sel.fields.every((f) => typeof f === 'string' && f !== '')) mustBe(`${at}.select.fields`, 'an array of field names')
-    for (const f of sel.fields as string[]) {
-      // (an escaped field, `a\.b`, is one column of the row the selection tests; a nested one is flattened into a column of another name)
-      if (f !== '_vgsid_' && accessPath(f, `${at}.select.fields`).length !== 1) {
-        fail(`${at}.select.fields`, `a selection cannot be projected over the nested field ${JSON.stringify(f)}`)
-      }
-    }
+    // (an escaped field, `a\.b`, is one column of the row the selection tests; a nested one, `o.c`, is read from the copy of it the rows carry
+    // under the joined path, as vega-lite's flatten does)
+    for (const f of sel.fields as string[]) if (f !== '_vgsid_') accessPath(f, `${at}.select.fields`)
   }
   if (!interval) {
     if (sel.toggle !== undefined && typeof sel.toggle !== 'boolean' && typeof sel.toggle !== 'string') mustBe(`${at}.select.toggle`, 'a boolean or an expression string')

@@ -4817,6 +4817,11 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
   }
   for (const f of fields) if (f.flatExpr !== undefined) addFlat(f.source)
   for (const p of referencedPaths(spec.encoding)) addFlat(p)
+  // (a point selection over `fields` tests the flat copy of each nested path, which vega-lite adds whether or not an encoding reads it)
+  for (const param of selectionParamsOf(spec)) {
+    const sel = isObject(param.select) ? param.select : undefined
+    if (sel !== undefined && Array.isArray(sel.fields)) for (const f of sel.fields) if (typeof f === 'string' && f !== '_vgsid_' && splitAccessPath(f).length > 1) addFlat(f)
+  }
 
   // type casts (formula) — the oracle emits them around impute/stack pipelines
   // (quantitative -> toNumber, temporal -> toDate)
@@ -10249,11 +10254,9 @@ function prepareUnitSelections(
     fieldDef: (channel) => {
       const f = fieldOf(channel)
       if (!f) return undefined
-      // (an escaped field is a column of the row the selection tests; a nested one is not, it is flattened into a copy)
-      if (f.flatExpr !== undefined && splitAccessPath(f.source).length !== 1) {
-        throw new VLCompileError(`encoding.${channel}: a selection cannot be projected over the nested field "${f.source}"`)
-      }
-      return { field: f.field, source: f.source, aggregate: f.aggregate, bin: !!f.bin, ...(f.tu ? { timeUnit: f.tu } : {}) }
+      // (a nested path is tested through the copy of it the rows carry under the joined path, `o.c`: vega-lite's flatten)
+      const nested = f.flatExpr !== undefined && splitAccessPath(f.source).length !== 1 && !f.bin && f.tu === undefined && f.aggregate === undefined
+      return { field: nested ? splitAccessPath(f.source).join('.') : f.field, source: f.source, aggregate: f.aggregate, bin: !!f.bin, ...(f.tu ? { timeUnit: f.tu } : {}) }
     },
     vgField: (channel, opt) => {
       const f = fieldOf(channel)!
