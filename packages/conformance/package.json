@@ -28,7 +28,8 @@
     "conformance:gallery": "tsx src/gallery/run.ts",
     "conformance:intersect": "tsx scripts/browser-intersect.mts",
     "conformance:geometry": "tsx scripts/browser-geometry.mts",
-    "conformance:selections": "tsx scripts/browser-vl-selections.mts --min-cases=55 --max-retained=16 --max-retained-canvas=12"
+    "conformance:selections": "tsx scripts/browser-vl-selections.mts --min-cases=56 --max-retained=16 --max-retained-canvas=12",
+    "conformance:url-reload": "tsx scripts/browser-url-reload.mts"
   },
   "dependencies": {
     "@aster-charts/core": "workspace:*",
