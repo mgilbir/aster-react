@@ -93,13 +93,20 @@ const deref = (node) => {
   while (n && n.$ref) n = defs[n.$ref.replace('#/definitions/', '')]
   return n
 }
-/** A schema node's alternatives, `$ref`s resolved and `anyOf`s flattened. */
-function alternatives(node) {
+/**
+ * A schema node's alternatives, `$ref`s resolved and `anyOf`s flattened. A bound written beside the `anyOf` (`{anyOf: [{type: number},
+ * ExprRef], minimum: 0, maximum: 1}`, an opacity) holds for the number alternatives inside it: they carry it down.
+ */
+function alternatives(node, outer = {}) {
   const n = deref(node)
   if (!n) return []
-  if (n.anyOf) return n.anyOf.flatMap(alternatives)
-  if (Array.isArray(n.type)) return n.type.map((type) => ({ ...n, type }))
-  return [n]
+  const bounds = { ...outer }
+  if (n.minimum !== undefined) bounds.minimum = Math.max(bounds.minimum ?? -Infinity, n.minimum)
+  if (n.maximum !== undefined) bounds.maximum = Math.min(bounds.maximum ?? Infinity, n.maximum)
+  if (n.anyOf) return n.anyOf.flatMap((alt) => alternatives(alt, bounds))
+  const own = n.type === 'number' || n.type === 'integer' || (Array.isArray(n.type) && n.type.some((t) => t === 'number' || t === 'integer')) ? { ...n, ...(bounds.minimum !== undefined ? { minimum: Math.max(n.minimum ?? -Infinity, bounds.minimum) } : {}), ...(bounds.maximum !== undefined ? { maximum: Math.min(n.maximum ?? Infinity, bounds.maximum) } : {}) } : n
+  if (Array.isArray(n.type)) return n.type.map((type) => ({ ...own, type }))
+  return [own]
 }
 const isExprRef = (n) => n.type === 'object' && n.properties && Object.keys(n.properties).join() === 'expr'
 
