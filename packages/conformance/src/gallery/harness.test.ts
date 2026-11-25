@@ -7,7 +7,10 @@ import { datasetVersionMismatches, galleryDataFor, localFileFor, nextPassingList
 import { runInline } from './react.js'
 import { settleWithin } from '../render-vega.js'
 import { logged, vegaSvg, warned } from './oracle.js'
-import { oracleProblem } from './static.js'
+import { loggedErrorsDiffer, oracleProblem, runStatic } from './static.js'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 describe('gallery data URLs (C394)', () => {
   it('resolves the gallery\'s own data/ and the jsDelivr vega-datasets package, with the version it asks for', () => {
@@ -61,9 +64,9 @@ describe('runPage (C528)', () => {
 })
 
 describe('a broken oracle is not a pass (C527)', () => {
-  it('names an error vega logged, and a data file it could not load, as the reason the spec is unverifiable', () => {
+  it('names a data file the oracle could not load, and a canvas it lacks, as the reason the spec is unverifiable; an error the spec makes vega log is compared', () => {
     expect(oracleProblem([], [])).toBeNull()
-    expect(oracleProblem(['TypeError: x is undefined\n    at f'], [])).toEqual({ reason: 'oracle-logged-error', first: 'TypeError: x is undefined' })
+    expect(oracleProblem(['TypeError: x is undefined\n    at f'], [])).toBeNull()
     expect(oracleProblem([], ['Loading failed: 404'])).toEqual({ reason: 'oracle-load-failed', first: 'Loading failed: 404' })
     expect(oracleProblem(['Error: getContext of null'], [])?.reason).toBe('oracle-needs-canvas (Node has none)')
   })
@@ -73,7 +76,7 @@ describe('a broken oracle is not a pass (C527)', () => {
     logged.length = 0
     warned.length = 0
     await vegaSvg(spec({ name: 't', values: [{ a: 1 }], transform: [{ type: 'formula', expr: 'datum.a.b.c.d', as: 'z' }] }) as never)
-    expect(oracleProblem(logged, warned), JSON.stringify([logged, warned])).not.toBeNull()
+    expect(logged, 'vega logged the error the formula throws').not.toEqual([])
     logged.length = 0
     warned.length = 0
     await vegaSvg(spec({ name: 't', url: 'data/no-such-file.json', format: { type: 'json' } }) as never)
@@ -83,4 +86,36 @@ describe('a broken oracle is not a pass (C527)', () => {
     await vegaSvg(spec({ name: 't', values: [{ a: 1 }] }) as never)
     expect(oracleProblem(logged, warned)).toBeNull()
   })
+})
+
+describe('a spec that makes vega log an error is compared on the document and on the errors (C527)', () => {
+  it('the errors are the same, in order, once the error name is dropped; any other difference is named', () => {
+    expect(loggedErrorsDiffer([], [])).toBeNull()
+    expect(loggedErrorsDiffer(['Error: Unrecognized projection type: airy\n    at f (x.js:1:1)'], ['Unrecognized projection type: airy'])).toBeNull()
+    expect(loggedErrorsDiffer(['Error: a'], [])).toMatch(/logged errors: vega \["a"\], aster \[\]/)
+    expect(loggedErrorsDiffer([], ['b'])).toMatch(/aster \["b"\]/)
+    expect(loggedErrorsDiffer(['Error: a', 'Error: b'], ['a'])).not.toBeNull()
+    expect(loggedErrorsDiffer(['Error: a'], ['c'])).not.toBeNull()
+  })
+
+  it('a projection type vega does not know passes when Aster draws the same document and logs the same error (and not when it logs none)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'aster-gallery-'))
+    try {
+      const spec = (type: string): unknown => ({
+        width: 100, height: 60, padding: 5,
+        projections: [{ name: 'p', type, scale: 20, translate: [50, 30] }],
+        marks: [{ type: 'shape', encode: { update: { fill: { value: 'red' } } }, transform: [{ type: 'geoshape', projection: 'p' }] }],
+      })
+      const run = async (type: string) => {
+        const file = join(dir, `${type}.vg.json`)
+        writeFileSync(file, JSON.stringify(spec(type)))
+        return runStatic({ id: `vega/${type}`, kind: 'vega', name: type, file })
+      }
+      expect((await run('airy')).status, 'airy is not in vega-projection\'s registry').toBe('pass')
+      // the same document where nothing is logged is not the comparison: a known type logs nothing on either side
+      expect((await run('mercator')).status).toBe('pass')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 120_000)
 })
