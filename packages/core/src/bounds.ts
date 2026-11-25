@@ -665,8 +665,7 @@ export function multiMarkBounds(mark: SceneGroup): Bounds {
     trailGeometry(items)?.outline.replay(new BoundsPen(drawn))
   } else drawn = curveExtent(mark.marktype === 'area' ? areaGeometry(items) : lineGeometry(items))
   const first = items[0]!
-  const styled = mark.marktype === 'line' && first.stroke != null && first.strokeWidth == null ? { ...first, strokeWidth: 2 } : first
-  return boundStroke(drawn, styled, true)
+  return boundStroke(drawn, first, true)
 }
 
 /** The bounds of a typed (non-group) mark: the union of its items' bounds (vega's `mark.bounds`), or a line's, an area's or a trail's own. */
