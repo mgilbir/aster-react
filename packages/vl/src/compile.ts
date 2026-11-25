@@ -6574,7 +6574,8 @@ function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleN
       // merges grid+labels into one axis; ours splits them)
       if (userAxis) {
         for (const gk of ['gridColor', 'gridWidth', 'gridDash', 'gridOpacity', 'gridCap', 'tickOffset', 'translate', 'tickBand', 'tickExtra', 'tickCount', 'tickMinStep', 'tickRound', 'values', 'zindex', 'bandPosition', 'offset'] as const) {
-          if ((userAxis as Record<string, unknown>)[gk] !== undefined) gridAxis[gk] = (userAxis as Record<string, unknown>)[gk]
+          // (a grid property that only the config gives is the Vega config's, as on the label axis)
+          if ((userAxis as Record<string, unknown>)[gk] !== undefined && !fromConfigOnly(gk)) gridAxis[gk] = (userAxis as Record<string, unknown>)[gk]
         }
       }
       // axis/properties.ts defaultTickMinStep: an integer format ('d') ticks at whole numbers only
