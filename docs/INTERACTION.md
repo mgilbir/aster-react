@@ -135,7 +135,7 @@ What works, and how it differs from Vega, precisely:
 - The state is the one Vega computes for the same input; `pnpm conformance:selections` drives the same native
   mouse, wheel and form-control input through vega-lite + Vega and through `@aster-charts/vl` + `<Chart>` and compares every
   signal, every store and the SVG after each step (point click, shift-toggle, hover, `nearest`, brush, move, wheel
-  zoom, legend click, `select` / `radio` / `range` / `checkbox` bindings, `bind: "scales"`, layered filters and lookups, and
+  zoom, legend click, a click in the view's padding (vega leaves a point selection as it is there, though a click on an empty point of the plot clears it; so does Aster), `select` / `radio` / `range` / `checkbox` bindings, `bind: "scales"`, layered filters and lookups, and
   across concat, facet and repeat views: a brush filtering another view, a point selection linking two, a selection
   declared on the composition, a brush or a point per facet cell, bound scales shared by cells, a legend binding).
 - A scale event (`{scale: "x"}`, which an unbound interval selection listens to so that its brush follows its
