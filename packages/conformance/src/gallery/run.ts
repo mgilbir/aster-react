@@ -125,7 +125,9 @@ const runPath = async (p: 'static' | 'react' | 'swap' | 'seeded'): Promise<void>
     results.react = await runReact(specs, () => undefined, 4)
   }
 }
-await Promise.all(PATHS.filter((p) => p !== 'swap').map(runPath))
+await Promise.all(PATHS.filter((p) => p !== 'swap' && p !== 'seeded').map(runPath))
+// the seeded path reads what the oracle logged, in the same global lists the static path fills: it runs alone, not beside it
+if (PATHS.includes('seeded')) await runPath('seeded')
 // the swap path runs alone: it is the one that holds a chart across timers and a pointer drag, and the data loads of the other paths in flight would only add load-dependent timeouts to it
 if (PATHS.includes('swap')) await runPath('swap')
 
