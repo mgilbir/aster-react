@@ -43,15 +43,6 @@ export const EXPECTED_DIFFERENCES = Object.freeze([
   },
   {
     gate: 'geometry-browser',
-    case: "canvas-group-one-axis-not-a-number",
-    reason:
-      "a group item whose x (or y) is a string that is not a number and whose other position is a number (`\"15px\"`, 32): "
-      + "vega's canvas draws the group untranslated (a translate that is not two numbers is ignored) and asks its bounds on the "
-      + "axis that is a number and not on the other; Aster's index drops the bounds test on both axes there, and measures what "
-      + "it keeps in the frame it draws in.",
-  },
-  {
-    gate: 'geometry-browser',
     case: "canvas-beyond-float-precision",
     reason:
       "a canvas keeps its path in 32-bit floats: beyond 2^24 a coordinate cannot tell one pixel from the next (a rect 71 high "

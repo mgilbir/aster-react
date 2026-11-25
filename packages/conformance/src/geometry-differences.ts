@@ -52,8 +52,6 @@ const FLOAT_EXACT = 2 ** 24
 
 const sides = (d: Difference): Side[] => [d.vega, d.aster].filter((s): s is Side => s !== null)
 const number = (v: unknown): number => (typeof v === 'number' ? v : Number.NaN)
-/** Whether a value a scenegraph holds reads as a number the way an arithmetic does: not a string like "15px", not NaN. */
-const reads = (v: unknown): boolean => v === undefined || v === null || !Number.isNaN(+(v as number))
 
 export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
   {
@@ -70,11 +68,6 @@ export const KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     id: 'svg-text-glyphs',
     renderer: 'svg',
     matches: (d) => sides(d).some((s) => s.type === 'text'),
-  },
-  {
-    id: 'canvas-group-one-axis-not-a-number',
-    renderer: 'canvas',
-    matches: (d) => sides(d).some((s) => s.groups.some(([x, y]) => (!reads(x) || !reads(y)) && (reads(x) || reads(y)))),
   },
   {
     id: 'canvas-beyond-float-precision',
