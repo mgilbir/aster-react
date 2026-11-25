@@ -55,8 +55,19 @@ const same = (a: unknown, b: unknown): boolean => a === b || (typeof a === 'numb
 /**
  * The generated specs (seed 1000 + n) whose picture differs from vega's on a real canvas, with what the first difference is.
  * Each is a live difference of the label layout (it is still compared every run). Not in ARCHITECTURE's "Deviations from Vega":
- * it is not intended behaviour, it is an open difference; the cause is not established (the occupancy bitmap of a rule's thin
- * stroke, where the two rasterizers' antialiasing differs, is the suspect: raster-vs-chromium.test.ts bounds that).
+ * it is not intended behaviour, it is an open difference.
+ *
+ * label-1006: the cause is established (audit 2026-11-22, a33). The first label that diverges is dropped because pixel (56, 130), at the
+ * tip of a DASHED ROUND-CAP rule (3 px wide, dash [40, 30], from (20.032, 132.04)), has alpha 1 in the engine and 0 in Chromium. A true circle
+ * of radius 1.5 about the dash end covers a sliver of about 0.005 px^2 of that pixel, which the engine's inscribed 13-gon keeps (alpha 1);
+ * Chromium's cap tip is asymmetric (smaller at the top, larger at the bottom), which no circle-like cap reproduces. Alphas at the tip:
+ *   pixel    Chromium  engine (13-gon)  engine (conic-arc cap, tried)
+ *   (56,130)    0           1                 6
+ *   (56,133)   12           1                 6
+ *   (55,130)   76          95                88
+ *   (55,133)  102          97                88
+ * Caps as conic arcs held the raster ratchet on all but four drawings and did not fix the pixel; walking curve quads from their top end
+ * (as Skia does) improves the summed alpha by a sixth but worsens 22 drawings. Both are future work in raster-edges.ts.
  */
 const KNOWN_BROWSER_DIFFERENCES: Record<string, string> = {
   'label-1006': "a rule base: vega places the label 'ff fff' at (92.69, 42.12), Aster leaves it out (opacity 0)",
