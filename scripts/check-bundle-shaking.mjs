@@ -797,6 +797,45 @@ const PATTERNS = [
     }),
   },
   {
+    name: 'react-chartstream',
+    why: "import { ChartStream } from '@aster-charts/react' in a browser build: the stream shell keeps the on-demand engine <Chart> has (a legend part loads behind the Suspense wait, from a chunk the entry does not contain) and does not reach the worker hook, which needs the whole synchronous engine (C82)",
+    split: true,
+    dom: true,
+    browser: true,
+    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { ChartStream } from '@aster-charts/react'\nimport { ENGINE_PARTS, partLoaded } from '@aster-charts/core/lean'`,
+    body: `
+      const loaded = () => ENGINE_PARTS.filter(partLoaded).join()
+      const mount = (spec) => {
+        const host = document.createElement('div'); document.body.appendChild(host)
+        flushSync(() => createRoot(host).render(React.createElement(React.Suspense, { fallback: React.createElement('i', { id: 'fb' }) }, React.createElement(ChartStream, { width: 300, height: 200, a11y: false, spec }))))
+        return host
+      }
+      const until = async (f) => { for (let i = 0; i < 400 && !f(); i++) await new Promise((r) => setTimeout(r, 10)) }
+      const out = {}
+      const plain = mount(${lit(BAR_VG)})
+      await until(() => plain.querySelector('svg'))
+      out.plainDrawn = /class="mark-rect/.test(plain.innerHTML)
+      out.afterPlain = loaded()
+      const legend = mount(${lit(LEGEND_VG)})
+      out.legendFallback = !!legend.querySelector('#fb')
+      await until(() => legend.querySelector('svg'))
+      out.legendDrawn = !!legend.querySelector('svg')
+      out.afterLegend = loaded()
+      return out`,
+    check: (r) => [
+      [r.plainDrawn === true && r.afterPlain === 'pulse,signals', 'a plain stream chart draws and loads only the stream\'s pulse path and the signal loop (a streamed chart is interactive), no legend, aggregate, time or colour part'],
+      [r.legendFallback === true && r.legendDrawn === true && r.afterLegend === 'color,scales,legend,pulse,svgpath,signals', 'a legend: the fallback shows, then the legend part loads on demand and the chart draws'],
+    ],
+    modules: (m) => [
+      [!hasModule(m.contributing, 'react', 'worker') && !hasModule(m.contributing, 'react', 'useChartWorkerStream'), '<ChartStream> does not pull the worker hook (react/worker.js, react/useChartWorkerStream.js) and, through it, the synchronous engine'],
+      [!hasModule(m.contributing, 'core', 'index'), 'the @aster-charts/core barrel (which fills every slot as a side effect) is not in the bundle'],
+      ...PART_MODULES.filter((name) => name !== 'incremental-engine').map((name) => {
+        const outs = outputsWith(m, 'core', name)
+        return [outs.length > 0 && outs.every((o) => !o.initial), `${name}: only in chunks loaded on demand`]
+      }),
+    ],
+  },
+  {
     name: 'react-lean-all',
     why: "import '@aster-charts/react/all' in a browser build: every part of the engine is in the entry's bundle and in its slot before the first render, so no chart waits for one (the first commit is the chart)",
     split: true,

@@ -1,0 +1,177 @@
+/**
+ * What the two stream shells (`ChartStream.tsx`, `ChartWorkerStream.tsx`) share: the props they take from `<Chart>`, the handle,
+ * and the hooks that forward size, view and signals into the stream. It imports nothing of the worker: the worker shell is its
+ * own module so that `import { ChartStream }` does not reach `useChartWorkerStream` (and, through it, the whole synchronous
+ * engine); `bundle-shaking.test.ts` pins that.
+ */
+import * as React from 'react'
+import type { SceneRoot, StreamBatch, VgSpec } from '@aster-charts/core'
+import type { ChartProps, ChartStreamInput } from './Chart.js'
+import { positionalScales, viewToDomainRaw } from './interaction.js'
+import { normalizeSpecResult, useStableSpec } from './spec.js'
+import type { StreamFlushFailureInfo } from './useChartStream.js'
+
+/**
+ * Props `<ChartStream>`/`<ChartWorkerStream>` take from `<Chart>`. Everything
+ * that makes sense on a stream-fed chart works: `view`/`onViewChange`/`panZoom`/
+ * `pan`/`zoom` and `signals` are routed into the stream (as `domainRaw` and
+ * `signals` batches, so scales, marks and guides recompute inside the stream),
+ * `limits`/`textMetrics` configure the stream's evaluation, and rendering,
+ * selection, tooltip, a11y and event props go to the underlying `<Chart>`.
+ * `data`/`dataChanges` are replaced by `push({ data | append })`.
+ */
+export type CommonStreamProps = Omit<ChartProps, 'spec' | 'data' | 'dataChanges' | 'sceneOverride' | 'onStreamInput'>
+
+export interface ChartStreamHandle {
+  push: (batch: StreamBatch) => boolean
+  flush: () => unknown
+  pending: () => unknown
+  pulse: () => unknown
+  stats: () => unknown
+  scene: () => SceneRoot | null
+  close: () => void
+}
+
+/**
+ * Called once per stream error. For a failed flush `failure` says what was queued
+ * and how many batches were discarded to recover (see `getStreamFlushFailure`).
+ */
+export type StreamErrorHandler = (error: Error, failure?: StreamFlushFailureInfo) => void
+
+/** The dimensions the size props fix (a number); `'container'` is filled from the measured element by the inner chart. */
+export function useSizeBatch(width: number | 'container' | undefined, height: number | 'container' | undefined): { width?: number; height?: number } {
+  return React.useMemo(() => ({
+    ...(typeof width === 'number' ? { width } : {}),
+    ...(typeof height === 'number' ? { height } : {}),
+  }), [width, height])
+}
+
+/**
+ * The container the spec is sized to when the size props give both dimensions (`containerSize()` reads the props then, as in
+ * `<Chart>`): known when the stream is created, so its first flush already has it and the chart's report of the same size
+ * changes nothing. A measured container is only known after the mount, and is pushed then.
+ */
+export function initialContainer(size: { width?: number; height?: number }): { width: number; height: number } | undefined {
+  return size.width != null && size.height != null ? { width: size.width, height: size.height } : undefined
+}
+
+export function useSyncSize(
+  push: (batch: StreamBatch) => boolean,
+  size: { width?: number; height?: number },
+): void {
+  const prev = React.useRef<{ width?: number; height?: number } | null>(null)
+  React.useEffect(() => {
+    const last = prev.current
+    prev.current = size
+    if (last == null) return
+    if (last.width === size.width && last.height === size.height) return
+    if (size.width == null && size.height == null) return
+    push({ ...size })
+  }, [push, size])
+}
+
+const sameValues = (a: Record<string, unknown>, b: Record<string, unknown>): boolean => {
+  const ak = Object.keys(a)
+  if (ak.length !== Object.keys(b).length) return false
+  return ak.every((k) => k in b && Object.is(a[k], b[k]))
+}
+
+/**
+ * Forward what the inner `<Chart>` derives from its props and gestures (the
+ * `domainRaw` of the pan/zoom view and the merged signal values) into the
+ * stream. Only changes are pushed; a rebuilt stream is brought back up to date.
+ */
+export function useStreamInput(
+  stream: unknown,
+  push: (batch: StreamBatch) => boolean,
+  /** The container size the stream was created with (see `initialContainer`): it is not pushed again. */
+  initialContainerSize?: { width: number; height: number },
+): (input: ChartStreamInput) => void {
+  const latest = React.useRef<ChartStreamInput | null>(null)
+  type Size = { width?: number; height?: number } | undefined
+  const sent = React.useRef<{ stream: unknown; domainRaw: Record<string, unknown[]>; signals: Record<string, unknown>; containerSize?: { width: number; height: number }; measuredSize?: Size }>(
+    { stream, domainRaw: {}, signals: {}, containerSize: initialContainerSize },
+  )
+  const sameSize = (a: Size, b: Size): boolean => a === b || (a != null && b != null && a.width === b.width && a.height === b.height)
+  const pushRef = React.useRef(push)
+  pushRef.current = push
+  const send = React.useCallback((input: ChartStreamInput, force: boolean): void => {
+    const last = sent.current
+    const domainRaw = input.domainRaw ?? {}
+    const batch: StreamBatch = {}
+    const domainChanged = Object.keys(domainRaw).length !== Object.keys(last.domainRaw).length
+      || Object.entries(domainRaw).some(([k, v]) => JSON.stringify(last.domainRaw[k]) !== JSON.stringify(v))
+    if (domainChanged || (force && Object.keys(domainRaw).length)) {
+      const next: Record<string, unknown[] | null> = { ...domainRaw }
+      for (const k of Object.keys(last.domainRaw)) if (!(k in domainRaw)) next[k] = null
+      batch.domainRaw = next
+    }
+    const signals = input.signals
+    if (!sameValues(signals, last.signals) || (force && Object.keys(signals).length)) batch.signals = signals
+    // the container the inner chart measured: the stream sizes the spec to it as <Chart> sizes its own evaluation
+    if (input.containerSize && (force || !sameSize(input.containerSize, last.containerSize))) batch.containerSize = input.containerSize
+    if (input.measuredSize && (force || !sameSize(input.measuredSize, last.measuredSize))) batch.measuredSize = input.measuredSize
+    sent.current = { stream: last.stream, domainRaw, signals, containerSize: input.containerSize, measuredSize: input.measuredSize }
+    if (batch.domainRaw || batch.signals || batch.containerSize || batch.measuredSize) pushRef.current(batch)
+  }, [])
+  React.useEffect(() => {
+    if (sent.current.stream === stream) return
+    // The stream was rebuilt (spec content changed): it starts from the spec
+    // alone, so re-apply the current view/signals.
+    sent.current = { stream, domainRaw: {}, signals: {}, containerSize: initialContainerSize }
+    if (latest.current) send(latest.current, true)
+  }, [stream, send])
+  return React.useCallback((input: ChartStreamInput): void => {
+    latest.current = input
+    send(input, false)
+  }, [send])
+}
+
+/** Initial stream input derived from the chart props, so the first scene is already correct. */
+export function useInitialInput(
+  spec: VgSpec,
+  signals: Record<string, unknown> | undefined,
+  view: ChartProps['view'],
+): { signals?: Record<string, unknown>; domainRaw?: Record<string, unknown[]> } {
+  const names = React.useMemo(() => positionalScales(spec), [spec])
+  const domainRaw = React.useMemo(() => (view ? viewToDomainRaw(view, names) : undefined), [view, names])
+  return React.useMemo(() => ({
+    ...(signals ? { signals } : {}),
+    ...(domainRaw ? { domainRaw } : {}),
+  }), [signals, domainRaw])
+}
+
+/**
+ * Report a stream error once per error object, to `onStreamError` (with the failure info) and to `onError` (the prop every
+ * `<Chart>` takes; on a stream component a failure is the stream's), even if the callbacks are inline arrows.
+ */
+export function useReportOnce(
+  error: Error | null,
+  failure: StreamFlushFailureInfo | null,
+  onStreamError: StreamErrorHandler | undefined,
+  onError: ((error: Error) => void) | undefined,
+): void {
+  const onStreamErrorRef = React.useRef(onStreamError)
+  onStreamErrorRef.current = onStreamError
+  const onErrorRef = React.useRef(onError)
+  onErrorRef.current = onError
+  const failureRef = React.useRef(failure)
+  failureRef.current = failure
+  React.useEffect(() => {
+    if (!error) return
+    onStreamErrorRef.current?.(error, failureRef.current ?? undefined)
+    onErrorRef.current?.(error)
+  }, [error])
+}
+
+/**
+ * The Vega spec a stream component's spec is, compiled once per change of its content: the stream hook and the chart the stream
+ * draws into both take it, so a Vega-Lite spec is compiled once and not by each of them.
+ */
+export function useNormalizedSpec(spec: VgSpec): VgSpec {
+  const stable = useStableSpec(spec)
+  // (a spec that does not normalize is handed on as it is: the stream hook normalizes it inside its guard and reports the error
+  // through `error` / `onStreamError`)
+  return React.useMemo(() => normalizeSpecResult(stable).spec ?? stable, [stable])
+}
+

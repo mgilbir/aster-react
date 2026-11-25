@@ -10,7 +10,8 @@ import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { forEachVariant } from './testing/variants'
-import { ChartStream, ChartWorkerStream, type ChartStreamHandle } from './ChartStream'
+import { ChartStream, type ChartStreamHandle } from './ChartStream'
+import { ChartWorkerStream } from './ChartWorkerStream'
 import { handleChartWorkerStreamRequest, type ChartWorkerStreamRequest } from './worker'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
