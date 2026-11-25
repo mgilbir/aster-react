@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect, afterAll, beforeAll } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { compileChart, evaluateChart, renderSceneToSvg, renderSpec } from './index.js'
-import { patchSceneDom, renderSceneToDomElement } from './addon-dom.js'
+import { patchSceneDom, renderSceneToDomElement, sceneToDomDesc, type DomDesc } from './addon-dom.js'
+import { createChartSession } from './session.js'
 import { svgPathCommands } from './path-data.js'
 import type { SceneRoot } from './types.js'
 import { namesAnotherDocument } from './css-url.testlib.js'
@@ -45,26 +46,62 @@ const BENIGN_KIND = {
   shape: 'circle',
   // a mark's `blend`: written into the `style` attribute (a CSS declaration list), see the CSS suite below
   blend: 'multiply',
+  // a hyperlink (vetted by sanitizeHref / the URL policy)
+  href: 'https://example.com/a',
+  // a flag the renderer tests for truth
+  bool: true,
+  // a list of names (a group's parts, a legend's channels)
+  strs: ['a', 'b'],
 } as const
 
 type Kind = keyof typeof BENIGN_KIND
-// Every channel the string renderer (render.ts) and the descriptor builder
-// (dom.ts) read from an item / group.
+// Every field the string renderer (render.ts) and the descriptor builder (dom.ts) read from an item / group and write, or test, as a
+// value. The list is checked against what the renderers read (see 'the channel table is every value field the renderers read'):
+// a field they read that is neither here nor in STRUCTURE fails that test.
 const CHANNELS: Record<string, Kind> = {
   x: 'num', y: 'num', x2: 'num', y2: 'num', width: 'num', height: 'num', size: 'num', radius: 'num',
   innerRadius: 'num', outerRadius: 'num', startAngle: 'num', endAngle: 'num', padAngle: 'num', angle: 'num',
   cornerRadius: 'num', cornerRadiusTopLeft: 'num', cornerRadiusTopRight: 'num', cornerRadiusBottomLeft: 'num',
   cornerRadiusBottomRight: 'num', dx: 'num', dy: 'num', fontSize: 'num', lineHeight: 'num', limit: 'num',
   strokeWidth: 'num', opacity: 'num', fillOpacity: 'num', strokeOpacity: 'num', scaleX: 'num', scaleY: 'num',
-  tension: 'num',
+  tension: 'num', strokeDashOffset: 'num', strokeMiterLimit: 'num', theta: 'num',
   fill: 'color', stroke: 'color',
   strokeDash: 'dash',
   shape: 'shape', baseline: 'str', align: 'str', interpolate: 'str', orient: 'str', strokeJoin: 'str',
-  strokeCap: 'str', font: 'str', fontWeight: 'str', text: 'str', role: 'str', dataDatum: 'str', ellipsis: 'str',
-  lineBreak: 'str', aspect: 'str',
-  path: 'path', clipPathD: 'path',
+  strokeCap: 'str', font: 'str', fontWeight: 'str', fontStyle: 'str', fontVariant: 'str', text: 'str', role: 'str', dataDatum: 'str',
+  ellipsis: 'str', lineBreak: 'str', aspect: 'str', description: 'str', ariaRole: 'str', ariaRoleDescription: 'str', cssName: 'str',
+  name: 'str', markRole: 'str', legendType: 'str', legendScale: 'str', scale: 'str', formatType: 'str', _part: 'str', _kind: 'str',
+  path: 'path', clipPathD: 'path', markClipPathD: 'path',
   url: 'url',
+  href: 'href',
   blend: 'blend',
+  aria: 'bool', defined: 'bool', smooth: 'bool', clip: 'bool', interactive: 'bool', grid: 'bool', describes: 'bool', emptyMark: 'bool',
+  hasLinks: 'bool', contentClip: 'bool', markClip: 'bool', urlDenied: 'bool',
+  parts: 'strs', legendChannels: 'strs', madeMarks: 'strs',
+}
+
+/**
+ * Fields the renderers read that are not values: the scene's structure and the engine's own bookkeeping, which hold objects the
+ * engine built (a hostile string there is not a scene the engine can make). Each with what it is.
+ */
+const STRUCTURE: Record<string, string> = {
+  items: 'the child list',
+  marktype: 'the mark kind the renderer dispatches on',
+  mark: 'the item\'s mark group (a back reference)',
+  datum: 'the row an item was made from (written only as `dataDatum`)',
+  __gen: 'the evaluation that made the item (the patcher\'s clean test)',
+  __domDesc: 'the patcher\'s descriptor cache (C1: lane a01 moves it off the item and refuses encode channels naming engine state)',
+  __scales: 'the resolved scale snapshot',
+  _bg: 'the frame background item marker', _clip: 'a clip shape the engine computed', _drawError: 'a draw failure the engine recorded',
+  _hit: 'the hit-only item marker', _made: 'the engine\'s made-item marker', _scope: 'the scope-group marker',
+  box: 'a guide\'s background item', boxFg: 'a guide\'s foreground item',
+  partMeta: 'the parts of a group (name, interactive) the engine recorded', itemAria: 'an item\'s aria channels (each tested above)',
+  format: 'a guide\'s compiled format specifier', title: 'a compiled title',
+  legendBounds: 'a legend\'s measured bounds', legendProps: 'a legend\'s compiled properties',
+  legendFormat: 'a legend\'s compiled format', legendItemFormat: 'a legend entry\'s compiled format', legendFormatType: 'a legend\'s compiled format type',
+  axis: 'an axis\'s compiled definition', image: 'a loaded image (canvas)',
+  contentClipBox: 'a guide group\'s clip box (numbers the engine measured: an object of w, h and an offset)',
+  markIndex: 'the mark\'s place among its siblings, which the renderer orders by',
 }
 
 const SPEC = {
@@ -123,22 +160,54 @@ function withChannel(channel: string, value: unknown): SceneRoot {
   return scene
 }
 
+/**
+ * The benign values a hostile one may render like: a flag the renderer tests with `=== true` reads a hostile string as false, and a
+ * link `sanitizeHref` refuses is drawn with no `<a>` (as vega draws it).
+ */
+const BENIGN_ALTERNATES: Partial<Record<Kind, unknown[]>> = { bool: [false], href: [undefined] }
+/**
+ * Per channel: a text given as an array is drawn as that many lines (vega's multi-line text); a path vega's reader refuses stops the
+ * evaluation at that mark, as vega's bounds do (the end-to-end test below says so), whatever the text of the refused path.
+ */
+const CHANNEL_ALTERNATES: Record<string, unknown[]> = { text: [['hello', 'hello']], path: ['not a path'] }
+const benignSkeletons = (channel: string, kind: Kind, render: (scene: SceneRoot) => Sk): Sk[] =>
+  [BENIGN_KIND[kind], ...(BENIGN_ALTERNATES[kind] ?? []), ...(CHANNEL_ALTERNATES[channel] ?? [])].map((v) => render(withChannel(channel, v)))
+/** `describeDiff` against the first reference it matches (the last one's difference otherwise). */
+function describeDiffAny(a: Sk, refs: readonly Sk[]): string | null {
+  let last: string | null = 'no reference'
+  for (const ref of refs) { last = describeDiff(a, ref); if (last === null) return null }
+  return last
+}
+
 function hostileFor(kind: Kind, h: string): unknown {
   if (kind === 'shape') {
     // an invalid custom path is refused (dedicated test); only paths that parse can render
     try { svgPathCommands(h); return h } catch { return BENIGN_KIND.shape }
   }
-  return kind === 'dash' ? [h, h] : h
+  return kind === 'dash' || kind === 'strs' ? [h, h] : h
 }
+
+/**
+ * Object-valued hostile values (C21): what a host's rows or an expression can hand a channel besides a string -- an object whose
+ * text is hostile, a nested object and array holding it, and an object that throws when made text.
+ */
+const OBJECT_HOSTILE = (h: string): unknown[] => [
+  { toString: () => h, valueOf: () => h },
+  { a: h, b: [h] },
+  [[h], { c: h }],
+  Object.assign(Object.create(null), { x: h }),
+]
 
 // --- structure extraction -----------------------------------------------------
 
-interface Sk { tag: string; attrs: string[]; kids: Sk[] }
+interface Sk { tag: string; attrs: string[]; values: Record<string, string>; text: string; kids: Sk[] }
 
 function skeletonOf(el: Element): Sk {
   return {
     tag: el.localName,
     attrs: [...el.attributes].map((a) => a.name).sort(),
+    values: Object.fromEntries([...el.attributes].map((a) => [a.name, a.value])),
+    text: [...el.childNodes].filter((c) => c.nodeType === 3).map((c) => c.textContent ?? '').join(''),
     kids: [...el.children].map(skeletonOf),
   }
 }
@@ -162,18 +231,29 @@ function learn(sk: Sk): void {
 }
 
 /**
+ * A link a browser would run as code when followed (after the characters its URL parser strips). Only an `<a>` is followed: an
+ * `<image>` loads its URL as an image and runs nothing (the URL policy decides what it may load: url-policy tests).
+ */
+const SCRIPT_URL = /^(?:javascript|vbscript|data:text\/html)/i
+const urlAttrBad = (tag: string, name: string, value: string): boolean =>
+  tag === 'a' && (name === 'href' || name === 'xlink:href') && SCRIPT_URL.test(value.replace(/[\u0000-\u0020\u007f]/g, ''))
+
+/**
  * Element tree (tags, order, nesting) must be identical. Attribute NAMES must
  * be identical, except that an attribute whose very presence is derived from
  * the value (e.g. `dy`, which exists only when a font size yields a non-zero
  * baseline offset) may differ; those must still be names some benign render of
  * that tag carries. A hostile value can therefore never introduce a new tag, a
- * new attribute name (`onerror`, `onload`, ...) or reshape the tree.
+ * new attribute name (`onerror`, `onload`, ...) or reshape the tree. Values (C21): no
+ * attribute may start an event handler's name, and no link may hold a script URL.
  */
 function describeDiff(a: Sk, b: Sk, path = 'svg'): string | null {
   if (a.tag !== b.tag) return `${path}: tag ${a.tag} != ${b.tag}`
   const known = ATTR_UNIVERSE.get(a.tag)
   for (const name of a.attrs) {
     if (!known?.has(name)) return `${path}<${a.tag}>: unexpected attribute ${name}`
+    if (/^on/i.test(name)) return `${path}<${a.tag}>: event handler attribute ${name}`
+    if (urlAttrBad(a.tag, name, a.values[name]!)) return `${path}<${a.tag}>: ${name} holds a script URL ${JSON.stringify(a.values[name])}`
   }
   if (a.kids.length !== b.kids.length) return `${path}<${a.tag}>: ${a.kids.length} children != ${b.kids.length}`
   for (let i = 0; i < a.kids.length; i++) {
@@ -181,6 +261,62 @@ function describeDiff(a: Sk, b: Sk, path = 'svg'): string | null {
     if (d) return d
   }
   return null
+}
+
+/** The same document: tags, attribute names AND values, children (a patched DOM against a fresh build of the same scene). */
+function exactDiff(a: Sk, b: Sk, path = 'svg'): string | null {
+  if (a.tag !== b.tag) return `${path}: tag ${a.tag} != ${b.tag}`
+  if (a.attrs.join(' ') !== b.attrs.join(' ')) return `${path}<${a.tag}>: attributes [${a.attrs.join(' ')}] != [${b.attrs.join(' ')}]`
+  for (const name of a.attrs) if (a.values[name] !== b.values[name]) return `${path}<${a.tag}> ${name}: ${JSON.stringify(a.values[name])} != ${JSON.stringify(b.values[name])}`
+  if (a.text !== b.text) return `${path}<${a.tag}> text: ${JSON.stringify(a.text)} != ${JSON.stringify(b.text)}`
+  if (a.kids.length !== b.kids.length) return `${path}<${a.tag}>: ${a.kids.length} children != ${b.kids.length}`
+  for (let i = 0; i < a.kids.length; i++) {
+    const d = exactDiff(a.kids[i]!, b.kids[i]!, `${path}/${a.tag}[${i}]`)
+    if (d) return d
+  }
+  return null
+}
+
+/**
+ * The fields the string renderer, the DOM descriptor builder and the patcher read off the scene's nodes, recorded by rendering the
+ * base scene and the scene with every channel set (so the reads behind a set channel happen too) through proxies; plus every field
+ * of the scene node types (types.ts) that render.ts or dom.ts name in code.
+ */
+function fieldsTheRenderersRead(): Set<string> {
+  const read = new Set<string>()
+  const watch = (n: Record<string, unknown>): Record<string, unknown> => {
+    if (Array.isArray(n.items)) n.items = (n.items as unknown[]).map((c) => (c !== null && typeof c === 'object' ? watch(c as Record<string, unknown>) : c))
+    return new Proxy(n, {
+      get(t, k, r) { if (typeof k === 'string') read.add(k); return Reflect.get(t, k, r) },
+      has(t, k) { if (typeof k === 'string') read.add(k); return Reflect.has(t, k) },
+    })
+  }
+  const watched = (scene: SceneRoot): SceneRoot => {
+    ;(scene as unknown as { items: unknown[] }).items = scene.items.map((g) => watch(g as unknown as Record<string, unknown>))
+    return scene
+  }
+  const everyChannel = (): SceneRoot => {
+    const scene = baseScene()
+    for (const [channel, kind] of Object.entries(CHANNELS)) for (const n of nodes(scene)) { const v = BENIGN_KIND[kind]; n[channel] = Array.isArray(v) ? [...v] : v }
+    return scene
+  }
+  for (const make of [baseScene, everyChannel]) {
+    renderSceneToSvg(watched(make()))
+    renderSceneToDomElement(watched(make()), document)
+    patchSceneDom(renderSceneToDomElement(baseScene(), document) as unknown as SVGSVGElement, watched(make()))
+  }
+  const types = readFileSync(join(import.meta.dirname, 'types.ts'), 'utf8')
+  const code = ['render.ts', 'dom.ts'].map((f) => readFileSync(join(import.meta.dirname, f), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1')).join('\n')
+  for (const iface of ['SceneGroup', 'SceneItem']) {
+    const start = types.indexOf(`export interface ${iface} `)
+    expect(start, iface).toBeGreaterThan(-1)
+    const body = types.slice(start, types.indexOf('\n}\n', start))
+    for (const m of body.matchAll(/^ {2}(?:readonly )?([A-Za-z_$][\w$]*)\??:/gm)) {
+      const f = m[1]!
+      if (new RegExp(`\\.${f.replace(/\$/g, '\\$')}\\b|'${f}'`).test(code)) read.add(f)
+    }
+  }
+  return read
 }
 
 describe('SVG string renderer escapes every attribute and text value', () => {
@@ -203,20 +339,67 @@ describe('SVG string renderer escapes every attribute and text value', () => {
   // Learn the benign attribute universe: the base scene plus every channel set
   // to a benign value of its kind.
   learn(skeletonOfSvg(renderSceneToSvg(baseScene())))
-  for (const [channel, kind] of Object.entries(CHANNELS)) learn(skeletonOfSvg(renderSceneToSvg(withChannel(channel, BENIGN_KIND[kind]))))
+  for (const [channel, kind] of Object.entries(CHANNELS)) for (const sk of benignSkeletons(channel, kind, (sc) => skeletonOfSvg(renderSceneToSvg(sc)))) learn(sk)
 
   it('the attribute universe is non-trivial (guards the comparator)', () => {
     expect(ATTR_UNIVERSE.get('path')!.size).toBeGreaterThan(8)
     expect(ATTR_UNIVERSE.get('path')!.has('onerror')).toBe(false)
   })
 
+  it('the channel table is every value field the renderers read (C21: derived, not listed by hand)', () => {
+    const read = fieldsTheRenderersRead()
+    // (a floor: a derivation that records nothing fails here)
+    expect(read.size).toBeGreaterThan(80)
+    for (const f of ['href', 'strokeDashOffset', 'strokeMiterLimit', 'fontStyle', 'fontVariant', 'description', 'ariaRole', 'ariaRoleDescription', 'cssName']) expect(read.has(f), f).toBe(true)
+    const unlisted = [...read].filter((f) => !Object.hasOwn(CHANNELS, f) && !Object.hasOwn(STRUCTURE, f)).sort()
+    expect(unlisted, 'a field the renderers read that the hostile-value tests never set').toEqual([])
+    // and nothing is both
+    expect(Object.keys(STRUCTURE).filter((f) => Object.hasOwn(CHANNELS, f))).toEqual([])
+  })
+
+  // (C21) each channel gets every hostile payload inside an object form: the four forms take the thirteen payloads in turn, so every
+  // payload and every form is tried on every channel, through the string renderer, a fresh DOM build and a patch
+  for (const [channel, kind] of Object.entries(CHANNELS)) {
+    it(`channel ${channel}: object-valued hostile values (an object whose text is hostile, nested objects and arrays) keep the benign structure`, () => {
+      const benign = benignSkeletons(channel, kind, (sc) => skeletonOfSvg(renderSceneToSvg(sc)))
+      const benignDom = renderSceneToDomElement(withChannel(channel, BENIGN_KIND[kind]), document) as Element
+      HOSTILE.forEach((h, i) => {
+        const forms = OBJECT_HOSTILE(h)
+        const v = forms[i % forms.length]
+        const what = `${channel}=form ${i % forms.length} of ${JSON.stringify(h)}`
+        const scene = withChannel(channel, v)
+        // each path either refuses the value (throws: nothing is written) or writes the benign structure
+        const refused = (e: unknown): boolean => e instanceof TypeError || /^Invalid SVG path/.test((e as Error).message)
+        const check = (path: string, make: () => Sk): void => {
+          let sk: Sk
+          try { sk = make() } catch (e) { expect(refused(e), `${path} ${what}: ${(e as Error).message}`).toBe(true); return }
+          expect(describeDiffAny(sk, benign), `${path} ${what}`).toBeNull()
+        }
+        check('string', () => skeletonOfSvg(renderSceneToSvg(scene)))
+        check('dom', () => skeletonOf(renderSceneToDomElement(scene, document) as Element))
+        check('patched', () => {
+          const patched = benignDom.cloneNode(true) as Element
+          patchSceneDom(patched as unknown as SVGSVGElement, scene)
+          return skeletonOf(patched)
+        })
+      })
+    })
+  }
+
+  it('the object forms are drawn, not refused, by most channels (guards the checks above, which skip a refusal)', () => {
+    const drawn = Object.keys(CHANNELS).filter((channel) => {
+      try { renderSceneToSvg(withChannel(channel, OBJECT_HOSTILE(HOSTILE[0]!)[0])); return true } catch { return false }
+    })
+    expect(drawn.length).toBeGreaterThan(Object.keys(CHANNELS).length * 0.8)
+  })
+
   for (const [channel, kind] of Object.entries(CHANNELS)) {
     it(`channel ${channel}: hostile strings never change the document structure`, () => {
-      const benign = skeletonOfSvg(renderSceneToSvg(withChannel(channel, BENIGN_KIND[kind])))
+      const benign = benignSkeletons(channel, kind, (sc) => skeletonOfSvg(renderSceneToSvg(sc)))
       for (const h of HOSTILE) {
         const svg = renderSceneToSvg(withChannel(channel, hostileFor(kind, h)))
         const hostile = skeletonOfSvg(svg)
-        expect(describeDiff(hostile, benign), `${channel}=${JSON.stringify(h)}`).toBeNull()
+        expect(describeDiffAny(hostile, benign), `${channel}=${JSON.stringify(h)}`).toBeNull()
       }
     })
   }
@@ -265,9 +448,11 @@ describe('SVG string renderer escapes every attribute and text value', () => {
   learn(skeletonOfSvg(renderSceneToSvg(frameFields('#336699', [4, 2]))))
 
   it('all channels hostile at once keeps the benign structure', () => {
+    // (the kinds with benign alternates -- flags, links -- may legitimately change the structure: each is tested alone above against
+    // both of its references; here they keep their benign value so the rest are compared all at once)
     const benign = skeletonOfSvg(renderSceneToSvg(allChannels((k) => BENIGN_KIND[k])))
     for (const h of HOSTILE) {
-      const d = describeDiff(skeletonOfSvg(renderSceneToSvg(allChannels((k) => hostileFor(k, h)))), benign)
+      const d = describeDiff(skeletonOfSvg(renderSceneToSvg(allChannels((k) => (BENIGN_ALTERNATES[k] ? BENIGN_KIND[k] : hostileFor(k, h))))), benign)
       expect(d, JSON.stringify(h)).toBeNull()
     }
   })
@@ -315,32 +500,142 @@ describe('SVG string renderer escapes every attribute and text value', () => {
     }
   })
 
-  // One test per channel (each keeps every hostile value, fresh build AND in-place patch): a
-  // single test over all channels took ~2 s alone and exceeded the 5 s default when the whole
-  // suite ran in parallel. Coverage is unchanged; each test is a fraction of the time.
+  // One test per channel, each over every hostile value (C741: all of HOSTILE, not a slice), fresh build AND in-place patch.
   describe('DOM paths (fresh build and in-place patch) agree on structure for hostile scenes', () => {
     // relearn the attribute universe from DOM skeletons when this group starts (not at collection
     // time: that would wipe what the string-renderer tests above are about to use)
     beforeAll(() => {
       ATTR_UNIVERSE.clear()
       for (const [channel, kind] of Object.entries(CHANNELS)) {
-        learn(skeletonOf(renderSceneToDomElement(withChannel(channel, BENIGN_KIND[kind]), document) as Element))
+        for (const sk of benignSkeletons(channel, kind, (sc) => skeletonOf(renderSceneToDomElement(sc, document) as Element))) learn(sk)
       }
       learn(skeletonOf(renderSceneToDomElement(baseScene(), document) as Element))
     })
     for (const [channel, kind] of Object.entries(CHANNELS)) {
       it(`channel ${channel}`, () => {
-        const benignScene = withChannel(channel, BENIGN_KIND[kind])
-        const benignDom = renderSceneToDomElement(benignScene, document) as Element
-        const benignSk = skeletonOf(benignDom)
-        for (const h of HOSTILE.slice(0, 4)) {
+        const benignDom = renderSceneToDomElement(withChannel(channel, BENIGN_KIND[kind]), document) as Element
+        const benignSk = benignSkeletons(channel, kind, (sc) => skeletonOf(renderSceneToDomElement(sc, document) as Element))
+        for (const h of HOSTILE) {
           const hostileScene = withChannel(channel, hostileFor(kind, h))
           const fresh = renderSceneToDomElement(hostileScene, document) as Element
-          expect(describeDiff(skeletonOf(fresh), benignSk), `fresh ${channel}=${JSON.stringify(h)}`).toBeNull()
-          const patched = renderSceneToDomElement(benignScene, document) as Element
+          expect(describeDiffAny(skeletonOf(fresh), benignSk), `fresh ${channel}=${JSON.stringify(h)}`).toBeNull()
+          const patched = benignDom.cloneNode(true) as Element
           patchSceneDom(patched as unknown as SVGSVGElement, hostileScene)
-          expect(describeDiff(skeletonOf(patched), benignSk), `patched ${channel}=${JSON.stringify(h)}`).toBeNull()
+          expect(describeDiffAny(skeletonOf(patched), benignSk), `patched ${channel}=${JSON.stringify(h)}`).toBeNull()
+          // the patch makes what a fresh build makes, values included
+          expect(exactDiff(skeletonOf(patched), skeletonOf(fresh)), `patched = fresh ${channel}=${JSON.stringify(h)}`).toBeNull()
         }
+      })
+    }
+  })
+
+  // (C21) the hostile value enters as a spec author's or a data row's would: through a mark's `encode`. The chart's string rendering
+  // is mounted (as <Chart> mounts it), patched with the scene it came from (the patcher makes its descriptors), and the SAME session's
+  // next evaluation -- one row appended, so the items of the other rows are kept and their descriptors served from the cache -- is
+  // patched over it; also straight from the string mount. Each must be the document a fresh DOM build of that state is, values
+  // included, and the benign structure.
+  describe('hostile values through a spec encode, patched by the same session (the cached-descriptor path)', () => {
+    const schema = JSON.parse(readFileSync(join(import.meta.dirname, '../../conformance/node_modules/vega/build/vega-schema.json'), 'utf8')) as { definitions: { encodeEntry: { properties: Record<string, unknown> } } }
+    // every channel of the table a spec can encode: vega's encode channels (its schema), and the link
+    const ENCODED = Object.keys(CHANNELS).filter((c) => Object.hasOwn(schema.definitions.encodeEntry.properties, c) || CHANNELS[c] === 'href')
+    const rows = (n: number): Array<Record<string, number>> => Array.from({ length: n }, (_, i) => ({ a: 10 + 20 * i, b: 20 + 10 * i, c: 1 + (i % 3) }))
+    const specWith = (channel: string, v: unknown): never => {
+      const spec = structuredClone(SPEC) as { marks: Array<{ encode: { update: Record<string, unknown> }; marks?: Array<{ encode: { update: Record<string, unknown> } }> }> }
+      for (const m of spec.marks) {
+        m.encode.update[channel] = { value: structuredClone(v) }
+        for (const inner of m.marks ?? []) inner.encode.update[channel] = { value: structuredClone(v) }
+      }
+      return spec as never
+    }
+    const mount = (scene: SceneRoot): Element => {
+      const host = document.createElement('div')
+      host.innerHTML = renderSceneToSvg(scene)
+      return host.firstElementChild!
+    }
+    /** The session's two states, patched over a string mount; how many items of the second were served from the descriptor cache. */
+    function run(channel: string, v: unknown): { hydrated: Element; direct: Element; fresh: Element; cached: number; kept: number; failed: boolean } {
+      const spec = specWith(channel, v)
+      const session = createChartSession()
+      // (an evaluation that logs a dataflow error is not committed, so the next keeps nothing: no descriptor is served from the cache)
+      let failed = false
+      const logger = { error: () => { failed = true }, warn: () => {}, info: () => {}, debug: () => {} }
+      const a = session.evaluate(spec, { data: { t: rows(3) }, logger })
+      const hydrated = mount(a)
+      patchSceneDom(hydrated, a)
+      // (a descriptor of the second state that is the very object the first state's build made was served from the patcher's cache; the
+      // guides keep their own caches, so only the marks under test are counted)
+      const markLeaves = (d: DomDesc, into: Set<DomDesc> = new Set(), inGuide = false): Set<DomDesc> => {
+        const guide = inGuide || /\brole-(axis|legend|title)\b/.test(d.attrs.find(([k]) => k === 'class')?.[1] ?? '')
+        if (!guide && d.children === undefined) into.add(d)
+        for (const c of d.children ?? []) markLeaves(c, into, guide)
+        return into
+      }
+      const made = markLeaves(sceneToDomDesc(a))
+      const b = session.evaluate(spec, { data: { t: rows(4) }, logger })
+      const cached = [...markLeaves(sceneToDomDesc(b))].filter((d) => made.has(d)).length
+      // (the mark items of the second state that are the first state's own: each is clean, and its descriptor is the cached one. A line or
+      // an area is one item for all its rows and a text may be two descriptors, so the count is held to half of them, not to all)
+      const marksOnly = (scene: SceneRoot): unknown[] => {
+        const out: unknown[] = []
+        const walk = (items: ReadonlyArray<Record<string, unknown>>, guide: boolean): void => {
+          for (const it of items) {
+            const g = guide || ['axis', 'legend', 'title'].includes(String(it.role))
+            if (Array.isArray(it.items)) walk(it.items as Array<Record<string, unknown>>, g)
+            else if (!g) out.push(it)
+          }
+        }
+        walk(scene.items as unknown as Array<Record<string, unknown>>, false)
+        return out
+      }
+      const first = new Set(marksOnly(a))
+      const kept = marksOnly(b).filter((n) => first.has(n)).length
+      patchSceneDom(hydrated, b)
+      const direct = mount(a)
+      patchSceneDom(direct, b)
+      const fresh = renderSceneToDomElement(evaluateChart(compileChart(specWith(channel, v)), { data: { t: rows(4) } }), document) as Element
+      return { hydrated, direct, fresh, cached, kept, failed }
+    }
+
+    const cachedNever: string[] = []
+    afterAll(() => {
+      // (a channel all of whose hostile values fail the evaluation -- an unknown curve name -- never reaches the cache; that may be a
+      // handful, never most: the cached path is what this block is for)
+      expect(cachedNever.length, cachedNever.join(' ')).toBeLessThan(ENCODED.length / 10)
+    })
+
+    it('derives its channels from vega\'s schema and finds them in the table (a floor)', () => {
+      expect(ENCODED.length).toBeGreaterThan(50)
+      for (const c of ['fill', 'href', 'text', 'url', 'description', 'ariaRole', 'strokeDashOffset', 'fontStyle']) expect(ENCODED, c).toContain(c)
+    })
+
+    for (const channel of ENCODED) {
+      it(`channel ${channel}`, () => {
+        const kind = CHANNELS[channel]!
+        const benign = [BENIGN_KIND[kind], ...(BENIGN_ALTERNATES[kind] ?? []), ...(CHANNEL_ALTERNATES[channel] ?? [])]
+          .map((v) => skeletonOf(run(channel, v).fresh))
+        let cached = 0
+        let kept = 0
+        let committed = 0
+        HOSTILE.forEach((h, i) => {
+          // the payload as a string, and (in turn) inside an object or an array, as a row or an expression can hand it
+          for (const v of [hostileFor(kind, h), [{ a: h }, [h]][i % 2]]) {
+            const what = `${channel}=${JSON.stringify(v)}`
+            let r: ReturnType<typeof run>
+            try { r = run(channel, v) } catch (e) {
+              // (a symbol shape that is no path is refused, as vega refuses it: nothing is written)
+              expect(e instanceof TypeError || /^Invalid SVG path/.test((e as Error).message), `${what}: ${(e as Error).message}`).toBe(true)
+              continue
+            }
+            if (!r.failed) { committed++; cached += r.cached; kept += r.kept }
+            const fresh = skeletonOf(r.fresh)
+            expect(describeDiffAny(fresh, benign), `fresh ${what}`).toBeNull()
+            expect(exactDiff(skeletonOf(r.hydrated), fresh), `string mount, hydrated, then patched ${what}`).toBeNull()
+            expect(exactDiff(skeletonOf(r.direct), fresh), `string mount, then patched ${what}`).toBeNull()
+          }
+        })
+        // the second evaluation's kept items really were drawn from the cached descriptors, whenever an evaluation was committed
+        if (committed > 0) { expect(kept, channel).toBeGreaterThan(0); expect(cached, `${channel}: kept items served from the descriptor cache`).toBeGreaterThanOrEqual(kept / 2) }
+        else cachedNever.push(channel)
       })
     }
   })
