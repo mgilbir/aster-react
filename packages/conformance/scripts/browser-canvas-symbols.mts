@@ -125,6 +125,12 @@ window.__time = (shape, n) => {
     { fill: null, stroke: '#e45756', strokeWidth: 3, strokeJoin: 'round', strokeCap: 'round', strokeDash: [4, 2], strokeDashOffset: 1, opacity: 1 },
     { fill: null, stroke: '#000', strokeWidth: 4, strokeJoin: 'miter', strokeMiterLimit: 10, opacity: 0.5 },
     { fill: '#0a0', stroke: null, opacity: 1, blend: 'multiply' },
+    // The paints a run is batched under (render.ts `batchablePaint`: opaque, unblended, a fill or a stroke but not both): paints
+    // 0, 2, 4 and 5 above are not, so only 1 and 3 take the Path2D route, and the gate's `path2d` floor needs six that do.
+    { fill: '#4c78a8', stroke: null, opacity: 1 },
+    { fill: '#e45756', stroke: null, opacity: 1, fillOpacity: 1, strokeOpacity: 1, strokeWidth: 3 },
+    { fill: null, stroke: '#222', strokeWidth: 4, strokeJoin: 'miter', strokeMiterLimit: 10, opacity: 1 },
+    { fill: null, stroke: '#4c78a8', strokeWidth: 1, strokeJoin: 'bevel', strokeCap: 'butt', opacity: 1, strokeOpacity: 1 },
   ]
   const cases: SymbolRunResult['cases'] = []
   let withInk = 0
