@@ -78,24 +78,27 @@ describe('the schema check agrees with an independent reading of the schema', ()
     cur[p[p.length - 1]!] = v
     return c
   }
-  it('on wrong values at every position: nothing the schema allows is refused, nothing it forbids passes', () => {
-    let n = 0
-    const falseRefusals: string[] = []
-    const falsePasses: string[] = []
-    for (const [f, s] of corpus.filter((_, i) => i % 8 === 0)) {
+  // One test per sampled spec (tens of ms each): the whole sweep is seconds of work, and as one test it fell over the 5 s default
+  // whenever the machine was busy. The sweep itself is unchanged, and so is its size, which is asserted below.
+  const sample = corpus.filter((_, i) => i % 8 === 0)
+  for (const [f, s] of sample) {
+    it(`on wrong values at every position of ${f}: nothing the schema allows is refused, nothing it forbids passes`, () => {
+      const falseRefusals: string[] = []
+      const falsePasses: string[] = []
       for (const p of paths(s)) {
         for (const w of WRONG) {
           const m = setAt(s, p, w)
-          n++
           const mine = accepts(m)
           if (strict(m) && !mine) falseRefusals.push(`${f} ${p.join('.')} = ${JSON.stringify(w)}`)
           if (mine && !lenient(m)) falsePasses.push(`${f} ${p.join('.')} = ${JSON.stringify(w)}`)
         }
       }
-    }
-    expect(n).toBeGreaterThan(20_000)
-    expect(falseRefusals).toEqual([])
-    expect(falsePasses).toEqual([])
+      expect(falseRefusals).toEqual([])
+      expect(falsePasses).toEqual([])
+    })
+  }
+  it('the sweep covers more than 20 000 wrong values', () => {
+    expect(sample.reduce((n, [, s]) => n + paths(s).length * WRONG.length, 0)).toBeGreaterThan(20_000)
   })
 })
 
