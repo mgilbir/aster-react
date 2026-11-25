@@ -14,7 +14,7 @@
  * returned (the node itself is moved to a snapshot that reads what it held). So a reader that keeps what a node held past the
  * evaluation it was read in -- a hit index, an accessible tree -- keeps a copy of the array, not the array (C229).
  */
-import type { SceneGroup, SceneNode, SceneRoot } from './types.js'
+import type { SceneGroup, SceneItem, SceneNode, SceneRoot } from './types.js'
 
 const ENGINE_NODES = new WeakSet<object>()
 
@@ -53,4 +53,27 @@ function note(node: SceneNode, depth: number): void {
   // (a mark's items are leaves, but a group mark's are group items, and a guide holds groups of its parts)
   if (g.role === 'mark' && g.marktype !== 'group') return
   for (const c of items) note(c, depth + 1)
+}
+
+const ROOT_ITEMS = new WeakMap<object, SceneItem>()
+const ROOT_ITEM_SET = new WeakSet<object>()
+
+/**
+ * The root group item of a scene, vega's `mark-group role-frame root` item: what `event.item` is where nothing else is hit and the
+ * view's frame is painted (a fill, a transparent one included, or a stroke). One object per scene, so the hit index and the event loop
+ * name the same item; it carries what the view's own `encode` gave it that an event or the cursor reads (`cursor`).
+ */
+export function rootItemOf(scene: SceneRoot): SceneItem {
+  let item = ROOT_ITEMS.get(scene)
+  if (item === undefined) {
+    item = { x: 0, y: 0, ...(typeof scene.frameCursor === 'string' ? { cursor: scene.frameCursor } : {}) } as SceneItem
+    ROOT_ITEMS.set(scene, item)
+    ROOT_ITEM_SET.add(item)
+  }
+  return item
+}
+
+/** Whether an item is a scene's root group item (see `rootItemOf`). */
+export function isRootItem(item: object): boolean {
+  return ROOT_ITEM_SET.has(item)
 }
