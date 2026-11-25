@@ -7,7 +7,7 @@ import { chartTooltip } from './testing/tooltip'
 
 // The matrix runs every test below on <Chart>, <SvgChart> and <SvgChart interaction={interaction}>;
 // `Chart` is the variant's component (see testing/variants.tsx).
-forEachVariant(['svg', 'canvas'], (Chart, variant) => {
+forEachVariant(['svg', 'canvas'], (Chart) => {
   function makeSpec() {
     return {
       $schema: 'https://vega.github.io/schema/vega/v6.json',

@@ -112,7 +112,7 @@ describe('event-driven signals', () => {
     const { svg } = mount()
     let got: Record<string, unknown> | null = null
     const binding = bindSceneSignals(svg, evaluateChart(compileChart(spec)), {}, {
-      onSignal: (name, value, all) => { if (name === 'a') got = all },
+      onSignal: (name, _value, all) => { if (name === 'a') got = all },
     })
     binding.setSignal('a', 5)
     expect(got!.b).toBe(10)

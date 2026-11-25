@@ -152,7 +152,7 @@ function rowLocalAppendPulse(
 }
 
 function filterAppendPulse(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext,
   input: StepPulse, prev: Row[] | undefined, prevPass: boolean[] | undefined,
 ): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
   const base = pulseBaseLength(input)
@@ -241,7 +241,7 @@ function rederiveAligned(
 }
 
 function filterPulse(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext,
   input: StepPulse, prev: Row[] | undefined, prevPass: boolean[] | undefined,
 ): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
   const from = input.from!
@@ -372,7 +372,7 @@ function flattenPulse(
  * objects and output positions.
  */
 function aggregatePulse(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+  rows: Row[], t: CompiledTransform,
   input: StepPulse, prev: Row[] | undefined, prevState: AggState | undefined,
 ): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
   if (!prevState) return null
@@ -796,7 +796,7 @@ function applyStepWithPulse(
       const fast = carry === undefined || carriesNone(carry, pulseBaseLength(input)) ? identifierAppendPulse(rows, t, tctx, input, writable) : null
       if (fast) return fast
     } else if (type === 'filter') {
-      const fast = filterIsRowLocal(t, tctx) ? filterAppendPulse(rows, t, tctx, sourceName, input, writable, prevStepState as boolean[] | undefined) : null
+      const fast = filterIsRowLocal(t, tctx) ? filterAppendPulse(rows, t, tctx, input, writable, prevStepState as boolean[] | undefined) : null
       if (fast) return fast
     } else if (type === 'fold') {
       const fast = foldAppendPulse(rows, t, tctx, sourceName, input, writable)
@@ -850,7 +850,7 @@ function applyStepWithPulse(
       return { rows: out, pulse: out.length === rows.length ? input : null }
     }
     case 'filter':
-      return (filterIsRowLocal(t, tctx) ? filterPulse(rows, t, tctx, sourceName, input, prev, prevStepState as boolean[] | undefined) : null)
+      return (filterIsRowLocal(t, tctx) ? filterPulse(rows, t, tctx, input, prev, prevStepState as boolean[] | undefined) : null)
         ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
     case 'fold':
       return foldPulse(rows, t, tctx, sourceName, input, prev)
@@ -859,7 +859,7 @@ function applyStepWithPulse(
       return flattenPulse(rows, t, tctx, sourceName, input, prev, prevStepState as FlattenState | undefined)
         ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
     case 'aggregate':
-      return aggregatePulse(rows, t, tctx, sourceName, input, prev, prevStepState as AggState | undefined)
+      return aggregatePulse(rows, t, input, prev, prevStepState as AggState | undefined)
         ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
     case 'joinaggregate':
       return joinAggregatePulse(rows, t, tctx, sourceName, input, prev, prevStepState as AggState | undefined)

@@ -600,7 +600,7 @@ const LINK_PATHS: Record<string, (sx: number, sy: number, tx: number, ty: number
   'diagonal-radial': linkDiagonalR,
 }
 
-function linkpathRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
+function linkpathRows(rows: Row[], t: Record<string, unknown>): Row[] {
   // (each endpoint is a field or an `{expr}`, like any vega `field` parameter)
   const sx = geoAccessor(t.sourceX ?? 'source.x')
   const sy = geoAccessor(t.sourceY ?? 'source.y')

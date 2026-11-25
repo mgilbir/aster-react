@@ -439,7 +439,7 @@ function circlesInPath(path: string): string {
   const curves = new RegExp(`M${n},${n}${`C${n},${n},${n},${n},${n},${n}`.repeat(4)}Z`, 'g')
   const r3 = (v: number): string => fmtN(Math.round(v * 1000) / 1000)
   return path
-    .replace(arcs, (m, sx: string, sy: string, r: string, sweep: string) => `O(${sx},${sy},${r},${sweep})`)
+    .replace(arcs, (_m, sx: string, sy: string, r: string, sweep: string) => `O(${sx},${sy},${r},${sweep})`)
     .replace(curves, (m, ...g: string[]) => {
       const v = g.slice(0, 26).map(Number)
       const [sx, sy] = [v[0]!, v[1]!]

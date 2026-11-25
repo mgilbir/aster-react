@@ -82,7 +82,7 @@ function selfAndCycles(r: Rnd): Case {
   const n = 2 + Math.floor(r() * 3)
   const names = Array.from({ length: n }, (_, i) => String.fromCharCode(97 + i))
   const signals: Spec[] = names.map((name, i) => {
-    const reads = names.filter((m, j) => j !== i && r() < 0.4)
+    const reads = names.filter((_m, j) => j !== i && r() < 0.4)
     const self = r() < 0.4 ? [name] : []
     const terms = [...reads, ...self]
     return { name, value: i + 1, ...(terms.length ? { update: `${terms.join(' + ')} + 1` } : {}), ...(r() < 0.2 ? { react: false } : {}) }

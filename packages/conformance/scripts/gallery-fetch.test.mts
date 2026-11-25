@@ -28,8 +28,8 @@ beforeAll(async () => {
       return
     }
     const name = url.split('/').pop()!
-    if (name === 'LICENSE') return res.end('MIT')
-    if (name in FILES) return res.end(FILES[name])
+    if (name === 'LICENSE') { res.end('MIT'); return }
+    if (name in FILES) { res.end(FILES[name]); return }
     res.statusCode = 404
     res.end()
   })

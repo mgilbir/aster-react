@@ -6,7 +6,7 @@ import { forEachVariant } from './testing/variants'
 
 // The matrix runs every test below on <Chart>, <SvgChart> and <SvgChart interaction={interaction}>;
 // `Chart` is the variant's component (see testing/variants.tsx).
-forEachVariant(['svg'], (Chart, variant) => {
+forEachVariant(['svg'], (Chart) => {
   /**
    * Regression guard for the no-op re-render path: an inline-literal spec (fresh
    * object, identical content) must not re-parse the SVG or re-run the pipeline.

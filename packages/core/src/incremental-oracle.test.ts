@@ -184,7 +184,7 @@ function genSpec(r: Rnd): GenSpec {
   }
 
   // Marks ----------------------------------------------------------------
-  const xy = (dataset: string, xf: string, yf: string, extra: Record<string, unknown> = {}): Record<string, unknown> =>
+  const xy = (_dataset: string, xf: string, yf: string, extra: Record<string, unknown> = {}): Record<string, unknown> =>
     ({ x: { scale: 'x', field: xf }, y: { scale: 'y', field: yf }, ...extra })
   const fillFor = pipe.cf ? { fill: { scale: 'color', field: pipe.cf } } : { fill: { value: '#4c78a8' } }
   // Marks whose encode reads a signal directly (not only through a scale).
