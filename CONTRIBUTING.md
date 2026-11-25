@@ -13,9 +13,9 @@ Prerequisites:
 - **Playwright Chromium** for the browser gates (command below). `pnpm install` and `playwright install --with-deps` need the network; the
   gates themselves run offline (`verify-publish` installs the packed tarballs into a scratch project from the local files).
 
-`pnpm check` runs 27 gates in sequence, and a complete run takes on the order of an hour on a laptop: a full build (including the demo's
+`pnpm check` runs 28 gates in sequence, and a complete run takes on the order of an hour on a laptop: a full build (including the demo's
 Vite build), the whole vitest suite, the time-zone matrix, packaging, the Vega and Vega-Lite oracle gates, a 10,000-point benchmark with
-floors, the bundle and size checks, and seven Chromium gates. Each gate has its own deadline (`timeoutMs` in `scripts/gates.mjs`); one that
+floors, the bundle and size checks, and eight Chromium gates. Each gate has its own deadline (`timeoutMs` in `scripts/gates.mjs`); one that
 hangs is killed and reported as `FAIL <gate> (timeout)`. While iterating, run one gate (`pnpm check -- --only conformance`) or a tag
 (`--only browser`, `--skip browser`) and the whole list before opening the PR.
 
