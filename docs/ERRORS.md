@@ -383,6 +383,11 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
   Aster does not reproduce that.) An unknown signal name is `SpecParseError: Unrecognized signal name: "<name>"` at the same
   time (see "Expressions are refused when the spec is compiled"). An unknown scale `type` is not fatal at compile: vega throws at parse
   time, Aster logs it and stops building scales (see the table above).
+- **A `{signal}` where vega's parser has no scope is refused when the spec is compiled.** vega-parser reads a scale's `interpolate`
+  (its type, its `gamma`) and the `interval` / `step` of an object `nice` with no scope, so a `{signal}` in one of those positions
+  crashes `vega.parse` with a TypeError (`Cannot read properties of undefined (reading 'signalRef')`). `compileChart` (so every host)
+  throws a `SpecParseError` with that message, after the scale's domain and in vega's order (interpolation, then `nice`). A `nice`
+  that is itself a `{signal}`, and a `{signal}` in any other scale property, are read as vega reads them.
 - **Spec lists follow vega-util `array()`.** `data`, `scales`, `marks`, ... may be a lone object (a one-element list)
   or `null` (empty), as in `vega-parser`: `data: { values: [...] }` is accepted.
 - **Unknown expression functions are fatal, everywhere.** A call to a function vega does not know is
