@@ -226,9 +226,6 @@ The list below is the features refused by name, each checked by `test/readme-ref
   url, a description, a key, an order, `x2`, a predicate, a fold, a joinaggregate, a window, a lookup, a pivot, a
   stack, a density, a quantile, a loess, an extent) it is drawn as there; each place is held to vega-lite by
   `vl-escaped-names.test.ts` (conformance).
-- A selection projected over a nested field (`fields: ["o.v"]`, or a channel of one): vega-lite reads the flattened
-  copy it makes under the name `o.v`, which the compiler names otherwise. (An escaped field, `a\.b`, is a column of
-  the row and is projected as in vega-lite.)
 
 ## Where it matches vega-lite on purpose, rather than the specification
 
