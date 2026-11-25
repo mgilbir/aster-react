@@ -83,6 +83,35 @@ describe('an append costs the appended items', () => {
     expect(svg.querySelectorAll('path').length).toBeGreaterThan(0)
   })
 
+  it('dense DOM chunks: a row changed in place (anywhere in the chunks) is never taken for clean: the patched DOM is the full render, edit after edit', () => {
+    // (the proof `chunkClean` makes without reading the items holds only while nothing in the array was replaced: an edit stamps
+    // `__editGen`, and the chunk that holds the edited item must be built again -- an append alone never exercises that)
+    const stream = createChartStream(spec([symbols('t', '#4c78a8')], ['t']) as never, { capacity: 8 })
+    const base = rows(3000)
+    stream.push({ data: { t: base } })
+    let scene = stream.flush()!.scene
+    const o = { denseMarks: true }
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    document.body.appendChild(svg)
+    patchSceneDom(svg, scene, o)
+    const current = base.map((r) => ({ ...r }))
+    // the first chunk, one in the middle, the last chunk, and the appended tail, in turn
+    for (const [k, at] of [0, 1, 1337, 2999, 2990].entries()) {
+      current[at] = { x: ((at * 31 + k) % 997) / 997, y: ((at + k * 13) % 100) / 10 }
+      stream.push({ data: { t: current.map((r) => ({ ...r })) } })
+      scene = stream.flush()!.scene
+      patchSceneDom(svg, scene, o)
+      expect(svg.outerHTML, `edit of row ${at}`).toBe(legacyDomElement(scene, document, o).outerHTML)
+      // an append after an edit: the edited chunk was rebuilt, the untouched ones may be proved clean
+      const more = rows(2 + k, 5000 + k * 10)
+      current.push(...more)
+      stream.push({ append: { t: more } })
+      scene = stream.flush()!.scene
+      patchSceneDom(svg, scene, o)
+      expect(svg.outerHTML, `append after the edit of row ${at}`).toBe(legacyDomElement(scene, document, o).outerHTML)
+    }
+  })
+
   it('per-item symbols (not batched): no unchanged item is read, the patch appends only the new elements, the DOM matches the old implementation', () => {
     const stream = createChartStream(spec([symbols('t', '#4c78a8')], ['t']) as never, { capacity: 8 })
     stream.push({ data: { t: rows(400) } })

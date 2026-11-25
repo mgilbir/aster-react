@@ -13,7 +13,7 @@ import { spawnSync } from 'node:child_process'
 import { describe, expect, it, vi } from 'vitest'
 import * as vega from 'vega'
 import { getChartInfo } from '../../core/src/runtime.ts'
-import { renderSpec } from '../../core/src/index.ts'
+import { compileChart, renderSpec, SpecParseError } from '../../core/src/index.ts'
 import { attempt } from './differential-util.mts'
 import { makeRng, scaled, type Rng } from './differential-gen.mts'
 
@@ -166,17 +166,18 @@ const SIGNAL_PROPS: Array<[string, string]> = [
   ['base', 'log'], ['exponent', 'pow'], ['constant', 'symlog'], ['paddingInner', 'band'], ['paddingOuter', 'band'], ['align', 'band'],
   ['round', 'band'], ['reverse', 'band'], ['domainImplicit', 'ordinal'],
 ]
-// (`interpolate: {signal}` is not drawn: vega's parser crashes on it and Aster resolves it, a deviation docs/ARCHITECTURE.md lists)
+// (`interpolate: {signal}`, a `{signal}` gamma and a `{signal}` in the interval / step of a `nice` object are not drawn: vega's parser crashes on them and Aster refuses them alike: see the test of Q12 below)
 /**
  * What a `{signal}` may say: the language's literals and constants, signals of the spec and of the view, names that are neither, and
  * expressions. Not drawn, each a difference of its own outside how a scale reads the reference: `autosize` and `background` (view
- * signals the runtime's signal map lacks, C133's neighbour in the audit) and `datum` / `event` / `item` (what the expression
- * evaluator gives for them in a signal's context, where vega's generated code raises `datum is not defined`).
+ * signals the runtime's signal map lacks, C133's neighbour in the audit). `datum`, `event` and `item` are drawn: vega's generated
+ * code raises `datum is not defined` for them in a signal's context, and so must the engine.
  */
 const SIGNAL_TEXTS = [
   'true', 'false', 'null', 'NaN', 'PI', 'E', 'MAX_VALUE', 'LN2', 'mySig', 'flag', 'nothing', 'width', 'height', 'nosuch', 'undefined',
   'Infinity', 'x', '!true', 'true && false', 'null || 3', '1 > 0', 'mySig * 2', '[1, 5]', '"center"', '0.25',
   'flag ? 2 : null', '[2, 30]', 'nothing || [0, 4]',
+  'datum', 'event', 'item', 'datum.x', 'false && datum', 'item()', 'flag || event',
 ]
 
 describe(`scale options from specs vs vega@${vega.version} (generated, live)`, () => {
@@ -216,25 +217,49 @@ describe(`scale options from specs vs vega@${vega.version} (generated, live)`, (
     expect(refused).toBeGreaterThan(count * 0.05)
   })
 
-  it('the resolved {signal} positions docs/ARCHITECTURE.md lists as deviations still differ from vega, and only as listed', async () => {
-    const probes = [0, 2, 10, 50]
-    const cases: Array<[string, Record<string, unknown>]> = [
+  it('a {signal} where vega-parser reads a scale option with no scope is refused as the parser crashes, from compileChart (Q12)', async () => {
+    // (parseScaleInterpolate / parseScaleNice call parseLiteral(v) with no scope: a `{signal}` there is a TypeError of the parser)
+    const refusing: Array<[string, Record<string, unknown>]> = [
       ['interpolate', { interpolate: { signal: '"hcl"' }, range: ['red', 'blue'] }],
       ['interpolate type', { interpolate: { type: { signal: '"hcl"' } }, range: ['red', 'blue'] }],
+      ['interpolate type, gamma', { interpolate: { type: { signal: '"rgb"' }, gamma: 2 }, range: ['red', 'blue'] }],
       ['gamma', { interpolate: { type: 'rgb', gamma: { signal: '2' } }, range: ['red', 'blue'] }],
+      ['gamma of a signal name', { interpolate: { type: 'rgb', gamma: { signal: 'mySig' } }, range: ['red', 'blue'] }],
+      ['interpolate on a discrete scale', { type: 'ordinal', domain: ['a', 'b'], interpolate: { signal: '"hcl"' }, range: ['red', 'blue'] }],
       ['nice interval', { type: 'utc', nice: { interval: { signal: '"day"' }, step: 2 } }],
       ['nice step', { type: 'utc', nice: { interval: 'day', step: { signal: '2' } } }],
+      ['nice both', { type: 'utc', nice: { interval: { signal: '"day"' }, step: { signal: '2' } } }],
     ]
-    for (const [name, extra] of cases) {
-      const spec = { width: 200, height: 100, scales: [{ name: 's', type: 'linear', domain: [2, 50], range: 'width', ...extra }] }
+    // (read with a scope, or not a signal at all: both engines read these alike)
+    const accepted: Array<[string, Record<string, unknown>]> = [
+      ['nice that is a signal', { nice: { signal: 'true' } }],
+      ['literal interpolate', { interpolate: 'hcl', range: ['red', 'blue'] }],
+      ['literal gamma', { interpolate: { type: 'rgb', gamma: 2 }, range: ['red', 'blue'] }],
+      ['literal nice object', { type: 'utc', nice: { interval: 'day', step: 2 } }],
+      ['signal in another property', { clamp: { signal: 'true' }, interpolate: 'hcl', range: ['red', 'blue'] }],
+    ]
+    const probes = [0, 2, 10, 50]
+    const specOf = (extra: Record<string, unknown>): Record<string, unknown> => ({
+      width: 200, height: 100, signals: [{ name: 'mySig', value: 2 }], scales: [{ name: 's', type: 'linear', domain: [2, 50], range: 'width', ...extra }],
+    })
+    for (const [name, extra] of refusing) {
+      const spec = specOf(extra)
+      const want = await vegaOutcome(spec, probes)
+      expect(want.errors, name).toEqual(["Cannot read properties of undefined (reading 'signalRef')"])
+      let thrown: unknown
+      try { compileChart(structuredClone(spec) as never) } catch (e) { thrown = e }
+      expect(thrown, name).toBeInstanceOf(SpecParseError)
+      expect((thrown as Error).message, name).toBe(want.errors[0])
+      // and no host reads the spec past it
+      expect(asterOutcome(spec, probes).errors, name).toEqual(want.errors)
+    }
+    for (const [name, extra] of accepted) {
+      const spec = specOf(extra)
       const want = await vegaOutcome(spec, probes)
       const got = asterOutcome(spec, probes)
-      expect(want.errors, name).toEqual(["Cannot read properties of undefined (reading 'signalRef')"])
+      expect(want.errors, name).toEqual([])
       expect(got.errors, name).toEqual([])
-      // resolved to what the literal gives
-      const literal = JSON.parse(JSON.stringify(spec).replace(/\{"signal":"\\"(\w+)\\""\}/g, '"$1"').replace(/\{"signal":"(\d+)"\}/g, '$1'))
-      expect(got.scale, name).toEqual(asterOutcome(literal, probes).scale)
-      expect(JSON.stringify(literal), name).not.toContain('signal')
+      expect(got.scale, name).toEqual(want.scale)
     }
     // a nested range list: vega leaves the reference unresolved, Aster resolves it; a top-level entry is resolved by both
     const nested = { width: 200, height: 100, scales: [{ name: 's', type: 'ordinal', domain: ['a', 'b'], range: [[0, { signal: 'width' }], [1, 2]] }] }
