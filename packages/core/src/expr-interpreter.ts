@@ -224,6 +224,12 @@ interface Compiling {
  */
 interface Mode {
   engine: boolean
+  /**
+   * The expression reads no row, no item and no event: a signal's `init` / `update`, a `{signal}` of a property (vega's `_`-only
+   * parameter and operator expressions). `datum`, `event` and `item` are not defined there: reading one fails as vega's generated
+   * code does (`ReferenceError: datum is not defined`, when it is evaluated, so `false && datum` is fine).
+   */
+  signal?: boolean
 }
 
 /**
@@ -424,6 +430,13 @@ function call(node: Extract<Expr, { type: 'CallExpression' }>, c: Compiling): Ru
   // The event functions are the loop's, whatever the host table holds under their names.
   if (EventFunctions.includes(name)) {
     c.pure = false
+    // (vega writes `event.vega.<name>(...)`: without an event that is `event is not defined`, before the arguments are read)
+    if (c.mode.engine) {
+      return (f) => {
+        if (f.event == null) throw new ReferenceError('event is not defined')
+        return callEventFunction(f.event, name, values(f, true))
+      }
+    }
     return (f) => callEventFunction(f.event, name, values(f, true))
   }
 
@@ -533,6 +546,10 @@ function compile(node: Expr, c: Compiling): Run {
     }
     case 'Identifier': {
       const name = node.name
+      if (c.mode.signal && (name === 'datum' || name === 'event' || name === 'item')) {
+        c.pure = false
+        return () => { throw new ReferenceError(`${name} is not defined`) }
+      }
       if (name === 'datum') return (f) => tupleDatum(f.datum)
       if (name === 'event') return (f) => f.event
       if (name === 'item') return (f) => f.item
@@ -583,6 +600,7 @@ function compileTree(ast: AstNode, host: Record<string, unknown>, mode: Mode): {
 const NO_PARAMS: Params = Object.freeze({}) as Params
 const INTERPRETER: Mode = { engine: false }
 const ENGINE: Mode = { engine: true }
+const ENGINE_SIGNAL: Mode = { engine: true, signal: true }
 
 /**
  * Bind a tree to a host function table. The closures are made on the first evaluation: an expression is
@@ -634,6 +652,12 @@ export const expressionInterpreter = {
   },
 }
 
+/**
+ * Handed as the `datum` of an expression (`expression.ts` `evalSignal`) to evaluate it as a signal's: with the signals alone, as
+ * vega's parameter and operator expressions have (`datum`, `event` and `item` are then not defined).
+ */
+export const SIGNAL_CONTEXT: unique symbol = Symbol('signal context')
+
 /** An expression compiled for the engine: one evaluation, or a pass over many rows with the same parameters. */
 export interface EngineExpression {
   /** `item` is the scenegraph item an encode is evaluated for (vega binds it there); undefined elsewhere. */
@@ -652,7 +676,12 @@ export interface EngineExpression {
  */
 export function compileExpression(functions: Record<string, unknown>, ast: AstNode): EngineExpression {
   let tree: { run: Run; c: Compiling } | undefined
+  let signalTree: Run | undefined
   const evaluate = ((datum, params, event, item) => {
+    // a signal's own expression (see `SIGNAL_CONTEXT`): its own tree, in which `datum`, `event` and `item` are not defined
+    if (datum === SIGNAL_CONTEXT) {
+      return (signalTree ??= compileTree(ast, functions, ENGINE_SIGNAL).run)({ params: params ?? NO_PARAMS, datum: undefined, event: undefined, item: undefined, self: undefined, pass: undefined })
+    }
     const run = (tree ??= compileTree(ast, functions, ENGINE)).run
     // (an event's datum is its item's)
     return run(event != null
