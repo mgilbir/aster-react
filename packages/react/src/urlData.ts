@@ -27,12 +27,14 @@ import { useStableContent } from './spec.js'
 /** The loader options the host gives `<Chart urlLoad>`: its own `signal`, `signals` and `limits` are the chart's. */
 export type UrlLoadOptions = Omit<LoadOptions, 'signal' | 'signals' | 'limits'>
 
-type LoadAddon = typeof import('@aster-charts/core/load')
-let loadAddon: Promise<LoadAddon> | undefined
-const importLoader = (): Promise<LoadAddon> => (loadAddon ??= import('@aster-charts/core/load').catch((e: unknown) => {
-  loadAddon = undefined
-  throw e
-}))
+interface Loader { loadSpecData: typeof import('@aster-charts/core/load').loadSpecData; datasetUrls: typeof import('@aster-charts/core/lean/load').datasetUrls }
+let loadAddon: Promise<Loader> | undefined
+const importLoader = (): Promise<Loader> => (loadAddon ??= Promise.all([import('@aster-charts/core/load'), import('@aster-charts/core/lean/load')])
+  .then(([load, plan]) => ({ loadSpecData: load.loadSpecData, datasetUrls: plan.datasetUrls }))
+  .catch((e: unknown) => {
+    loadAddon = undefined
+    throw e
+  }))
 
 /** The options with their functions replaced by calls through the latest-ref, so a function rebuilt by every render is no change. */
 function useStableLoadOptions(options: UrlLoadOptions | undefined): LoadOptions | undefined {

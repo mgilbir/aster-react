@@ -518,7 +518,7 @@ view's) and from `signals` for the host's values. vega reloads such a dataset wh
 `loadSpecData` loads once. `useChartData` in `@aster-charts/react` passes its `signals` to the loader, so a
 host-set signal that changes loads again. `<Chart urlLoad={{ ... }}>` keeps the data current as vega does: it
 loads the url datasets itself (the load add-on, imported lazily) and loads again whenever the urls the chart's
-signals now give are not the ones it loaded (`datasetUrls(spec, { signals, limits })`, from `@aster-charts/core/load`: a
+signals now give are not the ones it loaded (`datasetUrls(spec, { signals, limits })`, internal, `@aster-charts/core/lean/load`: a
 signal change that leaves every url as it was loads nothing), a change made inside the chart included (a bound
 input, an event handler, `setSignal`). The whole policy above applies, with the chart's `limits` and `signals`:
 a network url needs `allow` / `allowOrigins([...])` or a `baseURL` it is on, else the load fails with an

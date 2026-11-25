@@ -6,8 +6,10 @@
  * way a spec names its data; the second exactly the urls `loadSpecData` requests.
  */
 import { describe, it, expect } from 'vitest'
-import { AsterLimitError, emptyUrlData, HARD_MAX_SPEC_DEPTH, urlDatasets } from './index.js'
-import { datasetUrls, loadSpecData } from './addon-load.js'
+import { AsterLimitError, HARD_MAX_SPEC_DEPTH, urlDatasets } from './index.js'
+import { emptyUrlData } from './lean.js'
+import { datasetUrls } from './lean-load.js'
+import { loadSpecData } from './addon-load.js'
 import type { VgSpec } from './types.js'
 
 type Json = Record<string, unknown>
