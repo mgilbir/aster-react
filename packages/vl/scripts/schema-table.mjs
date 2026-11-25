@@ -346,7 +346,9 @@ export function generate(schema, version) {
     const enumI = ids.length === 0 ? -1 : ids.length === 1 ? ids[0] : ids
     const sorted = (s) => [...s].sort((a, b) => a - b)
     const parts = [u.mask, enumI, u.shapes.size ? sorted(u.shapes) : 0, u.arrays.size ? [...u.arrays].sort().map((a) => JSON.parse(a)) : 0, u.maps.size ? sorted(u.maps) : 0, u.nums.size ? [...u.nums].sort().map((a) => JSON.parse(a)) : 0, u.strs.size ? [...u.strs].sort().map((a) => JSON.parse(a)) : 0]
-    while (parts.length > 1 && parts[parts.length - 1] === 0) parts.pop()
+    // (an entry ends at its last part that is not the default: 0 for a list, -1 for no enumeration; the enumeration at index 0 is not the
+    // default - the first list of the schema, LayoutAlign, is an enumeration that is all of its type)
+    while (parts.length > 2 && parts[parts.length - 1] === 0) parts.pop()
     if (parts.length === 2 && parts[1] === -1) parts.pop()
     return parts.length === 1 ? parts[0] : parts
   }
@@ -406,7 +408,7 @@ export function generate(schema, version) {
     if (typeof e === 'number') return e
     const [mask, en, sh, ar, mp, nu, st] = e
     const parts = [mask, en, sh ? [...new Set(sh.map(Sh))].sort((a, b) => a - b) : 0, ar ? [...new Map(ar.map(([it, lo, hi]) => [JSON.stringify([T(it), lo, hi]), [T(it), lo, hi]])).values()] : 0, mp ? [...new Set(mp.map(T))].sort((a, b) => a - b) : 0, nu ?? 0, st ?? 0]
-    while (parts.length > 1 && parts[parts.length - 1] === 0) parts.pop()
+    while (parts.length > 2 && parts[parts.length - 1] === 0) parts.pop()
     return parts
   })
   const finalShapes = keptS.map((i) => {
