@@ -661,6 +661,10 @@ interface EvalContext {
   encodeItem?: object
   /** Present while an evaluation makes more than one dataflow pass (autosize fit): see `PassMemory`. */
   passMemory?: PassMemory
+  /** The scene of the view this evaluation continues (`RuntimeInput.retainFrom`): its axes' tick order is where theirs starts. */
+  retainFrom?: SceneRoot
+  /** It was given a scene to continue and does not continue it (see `continuesItems`): its own scene continues nothing either. */
+  uncontinued?: true
   scope: GuideScope
   abort: AxisAbort
   signalParams: Record<string, unknown>
@@ -993,7 +997,7 @@ function prepareChartCtx(
   // and what a text is measured by: the provider in force for this evaluation, `input.textMetrics` or the one set for every chart)
   const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${valueKey(getTextMetricsProvider())}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}\u0002${input.measuredSize ? `${input.measuredSize.width}x${input.measuredSize.height}` : ''}\u0002${formatEnvironmentKey()}`
   const ctx: EvalContext = {
-    chart, scope: rootScope(chart), abort: { failures: [] }, ...(passMemory !== undefined ? { passMemory } : {}), signalParams, width, height, datasets, setData, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
+    chart, scope: rootScope(chart), abort: { failures: [] }, ...(passMemory !== undefined ? { passMemory } : {}), ...(input.retainFrom !== undefined ? { retainFrom: input.retainFrom } : {}), signalParams, width, height, datasets, setData, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
     layoutState: { failed: false, warnings: [] }, initDone: new Set(), hostSignals: new Set([
       ...Object.keys(input.signals ?? {}),
       // an explicit view size (the host's, or the fit loop's resize) wins over an `init`
@@ -1138,6 +1142,11 @@ function prepareChartCtx(
   if (threw === 'height') { height = 0; ctx.height = 0 }
   if (threw === undefined) abortAtThrowingViewLayout(ctx)
   abortAtThrowingProjection(ctx)
+  // (a view continued over rows that came or went: see `continuesItems`)
+  if (ctx.retainFrom !== undefined && (UNCONTINUED.has(ctx.retainFrom) || !continuesItems(ctx, ctx.retainFrom))) {
+    ctx.retainFrom = undefined
+    ctx.uncontinued = true
+  }
 
   // The final context fingerprint: the next evaluation compares its own
   // (scale, mark) inputs against this to decide whether reuse is valid.
@@ -1676,6 +1685,54 @@ function abortAtThrowingSignal(ctx: EvalContext): string | undefined {
 }
 
 /**
+ * Whether an evaluation continues the view of `scene` (`RuntimeInput.retainFrom`) over the same rows in every dataset a mark is drawn
+ * from, at any depth. vega's running view keeps a mark's items in the order they were joined -- the items whose tuples went are taken
+ * out, new ones are joined after the others -- which an evaluation cannot tell from the rows alone; over the same rows nothing is joined
+ * or taken out. Where rows came or went, the evaluation is the first render of its input (the ticks in order, the view sized again),
+ * as it is with no scene to continue: never a mix of vega's two renders (C766).
+ */
+function continuesItems(ctx: EvalContext, scene: SceneRoot): boolean {
+  const before = datasetsOfScene(scene)
+  for (const name of markSourcesOf(ctx.chart)) {
+    const now = ctx.datasets.get(name)
+    const was = before.get(name)
+    if (now === undefined || was === undefined || was === null) { if (now !== was) return false; continue }
+    if (now === was) continue
+    // (rows appended after the others are joined after them, in data order, by both: the rows before must be as they were)
+    if (now.length < was.length) return false
+    for (let i = 0; i < was.length; i++) if (now[i] !== was[i] && !valuesEqual(now[i], was[i])) return false
+  }
+  return true
+}
+
+/**
+ * The scenes that do not continue a view (an evaluation that found rows came or went, see `continuesItems`), nor any scene after
+ * them: once the item orders of the two renders part, a later evaluation cannot tell vega's from the rows, so it stays the first
+ * render of its input.
+ */
+const UNCONTINUED = new WeakSet<SceneRoot>()
+
+/** The datasets of a chart that a mark is drawn from (`from.data`, a facet's `data`), at any depth. */
+const MARK_SOURCES = new WeakMap<CompiledChart, readonly string[]>()
+function markSourcesOf(chart: CompiledChart): readonly string[] {
+  let out = MARK_SOURCES.get(chart)
+  if (out === undefined) {
+    const names = new Set<string>()
+    const known = new Set(chart.data.map((d) => d.name))
+    const visit = (marks: readonly CompiledMark[] | undefined): void => {
+      for (const m of marks ?? []) {
+        const from = m.from as { data?: unknown; facet?: { data?: unknown } } | undefined
+        for (const n of [from?.data, from?.facet?.data]) if (typeof n === 'string' && known.has(n)) names.add(n)
+        visit(m.marks)
+      }
+    }
+    visit(chart.marks)
+    MARK_SOURCES.set(chart, (out = [...names]))
+  }
+  return out
+}
+
+/**
  * The view's `layout` holds a signal that throws (C398): vega-parser makes the layout's parameter, an expression operator, right after
  * the view's signals, so the throw stops the pass before every dataset, scale, mark and guide of the view, as a signal's does (the
  * view keeps its size: the root's own encode ran). A group mark's layout is its own operator, ranked after its content: a throw there
@@ -2138,7 +2195,7 @@ function guideDepsOf(def: object, chart: CompiledChart): GuideDeps {
 function guideKeyOf(def: object, ctx: EvalContext): string | null {
   const deps = guideDepsOf(def, ctx.chart)
   if (deps.names === null || deps.data === null) return null
-  let key = `${readsKey(ctx, deps.names)}\u0003${ctx.urlPolicy === undefined ? '' : dependencyKey(ctx.urlPolicy)}\u0003${ctx.rawGuides ? 1 : 0}`
+  let key = `${readsKey(ctx, deps.names)}\u0003${ctx.urlPolicy === undefined ? '' : dependencyKey(ctx.urlPolicy)}\u0003${ctx.rawGuides ? 1 : 0}${retainKey(ctx)}`
   for (const n of deps.data) key += `\u0004${n}=${datasetKey(ctx, n)}`
   return key
 }
@@ -3164,8 +3221,24 @@ function groupMarkKeyOf(mark: CompiledMark, ctx: EvalContext): string {
   if (subtreeOf(mark).vets) key = `${key}\u0003${ctx.urlPolicy === undefined ? '' : dependencyKey(ctx.urlPolicy)}`
   // (the datasets its expressions read by name, by content: a selection's store; see `markKeyOf`)
   if (!deps.allData) for (const n of deps.exprData) key += `\u0004${n}=${datasetKey(ctx, n)}`
-  return key + encodeLogKey(mark, ctx)
+  return key + encodeLogKey(mark, ctx) + retainKey(ctx)
 }
+
+/**
+ * What an evaluation that continues a view (`RuntimeInput.retainFrom`) reads of it: the tick keys of its axes, in their order. A
+ * guide or a group mark kept from the evaluation before must have been made from the same (an axis keeps the order it starts from).
+ */
+function retainKey(ctx: EvalContext): string {
+  if (ctx.retainFrom === undefined) return ''
+  let key = RETAIN_KEYS.get(ctx.retainFrom)
+  if (key === undefined) {
+    key = '\u0005'
+    for (const [id, keys] of [...retainedTickKeys(ctx.retainFrom)].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))) key += `${id}=${valueKey(keys)}\u0006`
+    RETAIN_KEYS.set(ctx.retainFrom, key)
+  }
+  return key
+}
+const RETAIN_KEYS = new WeakMap<SceneRoot, string>()
 
 /**
  * `markDepsOf` for a group mark: what its subtree reads, where a mark inside it reading a dataset of a scope inside the subtree (a
@@ -3507,12 +3580,31 @@ function paintOrderOf(items: SceneGroup[]): SceneGroup[] {
 }
 
 /**
+ * The padding of a view this evaluation continues (`RuntimeInput.retainFrom`), where vega's running view keeps it: its layout sizes
+ * the view on the first run and then only when the `width`, `height` or `padding` signal changes or `autosize.resize` says so
+ * (vega-view `_autosize`, reset by `resizeView`, set again by the size signals' operators). For `pad` only: a fit view's size is the
+ * signals' as its layout wrote them, which the continued view starts from as a fresh one would.
+ */
+function retainedPadding(ctx: EvalContext, chart: CompiledChart, input: RuntimeInput): ReturnType<typeof computeGuidePadding> | undefined {
+  const from = ctx.retainFrom
+  if (from === undefined || from.padding === undefined || !AUTOSIZED.has(from)) return undefined
+  const auto = autosizeOf(chart, input)
+  if (auto.type !== 'pad' || auto.resize === true) return undefined
+  const was = from.signalParams
+  if (was === undefined || !['width', 'height', 'padding'].every((k) => valueKey(was[k]) === valueKey(ctx.signalParams[k]))) return undefined
+  return { ...from.padding }
+}
+
+/** The scenes whose padding a view layout computed (or kept: see `retainedPadding`), which a view that continues them keeps. */
+const AUTOSIZED = new WeakSet<SceneRoot>()
+
+/**
  * Build the scene content (marks, axes/legends, title, trellis) and the
  * autosize padding at a given content size. A view that fits its viewport
  * (`fit`/`fit-x`/`fit-y`) builds it twice: once at the viewport, once at the
  * size that leaves room for what the first build laid out (see `evaluateChartPass`).
  */
-type BuiltContent = { record: PassRecord | undefined; items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; hasLayout: boolean; frame: FrameEncode | undefined }
+type BuiltContent = { record: PassRecord | undefined; items: SceneGroup[]; padding: ReturnType<typeof computeGuidePadding>; ctx: EvalContext; width: number; height: number; hasLayout: boolean; frame: FrameEncode | undefined; /** the view layout sized the view (or kept the size it gave the view this one continues) */ autosized: boolean }
 
 /** What the view's own `encode` gives the root group: where it sits, and the paint of its box (see frameEncodeOf). */
 interface FrameEncode { x: number; y: number; paint: Partial<SceneRoot>; aria: SceneRoot['frameAria'] }
@@ -3726,7 +3818,7 @@ function buildContentPass(
   // group's recursive bounds here would be pure cost (O(items) per evaluation,
   // and the dominant cost of a one-row update on a 100k-point chart).
   // (a scale or an encode that threw stopped vega's run before its ViewLayout: no overflow growth)
-  const padding = ctx.layoutState.failed
+  const unsized = ctx.layoutState.failed
     || ctx.encodeAborted === true
     || ctx.postRunLost === true
     || ctx.rawGuides
@@ -3734,8 +3826,9 @@ function buildContentPass(
     || autosizeOf(chart, input).type === 'none'
     // (no autosize type at all: the layout returns before it measures anything)
     || autosizeOf(chart, input).type === 'skip'
+  const padding = unsized
     ? viewLayout(chart, input).padding
-    : computeGuidePadding(items, width, height, viewLayout(chart, input).padding, isFit(autosizeOf(chart, input).type))
+    : retainedPadding(ctx, chart, input) ?? computeGuidePadding(items, width, height, viewLayout(chart, input).padding, isFit(autosizeOf(chart, input).type))
   const ordered = paintOrderOf(items)
   // (made and laid out: what is the same as the content of this pass in the evaluation before is that content)
   const content = ctx.prev?.content !== undefined ? shareContent(ctx.prev.content, ordered) : ordered
@@ -3748,7 +3841,7 @@ function buildContentPass(
       if (record.items.some((g) => shared.has(g))) record.items = record.items.map((g) => shared.get(g) ?? g)
     }
   }
-  return { record: ctx.passMemory?.cur, items: content, padding, ctx, width, height, hasLayout, frame }
+  return { record: ctx.passMemory?.cur, items: content, padding, ctx, width, height, hasLayout, frame, autosized: !unsized }
 }
 
 /**
@@ -4224,6 +4317,9 @@ function evaluateViewPass(chart: CompiledChart, hostInput: RuntimeInput, txn: Ev
   // chart, `setTextMetricsProvider`, is the one every render uses)
   bindSceneUrlPolicy(scene, ctx.urlPolicy)
   if (input.textMetrics) bindSceneTextMetrics(scene, input.textMetrics)
+  // (a padding the view layout found, or kept: a view that continues this scene keeps it, see `retainedPadding`)
+  if (built.autosized && signedPadding === undefined && firstPassPadding === undefined) AUTOSIZED.add(scene)
+  if (ctx.uncontinued === true) UNCONTINUED.add(scene)
   // (what is derived from its nodes may be kept with them from now on: see scene-registry.ts)
   noteEngineScene(scene)
   return scene
@@ -4443,7 +4539,7 @@ function viewLayout(chart: CompiledChart, input: RuntimeInput): ViewLayout {
 }
 
 function staticViewLayout(chart: CompiledChart): ViewLayout {
-  return { padding: chart.padding, autosize: { type: (chart.autosize ?? 'pad') as AutosizeType, contains: chart.autosizeContains } }
+  return { padding: chart.padding, autosize: { type: (chart.autosize ?? 'pad') as AutosizeType, contains: chart.autosizeContains, ...(chart.autosizeResize === true ? { resize: true } : {}) } }
 }
 
 /** The signals the view size is read from before an evaluation runs: the static ones, those known before it (see `ViewBefore`), the host's. */
@@ -5869,6 +5965,12 @@ function buildScales(ctx: EvalContext): void {
         kept = true
       } else {
         scale = scaleOfSettings(settings, sctx)
+        // (an ordinal scale given no domain adds the categories it is asked for to its domain, and vega's view keeps the scale: a view
+        // that continues another starts from the domain that scale ended with, C70)
+        if (ctx.retainFrom !== undefined && settings.domain === undefined && growsOnLookup(scale)) {
+          const was = ctx.retainFrom.__scales?.find((sc) => sc.name === s.name)?.domain
+          if (Array.isArray(was) && was.length) (scale as { domain(d: unknown[]): unknown }).domain([...was])
+        }
       }
     } catch (e) {
       // vega: the Scale operator throws, the dataflow logs it and the run stops there -- this scale
@@ -9026,7 +9128,13 @@ function makeAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGro
   const extra = isSignal(band.extra) ? evalSignal(ctx.runtime.expr(band.extra.signal), ctx.signalParams) : band.extra
   let rows: Row[] = ticks.map((value, i) => ({ index: i / ((ticks.length - 1) || 1), tickIndex: i, value, label: labelCache[i] }))
   if (extra && ticks.length) rows.push({ index: -1, tickIndex: -1, extra: { value: ticks[0] }, label: '' })
-  if (ctx.passMemory !== undefined) rows = retainGuideOrder(rows, ctx.passMemory, `a${ctx.scope.path.join('/')}:${index}`)
+  // (vega's AxisTicks joins the tick items by value: a pass or an evaluation that continues the one before keeps the ticks still there in
+  // the order they had, the others after them -- a fit view's second pass, and a running view's next evaluation, see RuntimeInput.retainFrom)
+  const tickId = `a${ctx.scope.path.join('/')}:${index}`
+  const prevTicks = ctx.passMemory?.prev !== undefined ? ctx.passMemory.prev.guides.get(tickId) : ctx.retainFrom !== undefined ? retainedTickKeys(ctx.retainFrom).get(tickId) : undefined
+  if (prevTicks !== undefined) rows = retainGuideOrder(rows, prevTicks)
+  const tickKeys = rows.map((r) => String(r.value))
+  if (ctx.passMemory !== undefined) ctx.passMemory.cur.guides.set(tickId, tickKeys)
   allot('items', rows.length, 'axis ticks')
 
   const guides = chartGuides(ctx.chart)
@@ -9084,15 +9192,10 @@ function makeAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGro
     ...(href != null ? { href } : {}),
   } as unknown as SceneGroup
   vetGuideLinks(out, ctx)
+  AXIS_TICKS.set(out, { id: tickId, keys: tickKeys })
   return out
 }
 
-/**
- * vega-encode DataJoin: the items of a keyed mark (an axis's ticks, labels and grid are keyed by `value`) outlive the dataflow
- * pass that made them. A second pass (autosize fit) adds its tuples first: one whose key an item already has updates that item
- * in its place, a new key makes a new item after the others, and only then do the first pass's tuples leave: an item whose
- * tuple was not replaced exits. The scene's items are what is left, in that order.
- */
 /** What a legend carries between the passes of a fit view. */
 function legendMemory(memory: PassMemory, id: string): { was: string | undefined; note(state: string): void } {
   return { was: memory.prev?.legends.get(id), note: (state) => { memory.cur.legends.set(id, state) } }
@@ -9105,26 +9208,55 @@ function gridMemory(ctx: EvalContext, id: string): { prev: readonly GridPlace[] 
   return { prev: memory.prev?.places.get(id), keep: (places) => { memory.cur.places.set(id, places) } }
 }
 
-function retainGuideOrder(rows: Row[], memory: PassMemory, id: string): Row[] {
-  const prev = memory.prev?.guides.get(id)
-  let out = rows
-  if (prev !== undefined) {
-    const byKey = new Map<string, Row>()
-    for (const r of rows) byKey.set(String(r.value), r) // (a repeated key: the last tuple's datum, the first one's place)
-    out = []
-    for (const k of prev) {
-      const r = byKey.get(k)
-      if (r !== undefined) { out.push(r); byKey.delete(k) }
-    }
-    const added = new Set<string>()
-    for (const r of rows) {
-      const k = String(r.value)
-      if (!byKey.has(k) || added.has(k)) continue
-      added.add(k)
-      out.push(byKey.get(k)!)
+/**
+ * vega-encode DataJoin: the items of a keyed mark (an axis's ticks, labels and grid are keyed by `value`) outlive the dataflow
+ * pass that made them. A later pass (autosize fit's second, a running view's next: see `RuntimeInput.retainFrom`) adds its tuples
+ * first: one whose key an item already has updates that item in its place, a new key makes a new item after the others, and only then
+ * do the earlier pass's tuples leave: an item whose tuple was not replaced exits. The rows in the order of what is left.
+ */
+function retainGuideOrder(rows: Row[], prev: readonly string[]): Row[] {
+  const byKey = new Map<string, Row>()
+  for (const r of rows) byKey.set(String(r.value), r) // (a repeated key: the last tuple's datum, the first one's place)
+  const out: Row[] = []
+  for (const k of prev) {
+    const r = byKey.get(k)
+    if (r !== undefined) { out.push(r); byKey.delete(k) }
+  }
+  const added = new Set<string>()
+  for (const r of rows) {
+    const k = String(r.value)
+    if (!byKey.has(k) || added.has(k)) continue
+    added.add(k)
+    out.push(byKey.get(k)!)
+  }
+  return out
+}
+
+/** Of an axis group an evaluation made: its place (`a<scope path>:<index>`) and its tick keys in item order (see `retainedTickKeys`). */
+const AXIS_TICKS = new WeakMap<object, { id: string; keys: readonly string[] }>()
+
+/**
+ * The tick keys of every axis of a scene, by place: where the axes of an evaluation that continues the scene's view start their
+ * ticks from (`RuntimeInput.retainFrom`). Read off the scene's group nodes (never a mark's items), once per scene.
+ */
+const RETAINED_TICKS = new WeakMap<SceneRoot, Map<string, readonly string[]>>()
+function retainedTickKeys(scene: SceneRoot): Map<string, readonly string[]> {
+  let out = RETAINED_TICKS.get(scene)
+  if (out !== undefined) return out
+  const found = new Map<string, readonly string[]>()
+  const visit = (nodes: readonly unknown[] | undefined, depth: number): void => {
+    if (nodes === undefined || depth > 64) return
+    for (const n of nodes) {
+      const g = n as SceneGroup
+      if (g === null || typeof g !== 'object' || !Array.isArray(g.items)) continue
+      const rec = AXIS_TICKS.get(g)
+      if (rec !== undefined) { found.set(rec.id, rec.keys); continue }
+      // (a group item, a guide's wrapper, a clipped content group: not a leaf mark, whose items are no group)
+      if (g.marktype === undefined || g.marktype === 'group') visit(g.items, depth + 1)
     }
   }
-  memory.cur.guides.set(id, out.map((r) => String(r.value)))
+  visit(scene.items, 0)
+  RETAINED_TICKS.set(scene, (out = found))
   return out
 }
 

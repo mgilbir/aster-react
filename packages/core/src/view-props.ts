@@ -60,7 +60,12 @@ function parseAutosize(v: unknown): unknown {
  *   overflows (the layout runs and matches no case).
  */
 export type AutosizeType = 'pad' | 'fit' | 'fit-x' | 'fit-y' | 'none' | 'skip' | 'shift'
-export interface Autosize { type: AutosizeType; contains: string | undefined }
+export interface Autosize {
+  type: AutosizeType
+  contains: string | undefined
+  /** `resize: true`: the layout sizes the view on every run; else only on the first, and when `width`, `height` or `padding` change. */
+  resize?: boolean
+}
 
 const TYPES: ReadonlySet<string> = new Set(['pad', 'fit', 'fit-x', 'fit-y', 'none'])
 
@@ -68,8 +73,9 @@ const TYPES: ReadonlySet<string> = new Set(['pad', 'fit', 'fit-x', 'fit-y', 'non
 export function autosizeOf(v: unknown): Autosize {
   const type = isObject(v) ? v.type : undefined
   const contains = isObject(v) && typeof v.contains === 'string' ? v.contains : undefined
-  if (!type) return { type: 'skip', contains }
-  return { type: typeof type === 'string' && TYPES.has(type) ? (type as AutosizeType) : 'shift', contains }
+  const resize = isObject(v) && v.resize === true ? { resize: true } : {}
+  if (!type) return { type: 'skip', contains, ...resize }
+  return { type: typeof type === 'string' && TYPES.has(type) ? (type as AutosizeType) : 'shift', contains, ...resize }
 }
 
 /** The autosize of a view whose `autosize` is no signal: its property (spec, else config) as vega-parser makes it a value. */

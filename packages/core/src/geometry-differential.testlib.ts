@@ -156,7 +156,7 @@ function inVegaPaintOrder(scene: SceneRoot): SceneRoot {
         let j = i + 1
         while (j < list.length && groupItem(list[j]!) && list[j]!.markIndex === n.markIndex) j++
         const run = list.slice(i, j).map(node)
-        out.push(...(ordered(run) ?? run))
+        for (const g of ordered(run) ?? run) out.push(g)
         i = j
         continue
       }

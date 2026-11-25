@@ -322,8 +322,32 @@ function mergeNames(a: Iterable<string>, b: readonly string[] | undefined): stri
   return [...new Set<string>([...a, ...(b ?? [])])]
 }
 
-export function createChartSession(): ChartSession {
+/** Options of {@link createChartSession}. */
+export interface ChartSessionOptions {
+  /**
+   * The session is one running view of its chart, as a vega `View` is: every evaluation of the same compiled chart continues from
+   * the last scene the session accepted (`RuntimeInput.retainFrom`, unless the input gives one), so an axis keeps the ticks it still
+   * shows in the order it showed them, as vega's does across a signal write or a data change. A new chart (another spec) starts
+   * afresh. Default false: every evaluation is the first render of its input. `<Chart>` makes its session with it on.
+   */
+  runningView?: boolean
+}
+
+export function createChartSession(options: ChartSessionOptions = {}): ChartSession {
+  const running = options.runningView === true
   let lastKey = ''
+  /**
+   * A running view continues from the last scene it accepted, unless the input names the scene it continues itself, or the host
+   * sized it otherwise (`width`, `height`, a measured or container size): a host that measures its element renders first at no
+   * size, which no vega view ever showed, so a view at a size the host gives anew starts as a view mounted at that size.
+   */
+  let lastSize = ''
+  const continued = (scene: SceneRoot | null, input: RuntimeInput): Partial<RuntimeInput> => {
+    const size = `${valueKey(input.width)}|${valueKey(input.height)}|${valueKey(input.measuredSize)}|${valueKey(input.containerSize)}`
+    const same = size === lastSize
+    lastSize = size
+    return running && same && scene !== null && input.retainFrom === undefined ? { retainFrom: scene } : {}
+  }
   let lastMetaKey = ''
   let lastSkeleton = ''
   let lastChart: CompiledChart | null = null
@@ -491,7 +515,7 @@ export function createChartSession(): ChartSession {
     const chart = recompile ? compileChart(spec) : lastChart!
     clock.check('compile')
     // (a chart compiled anew has no state to keep steps from)
-    const pending = evaluateChartPending(sessionEngine(), chart, { ...effectiveInput, data: dataInput(currentRaw) }, recompile ? undefined : stableData(input, currentRaw, pulse), engineRaw ?? undefined)
+    const pending = evaluateChartPending(sessionEngine(), chart, { ...effectiveInput, ...continued(recompile ? null : lastScene, effectiveInput), data: dataInput(currentRaw) }, recompile ? undefined : stableData(input, currentRaw, pulse), engineRaw ?? undefined)
     clock.check('evaluate')
     if (input.limits) checkSceneLimits(pending.scene, input.limits)
     pending.commit()
@@ -525,7 +549,7 @@ export function createChartSession(): ChartSession {
     const currentRaw = new Map(lastRaw)
     for (const [name, rows] of Object.entries(input.data ?? {})) currentRaw.set(name, rows)
     const { input: effectiveInput, pulse } = withAutoPulse(input, currentRaw)
-    const pending = evaluateChartPending(sessionEngine(), lastChart, { ...effectiveInput, data: dataInput(currentRaw) }, stableData(input, currentRaw, pulse), engineRaw ?? undefined)
+    const pending = evaluateChartPending(sessionEngine(), lastChart, { ...effectiveInput, ...continued(lastScene, effectiveInput), data: dataInput(currentRaw) }, stableData(input, currentRaw, pulse), engineRaw ?? undefined)
     clock.check('change')
     if (input.limits) checkSceneLimits(pending.scene, input.limits)
     pending.commit()

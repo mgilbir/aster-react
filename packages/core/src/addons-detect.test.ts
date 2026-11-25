@@ -75,9 +75,9 @@ describe('addonsNeeded names an add-on wherever the engine asks for it (C127)', 
       if (AT_RUN_TIME.test(name)) return false
       try { renderSpec(spec); return true } catch (e) { return !MISSING_GEO.test(String((e as Error).message)) }
     }).map(([name]) => name)
-    // (an entry of a legend's `values` list is a value, not an expression, in this engine; and an encode `value` is the object it
-    // holds, a `{signal}` in it too, as vega quotes it into the entry's code: C397)
-    expect(unasked).toEqual(['encode value holding a {signal}', 'encode value holding a {signal}, in a group mark', 'legend values with a {signal}', 'legend values with a {signal}, in a group mark'])
+    // (an encode `value` is the object it holds, a `{signal}` in it too, as vega quotes it into the entry's code: C397; a legend's
+    // `values` list is one expression, as vega's objectProperty makes it, so a `{signal}` in it is evaluated: C398)
+    expect(unasked).toEqual(['encode value holding a {signal}', 'encode value holding a {signal}, in a group mark'])
   })
 
   for (const [name, spec] of cases) {
