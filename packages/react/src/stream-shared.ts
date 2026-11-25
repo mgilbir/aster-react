@@ -5,7 +5,7 @@
  * engine); `bundle-shaking.test.ts` pins that.
  */
 import * as React from 'react'
-import type { SceneRoot, StreamBatch, VgSpec } from '@aster-charts/core'
+import type { DataPulse, SceneRoot, StreamBatch, StreamFlush, StreamStats, VgSpec } from '@aster-charts/core'
 import type { ChartProps, ChartStreamInput } from './Chart.js'
 import { positionalScales, viewToDomainRaw } from './interaction.js'
 import { normalizeSpecResult, useStableSpec } from './spec.js'
@@ -22,12 +22,31 @@ import type { StreamFlushFailureInfo } from './useChartStream.js'
  */
 export type CommonStreamProps = Omit<ChartProps, 'spec' | 'data' | 'dataChanges' | 'sceneOverride' | 'onStreamInput'>
 
+/** The ref of `<ChartStream>`: the hook's own functions (`useChartStream`), typed as they are there. */
 export interface ChartStreamHandle {
   push: (batch: StreamBatch) => boolean
-  flush: () => unknown
-  pending: () => unknown
-  pulse: () => unknown
-  stats: () => unknown
+  /** Apply the queued batches now; `null` when there was nothing to do. */
+  flush: () => StreamFlush | null
+  /** What the queued batches would change (rows added, removed, modified). */
+  pending: () => DataPulse
+  /** What the last flush changed; `null` before the first. */
+  pulse: () => DataPulse | null
+  stats: () => StreamStats
+  scene: () => SceneRoot | null
+  close: () => void
+}
+
+/**
+ * The ref of `<ChartWorkerStream>`: the worker hook's functions. The stream lives in the worker, so a flush answers nothing
+ * (its result arrives as the next scene), there is no pending pulse on this side, and `stats()` is `null` until the stream
+ * has started.
+ */
+export interface ChartWorkerStreamHandle {
+  push: (batch: StreamBatch) => boolean
+  flush: () => void
+  pending: () => null
+  pulse: () => DataPulse | null
+  stats: () => StreamStats | null
   scene: () => SceneRoot | null
   close: () => void
 }

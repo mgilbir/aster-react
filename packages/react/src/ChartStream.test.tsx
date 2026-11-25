@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { ChartStream, type ChartStreamHandle } from './ChartStream'
-import { ChartWorkerStream } from './ChartWorkerStream'
+import { ChartWorkerStream, type ChartWorkerStreamHandle } from './ChartWorkerStream'
 import { compile } from '@aster-charts/vl'
 import { compileChart, evaluateChart, renderSceneToSvg, type SceneRoot } from '@aster-charts/core'
 import { FakeWorker } from './testing/fake-worker'
@@ -154,7 +154,7 @@ describe('streaming chart components', () => {
   })
 
   it('uses the worker stream path when a Worker is supplied', async () => {
-    const ref = React.createRef<ChartStreamHandle>()
+    const ref = React.createRef<ChartWorkerStreamHandle>()
     const fake = new FakeWorker()
     const host = document.createElement('div')
     document.body.appendChild(host)

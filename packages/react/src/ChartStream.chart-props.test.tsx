@@ -11,7 +11,7 @@ import { act } from 'react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { forEachVariant } from './testing/variants'
 import { ChartStream, type ChartStreamHandle } from './ChartStream'
-import { ChartWorkerStream } from './ChartWorkerStream'
+import { ChartWorkerStream, type ChartWorkerStreamHandle } from './ChartWorkerStream'
 import { handleChartWorkerStreamRequest, type ChartWorkerStreamRequest } from './worker'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -59,9 +59,11 @@ const wait = (ms = 40): Promise<void> => act(async () => { await new Promise((r)
 
 afterEach(() => { document.body.innerHTML = '' })
 
+/** A ref both shells can fill: what each shell's handle is assignable from. */
+type StreamRef = ChartStreamHandle & ChartWorkerStreamHandle
 type Shell = 'ChartStream' | 'ChartWorkerStream (no Worker)' | 'ChartWorkerStream (Worker)'
 
-function streamShell(shell: Shell, props: Record<string, unknown>, ref?: React.Ref<ChartStreamHandle>): React.ReactElement {
+function streamShell(shell: Shell, props: Record<string, unknown>, ref?: React.RefObject<StreamRef | null>): React.ReactElement {
   const p = props as unknown as React.ComponentProps<typeof ChartStream>
   if (shell === 'ChartStream') return <ChartStream ref={ref} {...p} />
   const worker = shell === 'ChartWorkerStream (Worker)' ? new FakeWorker() as unknown as Worker : null
@@ -105,7 +107,7 @@ forEachVariant(['svg'], (Chart) => {
     it.each(['ChartStream', 'ChartWorkerStream (no Worker)', 'ChartWorkerStream (Worker)'] as const)('%s', async (shell) => {
       const onError: Error[] = []
       const onStreamError: Error[] = []
-      const ref = React.createRef<ChartStreamHandle>()
+      const ref = React.createRef<StreamRef>()
       mount(streamShell(shell, {
         spec: plainSpec, width: 100, height: 60, limits: { maxRows: 3 },
         onError: (e: Error) => onError.push(e), onStreamError: (e: Error) => onStreamError.push(e),

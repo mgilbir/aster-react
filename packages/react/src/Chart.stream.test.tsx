@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ChartStream, type ChartStreamHandle } from './ChartStream'
-import { ChartWorkerStream } from './ChartWorkerStream'
+import { ChartWorkerStream, type ChartWorkerStreamHandle } from './ChartWorkerStream'
 import { useChartStream, type UseChartStreamResult } from './useChartStream'
 import type { ViewDomain } from './interaction'
 import { forEachVariant } from './testing/variants'
@@ -155,7 +155,7 @@ describe('<ChartStream> honours the Chart props its type accepts', () => {
 
   it('<ChartWorkerStream> routes view and limits through the worker', async () => {
     const worker = new FakeWorker()
-    const ref = React.createRef<ChartStreamHandle>()
+    const ref = React.createRef<ChartWorkerStreamHandle>()
     const node = (view: ViewDomain | null) => (
       <ChartWorkerStream ref={ref} spec={dataSpec(base)} width={200} height={100} view={view} panZoom streamOptions={{ worker: worker as unknown as Worker }} />
     )
@@ -191,7 +191,7 @@ describe('pan/zoom/brush use the streamed or supplied data, not just the spec', 
 
   it('a worker stream: scales survive the clone, so brush and the a11y slider see the new extent', async () => {
     const worker = new FakeWorker()
-    const ref = React.createRef<ChartStreamHandle>()
+    const ref = React.createRef<ChartWorkerStreamHandle>()
     const onSelect = vi.fn()
     const node = <ChartWorkerStream ref={ref} spec={dataSpec(base)} width={200} height={100} panZoom onSelect={onSelect} streamOptions={{ worker: worker as unknown as Worker }} />
     const m = mount(node)
