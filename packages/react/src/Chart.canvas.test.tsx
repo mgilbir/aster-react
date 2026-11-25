@@ -202,3 +202,26 @@ forEachVariant(['svg', 'canvas'], (Chart) => {
     })
   })
 })
+
+// A renderer name that is none of ours ("webgl", a typo) drew SVG with no word, where `renderer="canvas"` without the capability is
+// reported (C645): every variant now reports it once, through `onError`, and draws SVG.
+forEachVariant(['svg'], (_Chart, variant) => {
+  describe('renderer that is no renderer', () => {
+    it('draws SVG and reports the name once', async () => {
+      const container = document.createElement('div')
+      document.body.appendChild(container)
+      const root = createRoot(container)
+      const errors: Error[] = []
+      const spec = { width: 40, height: 30, padding: 0, autosize: 'none', data: [{ name: 't', values: [{ x: 1 }] }], marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { value: 0 }, y: { value: 0 }, width: { value: 10 }, height: { value: 10 } } } }] }
+      const props = { spec, renderer: 'webgl' as never, onError: (e: Error) => { errors.push(e) } }
+      // (the raw component of the variant: the matrix wrapper drops a `renderer` it has no canvas for)
+      await act(async () => { root.render(variant.element(props)) })
+      await act(async () => { root.render(variant.element(props)) })
+      expect(container.querySelector('canvas')).toBeNull()
+      expect(container.querySelector('svg')).not.toBeNull()
+      expect(errors.map((e) => e.message)).toEqual(['[aster] renderer="webgl" is no renderer ("svg" or "canvas"), so it renders SVG'])
+      await act(async () => { root.unmount() })
+      container.remove()
+    })
+  })
+})

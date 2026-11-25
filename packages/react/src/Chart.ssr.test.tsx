@@ -2,8 +2,8 @@
 import { renderToString } from 'react-dom/server'
 import { hydrateRoot } from 'react-dom/client'
 import { act } from 'react'
-import { describe, it, expect, afterEach } from 'vitest'
-import { hydrateChart, renderChartToStaticMarkup } from './ssr'
+import { describe, it, expect, expectTypeOf, afterEach } from 'vitest'
+import { hydrateChart, renderChartToStaticMarkup, type HydrateChartOptions } from './ssr'
 import { forEachVariant } from './testing/variants'
 
 const spec = {
@@ -36,11 +36,20 @@ describe('SSR string render + hydration', () => {
     container.innerHTML = renderChartToStaticMarkup(spec as never, { width: 120, height: 80 })
     document.body.appendChild(container)
     const before = container.querySelector('svg')!
-    const result = hydrateChart(container, spec as never, { width: 120, height: 80, tooltips: true })
+    const result = hydrateChart(container, spec as never, { width: 120, height: 80 })
     expect(result.reused).toBe(true)
     expect(result.svg).toBe(before)
     expect(container.querySelector('svg .mark-line path')).not.toBeNull()
     expect(container.querySelectorAll('svg')).toHaveLength(1)
+    // it is one static patch: nothing is bound, so no `data-datum` is written for a pointer handler that does not exist (C276)
+    expect(container.querySelector('[data-datum]')).toBeNull()
+  })
+
+  it('takes no `tooltips` option: the option wrote attributes nothing read', () => {
+    // (checked by `pnpm typecheck`: the option coming back fails it)
+    expectTypeOf<HydrateChartOptions>().not.toHaveProperty('tooltips')
+    expectTypeOf<HydrateChartOptions>().toHaveProperty('width')
+    expect(hydrateChart.length).toBe(2)
   })
 
   forEachVariant(['svg'], (Chart) => {
