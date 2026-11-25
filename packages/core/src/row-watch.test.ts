@@ -92,10 +92,10 @@ describe('a row changed in place warns once per chart and dataset', () => {
     const session = createChartSession()
     const t = rows(5)
     const v = rows(5)
-    session.evaluate(spec(), { data: { t, extra: v }, logger })
+    session.evaluate(spec(), { data: { t, u: v }, logger })
     t.push({}); v.push({})
-    session.evaluate(spec(), { data: { t, extra: v }, logger })
-    expect(warnings.map((w) => /Dataset: "(\w+)"/.exec(w)?.[1]).sort()).toEqual(['extra', 't'])
+    session.evaluate(spec(), { data: { t, u: v }, logger })
+    expect(warnings.map((w) => /Dataset: "(\w+)"/.exec(w)?.[1]).sort()).toEqual(['t', 'u'])
   })
 })
 

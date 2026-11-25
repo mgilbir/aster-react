@@ -4,11 +4,13 @@
  * keeps the function's behaviour whatever a bundle imports besides, while `renderSpec` (which evaluates once, `evaluateOnce`) does not
  * pull it in.
  */
+import { assertCompiledChart } from './spec-guards.js'
 import { evaluateChartPending } from './runtime.js'
 import { incrementalEngine } from './incremental-engine.js'
 import type { CompiledChart, RuntimeInput, SceneRoot } from './types.js'
 
 export function evaluateChart(chart: CompiledChart, input: RuntimeInput = {}): SceneRoot {
+  assertCompiledChart(chart)
   const pending = evaluateChartPending(incrementalEngine, chart, input)
   pending.commit()
   return pending.scene

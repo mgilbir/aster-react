@@ -307,6 +307,7 @@ describe('partial re-evaluation (reactive dataflow)', () => {
     data: [
       { name: 'src', values: [{ v: 1 }, { v: 3 }] },
       { name: 'derived', source: 'src', transform: [{ type: 'formula', expr: 'datum.v * 2', as: 'y2' }] },
+      { name: 'other', values: [{ v: 0 }] },
     ],
     scales: [
       { name: 'y', type: 'linear', domain: { data: 'derived', field: 'y2' }, range: 'height', zero: true, nice: true },

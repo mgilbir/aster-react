@@ -25,7 +25,7 @@ import { bindSceneTextMetrics } from './scene-output.js'
 import { AsterUrlError } from './url-policy.js'
 import { SpecParseError } from './parse-error.js'
 import { follow, node as signalNode, Propagation, type SignalNode } from './signal-propagation.js'
-import { consoleLogger, type Logger } from './logger.js'
+import { loggerOf, type Logger } from './logger.js'
 import { buildScale, sameSettings, scaleOfSettings, scaleSettings, scaleTicks, type Scale, type Settings, fieldDomainKind, type ScaleContext } from './scales.js'
 import { sortReadsCategoriesOnly } from './scale-domain.js'
 import { implicit as implicitCategory } from './scale-discrete.js'
@@ -997,7 +997,7 @@ function prepareChartCtx(
     // run script, but a hostile spec can still make the viewer fetch an arbitrary
     // url (tracking pixel, IP leak). Hosts rendering foreign specs must opt in.
     urlPolicy: input.urlPolicy ?? (input.limits ? {} : undefined),
-    logger: input.logger ?? consoleLogger,
+    logger: loggerOf(input.logger),
   }
   // The event loop shows a dataset it modified through its transform pipeline, before the next evaluation
   // computes it (the rows of a modified selection store, sorted by its `collect`, for example).
@@ -1009,6 +1009,7 @@ function prepareChartCtx(
   // `dataPulse` carries the full mapping and wins when both name a dataset.
   // (each named dataset is one the chart or the host has, a pulse names a dataset given rows of its own, and every index is a row
   // index: see `checkHints`)
+  checkHostData(chart, input)
   checkHints(chart, input)
   const inputPulses = new Map<string, StepPulse>()
   for (const [name, idxs] of Object.entries(input.dataChanges ?? {})) inputPulses.set(name, { changed: [...idxs] })
@@ -1154,6 +1155,22 @@ function checkHints(chart: CompiledChart, input: RuntimeInput): void {
       const def = defs.get(name)
       if (def !== undefined && sourceNames(def).length) refuseHint(what, name, 'which is derived from other datasets (`source`): describe the change of its source')
     }
+  }
+}
+
+/**
+ * Refuse host `data` that cannot be what it says (a usage error, thrown before anything is evaluated, as Vega's `view.data(name, rows)`
+ * throws `Unrecognized data set`): a dataset name the chart does not declare at its top level (a typo would otherwise be a chart that
+ * silently keeps the spec's rows, or none), a list of rows where a record of them by dataset is expected. What a dataset's value is
+ * is the dataset's to say: rows, a GeoJSON or a TopoJSON object, text a format reads; `null` / `undefined` are no rows given.
+ */
+function checkHostData(chart: CompiledChart, input: RuntimeInput): void {
+  const data = input.data as unknown
+  if (data === undefined || data === null) return
+  if (typeof data !== 'object' || Array.isArray(data)) throw new TypeError(`[aster] input.data must be an object of rows by dataset name ({ ${chart.data[0]?.name ?? 'table'}: rows }), got ${Array.isArray(data) ? 'a list' : typeof data}`)
+  const names = new Set(chart.data.map((d) => d.name))
+  for (const name of Object.keys(data)) {
+    if (!names.has(name)) throw new TypeError(`[aster] input.data names dataset "${name}", which the chart does not declare (it declares: ${[...names].join(', ') || 'no datasets'}; Vega refuses it too: Unrecognized data set)`)
   }
 }
 
@@ -3832,7 +3849,7 @@ function measured(input: RuntimeInput, done: { failed?: boolean }, fn: () => Sce
   const { value, failures } = collectMeasureFailures(fn)
   if (failures.length) {
     done.failed = true
-    ;(input.logger ?? consoleLogger).error(failures[0])
+    ;loggerOf(input.logger).error(failures[0])
   }
   return value
 }
@@ -3924,7 +3941,7 @@ function evaluateChartPass(chart: CompiledChart, hostInput: RuntimeInput, txn: E
   if (settled) return evaluateViewPass(chart, { ...input, [VIEW_BEFORE]: { ...first, sizes } } as ViewInput, txn, done)
   // A padding or autosize that reads the dataflow: the evaluation tells what it is. What it logs is held until it is known to be
   // kept (then logged, and what it logs later goes straight through), or dropped with it.
-  const { logger: holding, settle } = heldLogger(input.logger ?? consoleLogger)
+  const { logger: holding, settle } = heldLogger(loggerOf(input.logger))
   let scene = evaluateViewPass(chart, { ...input, logger: holding, [VIEW_BEFORE]: { ...first, sizes } } as ViewInput, txn, done)
   const found = layoutFrom((scene as unknown as { signalParams: Record<string, unknown> }).signalParams, first)
   const kept = sameLayout(found, first)
