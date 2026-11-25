@@ -55,20 +55,6 @@ export interface RowDiff {
 const GROUPED = new Set<string>(['aggregate', 'joinaggregate', 'window', 'stack'])
 
 /**
- * The rows of a dataset value, when every one is an object: rows are compared field by field, and a value that is not an object
- * (a primitive row, which the engine wraps as `{data: value}`) has no fields to compare, so a dataset holding one is not diffed
- * (it is replaced as a whole).
- */
-function asRows(v: unknown): Record<string, unknown>[] | null {
-  if (!Array.isArray(v)) return null
-  for (let i = 0; i < v.length; i++) {
-    const row: unknown = v[i]
-    if (row === null || typeof row !== 'object') return null
-  }
-  return v as Record<string, unknown>[]
-}
-
-/**
  * Whether two cells hold the same value as the scene sees it: `Object.is` for a primitive (so `0` and `-0` differ, as a format or a
  * scale's domain tells them apart, and `NaN` is `NaN`), the same instant for two Dates, and for plain arrays and objects the same
  * entries, compared the same way, a bounded number of levels deep. Any other object is the same only when it is the same object.
@@ -118,6 +104,29 @@ function sameValueAt(a: unknown, b: unknown, depth: number): boolean {
 export function rowsEqual(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
   if (a === b) return true
   if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return equalCell(a, b)
+  return fieldsEqual(a, b)
+}
+
+/**
+ * How `diffRows` reads a pair of rows, in the one look it takes at each: `-1` when either is not an object (a primitive row, which
+ * the engine wraps as `{data: value}`, has no fields to compare, so a dataset holding one is not diffed: it is replaced as a
+ * whole; the same primitive at the same index is the same row, and is not looked at), else `1` for the same fields and `0` for
+ * different ones. Checking each row where it is compared, and not in a scan of
+ * both arrays first, is what keeps a whole-array replacement of a long dataset as cheap as it was (two more passes over the rows
+ * cost a third of it).
+ */
+function compareRows(a: unknown, b: unknown): -1 | 0 | 1 {
+  // the same value (the same object, or an identical primitive other than the zero `===` cannot tell from `-0`): nothing to look at,
+  // and not reading it at all is most of what a replacement that kept its rows (a `slice()` with one row changed) costs
+  if (a === b && a !== 0) return 1
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return -1
+  return a === b || fieldsEqual(a as Record<string, unknown>, b as Record<string, unknown>) ? 1 : 0
+}
+
+const isRow = (r: unknown): boolean => r !== null && typeof r === 'object'
+
+/** The fields of two objects: the same own ones, each `equalCell`. */
+function fieldsEqual(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
   const proto = Object.getPrototypeOf(a)
   if (proto === Object.prototype || proto === null) {
     // `for...in` avoids the two Object.keys() allocations per row that made
@@ -160,20 +169,39 @@ function pushRange(ranges: PulseRange[], start: number, end: number): void {
  * either side becomes an added/removed range.
  */
 export function diffRows(previous: unknown, next: unknown): RowDiff | null {
-  const p = asRows(previous)
-  const n = asRows(next)
-  if (!p || !n) return null
+  if (!Array.isArray(previous) || !Array.isArray(next)) return null
+  const p: readonly unknown[] = previous
+  const n: readonly unknown[] = next
+  // (every row of both arrays is looked at by one of the loops below, and each looks at a row as an object: a dataset with a row
+  // that is not one is not diffed, whichever row it is: see `compareRows`)
   if (p.length === n.length) {
     const changed: number[] = []
-    for (let i = 0; i < n.length; i++) if (!rowsEqual(p[i]!, n[i]!)) changed.push(i)
+    for (let i = 0; i < n.length; i++) {
+      const a = p[i]
+      const b = n[i]
+      if (a === b && a !== 0) continue // (see compareRows: the common row of a replacement is the very object it was)
+      const same = compareRows(a, b)
+      if (same < 0) return null
+      if (same === 0) changed.push(i)
+    }
     return { changed, sameLength: true, added: null, removed: null }
   }
 
   const min = Math.min(p.length, n.length)
   let prefix = 0
-  while (prefix < min && rowsEqual(p[prefix]!, n[prefix]!)) prefix++
+  while (prefix < min) {
+    const same = compareRows(p[prefix], n[prefix])
+    if (same < 0) return null
+    if (same === 0) break
+    prefix++
+  }
   let suffix = 0
-  while (suffix < min - prefix && rowsEqual(p[p.length - 1 - suffix]!, n[n.length - 1 - suffix]!)) suffix++
+  while (suffix < min - prefix) {
+    const same = compareRows(p[p.length - 1 - suffix], n[n.length - 1 - suffix])
+    if (same < 0) return null
+    if (same === 0) break
+    suffix++
+  }
 
   const from = new Array<number>(n.length).fill(-1)
   const to = new Array<number>(p.length).fill(-1)
@@ -200,15 +228,19 @@ export function diffRows(previous: unknown, next: unknown): RowDiff | null {
     const pi = prefix + k
     from[ni] = pi
     to[pi] = ni
-    if (!rowsEqual(p[pi]!, n[ni]!)) changed.push(ni)
+    const same = compareRows(p[pi], n[ni])
+    if (same < 0) return null
+    if (same === 0) changed.push(ni)
   }
   for (let k = paired; k < newMiddle; k++) {
     const ni = prefix + k
+    if (!isRow(n[ni])) return null
     from[ni] = -1
     pushRange(addedRanges, ni, ni + 1)
   }
   for (let k = paired; k < oldMiddle; k++) {
     const pi = prefix + k
+    if (!isRow(p[pi])) return null
     to[pi] = -1
     pushRange(removedRanges, pi, pi + 1)
   }
