@@ -15,7 +15,9 @@
  * - re-compiles the IR only when the structural skeleton actually changed
  *
  * Caveat (same as Vega's): dataset arrays are tracked by reference. Mutating
- * an array in place without replacing it is invisible to the cache.
+ * an array in place without replacing it is invisible to the cache. The same goes for the spec: evaluating the very object the
+ * session evaluated last costs nothing of its size (its skeleton is the one it made), so a spec edited in place and handed back is
+ * not seen -- pass a new object. A development build warns about it (row-watch.ts `checkSpecInPlace`).
  */
 import { compileChart } from './compiler.js'
 import { dict, ownGet } from './util.js'
@@ -29,7 +31,7 @@ import { getTextMetricsProvider } from './text-metrics.js'
 import { expressionRegistryEpoch } from './expression.js'
 import { assertSpecDepth, checkSpecLimits, checkSceneLimits, createLimitClock, withLimits, activeMeter } from './limits.js'
 import { diffRows, type DataPulse } from './pulse.js'
-import { checkChartRows } from './row-watch.js'
+import { checkChartRows, checkSpecInPlace } from './row-watch.js'
 import type { CompiledChart, RuntimeInput, SceneRoot, VgSpec } from './types.js'
 
 /**
@@ -58,6 +60,8 @@ function dataRefKey(v: unknown): string {
 
 /** What a top-level dataset's inline rows are reduced to in a skeleton. */
 const ROWS_MARKER = '\u0000rows'
+/** What a skeleton starts with when the spec cannot be written as text (a cycle, a function): it is different every time. */
+const UNCACHEABLE = '\u0000uncacheable'
 
 /**
  * The values JSON writes alike that a spec built in code tells apart (a signal of `Infinity` draws otherwise than one of `-Infinity`,
@@ -70,6 +74,22 @@ function keepDistinct(this: unknown, _key: string, value: unknown): unknown {
   if (typeof value === 'string') return value.charCodeAt(0) === 0 ? `\u0000s${value}` : value
   if (value === undefined && Array.isArray(this)) return '\u0000u'
   return value
+}
+
+/**
+ * The rows of a nested dataset (a group mark's `data`) that are many: their text is made once per array, by identity, as the
+ * top-level datasets' rows are tracked by it (an array changed in place is not seen: the file header). A spec rebuilt on each render
+ * around rows that are the same array is then not stringified again in its rows, whose text is most of the spec's.
+ */
+const NESTED_ROWS_MIN = 32
+const NESTED_ROWS = new WeakMap<object, string>()
+function skeletonReplacer(this: unknown, key: string, value: unknown): unknown {
+  if (key === 'values' && Array.isArray(value) && value.length >= NESTED_ROWS_MIN) {
+    let text = NESTED_ROWS.get(value)
+    if (text === undefined) NESTED_ROWS.set(value, (text = `${ROWS_MARKER}:${JSON.stringify(value, keepDistinct)}`))
+    return text
+  }
+  return keepDistinct.call(this, key, value)
 }
 
 /**
@@ -100,10 +120,10 @@ export function skeletonOf(spec: VgSpec): string {
   }
   const copy = { ...(spec as Record<string, unknown>), data: stripped }
   try {
-    return JSON.stringify(copy, keepDistinct) ?? ''
+    return JSON.stringify(copy, skeletonReplacer) ?? ''
   } catch {
     // Non-serializable spec (cycles/functions): no caching, always re-evaluate.
-    return `\u0000uncacheable:${refId(spec as object)}:${Date.now()}`
+    return `${UNCACHEABLE}:${refId(spec as object)}:${Date.now()}`
   }
 }
 
@@ -398,7 +418,16 @@ export function createChartSession(): ChartSession {
       if (typeof process !== 'undefined') throw e
     }
     clock.check('compile')
-    const skeleton = skeletonOf(spec)
+    // The spec this session evaluated last, as an object: its skeleton is the one made then (the walk that bounds its depth, and the
+    // text of all of it, are made for a spec object once; see the header on a spec edited in place).
+    // (a spec that cannot be written as text is never cached: its skeleton is made anew each time, see `skeletonOf`)
+    const again = lastSpec !== null && spec === lastSpec && !lastSkeleton.startsWith(UNCACHEABLE)
+    const skeleton = again ? lastSkeleton : skeletonOf(spec)
+    try {
+      if (again && process.env.NODE_ENV !== 'production') checkSpecInPlace(session, spec, skeleton, input as never, skeletonOf)
+    } catch (e) {
+      if (typeof process !== 'undefined') throw e
+    }
     const metaKey = metaKeyOf(skeleton, input)
     const key = fingerprint(spec, input, skeleton)
     const currentRaw = rawDatasets(spec, input)
