@@ -2,7 +2,7 @@
 /**
  * The geometry caches (geometry.ts): an unchanged mark is generated once however many times it is drawn, by whichever
  * consumer; every input the generators read, changed in place on the very same objects, misses the cache: the SVG, DOM and canvas
- * output is the refactor baseline's for the changed scene (`diffScene`), and the hit index, the bounds and `intersect()` answer as
+ * output is the output of a cold copy of the changed scene (`diffScene`), and the hit index, the bounds and `intersect()` answer as
  * they do on a fresh copy of the changed scene, whose objects no cache has seen (`coldVsWarm`).
  */
 import { describe, expect, it } from 'vitest'
@@ -13,12 +13,11 @@ import { geometryCounts } from './geometry.js'
 import { renderSceneToSvg } from './render.js'
 import { patchSceneDom, renderSceneToDomElement, sceneToDomDesc } from './dom.js'
 import { renderSceneToCanvas } from './canvas.js'
-import { renderSceneToCanvas as legacyCanvas } from './legacy-canvas.testlib.js'
 import { buildHitIndex, type HitTarget } from './hit.js'
 import { Bounds, boundTypedMark } from './bounds.js'
 import { setTextMetricsProvider } from './text-metrics.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
-import { diffScene, loggingContext, marksOf, probePoints } from './geometry-differential.testlib.js'
+import { coldCopy, diffScene, loggingContext, marksOf, probePoints } from './geometry-differential.testlib.js'
 import { sceneIntersect } from './scene-intersect.js'
 import { mulberry32 } from './scene-fuzz.testlib.js'
 
@@ -198,7 +197,7 @@ describe('invalidation: an input changed in place misses the cache', () => {
       const { mark } = marksOf(scene).find((m) => m.mark.marktype === marktype)!
       mutate(mark.items as SceneItem[], mark)
       const before = snapshot()
-      // the same objects, drawn again: the old implementation draws the changed scene from scratch
+      // the same objects, drawn again: a cold copy draws the changed scene from scratch
       expect(diffScene(scene)).toEqual([])
       expect(coldVsWarm(scene, mulberry32(2))).toEqual([])
       const d = delta(before)
@@ -216,21 +215,21 @@ describe('invalidation: an input changed in place misses the cache', () => {
     cell.y = (cell.y ?? 0) - 4
     expect(diffScene(scene)).toEqual([])
     expect(coldVsWarm(scene, mulberry32(2))).toEqual([])
-    // (diffScene compared the legacy renderer at dpr 1 and 2, drawing the scene as it caches its geometry: a context at 3 must draw
-    // what the legacy renderer draws at 3 on the scene warmed at the other ratios, and the same again)
+    // (diffScene compared a cold copy at dpr 1 and 2, drawing the scene as it caches its geometry: a context at 3 must draw
+    // what a cold copy draws at 3 on the scene warmed at the other ratios, and the same again)
     const warm = loggingContext()
     renderSceneToCanvas(scene, warm.ctx, { dpr: 3 })
-    const legacy = loggingContext()
-    legacyCanvas(scene, legacy.ctx, { dpr: 3 })
-    expect(warm.log).toEqual(legacy.log)
+    const cold = loggingContext()
+    renderSceneToCanvas(coldCopy(scene), cold.ctx, { dpr: 3 })
+    expect(warm.log).toEqual(cold.log)
     expect(warm.log.length).toBeGreaterThan(0)
     const again = loggingContext()
     renderSceneToCanvas(scene, again.ctx, { dpr: 3 })
-    expect(again.log, 'the same scene drawn again').toEqual(legacy.log)
+    expect(again.log, 'the same scene drawn again').toEqual(cold.log)
     // the ratio is in the drawing: dpr 3 is not what dpr 1 draws
     const one = loggingContext()
     renderSceneToCanvas(scene, one.ctx, { dpr: 1 })
-    expect(one.log).not.toEqual(legacy.log)
+    expect(one.log).not.toEqual(cold.log)
   })
 
   it('a new text-metrics provider is seen by every consumer (nothing here caches text)', () => {

@@ -487,7 +487,7 @@ export function applyStep(w: World, s: Step): World {
     case 'insert': {
       const k = 1 + Math.floor(s.r[0]! * 3)
       const at = Math.floor(s.r[1]! * (t.length + 1))
-      t.splice(at, 0, ...Array.from({ length: k }, (_, j) => rowAt(j)))
+      for (let j = 0; j < k; j++) t.splice(at + j, 0, rowAt(j))
       break
     }
     case 'remove': {

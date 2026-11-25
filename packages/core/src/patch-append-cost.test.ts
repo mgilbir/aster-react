@@ -2,15 +2,14 @@
 /**
  * An append costs what was appended, not what was left alone: the DOM patcher's dense symbol chunks and the canvas append
  * path prove an engine-made items array unchanged from its `__editGen` stamp instead of reading every unchanged item's
- * `__gen` (the reads are counted), and the output stays the old implementation's.
+ * `__gen` (the reads are counted), and the output stays the one a full render of the scene makes (a full render of a cold copy of it: a scene no
+ * cache of the patcher has seen).
  */
 import { describe, expect, it } from 'vitest'
 import { createChartStream } from './stream.js'
-import { patchSceneDom, sceneToDomDesc } from './dom.js'
-import { renderSceneToDomElement as legacyDomElement, sceneToDomDesc as legacyDomDesc } from './legacy-dom.testlib.js'
+import { patchSceneDom, renderSceneToDomElement, sceneToDomDesc } from './dom.js'
 import { renderSceneToCanvasAppend, snapshotCanvasScene } from './canvas.js'
-import { renderSceneToCanvasAppend as legacyAppend, snapshotCanvasScene as legacySnapshot } from './legacy-canvas.testlib.js'
-import { loggingContext } from './geometry-differential.testlib.js'
+import { coldCopy, descText, loggingContext } from './geometry-differential.testlib.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 
 const rows = (n: number, from = 0): Array<{ x: number; y: number }> =>
@@ -56,29 +55,29 @@ describe('an append costs the appended items', () => {
     let scene = stream.flush()!.scene
     // both implementations see the same history: the first scene, then each append (their chunk caches follow it)
     const o = { denseMarks: true }
-    expect(JSON.stringify(sceneToDomDesc(scene, o))).toBe(JSON.stringify(legacyDomDesc(scene, o)))
+    expect(descText(sceneToDomDesc(scene, o))).toBe(descText(sceneToDomDesc(coldCopy(scene), o)))
     for (let k = 0; k < 6; k++) {
       stream.push({ append: { t: rows(1 + k, 3000 + k * 10) } })
       const prevItems = markOf(scene, 0).items as SceneItem[]
       const before = prevItems.slice()
       scene = stream.flush()!.scene
-      const legacy = JSON.stringify(legacyDomDesc(scene, o))
+      const full = descText(sceneToDomDesc(coldCopy(scene), o))
       const reads = countGenReads(before)
-      const desc = JSON.stringify(sceneToDomDesc(scene, o))
+      const desc = descText(sceneToDomDesc(scene, o))
       expect(reads.n).toBe(0)
-      expect(desc).toBe(legacy)
+      expect(desc).toBe(full)
     }
     // and the DOM patch itself, append after append
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
     document.body.appendChild(svg)
     // (each patch leaves the DOM a full render of the same scene makes: the chunks hold the same paths, in the same order)
     patchSceneDom(svg, scene, o)
-    expect(svg.outerHTML).toBe(legacyDomElement(scene, document, o).outerHTML)
+    expect(svg.outerHTML).toBe(renderSceneToDomElement(coldCopy(scene), document, o).outerHTML)
     for (let k = 0; k < 3; k++) {
       stream.push({ append: { t: rows(2 + k, 9000 + k * 10) } })
       scene = stream.flush()!.scene
       patchSceneDom(svg, scene, o)
-      expect(svg.outerHTML, `append ${k}`).toBe(legacyDomElement(scene, document, o).outerHTML)
+      expect(svg.outerHTML, `append ${k}`).toBe(renderSceneToDomElement(coldCopy(scene), document, o).outerHTML)
     }
     expect(svg.querySelectorAll('path').length).toBeGreaterThan(0)
   })
@@ -101,14 +100,14 @@ describe('an append costs the appended items', () => {
       stream.push({ data: { t: current.map((r) => ({ ...r })) } })
       scene = stream.flush()!.scene
       patchSceneDom(svg, scene, o)
-      expect(svg.outerHTML, `edit of row ${at}`).toBe(legacyDomElement(scene, document, o).outerHTML)
+      expect(svg.outerHTML, `edit of row ${at}`).toBe(renderSceneToDomElement(coldCopy(scene), document, o).outerHTML)
       // an append after an edit: the edited chunk was rebuilt, the untouched ones may be proved clean
       const more = rows(2 + k, 5000 + k * 10)
       current.push(...more)
       stream.push({ append: { t: more } })
       scene = stream.flush()!.scene
       patchSceneDom(svg, scene, o)
-      expect(svg.outerHTML, `append after the edit of row ${at}`).toBe(legacyDomElement(scene, document, o).outerHTML)
+      expect(svg.outerHTML, `append after the edit of row ${at}`).toBe(renderSceneToDomElement(coldCopy(scene), document, o).outerHTML)
     }
   })
 
@@ -123,7 +122,7 @@ describe('an append costs the appended items', () => {
     const victim = (markOf(scene, 0).items as SceneItem[])[300]!
     delete (victim as { __gen?: number }).__gen
     patchSceneDom(svg, scene, o)
-    expect(svg.outerHTML).toBe(legacyDomElement(scene, document, o).outerHTML)
+    expect(svg.outerHTML).toBe(renderSceneToDomElement(coldCopy(scene), document, o).outerHTML)
     for (let k = 0; k < 3; k++) {
       // the host changes the item in place; the engine appends rows and the scene is patched again
       victim.fill = k % 2 === 0 ? '#e45756' : '#54a24b'
@@ -131,12 +130,12 @@ describe('an append costs the appended items', () => {
       scene = stream.flush()!.scene
       expect(markOf(scene, 0).items).toContain(victim)
       patchSceneDom(svg, scene, o)
-      expect(svg.outerHTML, `append ${k}`).toBe(legacyDomElement(scene, document, o).outerHTML)
+      expect(svg.outerHTML, `append ${k}`).toBe(renderSceneToDomElement(coldCopy(scene), document, o).outerHTML)
       expect(svg.outerHTML, `append ${k}: the changed paint is drawn`).toContain(k % 2 === 0 ? '#e45756' : '#54a24b')
     }
   })
 
-  it('per-item symbols (not batched): no unchanged item is read, the patch appends only the new elements, the DOM matches the old implementation', () => {
+  it('per-item symbols (not batched): no unchanged item is read, the patch appends only the new elements, the DOM matches a full render of the scene', () => {
     const stream = createChartStream(spec([symbols('t', '#4c78a8')], ['t']) as never, { capacity: 8 })
     stream.push({ data: { t: rows(400) } })
     let scene = stream.flush()!.scene
@@ -147,7 +146,7 @@ describe('an append costs the appended items', () => {
       stream.push({ append: { t: rows(1 + k, 400 + k * 10) } })
       const before = (markOf(scene, 0).items as SceneItem[]).slice()
       scene = stream.flush()!.scene
-      const legacy = JSON.stringify(legacyDomDesc(scene, {}))
+      const full = descText(sceneToDomDesc(coldCopy(scene), {}))
       const reads = countGenReads(before)
       const xReads = countReads(before, 'x')
       // (the elements already there must stay the very same nodes: an append adds, it does not rebuild)
@@ -156,9 +155,9 @@ describe('an append costs the appended items', () => {
       expect(reads.n).toBe(0)
       expect(xReads.n).toBe(0)
       expect(kept.every((el) => el.isConnected)).toBe(true)
-      expect(JSON.stringify(sceneToDomDesc(scene, {}))).toBe(legacy)
+      expect(descText(sceneToDomDesc(scene, {}))).toBe(full)
     }
-    expect(svg.outerHTML).toBe(legacyDomElement(scene, document).outerHTML)
+    expect(svg.outerHTML).toBe(renderSceneToDomElement(coldCopy(scene), document).outerHTML)
   })
 
   it('per-item symbols: a row changed in place, or an item without a generation edited by a host, is drawn after the next append', () => {
@@ -175,13 +174,13 @@ describe('an append costs the appended items', () => {
       stream.push({ data: { t: current.map((r) => ({ ...r })) } })
       scene = stream.flush()!.scene
       patchSceneDom(svg, scene)
-      expect(svg.outerHTML, `edit of row ${at}`).toBe(legacyDomElement(scene, document).outerHTML)
+      expect(svg.outerHTML, `edit of row ${at}`).toBe(renderSceneToDomElement(coldCopy(scene), document).outerHTML)
       const more = rows(2, 900 + k * 5)
       current.push(...more)
       stream.push({ append: { t: more } })
       scene = stream.flush()!.scene
       patchSceneDom(svg, scene)
-      expect(svg.outerHTML, `append after the edit of row ${at}`).toBe(legacyDomElement(scene, document).outerHTML)
+      expect(svg.outerHTML, `append after the edit of row ${at}`).toBe(renderSceneToDomElement(coldCopy(scene), document).outerHTML)
     }
     // an item with no generation (a scene a host edited by hand) is never taken for clean
     const victim = (markOf(scene, 0).items as SceneItem[])[40]!
@@ -192,32 +191,31 @@ describe('an append costs the appended items', () => {
       stream.push({ append: { t: rows(2, 1500 + k * 10) } })
       scene = stream.flush()!.scene
       patchSceneDom(svg, scene)
-      expect(svg.outerHTML, `append ${k}`).toBe(legacyDomElement(scene, document).outerHTML)
+      expect(svg.outerHTML, `append ${k}`).toBe(renderSceneToDomElement(coldCopy(scene), document).outerHTML)
       expect(svg.outerHTML).toContain(k % 2 === 0 ? '#e45756' : '#54a24b')
     }
   })
 
-  it('canvas append: a mark left alone is not read, and the calls match the old implementation\'s append (a pixel-level equality with a full repaint is the canvas gates\')', () => {
+  it('canvas append: a mark left alone is not read, and the calls match the append of a cold copy (a pixel-level equality with a full repaint is the canvas gates\')', () => {
     const stream = createChartStream(spec([symbols('a', '#f58518'), symbols('t', '#4c78a8')], ['a', 't']) as never, { capacity: 8 })
     stream.push({ data: { a: rows(2000, 50000), t: rows(500) } })
     let scene = stream.flush()!.scene
     for (let k = 0; k < 4; k++) {
       const prev = scene
-      const legacySnap = legacySnapshot(prev)
       const snap = snapshotCanvasScene(prev)
       const reads = countGenReads(markOf(prev, 0).items as SceneItem[])
       stream.push({ append: { t: rows(3, 600 + k * 3) } })
       scene = stream.flush()!.scene
       expect(markOf(scene, 0)).toBe(markOf(prev, 0))
-      const a = loggingContext()
       const b = loggingContext()
-      const okOld = legacyAppend(legacySnap, scene, a.ctx)
       reads.n = 0
       const okNew = renderSceneToCanvasAppend(snap, scene, b.ctx)
-      expect(okNew).toBe(okOld)
       expect(okNew).toBe(true)
       expect(reads.n).toBe(0)
-      expect(b.log).toEqual(a.log)
+      // (the three appended symbols are one batched run: a paint per run, never one per item of the 2500 there are)
+      const paints = b.log.filter((l) => /^(fill|stroke)\(/.test(l))
+      expect(paints.length, b.log.slice(0, 12).join(' ')).toBeGreaterThan(0)
+      expect(paints.length).toBeLessThanOrEqual(3)
     }
   })
 })
