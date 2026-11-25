@@ -58,6 +58,45 @@ function paintAlpha(style: unknown): number {
   return Number.isFinite(o) ? o : 1
 }
 
+/**
+ * Sort the first `m` crossings (x, with the winding direction riding along, and the edge that made it) by x, stably. The edges
+ * stay in the order of the last sub-row's crossings, and crossings move little from one sub-row to the next, so an insertion sort
+ * does it in about m steps with no comparator call or allocation. A drawing whose edges cross each other over and over (a dense
+ * polygon) would make that quadratic: past a budget of moves it is the engine's own sort instead.
+ */
+export function sortCrossings(x: Float64Array, wd: Int8Array, ed: Edge[], m: number): void {
+  let budget = 4 * m + 64
+  // bounded: one pass over the m crossings, each moving at most as far as the budget allows
+  for (let i = 1; i < m; i++) {
+    const xi = x[i]!
+    const wi = wd[i]!
+    const ei = ed[i]!
+    let j = i - 1
+    // bounded: j counts down from i - 1, and the budget ends it
+    while (j >= 0 && x[j]! > xi) {
+      if (--budget < 0) { sortWhole(x, wd, ed, m, xi, wi, ei, j); return }
+      x[j + 1] = x[j]!; wd[j + 1] = wd[j]!; ed[j + 1] = ed[j]!
+      j--
+    }
+    x[j + 1] = xi
+    wd[j + 1] = wi
+    ed[j + 1] = ei
+  }
+}
+
+/** The rest of {@link sortCrossings} when its moves ran out: the crossing in hand is put down where it stopped, then everything is sorted. */
+function sortWhole(x: Float64Array, wd: Int8Array, ed: Edge[], m: number, xi: number, wi: number, ei: Edge, j: number): void {
+  x[j + 1] = xi
+  wd[j + 1] = wi
+  ed[j + 1] = ei
+  const order = Array.from({ length: m }, (_, i) => i).sort((p, q) => x[p]! - x[q]!)
+  const sx = order.map((i) => x[i]!)
+  const sw = order.map((i) => wd[i]!)
+  const se = order.map((i) => ed[i]!)
+  // bounded: m crossings, at most as many as the edges (the sub-row's tick has them as its cost)
+  for (let i = 0; i < m; i++) { x[i] = sx[i]!; wd[i] = sw[i]!; ed[i] = se[i]! }
+}
+
 export class AlphaCanvas implements CanvasLike {
   readonly width: number
   readonly height: number
@@ -85,6 +124,8 @@ export class AlphaCanvas implements CanvasLike {
   private cur: Sub | null = null
   private row: Float32Array
   private sum: Int32Array
+  private crossX = new Float64Array(0)
+  private crossW = new Int8Array(0)
 
   constructor(width: number, height: number) {
     this.width = Math.max(0, Math.floor(width))
@@ -325,7 +366,10 @@ export class AlphaCanvas implements CanvasLike {
     const sum = this.sum
     let next = 0
     let active: Edge[] = []
-    const xs: Array<{ x: number; w: number }> = []
+    // the crossings of one sub-row, x and winding direction side by side (a sub-row is at most as wide as the edges are many)
+    if (this.crossX.length < edges.length) { this.crossX = new Float64Array(edges.length); this.crossW = new Int8Array(edges.length) }
+    const crossX = this.crossX
+    const crossW = this.crossW
     for (let row = rowStart; row <= rowEnd; row++) {
       meterTick('raster', w)
       let lo = w
@@ -337,24 +381,25 @@ export class AlphaCanvas implements CanvasLike {
         while (next < edges.length && edges[next]!.y0 <= y) active.push(edges[next++]!)
         if (active.length) {
           let kept = 0
-          xs.length = 0
+          let m = 0
           // bounded: the active edges, which the sub-row's tick above has as its cost
           for (let i = 0; i < active.length; i++) {
             const e = active[i]!
             if (e.y1 <= y) continue
             active[kept++] = e
-            xs.push({ x: e.x0 + (y - e.y0) * e.slope, w: e.dir })
+            crossX[m] = e.x0 + (y - e.y0) * e.slope
+            crossW[m++] = e.dir
           }
           active.length = kept
-          if (xs.length >= 2) {
-            xs.sort((p, q) => p.x - q.x)
+          if (m >= 2) {
+            sortCrossings(crossX, crossW, active, m)
             let wind = 0
             // bounded: the crossings of this sub-row, one per active edge ticked for above
-            for (let i = 0; i < xs.length - 1; i++) {
-              wind = rule === 'evenodd' ? wind ^ 1 : wind + xs[i]!.w
+            for (let i = 0; i < m - 1; i++) {
+              wind = rule === 'evenodd' ? wind ^ 1 : wind + crossW[i]!
               if (wind === 0) continue
-              const xa = Math.max(0, xs[i]!.x)
-              const xb = Math.min(w, xs[i + 1]!.x)
+              const xa = Math.max(0, crossX[i]!)
+              const xb = Math.min(w, crossX[i + 1]!)
               if (!(xb > xa)) continue
               const ia = Math.floor(xa)
               const ib = Math.min(w - 1, Math.floor(xb))
