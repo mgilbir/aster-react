@@ -109,7 +109,7 @@ describe('the shrinker reports a list that reproduces what it reports (C339)', (
       beforeCompare: (step, scene) => { if (step === 5) (datasetsOfScene(scene).get('t') as unknown[]).push({ x: 1, v: 1 }) },
     }
     const report = checkSeed(seedOf('none'), 8, scenario, mixed) ?? ''
-    const kind = (line: string): string => /\(.*?\) (retained scene from step \d+ mutated|scene)/.exec(report.split('\n').find((l) => l.includes(line)) ?? '')?.[1]?.replace(/\d+/, 'N') ?? 'none'
+    const kind = (line: string): string => /\(.*?\) (retained scene from step -?\d+ mutated|scene)/.exec(report.split('\n').find((l) => l.includes(line)) ?? '')?.[1]?.replace(/\d+/, 'N') ?? 'none'
     expect(kind('first failing step')).not.toBe('none')
     expect(kind('minimal failure')).toBe(kind('first failing step'))
   })
