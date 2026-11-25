@@ -203,6 +203,12 @@ const rec = (it: SceneItem): Record<string, unknown> => it as Record<string, unk
 /** vega's hit test reads `item.fill` and `item.stroke` as booleans: any colour (`transparent` included) or gradient paints. */
 const isFilled = (it: { fill?: unknown }): boolean => !!it.fill
 
+/** Whether the rect item names a corner radius (any of the five channels: even one that is not a number rounds it). */
+function hasCornerRadius(it: SceneItem): boolean {
+  const r = it as Record<string, unknown>
+  return r.cornerRadius !== undefined || r.cornerRadiusTopLeft !== undefined || r.cornerRadiusTopRight !== undefined || r.cornerRadiusBottomLeft !== undefined || r.cornerRadiusBottomRight !== undefined
+}
+
 /** The item's stroke, or null when it has none the pointer can meet (no colour, or no width). */
 function strokeOf(it: { stroke?: unknown; strokeWidth?: unknown; strokeCap?: unknown; strokeJoin?: unknown; strokeMiterLimit?: unknown; strokeDash?: unknown; strokeDashOffset?: unknown }, defaultWidth = 1): Stroke | null {
   if (!it.stroke) return null
@@ -1127,12 +1133,15 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
     }
   }
 
-  /** A symbol: a disc when it is a circle, else its shape's outline in its own frame, turned by its angle. */
-  function addSymbol(item: SceneItem, marktype: string, tx: number, ty: number, radius?: number): void {
-    // The common symbol: a filled disc at a finite position, no stroke, a size of its own (every test below passes: the same entry)
+  /**
+   * The common symbol: a filled disc at a finite position, no stroke, a size of its own (every test `addSymbol` makes passes: the same
+   * entry). Apart from it, so that what runs for each of thousands of items is small, and what the rare symbol needs is not compiled
+   * along with it.
+   */
+  function pushPlainDisc(item: SceneItem, marktype: string, tx: number, ty: number): boolean {
     const fx = item.x
     const fy = item.y
-    if (radius === undefined && typeof fx === 'number' && typeof fy === 'number' && fx - fx === 0 && fy - fy === 0 && item.fill && !item.stroke) {
+    if (typeof fx === 'number' && typeof fy === 'number' && fx - fx === 0 && fy - fy === 0 && item.fill && !item.stroke) {
       const sz = item.size
       const shp = marktype === 'symbol' ? (item as { shape?: unknown }).shape : undefined
       if (typeof sz === 'number' && sz > 0 && (shp === undefined || shp === null || shp === 'circle')) {
@@ -1141,10 +1150,16 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
           const cx0 = tx + fx
           const cy0 = ty + fy
           entries.push({ item, marktype, kind: 'disc', cx: cx0, cy: cy0, r: r0, x1: cx0 - r0, y1: cy0 - r0, x2: cx0 + r0, y2: cy0 + r0 })
-          return
+          return true
         }
       }
     }
+    return false
+  }
+
+  /** A symbol: a disc when it is a circle, else its shape's outline in its own frame, turned by its angle. */
+  function addSymbol(item: SceneItem, marktype: string, tx: number, ty: number, radius?: number): void {
+    if (radius === undefined && pushPlainDisc(item, marktype, tx, ty)) return
     // (vega draws a symbol at `translate(x || 0, y || 0)`: a missing or NaN position is the origin, one that is not two finite
     // numbers leaves the symbol at the origin too -- see `drawnOffset`)
     // (the per-item path: `drawnOffset` without the pair it makes)
@@ -1176,24 +1191,35 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
     entries.push({ item, marktype, kind: 'geom', cx, cy, rot, fill, stroke, polys: outline.polys, x1: cx - span, y1: cy - span, x2: cx + span, y2: cy + span })
   }
 
+  /**
+   * The common rect: a filled box of finite numbers, no stroke, no corner (every test the rect's case of `addMarkItemOf` makes passes:
+   * the same entry). Kept small and apart from it for the reason `pushPlainDisc` is.
+   */
+  function pushPlainBox(item: SceneItem, marktype: string, tx: number, ty: number): boolean {
+    const rx = item.x
+    const ry = item.y
+    const rw = item.width
+    const rh = item.height
+    if (typeof rx === 'number' && typeof ry === 'number' && typeof rw === 'number' && typeof rh === 'number' && rx - rx === 0 && ry - ry === 0 && rw - rw === 0 && rh - rh === 0
+      && rw !== 0 && rh !== 0 && !item.stroke && isFilled(item) && !hasCornerRadius(item)
+      && Number.isFinite(tx + rx) && Number.isFinite(ty + ry)) {
+      const bx = tx + rx
+      const by = ty + ry
+      entries.push({ item, marktype, kind: 'box', fill: true, stroke: null, x1: Math.min(bx, bx + rw), y1: Math.min(by, by + rh), x2: Math.max(bx, bx + rw), y2: Math.max(by, by + rh) })
+      return true
+    }
+    return false
+  }
+
   function addMarkItem(item: SceneItem, marktype: string, tx: number, ty: number): void {
+    if (marktype === 'rect') { if (pushPlainBox(item, marktype, tx, ty)) return }
+    else if (marktype === 'symbol' || marktype === 'circle') { addSymbol(item, marktype, tx, ty); return }
+    addMarkItemOf(item, marktype, tx, ty)
+  }
+
+  function addMarkItemOf(item: SceneItem, marktype: string, tx: number, ty: number): void {
     switch (marktype) {
       case 'rect': {
-        // The common rect: a filled box of finite numbers, no stroke, no corner (the checks below all pass: the same entry)
-        const rx = item.x
-        const ry = item.y
-        const rw = item.width
-        const rh = item.height
-        const rr = item as Record<string, unknown>
-        if (typeof rx === 'number' && typeof ry === 'number' && typeof rw === 'number' && typeof rh === 'number' && rx - rx === 0 && ry - ry === 0 && rw - rw === 0 && rh - rh === 0
-          && rw !== 0 && rh !== 0 && !item.stroke && isFilled(item)
-          && rr.cornerRadius === undefined && rr.cornerRadiusTopLeft === undefined && rr.cornerRadiusTopRight === undefined && rr.cornerRadiusBottomLeft === undefined && rr.cornerRadiusBottomRight === undefined
-          && Number.isFinite(tx + rx) && Number.isFinite(ty + ry)) {
-          const bx = tx + rx
-          const by = ty + ry
-          entries.push({ item, marktype, kind: 'box', fill: true, stroke: null, x1: Math.min(bx, bx + rw), y1: Math.min(by, by + rh), x2: Math.max(bx, bx + rw), y2: Math.max(by, by + rh) })
-          return
-        }
         const fill = isFilled(item)
         const stroke = strokeOf(item)
         if (!fill && !stroke) return
@@ -1204,9 +1230,7 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
         const w = +((item.width || 0) as number)
         const h = +((item.height || 0) as number)
         if (!Number.isFinite(x0) || !Number.isFinite(y0) || !Number.isFinite(w) || !Number.isFinite(h)) return
-        const rounded = rec(item).cornerRadius !== undefined || rec(item).cornerRadiusTopLeft !== undefined
-          || rec(item).cornerRadiusTopRight !== undefined || rec(item).cornerRadiusBottomLeft !== undefined || rec(item).cornerRadiusBottomRight !== undefined
-        if (rounded) {
+        if (hasCornerRadius(item)) {
           // a rounded rect: its own outline, so the corners outside it are not hits
           const e = geomEntry(item, marktype, () => flattenSegs(segsOf(rectData(item)), (x, y) => [tx + x, ty + y]), item, undefined, stroke)
           if (e) entries.push(e)

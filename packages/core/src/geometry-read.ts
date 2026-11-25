@@ -10,7 +10,7 @@
  */
 import { ArcPathWriter, ArcSegWriter } from './shape.js'
 import { drawnPathCommands, parsePathData, parseSvgPathData, renderSvgPath, tracePath, type PathCommand, type PathSeg } from './path-data.js'
-import { Flattener, held, type Poly } from './path-flatten.js'
+import { Flattener, FLOAT32_OVERFLOW, held, type Poly } from './path-flatten.js'
 import type { ArcGeometry, CurveGeometry, PathData, SymbolGeometry } from './geometry.js'
 
 /** The four calls a line or an area makes (`PathWriter`'s commands). */
@@ -23,15 +23,17 @@ interface CurveSink {
 
 /**
  * A sink that receives a curve as its full-precision text, read back by `parsePathData` and traced by `tracePath`, would draw
- * it on `s`: every number `+ 0` (the text has no negative zero), `Z` only once something was drawn. `finite` turns false when a
- * number that is not finite passes (its text would not read back as a number).
+ * it on `s`: every number `+ 0` (the text has no negative zero), `Z` only once something was drawn. `held` turns false when a
+ * number passes that a canvas cannot take (not finite, or beyond single precision: see `held`), settled in the one comparison each
+ * number costs; the text of such a number does not read back as the number a canvas would have had.
  */
 class AsText implements CurveSink {
   drawn = false
-  finite = true
+  held = true
   constructor(private readonly s: CurveSink) {}
   private r(v: number): number {
-    if (!Number.isFinite(v)) this.finite = false
+    // (the common number is one a canvas holds, so finite: one comparison answers both)
+    if (!(Math.abs(v) < FLOAT32_OVERFLOW)) this.held = false
     return v + 0
   }
   moveTo(x: number, y: number): void { this.s.moveTo(this.r(x), this.r(y)); this.drawn = true }
@@ -138,7 +140,7 @@ export function curvePolys(g: CurveGeometry, tx: number, ty: number, canvas = fa
     const f = new Flattener(IDENTITY)
     const t = new AsText(f)
     g.draw(t)
-    if (t.finite && canvasHolds(g)) return f.polys
+    if (t.held) return f.polys
     return flattenSegs(parseSvgPathData(g.exactText()))
   }, tx, ty)
 }
