@@ -218,7 +218,8 @@ export function mergeChainedBins(ts: Obj[]): (k: number) => number {
     if (!drop.has(k)) out.push(t)
     for (const c of after.get(k) ?? []) out.push(c)
   })
-  ts.splice(0, ts.length, ...out)
+  ts.length = 0
+  for (const t of out) ts.push(t)
   return (k) => (k >= place.length ? ts.length : place[k]!)
 }
 
