@@ -133,6 +133,18 @@ const sel = (name: string, select: unknown, extra: Record<string, unknown> = {})
 
 const CASES: Case[] = [
   {
+    // vega-lite's point clear is `click[!event.item]`-like only for the view's own items: a click in the padding (outside the frame)
+    // changes NOTHING in vega, while one on an empty point of the plot clears (the case above). Aster must do exactly that: the
+    // steps that click the padding are in no `moves`, and every step compares the stores and the SVG with vega's.
+    name: 'point click: a click in the padding (right, top, left, bottom) leaves the selection, as in vega',
+    spec: base({ padding: 24, params: [sel('pick', 'point')], mark: 'point', encoding: { ...xy, color: colorBy('pick') } }),
+    steps: [
+      { t: 'clickMark', i: 0 }, { t: 'click', x: 1.06, y: 0.5 }, { t: 'clickMark', i: 3 }, { t: 'click', x: 0.5, y: -0.1 },
+      { t: 'clickMark', i: 1 }, { t: 'click', x: -0.4, y: 0.5 }, { t: 'clickMark', i: 2 }, { t: 'click', x: 0.5, y: 1.4 },
+    ],
+    moves: [0, 2, 4, 6],
+  },
+  {
     name: 'point click, replace, shift-toggle, clear on empty, dblclick',
     spec: base({ params: [sel('pick', 'point')], mark: 'point', encoding: { ...xy, color: colorBy('pick') } }),
     steps: [
