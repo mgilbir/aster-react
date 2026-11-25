@@ -657,7 +657,7 @@ export interface CompiledMark {
 
 export type EncodeValue =
   | { value: unknown }
-  | { field: string; format?: unknown; formatType?: string; type?: string }
+  | { field: string; type?: string }
   | { scale: string; field: string | EncodeValue; band?: boolean | number; offset?: number; round?: boolean; range?: boolean }
   | { signal: string }
   | EncodeConditional
