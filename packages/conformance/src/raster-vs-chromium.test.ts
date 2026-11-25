@@ -82,8 +82,10 @@ describe(`raster.ts against ${FIXTURES.browser}'s canvas`, () => {
 
   // The generated drawings (curves of every size, arcs of every sweep, transformed circles, every cap and join, dashes) hold the
   // engine to the same ratchet as the hand ones, with no tolerance of their own: a change to how curves are cut, how vertices snap
-  // or how coverage is summed moves these numbers. Where the browser spreads a sub-pixel stroke over two or three columns the engine
-  // draws one (`missing` of the thin cubics): a documented deviation (docs/ARCHITECTURE.md "Deviations from Vega"), pinned here.
+  // or how coverage is summed moves these numbers. A pen of a
+  // pixel or less is a hairline to the browser (one pixel thick, spread over the two columns it straddles, its alpha scaled by the
+  // pen's width): the thin strokes here are drawn so (`raster-hairline.test.ts`), and what is left of their disagreement (round
+  // caps, how a curve is cut) is pinned.
   describe('generated drawings (ratchet against the recorded disagreement)', () => {
     for (const s of GENERATED_SHAPES) {
       it(s.name, () => { expectNoWorse(s) })

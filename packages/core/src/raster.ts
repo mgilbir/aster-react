@@ -26,7 +26,7 @@
 import { color as parseColor } from './color.js'
 import type { CanvasLike, GradientLike } from './canvas.js'
 import { arcConics, conicQuads, pathEdges, polygonEdges, type Edge, type Pt, type Sub } from './raster-edges.js'
-import { strokePolygons } from './raster-stroke.js'
+import { strokeHairlines, strokePolygons } from './raster-stroke.js'
 import { allot, meterTick } from './limits.js'
 
 interface State {
@@ -95,6 +95,22 @@ function sortWhole(x: Float64Array, wd: Int8Array, ed: Edge[], m: number, xi: nu
   const se = order.map((i) => ed[i]!)
   // bounded: m crossings, at most as many as the edges (the sub-row's tick has them as its cost)
   for (let i = 0; i < m; i++) { x[i] = sx[i]!; wd[i] = sw[i]!; ed[i] = se[i]! }
+}
+
+/**
+ * The coverage a stroke of `width` under the transform `m` is drawn with when Skia draws it as a hairline (every stroke whose pen
+ * is a pixel or less across, both ways: SkDrawTreatAsHairline), else 0. A hairline is one pixel wide whatever the pen's width, and
+ * the alpha it is drawn with is scaled by this.
+ */
+function hairlineCoverage(width: number, m: readonly number[]): number {
+  const len = (x: number, y: number): number => {
+    const ax = Math.abs(x)
+    const ay = Math.abs(y)
+    return Math.max(ax, ay) + Math.min(ax, ay) / 2
+  }
+  const l0 = len(m[0]! * width, m[1]! * width)
+  const l1 = len(m[2]! * width, m[3]! * width)
+  return l0 <= 1 && l1 <= 1 ? (l0 + l1) / 2 : 0
 }
 
 export class AlphaCanvas implements CanvasLike {
@@ -312,16 +328,79 @@ export class AlphaCanvas implements CanvasLike {
     const m = this.m
     const scale = Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2]))
     if (!(scale > 0)) return
-    const polys = strokePolygons(this.subs, {
+    const pen = {
       half: (this.lineWidth * scale) / 2,
       cap: this.lineCap,
       join: this.lineJoin,
       miterLimit: this.miterLimit,
       dash: this.dash.map((d) => d * scale),
       dashOffset: this.lineDashOffset * scale,
-      canvas: [0, 0, this.width, this.height],
-    })
-    this.scan(polygonEdges(polys), 'nonzero', a)
+      canvas: [0, 0, this.width, this.height] as [number, number, number, number],
+    }
+    // a pen of a pixel or less is a hairline to Skia: a line one pixel thick whose alpha is scaled by the pen's width (SkDraw)
+    const wide = hairlineCoverage(this.lineWidth, m)
+    if (wide > 0) {
+      const hairs = strokeHairlines(this.subs, pen)
+      // (the colour's alpha as 8 bits, then scaled by the coverage and cut, as the paint of a hairline is)
+      const alpha = Math.min(255, Math.max(0, Math.floor(Math.round(a * 255) * wide + 1e-9)))
+      if (alpha === 0) return
+      const lines = hairs.lines
+      // bounded: the segments the stroker made (it ticks as it makes them)
+      for (let i = 0; i < lines.length; i += 4) this.hairline(lines[i]!, lines[i + 1]!, lines[i + 2]!, lines[i + 3]!, alpha)
+      for (const cap of hairs.caps) this.scan(polygonEdges([cap]), 'nonzero', alpha / 255)
+      return
+    }
+    this.scan(polygonEdges(strokePolygons(this.subs, pen)), 'nonzero', a)
+  }
+
+  /**
+   * One segment as Skia's anti-aliased hairline draws it (SkScan_Antihair): along the axis it runs more along, every pixel of the
+   * line takes the position of the line across it at its centre, in 1/64ths, and splits the pixel's share of the line's length
+   * between the two pixels the one-pixel-thick line covers there, the nearer row or column more. The ends count the part of their
+   * pixel the line covers. `alpha` is the paint's, 0..255; each pixel is blended source-over.
+   */
+  private hairline(x0: number, y0: number, x1: number, y1: number, alpha: number): void {
+    let X0 = Math.trunc(x0 * 64)
+    let Y0 = Math.trunc(y0 * 64)
+    let X1 = Math.trunc(x1 * 64)
+    let Y1 = Math.trunc(y1 * 64)
+    if (![X0, Y0, X1, Y1].every(Number.isFinite)) return
+    const across = Math.abs(X1 - X0) <= Math.abs(Y1 - Y0) // the segment runs more along y: pixels are walked down it
+    if (across) { [X0, Y0] = [Y0, X0]; [X1, Y1] = [Y1, X1] }
+    if (X0 > X1) { [X0, X1] = [X1, X0]; [Y0, Y1] = [Y1, Y0] }
+    const major = across ? this.height : this.width // the extent along the walked axis
+    const minor = across ? this.width : this.height
+    const first = Math.max(0, Math.floor(X0 / 64)) // (not a shift: the coordinates may be past 32 bits)
+    const stop = Math.min(major, Math.ceil(X1 / 64))
+    if (!(stop > first)) return
+    meterTick('raster', stop - first)
+    // 16.16 fixed point as the scan walks it: the slope per pixel, and the line's position at the centre of the first pixel
+    const slope = X1 === X0 ? 0 : Math.trunc(((Y1 - Y0) * 65536) / (X1 - X0))
+    const start = Math.floor(X0 / 64)
+    const fstart = Y0 * 1024 + (Y0 === Y1 ? 0 : Math.floor((slope * (32 - (((X0 % 64) + 64) % 64)) + 32) / 64))
+    // (a pixel's share of the line, 0..255, scaled by the paint's alpha the way a blitter scales a coverage: (c + 1) of 256ths)
+    const alphaOf = (c: number): number => ((c + 1) * alpha) >> 8
+    // bounded: pixels of one row or column of the canvas, ticked for above
+    for (let i = first; i < stop; i++) {
+      const lo = Math.max(X0, i * 64)
+      const hi = Math.min(X1, (i + 1) * 64)
+      const share = X1 === X0 ? 64 : hi - lo // 1/64ths of the pixel the segment spans
+      if (share <= 0) continue
+      const at = fstart + slope * (i - start) + 32768 // the line's position at the pixel's centre, a whole number a boundary
+      const near = Math.floor(at / 65536)
+      const a8 = Math.floor(at / 256) & 255
+      const cLow = (a8 * share) >> 6
+      const cHigh = ((255 - a8) * share) >> 6
+      if (near >= 0 && near < minor) this.blend(across ? near : i, across ? i : near, alphaOf(cLow))
+      if (near - 1 >= 0 && near - 1 < minor) this.blend(across ? near - 1 : i, across ? i : near - 1, alphaOf(cHigh))
+    }
+  }
+
+  private blend(x: number, y: number, srcA: number): void {
+    if (srcA === 0) return
+    const k = y * this.width + x
+    const dst = this.alpha[k]!
+    this.alpha[k] = srcA + ((dst * (256 - srcA)) >> 8)
   }
 
   /** Text is a box from its advance width and font size (glyph coverage is not modelled); `fillText` and `strokeText` draw it. */
