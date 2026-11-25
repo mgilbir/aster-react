@@ -113,3 +113,42 @@ export function checkChartUrlData(chart: object, urlData: UrlDataMode | undefine
   if (found === undefined) CHART_URL_DATASETS.set(chart, (found = collectUrlDatasets(chart)))
   if (found.length) throw refusal(found)
 }
+
+/**
+ * A copy of `spec` in which every `url` dataset (top level and in nested group marks, at any depth) has no rows yet: `values: []`
+ * and no `format`, the shape `loadSpecData` gives a dataset it has loaded (so the two differ only in the rows). A `<Chart>` that
+ * loads url data itself draws this until a load arrives, as vega draws a view whose url has not answered. The very same object
+ * when the spec has no url dataset; untouched branches are shared; the input is never mutated. Nothing is read from the network
+ * and no `url` expression is evaluated.
+ */
+export function emptyUrlData<T>(spec: T): T {
+  if (!isObj(spec) || Array.isArray(spec)) return spec
+  const visit = (node: Json, depth: number): Json => {
+    if (depth > HARD_MAX_SPEC_DEPTH) {
+      throw new AsterLimitError(`maxDepth ${depth} > ${HARD_MAX_SPEC_DEPTH} (mark nesting, while looking for url datasets; a built-in ceiling that applies even without limits)`)
+    }
+    let out: Json | undefined
+    const data = specList(node.data)
+    let blanked: unknown[] | undefined
+    for (let i = 0; i < data.length; i++) {
+      const def = data[i]
+      if (isUrlDataset(def)) {
+        const copy: Json = { ...def, values: [] }
+        delete copy.format
+        ;(blanked ??= data.slice())[i] = copy
+      }
+    }
+    if (blanked) (out ??= { ...node }).data = blanked
+    const marks = specList(node.marks)
+    let inner: unknown[] | undefined
+    for (let i = 0; i < marks.length; i++) {
+      const m = marks[i]
+      if (!isObj(m) || Array.isArray(m)) continue
+      const next = visit(m, depth + 1)
+      if (next !== m) (inner ??= marks.slice())[i] = next
+    }
+    if (inner) (out ??= { ...node }).marks = inner
+    return out ?? node
+  }
+  return visit(spec, 0) as T
+}
