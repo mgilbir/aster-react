@@ -1693,7 +1693,11 @@ function abortAtThrowingSignal(ctx: EvalContext): string | undefined {
  */
 function continuesItems(ctx: EvalContext, scene: SceneRoot): boolean {
   const before = datasetsOfScene(scene)
+  // (the rows a `force` layout links are rewritten by it, in the scene's datasets: their ends are its nodes -- they are the layout's
+  // inputs, which it tells again by what it holds, see `continueForce`)
+  const linked = forceLinkDatasets(ctx.chart)
   for (const name of markSourcesOf(ctx.chart)) {
+    if (linked.has(name)) continue
     const now = ctx.datasets.get(name)
     const was = before.get(name)
     if (now === undefined || was === undefined || was === null) { if (now !== was) return false; continue }
@@ -7355,6 +7359,10 @@ function transformMarkItems(mark: CompiledMark, items: readonly SceneItem[], ctx
     for (const [k, t] of (mark.transform ?? []).entries()) {
       if (readsTaint(t, ctx)) return false
       const input = rows
+      // (a `force` layout of a view that continues one starts from the layout its items had, as vega's simulation does: below)
+      const continuation = t.type === 'force' ? continueForce(mark, t, own as unknown as SceneItem[], ctx) : undefined
+      tctx.settled = continuation === 'settled'
+      tctx.continued = continuation === 'continued'
       // (a transform that draws random numbers - the layout of a word cloud - draws them once for the inputs it is given, as vega's
       // operator does, not again for every evaluation of the scene: see random-tape.ts)
       const run = (): Row[] => applyTransforms(input, [t], tctx, source, true)
@@ -7374,6 +7382,70 @@ function transformMarkItems(mark: CompiledMark, items: readonly SceneItem[], ctx
     if (numbers !== undefined) ctx.draft.numbered.set(numbers, items)
   }
   return true
+}
+
+/** The force parameters (without `restart`) an item's layout was run with, kept on the items the layout placed. */
+const FORCE_KEYS = new WeakMap<object, string>()
+
+/**
+ * vega's `force` transform keeps its simulation and its nodes: when a pulse reaches it again it runs the simulation (static: its
+ * iterations, from alpha 1) only when its parameters changed, its nodes came or went, its configuration changed, or the pulse
+ * changed something while `restart` holds; any other pulse leaves the nodes where they were. A node's `fx` / `fy` (what a mark's
+ * `modify` trigger writes) is read by the simulation's ticks, so pinning a node does not move anything until one runs. Nothing of
+ * this is known to an evaluation that does not continue a view (`RuntimeInput.retainFrom`: the layout is made from its inputs, as the
+ * first run of vega's is); one that does continues over the same nodes from the positions and velocities they had.
+ * Returns `settled` when no simulation is to be run (the nodes were put where they were: the transform then only binds its forces to
+ * them), `continued` when the nodes were seeded and the simulation runs from them, and nothing when the layout is made from the inputs.
+ */
+function continueForce(mark: CompiledMark, t: CompiledTransform, items: SceneItem[], ctx: EvalContext): 'settled' | 'continued' | undefined {
+  const record = (key: string): void => { for (const it of items) FORCE_KEYS.set(it, key) }
+  if (!items.length) return undefined
+  const param = (v: unknown): unknown => {
+    const sig = v !== null && typeof v === 'object' ? (v as { signal?: unknown }).signal : undefined
+    if (typeof sig !== 'string') return v
+    // (a signal by its name, as the transform reads it: a name an expression could not spell, `static`, included)
+    if (Object.hasOwn(ctx.signalParams, sig)) return ctx.signalParams[sig]
+    try { return evalSignal(ctx.runtime.expr(sig), ctx.signalParams) } catch { return undefined }
+  }
+  const spec = t as unknown as Record<string, unknown>
+  const { restart, ...rest } = spec
+  const key = randomFingerprint(rest, [], ctx.signalParams)
+  // (what this layout was run with stays with the items it placed, for the evaluation that continues them)
+  if (ctx.retainFrom === undefined || !param(spec.static)) { record(key); return undefined }
+  const container = mark.userName !== undefined ? itemsOfMarkNamed(ctx.retainFrom, mark.userName) : undefined
+  if (container === undefined || container.length !== items.length) { record(key); return undefined }
+  for (let i = 0; i < items.length; i++) {
+    const was = container[i] as unknown as Record<string, unknown>
+    if (datumText(was.datum) !== datumText((items[i] as { datum?: unknown }).datum) || typeof was.x !== 'number' || typeof was.y !== 'number') { record(key); return undefined }
+  }
+  const same = FORCE_KEYS.get(container[0]!) === key
+  // (vega: `(pulse.changed() && _.restart)`: a pulse that reaches the layout has changed something)
+  const rerun = !same || !!param(restart)
+  for (let i = 0; i < items.length; i++) {
+    const was = container[i] as unknown as Record<string, unknown>
+    const it = items[i] as unknown as Record<string, unknown>
+    it.x = was.x
+    it.y = was.y
+    it.vx = was.vx
+    it.vy = was.vy
+    it.index = was.index
+  }
+  record(key)
+  return rerun ? 'continued' : 'settled'
+}
+
+/** The items of the one leaf mark of this name in a scene (a mark in several group items is not one: undefined). */
+function itemsOfMarkNamed(scene: SceneRoot, name: string): readonly SceneItem[] | undefined {
+  let found: readonly SceneItem[] | undefined
+  let count = 0
+  const walk = (n: unknown, depth: number): void => {
+    if (n === null || typeof n !== 'object' || depth > 64) return
+    const g = n as { marktype?: string; name?: string; cssName?: string; role?: string; items?: unknown[] }
+    if (g.role === 'mark' && g.marktype !== undefined && g.marktype !== 'group' && g.cssName === name) { count++; found = (g.items ?? []) as SceneItem[]; return }
+    for (const c of g.items ?? []) if (c !== null && typeof c === 'object' && Array.isArray((c as { items?: unknown }).items)) walk(c, depth + 1)
+  }
+  for (const g of scene.items) walk(g, 0)
+  return count === 1 ? found : undefined
 }
 
 /** The key of a mark's instance among the evaluation's numbered marks: the mark, and the instance of the scope it is in. */
