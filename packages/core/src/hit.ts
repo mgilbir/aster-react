@@ -1129,6 +1129,22 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
 
   /** A symbol: a disc when it is a circle, else its shape's outline in its own frame, turned by its angle. */
   function addSymbol(item: SceneItem, marktype: string, tx: number, ty: number, radius?: number): void {
+    // The common symbol: a filled disc at a finite position, no stroke, a size of its own (every test below passes: the same entry)
+    const fx = item.x
+    const fy = item.y
+    if (radius === undefined && typeof fx === 'number' && typeof fy === 'number' && fx - fx === 0 && fy - fy === 0 && item.fill && !item.stroke) {
+      const sz = item.size
+      const shp = marktype === 'symbol' ? (item as { shape?: unknown }).shape : undefined
+      if (typeof sz === 'number' && sz > 0 && (shp === undefined || shp === null || shp === 'circle')) {
+        const r0 = Math.sqrt(sz) / 2
+        if (r0 > 0) {
+          const cx0 = tx + fx
+          const cy0 = ty + fy
+          entries.push({ item, marktype, kind: 'disc', cx: cx0, cy: cy0, r: r0, x1: cx0 - r0, y1: cy0 - r0, x2: cx0 + r0, y2: cy0 + r0 })
+          return
+        }
+      }
+    }
     // (vega draws a symbol at `translate(x || 0, y || 0)`: a missing or NaN position is the origin, one that is not two finite
     // numbers leaves the symbol at the origin too -- see `drawnOffset`)
     // (the per-item path: `drawnOffset` without the pair it makes)
@@ -1163,6 +1179,21 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
   function addMarkItem(item: SceneItem, marktype: string, tx: number, ty: number): void {
     switch (marktype) {
       case 'rect': {
+        // The common rect: a filled box of finite numbers, no stroke, no corner (the checks below all pass: the same entry)
+        const rx = item.x
+        const ry = item.y
+        const rw = item.width
+        const rh = item.height
+        const rr = item as Record<string, unknown>
+        if (typeof rx === 'number' && typeof ry === 'number' && typeof rw === 'number' && typeof rh === 'number' && rx - rx === 0 && ry - ry === 0 && rw - rw === 0 && rh - rh === 0
+          && rw !== 0 && rh !== 0 && !item.stroke && isFilled(item)
+          && rr.cornerRadius === undefined && rr.cornerRadiusTopLeft === undefined && rr.cornerRadiusTopRight === undefined && rr.cornerRadiusBottomLeft === undefined && rr.cornerRadiusBottomRight === undefined
+          && Number.isFinite(tx + rx) && Number.isFinite(ty + ry)) {
+          const bx = tx + rx
+          const by = ty + ry
+          entries.push({ item, marktype, kind: 'box', fill: true, stroke: null, x1: Math.min(bx, bx + rw), y1: Math.min(by, by + rh), x2: Math.max(bx, bx + rw), y2: Math.max(by, by + rh) })
+          return
+        }
         const fill = isFilled(item)
         const stroke = strokeOf(item)
         if (!fill && !stroke) return

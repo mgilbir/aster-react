@@ -501,7 +501,7 @@ async function phase1(gate: Gate): Promise<void> {
 await runGate({
   name: 'canvas',
   counters: {
-    compared: { floor: 1068, what: 'entries compared in pixels with ink on both sides' },
+    compared: { floor: 1146, what: 'entries compared in pixels with ink on both sides' },
     gradient: { floor: 150, what: 'generated scale gradients compared call by call and in pixels' },
     'gradient-refusals': { floor: 46, what: 'generated gradients vega refuses, refused by Aster with the same message' },
     'append-frames': { floor: 309, what: 'frames painted by the append path and compared with a full repaint' },
