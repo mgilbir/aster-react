@@ -8902,6 +8902,8 @@ function makeLegend(legend: CompiledLegend, ctx: EvalContext, index: number): Sc
   const host = guideHost(ctx)
   host.stopped = undefined
   const guides = chartGuides(ctx.chart)
+  // (a strip that reads a late scale is ranked after the title: guide-legend.ts `lateStrip`)
+  const lateStrip = legendStripReadsLateScale(legend, spec, scaleType, channels[0]![1], ctx)
   // (an entry's size is read while the entries are listed -- an encode of the symbols or the labels that throws there is the
   // legend's entries operator failing: vega never makes the legend)
   let built: ReturnType<typeof buildLegendGuide>
@@ -8917,6 +8919,7 @@ function makeLegend(legend: CompiledLegend, ctx: EvalContext, index: number): Sc
       ...(ctx.passMemory !== undefined ? { relayout: legendMemory(ctx.passMemory, `l${ctx.scope.path.join('/')}:${index}`) } : {}),
       ...(entries !== undefined ? { entries } : {}),
       ...(lateLabels ? { lateLabels } : {}),
+      ...(lateStrip ? { lateStrip } : {}),
       ...(labels !== undefined ? { labels } : {}),
       ...(ctx.rawGuides && slot !== undefined && (ctx.layoutThrew === true || (cut !== undefined && entryGridRan(ctx.scope.path, slot, cut))) ? { entryGrid: true } : {}),
     })
@@ -8966,6 +8969,20 @@ function makeLegend(legend: CompiledLegend, ctx: EvalContext, index: number): Sc
   } as unknown as SceneGroup
   vetGuideLinks(group, ctx)
   return group
+}
+
+/**
+ * Whether the strip of a gradient or discrete-gradient legend (its gradient, or its bands) reads a scale ranked late. The bands
+ * are drawn from the scale in their `enter` set, whatever the spec's encode says; the gradient's fill is the scale's gradient
+ * unless the spec's `update` writes its own fill, which then decides (what it reads).
+ */
+function legendStripReadsLateScale(legend: CompiledLegend, spec: Record<string, unknown>, scaleType: string, scale: string, ctx: EvalContext): boolean {
+  const kind = legendType(spec, scaleType)
+  if (kind !== 'gradient' && kind !== 'discrete') return false
+  if (kind === 'discrete') return scaleNamedIsLate(ctx.scope, scale, ctx.chart)
+  const fill = (legend.encode as Record<string, UserEncode | undefined> | undefined)?.gradient?.update?.fill
+  if (fill === undefined) return scaleNamedIsLate(ctx.scope, scale, ctx.chart)
+  return encodeReadsLateScale({ fill } as Record<string, EncodeValue | EncodeValue[]>, ctx.scope, ctx.chart)
 }
 
 /** What the guide encoders (guide-encode.ts) need of an evaluation: entries, expressions, scales, the view's signals. */

@@ -350,6 +350,11 @@ export interface LegendBuildInput {
    * the scope had made, an operator parsed after the entries that read it).
    */
   lateLabels?: boolean
+  /**
+   * The strip (the gradient, or the bands) reads a scale ranked late (its domain reads data): vega's dataflow ranks what reads such a
+   * scale after every operator that reads none, the legend's title among them, so the title is made before the strip is.
+   */
+  lateStrip?: boolean
   /** a gradient's late labels are not made: the pass stopped before them */
   labels?: 'none'
   /** the pass stopped, but after the layout of the entries' grid: it ran, though the legend itself was not laid out (`raw`) */
@@ -494,7 +499,7 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
   let titleItem = undefined as (SceneItem & Rec) | undefined
   const title: Placed = { x: 0, y: 0, box: new Bounds() }
   const makeTitle = (): void => {
-    if (!datum.title) return
+    if (!datum.title || titleItem !== undefined) return
     stage('title', () => {
       const def = markOf(defs, 'title', () => legendTitle(k))
       titleItem = make(def, datum, 'title')
@@ -537,6 +542,7 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
     markTuples(keyed)
     let strips: Array<SceneItem & Rec> = []
     let labels: Array<SceneItem & Rec> = []
+    if (inp.lateStrip === true) makeTitle()
     stage('strip', () => {
       strips = isGradient ? [make(stripDef, datum, 'gradient')] : keyed.map((e) => make(stripDef, e, 'band'))
       partMeta[isGradient ? 'gradient' : 'band'] = { name: stripDef.name, interactive: stripDef.interactive }
