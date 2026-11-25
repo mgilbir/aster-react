@@ -13,6 +13,8 @@ import { derive, deriveWithout } from './consume.js'
 
 type Obj = Record<string, any>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
+/** What the literal of a default title reads of a field written with escapes: `a\\.b` is titled `a.b` (a title the user wrote is text, not this). */
+const readEscapes = (s: string): string => s.replace(/\\(.)/gs, '$1')
 const titleCase = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1)
 /** The field a row has under `name` itself (a name this module made: a statistic), as source text of an expression. */
 const datumRef = (name: string): string => `datum[${JSON.stringify(name)}]`
@@ -212,9 +214,14 @@ interface PartSpec {
 }
 
 /** The continuous channel as a part draws it: at one statistic, with the title and the scale and axis the user gave it. */
-function axisDef(a: Anatomy, field: string): Obj {
+function axisDef(a: Anatomy, field: string, raw = false): Obj {
   const { scale, axis } = a.continuous
-  return { field, type: a.continuous.type, title: a.continuous.title !== undefined ? a.continuous.title : a.continuous.field, ...(scale !== undefined ? { scale } : {}), ...(axis !== undefined ? { axis } : {}) }
+  // (a part over a statistic is named by a title: the field's default one, whose escapes the literal of a description or tooltip reads
+  // (`a\\.b` is read `a.b`), while the axis shows the name as written; the outliers draw the raw field and keep its own default title)
+  const own = a.continuous.title
+  const title = own !== undefined ? own : raw ? undefined : readEscapes(a.continuous.field)
+  const axisOut = own === undefined && !raw && axis !== null && !(isObj(axis) && axis.title !== undefined) ? { ...(isObj(axis) ? axis : {}), title: a.continuous.field } : axis
+  return { field, type: a.continuous.type, ...(title !== undefined ? { title } : {}), ...(scale !== undefined ? { scale } : {}), ...(axisOut !== undefined ? { axis: axisOut } : {}) }
 }
 
 /** The end of a ranged part: its field (the position channel carries the title, which names the axis). */
@@ -240,7 +247,7 @@ function part(a: Anatomy, p: PartSpec): Obj[] {
       ...(isObj(own) ? own : {}),
     },
     encoding: {
-      [a.axis]: axisDef(a, p.field ?? a.fieldName(p.at!)),
+      [a.axis]: axisDef(a, p.field ?? a.fieldName(p.at!), p.name === 'outliers'),
       ...(p.to ? { [`${a.axis}2`]: endDef(a, p.to) } : {}),
       ...p.encoding,
     },
@@ -404,7 +411,7 @@ function readErrorMark(unit: Obj, kind: 'errorbar' | 'errorband', config: Obj): 
   const stats = errorStatistics(a, input, ends, config.errorbar.center)
 
   const aggregate = [...lifted.aggregate, ...stats.aggregate]
-  const name = a.continuous.title !== undefined ? a.continuous.title : a.continuous.field
+  const name = a.continuous.title !== undefined ? a.continuous.title : readEscapes(a.continuous.field)
   const tooltip = tooltipOf(stats.lines.map(({ field, title }) => ({ field, type: continuous.type, title: `${title}${stats.named ? ` of ${name}` : ''}` })), lifted.encoding)
   return {
     a,
@@ -497,7 +504,7 @@ function boxplotLayers(unit: Obj, userConfig: Obj | undefined): Obj {
   const a: Anatomy = { kind: 'boxplot', markDef, config, axis, continuous, shared, fieldName: (prefix) => statName(prefix, f) }
 
   const summary = (stats: Array<[prefix: string, label: string]>): Obj =>
-    tooltipOf(stats.map(([prefix, label]) => ({ field: statName(prefix.replace(/_$/, ''), continuous.field), type: continuous.type, title: `${label} of ${continuous.title !== undefined ? continuous.title : continuous.field}` })), shared)
+    tooltipOf(stats.map(([prefix, label]) => ({ field: statName(prefix.replace(/_$/, ''), continuous.field), type: continuous.type, title: `${label} of ${continuous.title !== undefined ? continuous.title : readEscapes(continuous.field)}` })), shared)
   const fiveNumbers = summary([
     [minMax ? 'upper_whisker_' : 'max_', 'Max'], ['upper_box_', 'Q3'], ['mid_box_', 'Median'], ['lower_box_', 'Q1'], [minMax ? 'lower_whisker_' : 'min_', 'Min'],
   ])
