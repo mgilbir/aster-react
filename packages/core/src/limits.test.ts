@@ -55,6 +55,12 @@ describe('checkSceneLimits', () => {
     expect(lim(() => checkSceneLimits(scene, { maxStringLength: 100 })).message).toMatch(/maxStringLength 120 > 100/)
     expect(() => checkSceneLimits(scene, { maxStringLength: 120 })).not.toThrow()
   })
+  it('exempts only the bookkeeping keys the engine writes: __gen is skipped, the retired __domDesc is an ordinary string', () => {
+    const long = 'x'.repeat(200)
+    const sceneWith = (key: string) => ({ items: [{ marktype: 'rect', items: [{ [key]: long }] }] })
+    expect(() => checkSceneLimits(sceneWith('__gen'), { maxStringLength: 100 })).not.toThrow()
+    expect(lim(() => checkSceneLimits(sceneWith('__domDesc'), { maxStringLength: 100 })).message).toMatch(/maxStringLength 200 > 100 \(__domDesc\)/)
+  })
 })
 
 describe('the meter is ambient, nests, and a swallowed violation still fails the call', () => {
