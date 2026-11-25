@@ -3962,6 +3962,8 @@ function parseChannel(channel: string, def: unknown): FieldDef | null {
   }
   if (raw.field === undefined && raw.datum !== undefined) {
     const d = raw.datum
+    // (mark.ts getMarkGroup: the key of the marks is the field of the key channel; a datum there is no key, and what it holds is not read)
+    if (channel === 'key' && isObject(d)) for (const k of Object.keys(d)) ignore(d, k, 'vega-lite keys the marks by the field of the key channel only')
     // (channeldef.ts initDatumDef: the type of a datum without one follows its value)
     return {
       channel,

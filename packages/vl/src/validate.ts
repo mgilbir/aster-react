@@ -1146,6 +1146,25 @@ function conditionGivesField(cond: unknown): boolean {
 const FIELD_DEF_KEYS = set('field type aggregate bin timeUnit sort stack bandPosition axis scale legend title format formatType condition value datum header impute band')
 /** facet channel definitions (row/column/facet) add the layout controls */
 const FACET_CHANNEL_DEF_KEYS = set('field type aggregate bin timeUnit sort bandPosition title header columns spacing align center bounds')
+/**
+ * The channels whose datum, given as an expression, vega-lite gets wrong, on the marks it does (a channel it drops for the mark, or reads
+ * no scale for, draws): the ones a scale reads - which marks vega-lite drops a channel of is its own table - and the ones that print it, on all.
+ */
+const DATUM_EXPRESSION_ALL_MARKS = set('x y xOffset yOffset color fill stroke opacity fillOpacity strokeOpacity strokeWidth tooltip href description')
+const DATUM_EXPRESSION_MARKS: Record<string, ReadonlySet<string>> = {
+  theta: set('text arc'),
+  radius: set('text arc'),
+  strokeDash: set('point circle square bar rule tick line'),
+  size: set('point circle square bar rule tick text line trail'),
+  shape: set('point rule line area trail'),
+  angle: set('point square text arc'),
+  text: set('text'),
+}
+/** The channels that print their datum: vega-lite's chart of an expression there prints the object literal. */
+const TEXT_CHANNELS_OF_DATUM = set('tooltip text href description')
+function datumExpressionRefused(channel: string, mark: string): boolean {
+  return DATUM_EXPRESSION_ALL_MARKS.has(channel) || DATUM_EXPRESSION_MARKS[channel]?.has(mark) === true
+}
 const SORT_CHANNELS = set('x y color fill stroke strokeWidth size shape fillOpacity strokeOpacity opacity text')
 
 function validateEncoding(enc: unknown, path: string, where: 'unit' | 'layer', mark?: string): void {
@@ -1154,6 +1173,17 @@ function validateEncoding(enc: unknown, path: string, where: 'unit' | 'layer', m
     const at = `${path}.${ch}`
     if (!ALL_CHANNELS.has(ch)) fail(at, `unknown encoding channel "${ch}"${suggest(ch, ALL_CHANNELS)}`)
     if (def === null) continue
+    // (a datum given as an expression: vega-lite 6.4.3 refuses it on a channel it builds a scale for, without a `type` ("Invalid field
+    // type undefined"), and with one writes the expression object into the scale's domain, which Vega refuses ("Unsupported object"); on
+    // a tooltip it writes the object literal into the text. Each is a chart vega-lite gets wrong (DECISIONS Q9). Which marks it builds
+    // a scale on a channel for is vega-lite's own, measured in vl-datum-expression.test.ts; elsewhere the datum draws, and compiles here.)
+    if (mark !== undefined) {
+      for (const d of ([] as unknown[]).concat(def)) {
+        if (isObj(d) && isObj(d.datum) && d.datum.expr !== undefined && datumExpressionRefused(ch, mark)) {
+          fail(`${at}.datum`, `a datum given as an expression on the ${ch} channel of a ${mark} is refused: vega-lite 6.4.3 ${TEXT_CHANNELS_OF_DATUM.has(ch) ? 'writes the expression\'s object literal into the text' : 'refuses it without a type and compiles a chart Vega cannot run with one ("Unsupported object")'}; give a \`value\` ({"expr": ...}), or compute a field with a calculate`)
+        }
+      }
+    }
     // (a channel the mark does not draw is dropped, as vega-lite drops it: there is nothing of it to check)
     if (mark !== undefined && !draws(enc, ch, mark)) continue
     if ((ch === 'row' || ch === 'column' || ch === 'facet') && where === 'layer') fail(at, 'facet channels are not allowed in a layer encoding (use the facet operator)')
