@@ -46,7 +46,7 @@
  */
 import type { HostElement, HostEvent, HostEventTarget } from './host-types.js'
 import type { CompiledChart, CompiledData, CompiledSignalDef, SceneGroup, SceneItem, SceneNode, SceneRoot, SignalOnDef } from './types.js'
-import { isEngineNode, keptInto } from './scene-registry.js'
+import { isEngineNode, isRootItem, keptInto, rootItemOf } from './scene-registry.js'
 import { compileExpr, evalSignal, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import type { Changeset } from './modify.js'
 import { normalizeEvents, filterCode } from './stream-defs.js'
@@ -1010,7 +1010,8 @@ function bindSignalEventsDefs(
       picked = hit ? { marktype: hit.marktype, ...hit } as PickedItem : null
       if (picked && sceneInfo) picked = describeIn(sceneInfo, picked)
     }
-    picked ??= frameAt(p)
+    // (the scene hit index holds the view's frame -- the root group item -- as it holds every other item: it is not asked again here)
+    if (!opts.pick) picked ??= frameAt(p)
     if (picked && opts.scene) pickedFrom.set(picked, opts.scene)
     return picked
   }
@@ -1020,7 +1021,13 @@ function bindSignalEventsDefs(
     if (!sc || !sceneInfo || !(sc.frameFill || sc.frameStroke || sc.frameFillTransparent)) return null
     const w = sc.plotWidth ?? sc.width
     const h = sc.plotHeight ?? sc.height
-    return p[0] >= 0 && p[1] >= 0 && p[0] <= w && p[1] <= h ? sceneInfo.root() : null
+    const inside = p[0] >= 0 && p[1] >= 0 && p[0] <= w && p[1] <= h
+    if (sc.frameFill || sc.frameFillTransparent) return inside ? sceneInfo.root() : null
+    // (a frame that is only stroked is found along its stroke, as vega's pick finds it)
+    const hw = (sc.frameStrokeWidth ?? 1) / 2
+    if (!(hw > 0)) return null
+    const near = p[0] >= -hw && p[1] >= -hw && p[0] <= w + hw && p[1] <= h + hw
+    return near && !(p[0] > hw && p[1] > hw && p[0] < w - hw && p[1] < h - hw) ? sceneInfo.root() : null
   }
 
   /** `event.item` of an event the renderer left to the loop: the item under its point (no picker: what the DOM under it says). */
@@ -1952,7 +1959,7 @@ function buildSceneIndex(scene: SceneRoot): SceneIndex {
     get group(): PickedItem | null { return enclosing(g) },
   } as PickedItem)
   /** vega's root group item (`mark-group role-frame root`): the group of every top-level mark. */
-  const rootGroup: PickedItem = { item: { x: 0, y: 0 }, marktype: 'group', name: 'root', role: 'frame', group: null, node: ROOT_MARK_NODE }
+  const rootGroup: PickedItem = { item: rootItemOf(scene), marktype: 'group', name: 'root', role: 'frame', group: null, node: ROOT_MARK_NODE }
   const enclosing = (node: object): PickedItem | null => {
     const map = ensure()
     let p = map.get(node)
@@ -2001,6 +2008,8 @@ function buildSceneIndex(scene: SceneRoot): SceneIndex {
     pathOf,
     at,
     describe: (p) => {
+      // (the root group item: the view's frame, which the hit index picks where nothing else is)
+      if (isRootItem(p.item)) return rootGroup
       const map = ensure()
       const container = map.get(p.item)
       const markGroup = container && isMark(container) ? container : undefined
