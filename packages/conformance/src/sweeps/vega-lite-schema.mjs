@@ -360,8 +360,14 @@ const ENCODING_SKIP = {
   bin: 'a bin, whose object form is a table of properties and whose bare form the mark families already draw',
 };
 
-/** The numbers tried for a number-typed property. */
-const NUMBERS = [0, 0.5, 8, -4];
+/** The numbers tried for a number-typed property: a boundary, a fraction, a large value, a negative one. */
+const NUMBERS = [0, 0.5, 1, 8, -4];
+/**
+ * What is tried where a number the schema forbids would be drawn: a spec that breaks its schema (`opacity: 8`, `size: -4`) is not a
+ * spec @aster-charts/vl is asked to draw (it checks every spec against the schema and refuses what breaks it), so each number is
+ * one the property can take. A property keeps as many values as it had: a forbidden one is replaced by the next of these that fits.
+ */
+const REPLACEMENTS = [1, 2, 4, 16, 30, 0.25, 0.75, 100, 360, 3, 5, 10];
 
 /** The one colour tried where the schema says a colour, chosen to be unlike every default. */
 const COLOUR = '#b35a1f';
@@ -542,12 +548,46 @@ export function generate(ctx) {
     return branch?.properties ?? null;
   }
 
+  /**
+   * The bounds a fragment puts on its number alternatives from outside them: `{anyOf: [{type: number}, ExprRef], minimum: 0, maximum: 1}`
+   * (opacity) bounds the number that is in the anyOf, and nothing says so in the branch.
+   */
+  function outerBounds(fragment, depth = 0, into = { minimum: -Infinity, maximum: Infinity }) {
+    if (!fragment || depth > 8) return into;
+    if (fragment.$ref) return outerBounds(schema.definitions[fragment.$ref.split('/').pop()], depth + 1, into);
+    if (fragment.minimum !== undefined) into.minimum = Math.max(into.minimum, fragment.minimum);
+    if (fragment.maximum !== undefined) into.maximum = Math.min(into.maximum, fragment.maximum);
+    for (const nested of fragment.oneOf || fragment.anyOf || fragment.allOf || []) {
+      // (the bounds of a nested alternative are its own: they stay with the branch)
+      if (nested.anyOf || nested.oneOf || nested.allOf || nested.$ref) outerBounds(nested, depth + 1, into);
+    }
+    return into;
+  }
+
+  /** The numbers a number branch can take: as many as NUMBERS has, and the ends of its range. A branch of words and numbers (fontWeight) takes the words it lists. */
+  function numbersFor(branch, outer) {
+    if (branch.enum) return [];
+    const minimum = Math.max(outer.minimum, branch.minimum ?? -Infinity);
+    const maximum = Math.min(outer.maximum, branch.maximum ?? Infinity);
+    const exclusiveMinimum = typeof branch.exclusiveMinimum === 'number' ? branch.exclusiveMinimum : -Infinity;
+    const fits = (n) => n >= minimum && n <= maximum && n > exclusiveMinimum && (branch.type !== 'integer' || Number.isInteger(n));
+    const taken = NUMBERS.filter(fits);
+    for (const n of REPLACEMENTS) {
+      if (taken.length >= NUMBERS.length) break;
+      if (fits(n) && !taken.includes(n)) taken.push(n);
+    }
+    // (and the two ends of what the property takes: a bound is where an off-by-one is)
+    for (const bound of [minimum, maximum]) if (Number.isFinite(bound) && fits(bound) && !taken.includes(bound)) taken.push(bound);
+    return taken;
+  }
+
   /** Collects the candidate values a schema fragment declares, or null where there are none. */
   function declaredValues(fragment, name) {
     const branches = branchesOf(fragment);
     // every enumerable branch together (vega-schema.mjs `enumerableUnion`): `stack` is words AND booleans, `timeUnit` and `sort`
     // several enums, `tickCount` and `nice` words AND numbers
-    const union = enumerableUnion(branches, NUMBERS);
+    const bounds = outerBounds(fragment);
+    const union = enumerableUnion(branches, (branch) => numbersFor(branch, bounds));
     if (union.values.length) return union;
     // A colour is named by the definition it references rather than by the property's name.
     if (JSON.stringify(fragment).includes('Color')) return { kind: 'colour', values: [COLOUR] };
