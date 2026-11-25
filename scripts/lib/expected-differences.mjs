@@ -117,38 +117,10 @@ export const EXPECTED_DIFFERENCES = Object.freeze([
     gate: 'test',
     case: 'mark-role-config-vs-vega: a group mark whose role starts with axis, legend or title',
     reason:
-      "vega's ViewLayout reads a child's role: a GROUP mark that says `role: axis` (or `legend`, `title`, and the prefixed `axis-label` ...) is "
-      + "laid out as that guide (half-pixel offset, the legend grid, the title anchor) and its role-axis container carries the axis caption. "
-      + "Aster lays out only the guides it generates from `axes`, `legends` and `title`; an authored group is drawn in place. Not a "
-      + "function of anything a chart author writes for a guide (C205).",
-  },
-  {
-    gate: 'test',
-    case: 'mark-role-config-vs-vega: a data mark whose role is exactly axis',
-    reason:
-      "vega's axis layout takes a data mark whose role is `axis` as the guide and offsets it by half a pixel (`M13.5,13.5L..` against "
-      + "`M13,13L..`); Aster does not read the role of an authored mark for layout (C205).",
-  },
-  {
-    gate: 'test',
-    case: 'mark-role-config-vs-vega: a data mark whose role is legend, in a chart with a legend',
-    reason:
-      "vega's ViewLayout gathers a data mark with `role: legend` with the legends and places it on the legend grid (the chart's own "
-      + "legend moves, the view grows by the grid); Aster's legend layout reads only the legends it generated (C205).",
-  },
-  {
-    gate: 'test',
-    case: 'mark-role-config-vs-vega: a data mark whose role is frame or scope, in a chart with a legend and a title',
-    reason:
-      "vega's ViewLayout unions a `frame` or `scope` child's bounds into both anchor bounds and drops the guides' placement against it "
-      + "(the view is 132x82 where Aster's is 174x99); Aster places the legend against the plot as it does for any data mark (C205).",
-  },
-  {
-    gate: 'test',
-    case: 'mark-role-config-vs-vega: a stroked area whose role is frame, scope, legend or title',
-    reason:
-      "vega's parser makes such a stroked area a layout container: its stroke does not grow the view as it does for every other role "
-      + "(height 82 against 84); Aster grows the view by the stroke (C205).",
+      "vega-parser does not make a scope of a group mark whose role is a guide's (`axis`, `legend`, `title`, and the prefixed `axis-label`, "
+      + "`legend-entry`, `title-text` ...): what it holds is parsed once, in the scope around it, and vega draws no container for the group "
+      + "mark or its items (one `rect` where Aster draws a rect per group item inside its own `role-axis` container). Aster makes a group "
+      + "mark a scope whatever its role (C205, open: the parse of such a group mark is not modelled)."
   },
   {
     gate: 'test',
