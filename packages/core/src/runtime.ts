@@ -6082,6 +6082,9 @@ function reusablePulse(
   // (a pass cut short by a failure -- an encode that threw, in this mark or before it -- makes what vega's first run of the dataflow
   // makes, which a pulse over the items of a clean evaluation is not: the items after the failing one stay unencoded)
   if (!prevGroup || !prev || !ctx.incremental || !cleanPass(ctx)) return null
+  // (the layout of a mark whose role is `axis` writes the position of its first item: the items of the evaluation before are not the
+  // encode's, and an item that moved up would keep the half pixel -- the mark is made whole)
+  if (mark.role === 'axis') return null
   // The output pulse of the source dataset. `null` means it was fully
   // re-derived without a trustworthy mapping.
   const pulse = ctx.datasetPulses.get(source) ?? null
@@ -7418,9 +7421,6 @@ function authoredLayoutError(mark: SceneGroup): TypeError {
   return new TypeError(mark.items?.length ? "Cannot read properties of undefined (reading '0')" : "Cannot read properties of undefined (reading 'datum')")
 }
 
-/** The items `axisRoleLayout` moved: their position is already the axis's. */
-const AXIS_PLACED = new WeakSet<object>()
-
 /**
  * The view's layout reads a mark whose `role` is `axis` as an axis (vega-view-transforms layout/axis.js): it takes the mark's first
  * item for the axis's group item. An authored item has no `orient` of the four, so the layout leaves it where it was, then writes
@@ -7431,10 +7431,8 @@ const AXIS_PLACED = new WeakSet<object>()
  */
 function axisRoleLayout(items: SceneItem[]): SceneItem[] {
   const first = items[0] as SceneItem & Record<string, unknown>
-  if (AXIS_PLACED.has(first)) return items
   const delta = first.translate != null ? (first.translate as number) : 0.5
   const moved = { ...first, x: (first.x as number) + delta, y: (first.y as number) + delta } as SceneItem
-  AXIS_PLACED.add(moved)
   return [moved, ...items.slice(1)]
 }
 

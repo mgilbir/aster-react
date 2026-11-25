@@ -344,9 +344,79 @@ function markWrites(r: Rnd): Scenario {
   }
 }
 
+
+/**
+ * Authored marks with a role the view's layout reads (C205): `axis` (the first item placed with the half pixel, no bounds), `legend`
+ * and `title` (the layout throws over a mark that is no guide), `frame` and `scope` (the pass stops at the mark), among a view's guides
+ * and other marks, over rows that come and go (the item first in the mark changes with them).
+ */
+function authoredRoles(r: Rnd): Scenario {
+  const pipe = pipeline(r)
+  const role = pick(r, ['axis', 'legend', 'title', 'frame', 'scope', 'custom', 'mark', 'axis-label'] as const)
+  const type = pick(r, ['rect', 'symbol', 'text', 'line', 'area', 'rule'] as const)
+  const geo: Record<string, Record<string, unknown>> = {
+    rect: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'v' }, width: { value: 6 }, height: { value: 6 } },
+    symbol: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'v' }, size: { value: 40 } },
+    text: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'v' }, text: { field: 'k' } },
+    line: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'v' }, stroke: { value: '#456' } },
+    area: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'v' }, y2: { value: 0 }, stroke: { value: '#456' } },
+    rule: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'v' }, x2: { value: 150 }, y2: { value: 100 }, stroke: { value: '#456' } },
+  }
+  const other = { type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'v' }, size: { value: 30 }, fill: { value: 'teal' } } } }
+  const authored = { type, role, from: { data: 't' }, encode: { update: geo[type]! } }
+  const marks = r() < 0.5 ? [authored, other] : [other, authored]
+  return {
+    spec: {
+      ...FRAME, autosize: pick(r, ['pad', 'none']),
+      data: [hostData(r, 't', { transform: [...pipe] })],
+      scales: [
+        { name: 'x', type: 'linear', domain: pick(r, [[0, 20], { data: 't', field: 'x' }]), range: 'width' },
+        { name: 'y', type: 'linear', domain: [0, 10], range: 'height' },
+        { name: 'c', type: 'ordinal', domain: ['a', 'b'], range: 'category' },
+      ],
+      axes: r() < 0.6 ? [{ scale: 'y', orient: 'left' }] : [],
+      legends: r() < 0.6 ? [{ fill: 'c', title: 'L' }] : [],
+      ...(r() < 0.5 ? { title: 'T' } : {}),
+      marks,
+    } as unknown as VgSpec,
+    data: { t: rowsOf(r, int(r, 0, 8)) },
+    mutable: ['t'],
+    row: plainRow,
+  }
+}
+
+/** A group mark's own signals (C483): derived signals in any declaration order over the rows of the cells they are in. */
+function scopedSignals(r: Rnd): Scenario {
+  const pipe = pipeline(r)
+  const n = int(r, 2, 7)
+  const names = Array.from({ length: n }, (_, i) => `s${i}`)
+  const order = names.map((_, i) => i).sort(() => r() - 0.5)
+  const rank = new Map(order.map((idx, k) => [idx, k]))
+  const defs = names.map((name, i) => {
+    const reads = names.filter((_, j) => rank.get(j)! < rank.get(i)! && r() < 0.5)
+    const terms = [...reads, ...(r() < 0.5 ? ['parent.x'] : [])]
+    return terms.length ? { name, update: `${terms.join(' + ')} + ${i + 1}` } : { name, value: i }
+  })
+  const facet = r() < 0.5
+  const group = {
+    type: 'group', ...(facet ? { from: { facet: { name: 'cell', data: 't', groupby: 'k' } } } : { from: { data: 't' } }),
+    signals: defs.slice().sort(() => r() - 0.5),
+    encode: { update: { x: { value: 0 }, y: { value: 0 }, width: { value: 50 }, height: { value: 30 } } },
+    marks: [{ type: 'text', encode: { update: { text: { signal: `join([${names.join(', ')}], ',')` } } } }],
+  }
+  return {
+    spec: { ...FRAME, data: [hostData(r, 't', { transform: [...pipe] })], marks: [group] } as unknown as VgSpec,
+    data: { t: rowsOf(r, int(r, 1, 6)) },
+    mutable: ['t'],
+    row: plainRow,
+  }
+}
+
 export const SHAPES: ReadonlyArray<readonly [string, (r: Rnd) => Scenario]> = [
   ['keys, zindex and colour objects', keyedPaintOrder],
   ['mark triggers: writes onto items', markWrites],
+  ['authored marks with a layout role', authoredRoles],
+  ["a group mark's own signals", scopedSignals],
   ['mark-from-mark', markFromMark],
   ['group-scoped reads', groupScopedReads],
   ['fitted projection', fittedProjection],
