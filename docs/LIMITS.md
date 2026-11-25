@@ -516,8 +516,20 @@ view starts: the expression is evaluated under `limits` (the regular-expression 
 over the signals it reads and only those, each taken from its own scope (a group mark's signals shadow the
 view's) and from `signals` for the host's values. vega reloads such a dataset whenever the signal changes;
 `loadSpecData` loads once. `useChartData` in `@aster-charts/react` passes its `signals` to the loader, so a
-host-set signal that changes loads again; a change made inside the chart (a bound input, an event handler)
-does not reload (see docs/ROADMAP.md).
+host-set signal that changes loads again. `<Chart urlLoad={{ ... }}>` keeps the data current as vega does: it
+loads the url datasets itself (the load add-on, imported lazily) and loads again whenever the urls the chart's
+signals now give are not the ones it loaded (`datasetUrls(spec, { signals, limits })`, from `@aster-charts/core/load`: a
+signal change that leaves every url as it was loads nothing), a change made inside the chart included (a bound
+input, an event handler, `setSignal`). The whole policy above applies, with the chart's `limits` and `signals`:
+a network url needs `allow` / `allowOrigins([...])` or a `baseURL` it is on, else the load fails with an
+`AsterUrlError` and nothing is requested; the per-load caps (`timeoutMs`, `maxBytes`, `maxTotalBytes`,
+`maxRequests`, `maxRedirects`, `limits.maxTimeMs`, `limits.maxRows`) bound every load, and each url change is
+one more load under them (a url an event stream rewrites on every pointer move requests as often as the
+pointer moves: bound it with the spec, as with vega). The load a newer url supersedes is aborted, and so is one
+still running at unmount. Until the first load arrives the datasets are empty (`emptyUrlData`), the previous
+rows stay while a newer url loads, and a failed load is reported through `onError` (else the logger) once,
+the chart keeping the rows and the bound inputs it has so the next url can recover it; it is not retried by
+itself.
 
 **The format.** A url dataset is read in the format its `format.type` names, `json` by default, as vega does: the url's
 extension is not read. A `.csv` url with no `format` is json, and a body that is not JSON is an error
