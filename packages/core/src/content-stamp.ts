@@ -47,7 +47,7 @@ export function beginWrite(arr: object): void {
   VERSIONS.set(arr, v + 1)
   const kept = HISTORIES.get(arr)
   if (kept === undefined || kept.version !== v || !Array.isArray(arr) || kept.copy !== undefined) return
-  const after: History = { of: arr as readonly unknown[], version: v + 1 }
+  const after: Version = { version: v + 1 }
   kept.len = arr.length
   kept.slots = new Map()
   kept.after = after
@@ -67,45 +67,52 @@ export function endWrite(arr: object): void {
   const v = versionOf(arr) + 1
   VERSIONS.set(arr, v)
   const h = HISTORIES.get(arr)
-  if (h !== undefined && h.of === arr) h.version = v
+  if (h !== undefined) h.version = v
 }
 
 /**
  * An array's content as it is now, kept for readers that outlive later writes (a scene's datasets, DECISIONS Q14: a scene's rows are
- * that scene's): the array itself while it is not written; after a journalled write, the content after (`after`, itself a history)
- * cut to the length it had and with the overwritten slots put back; after any other write, the copy `wrote` took. One history per
+ * that scene's): the array itself while it is not written; after a journalled write, the content after (`after`, the next version)
+ * cut to the length it had and with the overwritten slots put back; after any other write, the copy `wrote` took. One record per
  * version of an array, shared by every reader of that version: the array holds one entry and nothing keeps a reader alive. (The
  * engine never edits a published row object in place, which the incremental differential checks.)
+ *
+ * The record of a version does not hold the array: the tables below are keyed by the array, and a value that holds its own key keeps
+ * it alive through every minor GC (V8's scavenger treats an old table's values as roots), so each array a scene published -- a host's
+ * rows, 80 kB at 10k rows -- would be promoted and live until the next full collection. The reader's handle holds the array.
  */
-export interface History {
-  readonly of: readonly unknown[]
+interface Version {
   version: number
   copy?: readonly unknown[]
   len?: number
   slots?: Map<number, unknown>
-  after?: History
+  after?: Version
 }
-const HISTORIES = new WeakMap<object, History>()
-const JOURNALS = new WeakMap<object, History>()
+/** A reader's hold on an array's content at one version (see `keepHistory`). */
+export interface History {
+  readonly of: readonly unknown[]
+  readonly at: Version
+}
+const HISTORIES = new WeakMap<object, Version>()
+const JOURNALS = new WeakMap<object, Version>()
 
 export function keepHistory(arr: readonly unknown[]): History {
   const version = versionOf(arr)
-  const kept = HISTORIES.get(arr)
-  if (kept !== undefined && kept.version === version) return kept
-  const h: History = { of: arr, version }
-  HISTORIES.set(arr, h)
-  return h
+  let at = HISTORIES.get(arr)
+  if (at === undefined || at.version !== version) HISTORIES.set(arr, (at = { version }))
+  return { of: arr, at }
 }
 
 /** The content a history kept (rebuilt once from the writes after it, then kept). */
 export function historical(h: History): readonly unknown[] {
-  if (h.copy !== undefined) return h.copy
-  if (h.after === undefined) return h.of
-  // (down the chain of later writes, then back up: a long-lived scene may be many writes behind)
-  const chain: History[] = []
-  let at: History = h
+  const first = h.at
+  if (first.copy !== undefined) return first.copy
+  if (first.after === undefined) return h.of
+  // (down the chain of later writes, then back up: a long-lived scene may be many writes behind; every version is of the same array)
+  const chain: Version[] = []
+  let at: Version = first
   while (at.copy === undefined && at.after !== undefined) { chain.push(at); at = at.after }
-  let content: readonly unknown[] = at.copy ?? at.of
+  let content: readonly unknown[] = at.copy ?? h.of
   for (let k = chain.length - 1; k >= 0; k--) {
     const c = chain[k]!
     const out = content.slice(0, c.len)
