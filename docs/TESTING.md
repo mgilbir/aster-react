@@ -199,7 +199,7 @@ and what vega itself dies on (a tick count of 2^32, a bin step of 1e-9) is held 
 | Guide captions vs Vega `aria-label` | `pnpm a11y-parity` | 1129/1129 caption sets match |
 | Transform option combinations | `pnpm transform-matrix` | 77/78 match (1 browser-only case skipped here, run by `conformance:browser`) |
 | Vega schema sweep | `pnpm sweep-vega -- --floor 7549 --min-ok 7538 --max-node-error 3` | 7538 ok, 9 both-refused, 2 node-error (the oracle crashes), 0 engine-error, 0 differ / 7549 |
-| Vega-Lite schema sweep | `pnpm sweep-vl -- --floor 27513 --min-ok 27452 --max-node-error 17 --vega-check` | 27452 ok, 47 both-refused, 14 node-error, 0 engine-error, 0 differ, 0 vega-differ / 27513 |
+| Vega-Lite schema sweep | `pnpm sweep-vl -- --floor 33043 --min-ok 32630 --max-node-error 1 --vega-check` | 32630 ok, 412 both-refused, 1 node-error, 0 engine-error, 0 differ, 0 vega-differ / 33043 |
 | Value sweep | `pnpm sweep-values -- --floor 500 --min-ok 500 --max-node-error 0` | 500 ok, 0 both-refused, 0 node-error, 0 engine-error, 0 differ / 500 |
 | Signals sweep | `pnpm sweep-signals -- --floor 166 --min-ok 103 --max-node-error 2 --max-retained 60` | 103 ok, 60 retained, 1 both-refused, 2 node-error, 0 differ / 166 |
 | Gap probes (a failing probe documents a gap only when listed in `scripts/lib/expected-differences.mjs`, which requires it to still fail) | `pnpm probe -- --min-pass 2` | 2/2 pass (floor 2) |
