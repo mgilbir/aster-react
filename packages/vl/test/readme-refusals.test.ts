@@ -40,6 +40,7 @@ const REFUSED: Array<[string, Record<string, unknown>, RegExp]> = [
   ['a longitude / latitude datum that is not a number', unit('point', { longitude: { datum: 'east', type: 'nominal' }, latitude: q('lat') }, proj), /must be a finite number/],
   ['a `time` channel needs a unit at the root, or in the\n  layers of the root', { data, hconcat: [{ params: [timer], transform: frame, mark: 'point', encoding: { x: q('b'), time: q('t') } }] }, /single top-level unit/],
   ['composite marks', unit('boxplot', { x: n('a'), y: q('b'), time: q('t') }, { params: [timer], transform: frame }), /animating it is not supported/],
+  ['an errorbar or errorband whose measure is a nested path', unit('errorbar', { x: n('a'), y: q('o.v') }), /nested path or a name with a dot/],
   ['`timeUnit.maxbins`', unit('bar', { x: { field: 'd', type: 'temporal', timeUnit: { maxbins: 5 } }, y: q('c') }), /timeUnit\.maxbins/],
   ['errorbar / errorband over a binned channel', unit('errorbar', { x: { field: 'b', type: 'quantitative', bin: 'binned' }, y: q('c') }), /over a binned/],
   ['a `datum`\n  condition on fillOpacity', unit('point', { x: q('b'), fillOpacity: { condition: { test: 'datum.b > 1', datum: 2 }, value: 1 } }), /datum conditions/],
