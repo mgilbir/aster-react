@@ -60,7 +60,7 @@ import type {
 import { gradientDefOf, hash53, isGradientPaint } from './svg-defs.js'
 import { tickFormat, scaleGradient, scaleGradientStops, tickCount, validTicks } from './scale.js'
 import { compileChart } from './compiler.js'
-import { copyTuple, withTupleOrigins, dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, isTuple, markTuple, markTuples, markTupleAlways, withTuples, tuplesRegistering, PRIMITIVE_TUPLE, tupleDatum } from './util.js'
+import { splitAccessPath, copyTuple, withTupleOrigins, dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, isTuple, markTuple, markTuples, markTupleAlways, withTuples, tuplesRegistering, PRIMITIVE_TUPLE, tupleDatum } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, bindSceneUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { checkChartUrlData } from './url-data.js'
 import { publishRows, valueKey, valuesEqual } from './fingerprint.js'
@@ -674,6 +674,12 @@ interface EvalContext {
   /** Position of the enclosing facet group, for `{field: {group: 'x' | 'y'}}` references. */
   groupX?: number
   groupY?: number
+  /**
+   * The group item the marks being made are in (vega's `item.mark.group`): what its encode wrote and its `datum`, and the group item
+   * it is in, up to the view's (`parent` undefined): what `{field: {group | parent, level}}` reads (see groupFieldValue). Undefined
+   * for the view's marks, whose group item is the view's (`rootGroupItem`).
+   */
+  groupItem?: GroupLink
   datasets: Map<string, Row[]>
   /** The rows `setdata(name, tuples)` put in a dataset's input (see `ExpressionRuntime.setdata`), and whether they changed since the datasets were last built. */
   setData: SetDataState
@@ -6662,7 +6668,7 @@ interface GivenPulse { pulse: StepPulse; items: SceneItem[] }
 function evaluateInstanceMark(mark: CompiledMark, ctx: EvalContext, id: string, itemContext: Record<string, unknown>): SceneGroup | SceneGroup[] | null {
   const source = mark.from?.data
   const eligible = mark.type !== 'group' && !mark.transform?.length && source !== undefined && ctx.datasets.has(source)
-    && !forceBound(mark, ctx.chart) && !readsAllDataInScope(mark, ctx.chart)
+    && !forceBound(mark, ctx.chart) && !readsAllDataInScope(mark, ctx.chart) && !readsOuterGroup(mark)
   if (!eligible) return evaluateMark(mark, ctx)
   // (what it reads of the signals: as a top-level mark's, its `from` being a dataset of its scope, see `readsAllDataInScope`)
   const key = markKeyOf(mark, ctx, namesMentioned(mark, ctx.chart))
@@ -6680,7 +6686,10 @@ function evaluateInstanceMark(mark: CompiledMark, ctx: EvalContext, id: string, 
     && prev.deps.length === deps.length && prev.deps.every(([n, d], i) => deps[i]![0] === n && samePin(d, deps[i]![1].of))
     && equalCell(prev.item, itemContext)) {
     const datums = prev.rowItems.map((it) => (it as { datum?: unknown }).datum)
-    const diff = datums.every((d) => d !== null && typeof d === 'object') ? diffRows(datums, rows) : null
+    // (an item's datum is a shallow copy of its row: an object or array a row holds is the very one the new row holds, so a write into
+    // it, which a host may have made before handing new rows, cannot be seen by comparing them -- such rows are made again, as the
+    // view's marks are when the caller does not say what changed: C541)
+    const diff = datums.every((d) => d !== null && typeof d === 'object' && !holdsNested(d as Row)) ? diffRows(datums, rows) : null
     if (diff !== null && diff.sameLength && diff.changed.length === 0) {
       // (nothing it reads changed: the mark is the one the evaluation before made)
       keepInstanceMark(mark, ctx, prev.group)
@@ -6719,6 +6728,37 @@ function readsGroupItem(mark: CompiledMark): boolean {
   }
   visit(mark, 0)
   READS_GROUP_ITEM.set(mark, out)
+  return out
+}
+
+/** Whether a row holds an object or an array (a Date is a value: compared by its time). */
+function holdsNested(row: Row): boolean {
+  for (const k in row) {
+    const v = row[k]
+    if (v !== null && typeof v === 'object' && !(v instanceof Date)) return true
+  }
+  return false
+}
+
+/**
+ * Whether a mark reads a group item above its own (`{field: {group | parent, level: 2+}}`): the item context it is kept by is its
+ * own group item's, so such a mark is made again.
+ */
+const READS_OUTER_GROUP = new WeakMap<CompiledMark, boolean>()
+function readsOuterGroup(mark: CompiledMark): boolean {
+  let out = READS_OUTER_GROUP.get(mark)
+  if (out !== undefined) return out
+  out = false
+  const visit = (v: unknown, depth: number): void => {
+    if (out || depth > 64) { out = true; return }
+    if (v === null || typeof v !== 'object') return
+    if (Array.isArray(v)) { for (const x of v) visit(x, depth + 1); return }
+    const o = v as Record<string, unknown>
+    if ((o.group !== undefined || o.parent !== undefined) && o.level !== undefined && Math.max(1, +(o.level as number) || 1) > 1) { out = true; return }
+    for (const x of Object.values(o)) visit(x, depth + 1)
+  }
+  visit(mark, 0)
+  READS_OUTER_GROUP.set(mark, out)
   return out
 }
 
@@ -7509,6 +7549,8 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
       height: gh,
       groupX: gx,
       groupY: gy,
+      // (the group item its marks read: what its encode wrote, as it is, and its datum; the one it is in above it)
+      groupItem: { item: { ...geo, datum: src.datum }, up: ctx.groupItem ?? rootGroupItem(ctx) },
       scales: childScales.size ? new Map([...ctx.scales, ...childScales]) : ctx.scales,
       scaleTypes: childTypes.size ? new Map([...ctx.scaleTypes, ...childTypes]) : ctx.scaleTypes,
       ...(own?.registry ? { projections: own.registry } : {}),
@@ -8050,21 +8092,38 @@ function fieldName(f: unknown, datum: Row, ctx: EvalContext): { name: unknown; p
   return typeof f === 'string' ? { name: f, path: true } : { name: encodeFieldValue(f, datum, ctx), path: false }
 }
 
-/** The group a `{group|parent}` field reference points at, `level` groups up (this engine has the enclosing facet group only). */
-function groupFieldValue(ref: { group?: unknown; parent?: unknown }, datum: Row, ctx: EvalContext): unknown {
-  if (ref.parent !== undefined) {
-    // `item.mark.group.datum[field]`: the facet cell's datum is the `parent` signal there
-    const parent = ctx.signalParams['parent']
-    if (parent == null) return undefined
-    const f = fieldName(ref.parent, datum, ctx)
-    return f.path ? getField(parent as Row, f.name as string) : (parent as Record<string, unknown>)[f.name as string]
+/** A group item as the marks inside it read it (`item.mark.group`), and the group item it is in (`undefined` past the view's). */
+interface GroupLink { item: Record<string, unknown>; up: GroupLink | undefined }
+
+/** The view's group item, as a mark of the view reads it: at the origin, its size the `width` and `height` signals, no datum. */
+function rootGroupItem(ctx: EvalContext): GroupLink {
+  return { item: { x: 0, y: 0, width: ctx.viewWidth ?? ctx.width, height: ctx.viewHeight ?? ctx.height }, up: undefined }
+}
+
+/**
+ * A `{group | parent}` field reference (vega-parser resolveField): `item.mark.group` `level` times (at least once), then the field
+ * of that group item (`{group: "fill"}`, `{group: "datum.k"}`: any of its properties, as a path) or of its datum (`{parent}`).
+ * Past the view's group item there is none: reading through it fails as vega's generated code does.
+ */
+function groupFieldValue(ref: { group?: unknown; parent?: unknown; level?: unknown }, datum: Row, ctx: EvalContext): unknown {
+  let at: GroupLink | undefined = ctx.groupItem ?? rootGroupItem(ctx)
+  const level = Math.max(1, +(ref.level as number) || 1)
+  for (let up = 1; up < level; up++) {
+    // (`item.mark.group.mark`: the view's group item's mark has no group, so the next `.mark` is read off undefined)
+    if (at === undefined) throw new TypeError("Cannot read properties of undefined (reading 'mark')")
+    at = at.up
   }
-  const key = fieldName(ref.group, datum, ctx).name
-  if (key === 'width') return ctx.width
-  if (key === 'height') return ctx.height
-  if (key === 'x') return ctx.groupX ?? 0
-  if (key === 'y') return ctx.groupY ?? 0
-  return 0
+  const isParent = ref.parent !== undefined
+  const f = fieldName(isParent ? ref.parent : ref.group, datum, ctx)
+  // (one group past the view's: the field is read off undefined)
+  if (at === undefined) throw new TypeError(`Cannot read properties of undefined (reading '${isParent ? 'datum' : f.path ? splitAccessPath(String(f.name))[0] : String(f.name)}')`)
+  // (the generated code reads each step of the path, `item.mark.group["datum"]["g"]`: a step off null or undefined fails)
+  let value: unknown = isParent ? at.item.datum : at.item
+  for (const step of f.path ? splitAccessPath(String(f.name)) : [String(f.name)]) {
+    if (value == null) throw new TypeError(`Cannot read properties of ${value === null ? 'null' : 'undefined'} (reading '${step}')`)
+    value = (value as Record<string, unknown>)[step]
+  }
+  return value
 }
 
 /** A field reference in any of vega's forms: a path, `{datum}`, `{signal}`, `{group}`, `{parent}`. */
