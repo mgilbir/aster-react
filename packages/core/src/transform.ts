@@ -51,6 +51,16 @@ export interface TransformContext {
    */
   inPlace?: boolean
   /**
+   * A `force` layout over nodes that carry the positions and velocities of a layout already run (a view that continues one) that vega
+   * does not run again: the layout is set up over them (its links are bound to its nodes) and no tick is made.
+   */
+  settled?: boolean
+  /**
+   * A `force` layout over the nodes of a layout already run, which it runs again: the simulation keeps its nodes (vega sets a node
+   * to its `fx` / `fy` when it is given its nodes, not when it runs again), so the first tick sees them where they were.
+   */
+  continued?: boolean
+  /**
    * A named mark's container (`marktype` and its `items`; for a group mark, the group items): the marks the `label`
    * transform avoids. Absent where there are no marks (a dataset's transform).
    */
