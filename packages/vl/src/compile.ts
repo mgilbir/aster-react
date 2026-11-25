@@ -4878,7 +4878,9 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     // (the rows carry the joined copy `o.v` of this field's path, as vega-lite's parse writes it: its text reads that column - unless an aggregate of
     // the encoding groups the rows by the compiler's own key, which is all the groups keep)
     const pieces = splitAccessPath(f.source)
-    if (pieces.length > 1 && !fields.some((g) => g.aggregate) && castDone.has(`flat:${pieces.join('.')}`) && !derivedKeys.has(pieces[0]!) && !producedNames.has(pieces.join('.'))) JOINED_COPY.add(f.raw)
+    const joined = pieces.join('.')
+    // (a name a transform of the unit produces, with a dot in it, is a column of the rows under that very name)
+    if (pieces.length > 1 && !fields.some((g) => g.aggregate) && (producedNames.has(joined) || (castDone.has(`flat:${joined}`) && !derivedKeys.has(pieces[0]!)))) JOINED_COPY.add(f.raw)
   }
   for (const p of referencedPaths(spec.encoding)) addFlat(p)
   // (a point selection over `fields` tests the flat copy of each nested path, which vega-lite adds whether or not an encoding reads it)
