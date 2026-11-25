@@ -174,3 +174,21 @@ describe('a hit index answers for the scene it was built for (C229)', () => {
     }
   })
 })
+
+describe('a line with a point past single precision', () => {
+  // (a browser's SVG path reads the text up to the number it cannot hold, so the line ends at the point before it; a canvas's path is
+  // floats: it leaves the point out and joins the two beside it. Where the SVG index tests the polygons the flattener made as the
+  // canvas draws them, it must read the text instead: this is what tells the two apart)
+  const { svg, canvas } = both(view([{
+    type: 'line', from: { data: 'p' },
+    encode: { update: { x: { field: 'x' }, y: { field: 'y' }, stroke: { value: '#333' }, strokeWidth: { value: 4 } } },
+  }], { data: [{ name: 'p', values: [{ x: 0, y: 50 }, { x: 100, y: 50 }, { x: 150, y: 1e39 }, { x: 300, y: 50 }] }] }))
+  it('the SVG index ends the line at the point before it', () => {
+    expect(markOf(svg.pick(50, 50))).toBe('line')
+    expect(markOf(svg.pick(200, 50))).toBe('none')
+  })
+  it('the canvas index joins the points beside it', () => {
+    expect(markOf(canvas.pick(50, 50))).toBe('line')
+    expect(markOf(canvas.pick(200, 50))).toBe('line')
+  })
+})
