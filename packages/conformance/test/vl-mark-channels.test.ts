@@ -46,7 +46,7 @@ function keysOf(node: Obj): unknown[] {
 /** What Aster did with a spec nothing was compared of. */
 const asterDid = (s: Skipped): string =>
   s.aster === 'compiled' ? 'compiled'
-  : /the time channel needs exactly one timer selection param/.test(s.aster) ? 'refused: the time channel needs a timer param'
+  : /the time channel needs exactly one timer selection param|the time channel needs a timer selection and its frame filter|the time channel is a field definition|`scale` is not supported on the time channel/.test(s.aster) ? 'refused: the time channel needs a timer param'
   : /needs its pair: give both/.test(s.aster) ? 'refused: longitude and latitude need each other'
   : /longitude \/ latitude positions are only implemented for the/.test(s.aster) ? 'refused: longitude / latitude on a mark it does not draw them on'
   : /a condition that gives a field or a datum on a position/.test(s.aster) ? 'refused: a position condition'

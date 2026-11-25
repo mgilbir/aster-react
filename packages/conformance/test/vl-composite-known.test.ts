@@ -28,11 +28,12 @@ describe('composite specs held to a known difference from vega-lite', () => {
     ['area with config.area.opacity and a line', { data: DATA, config: { area: { line: true, opacity: 0.2 } }, mark: 'area', encoding: { x: q('x'), y: q('v', { aggregate: 'sum' }) } }],
     ['area with config.mark.opacity and points', { data: DATA, config: { area: { point: true }, mark: { opacity: 0.9 } }, mark: 'area', encoding: { x: q('x'), y: q('v', { aggregate: 'sum' }) } }],
   ] as Array<[string, Record<string, any>]>) {
-    it(`${name}: the same picture, from marks that repeat the config's opacity`, async () => {
+    it(`${name}: the same picture, and now the same marks (a14 reads the config's opacity as vega-lite does)`, async () => {
       const oracle = theirs(spec)
       const ours = compile(plain(spec) as never) as Record<string, any>
-      // (Aster repeats the config opacity in the mark's encode, vega-lite leaves it to the config's style)
-      expect(pickSpec(ours, 'aster')).not.toEqual(pickSpec(oracle, 'oracle'))
+      // (it was a known difference: Aster repeated the config opacity in the mark's encode, vega-lite leaves it to the config's style. It no longer
+      // differs, so the entry is an agreement now and says so)
+      expect(pickSpec(ours, 'aster')).toEqual(pickSpec(oracle, 'oracle'))
       expect(diffCanonical(canonicalizeSvg(await renderWithVega(oracle)), canonicalizeSvg(await renderWithVega(plain(ours))))).toEqual([])
     })
   }
@@ -45,14 +46,14 @@ describe('composite specs held to a known difference from vega-lite', () => {
     if (ours !== undefined) expect(size(await renderWithVega(plain(ours))), 'Aster draws what vega-lite does: move the spec to the matrix').not.toEqual([10, 10])
   })
 
-  it('an errorbar over a nested field: vega-lite draws no data for it, so there is nothing to compare', async () => {
+  it('an errorbar over a nested field: vega-lite draws no data for it, and Aster refuses it', async () => {
     const spec = { data: { values: DATA.values.map((d) => ({ ...d, o: { v: d.v } })) }, mark: 'errorbar', encoding: { x: n('c'), y: q('o.v') } }
     const svg = await renderWithVega(theirs(spec))
     // (its y axis runs from 0 to 0 and carries one label, where the same chart over a flat field has a label for each tick and the x axis has none)
     const flat = { data: DATA, mark: 'errorbar', encoding: { x: n('c'), y: q('v') } }
     expect(textsIn(svg), 'vega-lite draws the nested field: move the spec to the matrix').toBeLessThan(textsIn(await renderWithVega(theirs(flat))))
-    // (Aster compiles it and Vega runs the result)
-    await renderWithVega(plain(compile(plain(spec) as never)))
+    // (Aster refuses it, naming the field: a16, DECISIONS Q9)
+    expect(() => compile(plain(spec) as never)).toThrow(/is a nested path or a name with a dot in it/)
   })
 
   it('an errorbar over a binned x: vega-lite draws it, Aster refuses it', async () => {
