@@ -114,6 +114,20 @@ Each item is something the code or the gates show today; none is a plan that has
   the total coverage error of the 122-drawing raster ratchet by 14%, but 22 drawings get worse, so it is not in; doing it together
   with a re-calibration of the curve subdivision is the work. It is what separates the one generated spec (`label-1006`) whose label
   Chromium places and Aster drops ([ARCHITECTURE.md](ARCHITECTURE.md#deviations-from-vega), the dashed round-cap row).
+- **Authored marks with a guide's role.** A group mark whose `role` starts with `axis`, `legend` or `title` is a scope in Aster;
+  vega-parser parses what it holds once in the scope around it and draws no container for it (held, still differing, by
+  `mark-role-config-vs-vega: a group mark whose role starts with axis, legend or title`). A `frame` or `scope` mark that reads a
+  scale ranked late (its domain reads data) fails its layout among the late operators in vega -- the later marks are made unencoded,
+  the view is not laid out -- where Aster draws it as an ordinary mark; for a mark that reads no late scale the pass stops at it, as
+  in vega ([ARCHITECTURE.md](ARCHITECTURE.md#deviations-from-vega)). A failing guide part that reads no late scale, over a late scale
+  (a strip whose own `fill` throws), leaves the scale unevaluated in vega -- no mark that reads it is encoded and no guide over it has a
+  caption; Aster still draws them (`legend-strip-late-scale-vs-vega.test.ts` says which cases it covers).
+- **Mark triggers on group marks and in nested scopes.** A named mark's `on` triggers write onto the items of leaf marks; a group
+  mark's own items take no write, and a trigger of a mark inside a group that declares no signals runs once, not per group item
+  (`mark-triggers-vs-vega.test.ts`). The `<mark>`-named data of an outer scope is visible to inner marks in Aster, where vega's
+  `data('<mark>')` of the view does not see a mark inside a group.
+- **Selection stores tested by an encode.** A store a handler writes has its Dates rewritten as the filters and formulas of datasets
+  test it (`selection-store-dates-vs-vega.test.ts`); a store only a mark's encode tests (`test: vlSelectionTest(...)`) keeps them.
 - **Probes.** `packages/conformance/probes` holds two probes; both pass today and can be promoted into `corpus/`.
 - **Streaming transport.** The host owns the network and decides when to flush.
 - **Transitions on canvas.** `transition` animates the SVG renderer only; the canvas renderer and batched dense marks
