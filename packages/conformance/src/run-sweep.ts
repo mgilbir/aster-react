@@ -38,7 +38,7 @@ import '@aster-charts/core/transforms'
 import { renderSpec, renderSceneToSvg } from '@aster-charts/core'
 import { createChartSession } from '@aster-charts/core/dom'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
-import { compile as compileVL } from '@aster-charts/vl'
+import { compile as compileVL, VLCompileError } from '@aster-charts/vl'
 import { renderWithVegaChecked, settleWithin, type CheckedRender } from './render-vega.js'
 import { withOracleRandom } from './gallery/seeded.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
@@ -255,6 +255,16 @@ async function runOneCase(c: SweepCase, serial = false): Promise<'ok' | 'retaine
     try {
       ourVgSpec = compileVL(ourVl as never) as unknown as Record<string, unknown>
     } catch (e) {
+      // A refusal (a VLCompileError) of a spec whose vega-lite chart Vega cannot run is the agreement DECISIONS Q9 asks for: vega-lite
+      // compiled a chart that is wrong, and the compiler would not draw it. Any other refusal, or one of a chart Vega does run, is an
+      // engine error.
+      if (e instanceof VLCompileError) {
+        try {
+          await renderOracle(vgSpec, c.writes, [])
+        } catch {
+          return 'both-refused'
+        }
+      }
       console.error(`  [engine-error] ${c.name}: ${(e as Error).message.split('\n')[0]}`)
       return 'engine-error'
     }
