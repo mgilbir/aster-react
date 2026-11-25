@@ -411,7 +411,7 @@ name; it overrides or supplies the rows of the spec dataset of that name. A row 
 that supplies every row itself and draws specs it did not write (the data counterpart of `urlPolicy`; see
 [LIMITS.md](LIMITS.md#refusing-url-datasets-urldata)). Any other value is a `TypeError`. `urlDatasets(spec)` returns the names of a
 spec's url datasets (top level and nested groups, in document order), and `checkUrlData(spec, urlData)` throws the refusal
-`urlData: 'refuse'` would, for a host that checks a spec before handing it over.
+`urlData: 'refuse'` would, for a host that checks a spec before handing it over. `emptyUrlData(spec)` returns a copy of the spec in which every url dataset has `values: []` and no `format` (the shape a load gives, without its rows), the same object when there is none: what `<Chart urlLoad>` draws until a load arrives.
 
 `random` (`RuntimeInput.random`, `() => number` in [0, 1)) is the chart's source of random numbers, the per-chart counterpart of
 vega's `setRandom`: expression `random()`, `sampleNormal` / `sampleLogNormal` / `sampleUniform`, the `sample` transform and the
@@ -765,7 +765,8 @@ for a dotless name, a special-use or private-use suffix, a non-public IPv4 addre
 mapped, NAT64 and 6to4 forms judged by the IPv4 address they carry), and anything that is not a host. `readData(data, format?)` reads
 data by a Vega `format` spec (`type`, `parse`, ...) the way vega-loader's `read` does, through the registered reader of the type and then
 `coerceRows`; `coerceRows(rows, parse)` converts the columns that `parse` names (a column type, a `date:<pattern>` /
-`utc:<pattern>`, or `'auto'` to infer from the first row) and returns copies. `AsterUrlError` is re-exported here.
+`utc:<pattern>`, or `'auto'` to infer from the first row) and returns copies. `AsterUrlError` is re-exported here. `datasetUrls(spec, { signals, limits })` returns the urls `loadSpecData` would request for those signal values, in
+document order, and requests nothing: a host that keeps url data current compares it before and after a signal change (`<Chart urlLoad>` does).
 
 #### `@aster-charts/core/geo` and `@aster-charts/core/transforms`
 
@@ -888,9 +889,19 @@ since compilation happens there.
 `height` (each independent. Without them the chart is the size its spec makes it, as in Vega and vega-embed: a literal `width: 400, height: 300` draws at 400 x 300 plus padding in any element, a dimension the spec gives no value stays Vega's 0 grown to the content by autosize, and Vega-Lite's `width: "container"` fills the element through `containerSize()`, which the chart measures. A number fixes the view's size, even for a container-sized spec, whose `width` / `height` signals and `window:resize` handlers do not move it. `'container'` fills the chart's element in that dimension, measured and followed as it resizes: it sizes a spec that has no `width` / `height` signal of its own and whose autosize is not `none` (Vega's `none` means the chart's whole size is its `width`, `height` and `padding`), and it sizes the chart's whole box, padding, guides and the bound inputs under the chart included, as Vega-Lite's `"container"` does (autosize `fit` containing the padding): the content shrinks to fit, so a chart never overflows the element it fills, and an element whose height is the chart's own (a block `<div>` with no height) keeps the chart's size instead of growing with it. A spec that drives its size itself (a bound input, a handler, Vega-Lite's `"container"`) keeps doing so, as in Vega where the size is a signal and the later write wins. A `'container'` dimension is the spec's own on the server and until the first measurement. Anything else (`NaN`, a negative number, a string) is a `TypeError` in the error state. Before 0.5 the chart filled its element whenever a size prop was missing; see the CHANGELOG's migration note), `ariaLabel`, `className`, `style`,
 `signals`, `signalListeners`, `onSignal`, `interactive`, `preventDefault`, `eventSources` (which `window` and CSS-selector sources a spec's `signal.on` streams may listen to: `true`, `false` or a list of event types for each of `window` and `selector`; the default is the window's pointer moves, ends and cancels and `resize`, and no selector, and a spec's own `config.events` can only narrow it; compared by content, so an inline literal is safe; see LIMITS.md), `renderer`, `incremental`, `denseMarks`, `transition`,
 `tooltip`, `renderTooltip`, `tooltipContainer`, `selection`/`select`, `onSelectionChange`, `onSelect`, `onPointSelect`, `brush`, `panZoom`,
-`pan`, `zoom`, `view`, `onViewChange`, `maxZoom`, `a11y`, `limits`, `urlPolicy`, `urlData`, `random`, `logger`, `textMetrics`, `onError`.
+`pan`, `zoom`, `view`, `onViewChange`, `maxZoom`, `a11y`, `limits`, `urlPolicy`, `urlData`, `urlLoad`, `random`, `logger`, `textMetrics`, `onError`.
 `urlData="refuse"` refuses a spec with a `url` dataset before any add-on loads and before evaluation: the chart renders its error
 state and `onError` receives the `AsterUrlError` (see `RuntimeInput.urlData`).
+`urlLoad` (`Omit<LoadOptions, 'signal' | 'signals' | 'limits'>` of `@aster-charts/core/load`: `fetch`, `baseURL`, `allow`, `protocols`,
+`allowPrivateNetwork`, `timeoutMs`, `maxBytes`, `maxTotalBytes`, `maxRequests`, `maxConcurrent`, `maxRedirects`) makes the chart load the
+spec's `url` datasets itself and keep them current, as a vega view does: it loads again whenever the urls its signals give change, wherever the
+change comes from (a bound input, an event handler, `setSignal`, the `signals` prop). The loader's URL policy is required (a network url needs
+`allow` / `allowOrigins([...])` or a `baseURL` it is on, else the load fails with an `AsterUrlError` through `onError`), the chart's `limits`
+and `signals` are the loader's, a load a newer url supersedes (and one still running at unmount) is aborted, the datasets are empty until the
+first load arrives (and on the server), the previous rows stay while the next url loads, and a failed load is reported through `onError`
+(else the logger) while the chart keeps its rows and bound inputs. Values by content, `fetch` and `allow` through a latest-ref. Without
+`urlLoad` nothing is fetched (give the rows through `data`, or load with `useSpecData` / `loadSpecData`); `urlData="refuse"` wins over it
+([LIMITS.md](LIMITS.md#loading-url-data-loadspecdataspec-options)).
 
 **Internal props.** `sceneOverride` and `onStreamInput` are host plumbing for `<ChartStream>` and `<ChartWorkerStream>`, which are
 built on `<Chart>`. They are internal and unstable: their shape can change in any release and they are not covered by semver. Do not

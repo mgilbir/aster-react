@@ -14,7 +14,7 @@ import type { InteractionCapability, PngCapability } from './capabilities.js'
 export const SVG_CHART_SHARED_PROPS = [
   'spec', 'sceneOverride', 'data', 'dataChanges', 'width', 'height', 'ariaLabel', 'incremental', 'denseMarks', 'transition',
   'className', 'style', 'signals', 'onSelect', 'brush', 'panZoom', 'pan', 'zoom', 'view', 'onViewChange', 'maxZoom',
-  'signalListeners', 'onSignal', 'onStreamInput', 'interactive', 'limits', 'urlPolicy', 'urlData', 'random', 'logger', 'textMetrics',
+  'signalListeners', 'onSignal', 'onStreamInput', 'interactive', 'limits', 'urlPolicy', 'urlData', 'urlLoad', 'random', 'logger', 'textMetrics',
   'a11y', 'onError',
 ] as const
 
