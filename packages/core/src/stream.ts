@@ -455,8 +455,48 @@ function foldBatch(fold: Fold, batch: StreamBatch, baseLenOf: (name: string) => 
   if (batch.textMetrics) fold.textMetrics = batch.textMetrics
 }
 
-export function createChartStream(spec: VgSpec, options: StreamOptions = {}): ChartStream {
-  assertSpecObject(spec, 'createChartStream')
+/**
+ * A private, deep-frozen copy of the spec a stream was created with: the stream evaluates it on every flush, and a deep-frozen spec is
+ * read by the session once (its skeleton is kept: session.ts `isDeepFrozen`), where the host's own object would be read in full each
+ * time. What the host does to its object afterwards does not reach the running stream (the spec is read when the stream is made, as a
+ * JSON input is read by content). Plain objects and arrays are copied, sharing and cycles kept (iteratively: a spec of any depth); any
+ * other object (a function, a Date, a typed array, a class instance) is left as it is and not frozen -- the copy is then not deep-frozen
+ * and is read in full on every flush, as before.
+ */
+function frozenSnapshot(spec: VgSpec): VgSpec {
+  const copies = new Map<object, object>()
+  const plain = (v: unknown): v is object => {
+    if (v === null || typeof v !== 'object') return false
+    if (Array.isArray(v)) return Object.getPrototypeOf(v) === Array.prototype
+    const proto = Object.getPrototypeOf(v)
+    return proto === Object.prototype || proto === null
+  }
+  const copyOf = (v: object): object => {
+    let c = copies.get(v)
+    if (c === undefined) {
+      c = Array.isArray(v) ? new Array<unknown>(v.length) : Object.create(Object.getPrototypeOf(v)) as object
+      copies.set(v, c)
+      pending.push(v)
+    }
+    return c
+  }
+  const pending: object[] = []
+  const root = copyOf(spec)
+  while (pending.length) {
+    const from = pending.pop()!
+    const to = copies.get(from)! as Record<string, unknown>
+    for (const k of Object.keys(from)) {
+      const v = (from as Record<string, unknown>)[k]
+      to[k] = plain(v) ? copyOf(v) : v
+    }
+  }
+  for (const c of copies.values()) Object.freeze(c)
+  return root as VgSpec
+}
+
+export function createChartStream(given: VgSpec, options: StreamOptions = {}): ChartStream {
+  assertSpecObject(given, 'createChartStream')
+  const spec = frozenSnapshot(given)
   // a stream is a chart whose data changes: its session takes every batch as a pulse, so it carries the pulse path (engine-parts.ts)
   if (!partLoaded('pulse')) installPart('pulse', { applyPipelineWithPulse })
   const policy: StreamPolicy = options.policy ?? 'coalesce'
