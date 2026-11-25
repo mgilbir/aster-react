@@ -1669,6 +1669,27 @@ const MORE_SHAPES: Shape[] = [
       )
     },
   },
+  {
+    // A signal whose value CONTAINS a dataset's rows (an object, an array, nested), not is them: what a scene returned earlier holds
+    // there must not move when a later append advances the rows in place.
+    name: 'nested-signal',
+    ops: ['append', 'appendU', 'edit', 'bulk', 'append', 'signal', 'truncate'],
+    add(g, r) {
+      const sp = specOf(g)
+      const yf = g.pipe!.yf
+      sp.signals.push(
+        { name: 'bundle', update: `{rows: data('${g.ds}'), meta: {n: sig}}` },
+        { name: 'pair', update: "[data('t'), data('u'), sig]" },
+        { name: 'deep', update: `{a: [{b: [data('${g.ds}')]}], c: data('t')}` },
+      )
+      const texts = [
+        `length(bundle.rows) + ':' + length(pair[1]) + ':' + length(deep.a[0].b[0])`,
+        `length(bundle.rows) ? bundle.rows[0].${yf} + '/' + length(pair[0]) + '/' + length(deep.c) : 'none'`,
+      ]
+      // (and an item's own property that holds them: a tooltip is any value)
+      sp.marks.push({ type: 'text', encode: { update: { x: { value: 10 }, y: { value: 40 }, text: { signal: pick(r, texts) }, tooltip: { signal: `{all: data('${g.ds}'), pair: [data('u')]}` } } } })
+    },
+  },
 ]
 
 /** The relational shapes, in the order seeds take them. */
