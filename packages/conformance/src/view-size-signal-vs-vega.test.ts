@@ -61,3 +61,31 @@ describe('the view size the host gives and the size the spec computes (generated
     expect(diffs).toEqual([])
   })
 })
+
+// C225: a spec's own number is only the size signal's first value: a `width` / `height` signal of the spec with an `update` wins
+// over it, as vega's view does (the official horizon-graph: `height: 100` and `{name: 'height', update: 'floor(200 / layers)'}`).
+describe('a numeric width / height and a size signal with an update (C225)', () => {
+  const CASES: Array<[string, Spec, Record<string, unknown>]> = []
+  for (const dim of ['width', 'height'] as const) {
+    for (const [name, update] of [['a constant', '40'], ['reading another signal', 'floor(200 / layers)']] as const) {
+      for (const layers of [1, 2, 3, 4]) {
+        const spec: Spec = { width: 100, height: 100, padding: 0, autosize: 'none', signals: [{ name: 'layers', value: 2 }, { name: dim, update }], marks: T }
+        CASES.push([`${dim}: ${name}, layers=${layers}`, spec, { layers }])
+      }
+    }
+  }
+  it('every case: the frame and the signal are vega\'s', async () => {
+    const bad: string[] = []
+    for (const [name, spec, signals] of CASES) {
+      const view = new vega.View(vega.parse(structuredClone(spec) as never), { renderer: 'none' })
+      for (const [k, v] of Object.entries(signals)) view.signal(k, v)
+      await view.runAsync()
+      const want = await view.toSVG()
+      view.finalize()
+      const got = renderSceneToSvg(evaluateChart(compileChart(structuredClone(spec) as never), { signals }))
+      if (frame(want) !== frame(got) || /<text[^>]*>([^<]*)</.exec(want)?.[1] !== /<text[^>]*>([^<]*)</.exec(got)?.[1]) bad.push(`${name}: vega ${frame(want)} aster ${frame(got)}`)
+    }
+    expect(bad).toEqual([])
+    expect(CASES.length).toBe(16)
+  })
+})

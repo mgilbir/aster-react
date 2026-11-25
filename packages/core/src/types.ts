@@ -67,6 +67,18 @@ export interface RuntimeInput {
   /** Static signal values for signals that are referenced but not event-driven. */
   signals?: Record<string, unknown>
   /**
+   * The scene of the view this evaluation continues, as vega's running view continues from what it showed: an axis keeps the
+   * ticks it still shows in the order it showed them, and the ticks it did not show come after them, in order (vega joins an
+   * axis's tick items by value); an ordinal scale given no domain starts from the categories it ended with; an `autosize: pad`
+   * view keeps its padding until `width`, `height` or `padding` change (or `autosize.resize`). Where the rows a mark is drawn from
+   * came or went (other than rows appended after the others), vega's item order is its join's, which the rows do not tell: the
+   * evaluation, and any that continues its scene, is then the first render of its input. Without it the evaluation is the first
+   * render of the view: the ticks in order. The scene is read
+   * only for that order, so an evaluation given the same scene is the same scene, fresh or incremental. A session made with
+   * `createChartSession({ runningView: true })` (what `<Chart>` does) passes its last scene for every evaluation of the same chart.
+   */
+  retainFrom?: SceneRoot
+  /**
    * The size of the element the chart fills, in pixels: what `containerSize()`
    * returns in expressions (vega-lite's `width: "container"` reads it). Without
    * it `containerSize()` is `[undefined, undefined]`, as in headless vega, and
@@ -169,6 +181,8 @@ export interface CompiledChart {
   /** vega autosize `contains` (viewSizeLayout's contains: 'padding' makes the
    * spec'd width/height include the padding). */
   autosizeContains?: string
+  /** vega autosize `resize: true`: the layout sizes the view on every run (a view that continues another resizes; see `RuntimeInput.retainFrom`). */
+  autosizeResize?: boolean
   width: SizeSpec
   height: SizeSpec
   padding: { top: number; right: number; bottom: number; left: number }
