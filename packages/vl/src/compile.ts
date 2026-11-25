@@ -2521,6 +2521,9 @@ function compileFacetedView(spec: VLSpec, ctx: CompileCtx, nested = ''): VLSpec 
   const rawFacet = !innerOwnData && !innerIsFacet && !layeredInner && typeof unitPipelineDs?.source === 'string' && (nested !== '' || PRE_FILTER_UNITS.has(inner) || (
     sortsByAggregate && !(rowDef && colDef)
     && innerData.some((d) => d.name === unitPipelineDs.source)
+    // (a pipeline merged into the one dataset that reads the data source, with a calculate or a facet field to make, has no raw table: the
+    // facet reads that dataset, whose rows carry what the sort and the cells group by - trellis_area_seattle)
+    && !(innerData.find((d) => d.name === unitPipelineDs.source)?.source === undefined && (pre.length > 0 || (unitPipelineDs.transform as Record<string, unknown>[] | undefined)?.some((t) => USER_TRANSFORMS.has(t)) === true))
     && ((unitPipelineDs.transform as Record<string, unknown>[] | undefined) ?? []).some((t) => t.type === 'aggregate')))
   // (the facet's data is that raw dataset - the casts, the calculates, the facet fields' time units; the aggregate that follows runs in
   // each cell over the cell's rows)
