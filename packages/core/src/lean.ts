@@ -23,7 +23,7 @@ export { createPointMapper } from './pointer.js'
 export { createCursorTracker, resolveCursor, sceneHasCursor } from './cursor.js'
 export { consoleLogger } from './logger.js'
 export { checkChartRows, shareRowWatch } from './row-watch.js'
-export { checkUrlData } from './url-data.js'
+export { checkUrlData, emptyUrlData } from './url-data.js'
 export { createChartSession, skeletonOf as chartSkeleton } from './session.js'
 export { hasDenseSymbolMarks, patchSceneDom, renderSceneToDomElement } from './dom.js'
 export {
