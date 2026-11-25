@@ -420,6 +420,10 @@ export interface LimitMeter {
   generated(n: number, what: string): void
   /** The rows charged to `maxGeneratedRows` so far in this scope (0 while it is unset). */
   readonly generatedRows: number
+  /** The characters charged to `maxGeneratedBytes` so far in this scope (0 while it is unset). */
+  readonly generatedBytes: number
+  /** The coordinates charged so far in this scope. */
+  readonly generatedCoords: number
   /** Account `n` rows about to be generated: {@link checkRows} plus {@link generated}. */
   rows(n: number, what: string, kind?: 'rows' | 'cells'): void
   /** Account a string of `n` characters about to be built (single: maxStringLength; cumulative: maxGeneratedBytes). */
@@ -466,6 +470,12 @@ class Meter implements LimitMeter {
   }
   get generatedRows(): number {
     return this.genRows
+  }
+  get generatedBytes(): number {
+    return this.genBytes
+  }
+  get generatedCoords(): number {
+    return this.genCoords
   }
   tick(phase = 'evaluation', cost = 1): void {
     if (this.violation) throw this.violation
@@ -560,6 +570,50 @@ export let metering = false
 /** The meter of the enclosing {@link withLimits} scope, or null when limits are off. */
 export function activeMeter(): LimitMeter | null {
   return active
+}
+
+/**
+ * What a result charged the cumulative budgets of the scope it was made in (`maxGeneratedRows`, `maxGeneratedBytes`, the coordinates),
+ * and the limits those were budgets of. A later evaluation under the same limits that keeps the result instead of making it again
+ * charges it the same (`chargeKept`), so the evaluation counts what a fresh one would count (audit C277).
+ */
+export interface Charges { readonly limits: SpecLimits; readonly rows: number; readonly bytes: number; readonly coords: number }
+
+/** Where the active scope's cumulative budgets stand now (null outside a limits scope): what `chargesSince` measures from. */
+export function chargesNow(): Charges | null {
+  return active === null ? null : { limits: active.limits, rows: active.generatedRows, bytes: active.generatedBytes, coords: active.generatedCoords }
+}
+
+/** What the active scope charged since `start` (null outside a limits scope, or in another one). */
+export function chargesSince(start: Charges | null): Charges | null {
+  if (active === null || start === null || start.limits !== active.limits) return null
+  return { limits: active.limits, rows: active.generatedRows - start.rows, bytes: active.generatedBytes - start.bytes, coords: active.generatedCoords - start.coords }
+}
+
+/** Whether limits are the same budgets (the same object, or the same values). */
+const sameLimits = (a: SpecLimits, b: SpecLimits): boolean => {
+  if (a === b) return true
+  const ka = Object.keys(a).filter((k) => (a as Record<string, unknown>)[k] !== undefined).sort()
+  const kb = Object.keys(b).filter((k) => (b as Record<string, unknown>)[k] !== undefined).sort()
+  return ka.length === kb.length && ka.every((k, i) => k === kb[i] && Object.is((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]))
+}
+
+/**
+ * Whether a result made with `charges` may be kept in the active scope: always outside a limits scope; inside one, only when it was
+ * made under the same limits and what it charged is known (a result made under other limits, or none, is made again: its single
+ * budgets were checked against other values).
+ */
+export function keepableUnderLimits(charges: Charges | null | undefined): boolean {
+  return active === null || (charges != null && sameLimits(charges.limits, active.limits))
+}
+
+/** Charge a kept result what it charged when it was made (see `Charges`): a budget it takes past its limit throws, as making it would. */
+export function chargeKept(charges: Charges | null | undefined, what: string): void {
+  if (active === null || charges == null) return
+  if (charges.rows > 0) active.generated(charges.rows, what)
+  if (charges.bytes > 0) active.spend('bytes', 0, charges.bytes, what, true)
+  if (charges.coords > 0) active.spend('coords', 0, charges.coords, what, true)
+  active.clock.check(what)
 }
 
 /**

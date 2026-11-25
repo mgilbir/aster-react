@@ -290,20 +290,17 @@ cache hit is the one at the start of `evaluate` (`maxTimeMs: 0` fails there). A 
 the session as it was, and the scenes it returned before: `datasetsOfScene(scene)` and the scene's
 runtime keep the rows that scene was made with, whatever is evaluated or rejected after it.
 
-## What `limits` cost
+## Kept results under `limits`
 
-Passing `limits` (the configuration recommended above for an untrusted spec) turns the incremental reuse off, because a result kept from
-the evaluation before would not be counted against the budgets again. An evaluation under `limits` therefore keeps none of: a scale or a
-top-level mark by the signals it reads (signal-scoped reuse), a build of a dataset between rounds and passes, the leaf marks of
-group items, a kept group mark, a mark's channels, a kept guide, scale-settings reuse. Without `limits` a signal that only a rule reads
-keeps every symbol item of a scatter by identity and the DOM patcher has nothing to diff; under `limits` every item is made again
-and the patcher diffs them all. Measured on one session, a 20,000-point scatter and 30 writes of such a signal, alternating the two
-runs: about 0.3 ms per write without `limits` (the items kept in 30 of 30) and about 10 ms under `{ maxTimeMs: 60000 }` (kept in
-0 of 30). The hover numbers in the CHANGELOG are measured without `limits`.
-
-So a host that renders trusted specs interactively should not pass `limits` (the built-in ceilings above still hold), and a host that
-renders untrusted ones pays this per interaction for the safety, in a worker where the guarantee is ([ADR 0010](adr/0010-limits-best-effort-worker-is-the-guarantee.md)).
-`packages/core/src/limits-reuse.test.ts` pins both halves; the day a kept result is charged its recorded counts, it fails and this section goes.
+An evaluation under `limits` keeps a scale or a top-level mark from the evaluation before (signal-scoped reuse: a signal that only a
+rule reads keeps every symbol item of a scatter by identity, and the DOM patcher has nothing to diff) when it was made under the same
+limits, and charges it what making it charged the cumulative budgets (`maxGeneratedRows`, `maxGeneratedBytes`, the coordinates):
+the evaluation counts what a fresh one counts, so a kept result never lets an evaluation through a budget a fresh evaluation of the
+same input would exceed (`packages/core/src/limits-reuse.test.ts` compares the two over generated signal writes and budgets). A result
+made under other limits, or with none, is made again: its single budgets (`maxItems`, `maxStringLength`, ...) were compared with other
+values. A result taken partly from the evaluation before -- items spliced by a data pulse, a mark's channels, a domain census advanced
+in place, a dataset build or a guide kept -- is not kept under `limits` this way: it is made again (a data pulse's steps are charged as
+`maxGeneratedRows` says, the rows they produce in this evaluation). The clock is read for every kept result.
 
 ## How the budgets are enforced: meters, not checkpoints
 
