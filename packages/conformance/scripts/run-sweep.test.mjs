@@ -103,6 +103,19 @@ describe('run-sweep verdicts', { timeout: 60_000 }, () => {
     expect(within.code, within.out).toBe(0)
   })
 
+  it('a spec vega logs an error for and then fails to draw is refused, not a node-error, when Aster logs the same error', async () => {
+    const alike = await sweep('refused-alike', '--floor', '2', '--min-ok', '1', '--max-node-error', '0')
+    expect(alike.code, alike.out).toBe(0)
+    expect(alike.out).toMatch(/1 ok, 0 retained, 1 both-refused, 0 node-error/)
+    // another message from Aster, or none: the oracle's crash is its own, and counts against the ceiling
+    for (const fixture of ['refused-differently', 'crash-unexplained']) {
+      const other = await sweep(fixture, '--floor', '2', '--min-ok', '1', '--max-node-error', '0')
+      expect(other.code, other.out).toBe(1)
+      expect(other.out, fixture).toMatch(/\[node-error\] goldred-4: Cannot read properties of undefined/)
+      expect(other.out).toMatch(/NODE-ERROR CEILING EXCEEDED/)
+    }
+  })
+
   it('a signal write the engine renders like vega is ok', async () => {
     const r = await sweep('write-ok', '--floor', '1', '--min-ok', '1', '--max-node-error', '0')
     expect(r.code, r.out).toBe(0)
