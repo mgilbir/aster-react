@@ -103,11 +103,16 @@ export function buildInputs(pkgDir) {
   })
 }
 
+const PUBLIC_PACKAGES = ['core', 'react', 'vl']
+
 /**
- * Problems that make the measured dist describe code that is not there: a source with no output, an output older than its source, an
- * output whose source is gone.
+ * Problems that make the measured dist describe code that is not there (the one check: the budget refuses to measure it, and the
+ * dist-problems test holds it to a tree): a source with no output, an output older than its source, an output whose source is gone.
+ * `tsc` never deletes what it emitted before, so a module whose source was removed or renamed stays in `dist` (and in a local
+ * `pnpm pack`, and keeps an `exports` or `sideEffects` entry that names it green locally while a clean checkout goes red); `pnpm
+ * build` removes `dist` first, so an orphan means the dist was not built by it.
  */
-export function distProblems(root, packages) {
+export function distProblems(root, packages = PUBLIC_PACKAGES) {
   const problems = []
   for (const pkg of packages) {
     const pkgDir = join(root, 'packages', pkg)
@@ -133,7 +138,7 @@ export function distProblems(root, packages) {
     } catch { /* a missing dist is reported file by file above */ }
     for (const file of built) {
       const rel = relative(distDir, file).split('\\').join('/')
-      if (/\.(js|d\.ts)$/.test(rel) && !expected.has(rel)) problems.push(`packages/${pkg}/dist/${rel} has no source (a build of sources that are gone)`)
+      if (/\.(js|d\.ts)$/.test(rel) && !expected.has(rel)) problems.push(`packages/${pkg}/dist/${rel} is an orphan: it has no source (a stale dist; pnpm build cleans dist first)`)
     }
   }
   return problems

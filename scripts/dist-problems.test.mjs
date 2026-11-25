@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
-import { distProblems } from './lib/dist-problems.mjs'
+import { distProblems } from '../packages/benchmarks/scripts/budget-lib.mjs'
 import { spawnAsync } from './lib/spawn-async.mjs'
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -19,10 +19,11 @@ function put(root, rel, text = 'x', age = 0) {
   utimesSync(p, t, t)
 }
 
-/** A tree with one built package (`core`: a.ts, b.tsx, a test file and a testing helper that emit nothing). */
+/** A tree with one built package (`core`: a.ts, b.tsx, a test file and a testing helper that its tsconfig.build.json excludes). */
 function tree() {
   const root = mkdtempSync(join(tmpdir(), 'aster-dist-'))
   made.push(root)
+  put(root, 'packages/core/tsconfig.build.json', JSON.stringify({ exclude: ['src/**/*.test.ts', 'src/testing'] }), 100)
   put(root, 'packages/core/src/a.ts', 'export const a = 1', 100)
   put(root, 'packages/core/src/b.tsx', 'export const b = 1', 100)
   put(root, 'packages/core/src/a.test.ts', 'test', 100)
