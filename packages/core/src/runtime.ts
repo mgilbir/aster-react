@@ -6105,6 +6105,32 @@ function evaluateMarkItems(
   }
 }
 
+/**
+ * vega's DataJoin under a mark `key` (vega-view-transforms DataJoin): one item per key. Rows whose keys read as the same text are one
+ * item (vega keys its items by the properties of a plain object: 1 and "1", null and "null", every object are one key), in the place
+ * of the first of them, holding the last of them. `rows` itself when no two rows share a key.
+ */
+function joinByKey<T>(rows: readonly T[], key: (t: T) => unknown): readonly T[] {
+  const at = new Map<string, number>()
+  let out: T[] | undefined
+  for (let i = 0; i < rows.length; i++) {
+    const k = String(key(rows[i]!))
+    // ('__proto__' is no own property of vega's object, so a row of that key never finds the item before it)
+    const j = k === '__proto__' ? undefined : at.get(k)
+    if (j === undefined) {
+      if (k !== '__proto__') at.set(k, out !== undefined ? out.length : i)
+      out?.push(rows[i]!)
+    } else {
+      out ??= rows.slice(0, i)
+      out[j] = rows[i]!
+    }
+  }
+  return out ?? rows
+}
+
+/** A mark `key`'s accessor: a field of the row, as vega's `field(key)` reads it (`a.b` is nested, `a\.b` is one name). */
+const keyAccessor = (key: string) => (row: Row): unknown => getField(row, key)
+
 function markItemsOf(
   mark: CompiledMark,
   ctx: EvalContext,
@@ -6162,7 +6188,9 @@ function markItemsOf(
         return null
       }
     }
-    const encodeRows = ctx.primitiveTuples ? joinPrimitiveTuples(rows) : rows
+    const tuples = ctx.primitiveTuples ? joinPrimitiveTuples(rows) : rows
+    // (a mark `key` joins rows that share a key into one item: `rows` itself when none do, so every per-row path below still applies)
+    const encodeRows = mark.key !== undefined ? joinByKey(tuples, keyAccessor(mark.key)) : tuples
 
     const update = mark.encode?.update ?? mark.encode?.enter ?? {}
     ctx.encodeBinding = encodeBindingFor(update, ctx)
@@ -6858,7 +6886,8 @@ function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] | nul
     return items
   }
   const data = mark.from?.data
-  if (data) return (ctx.datasets.get(data) ?? []).map((row, i) => ({ datum: row, key: String(i) }))
+  // (a mark `key` joins the rows that share one into one group item: see joinByKey)
+  if (data) return (mark.key !== undefined ? joinByKey(ctx.datasets.get(data) ?? [], keyAccessor(mark.key)) : ctx.datasets.get(data) ?? []).map((row, i) => ({ datum: row, key: String(i) }))
   const datum: Row = {}
   markTuple(datum)
   return [{ datum }]

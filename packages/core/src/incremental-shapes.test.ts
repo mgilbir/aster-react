@@ -247,7 +247,35 @@ function underLimits(r: Rnd): Scenario {
   }
 }
 
+/**
+ * Marks whose items are not one per row in data order: a mark `key` joins the rows that share a key into one item (C120); an item
+ * `zindex` paints it out of order (C28); colour objects are written as vega's code (C27). At the top level and inside a group, over
+ * a pipeline, with the joined key colliding and coming apart as rows change.
+ */
+function keyedPaintOrder(r: Rnd): Scenario {
+  const pipe = pipeline(r)
+  const enc = (): Record<string, unknown> => ({
+    x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'v' },
+    ...(r() < 0.6 ? { zindex: pick(r, [{ field: 'v' }, { signal: '-datum.v % 3' }, { signal: "datum.k === 'a' ? 2 : 0" }]) } : {}),
+    ...(r() < 0.5 ? { fill: { color: { h: { field: 'x', mult: 15 }, c: { value: 40 }, l: { field: 'v', mult: 8 } } } } : { fill: { value: '#4c78a8' } }),
+  })
+  const keyed = (type: string): Record<string, unknown> => ({
+    type, from: { data: 't' }, ...(r() < 0.7 ? { key: pick(r, ['k', 'g', 'x']) } : {}), ...(r() < 0.3 ? { zindex: int(r, 0, 2) } : {}),
+    encode: { update: { ...enc(), ...(type === 'rect' ? { width: { value: 9 }, height: { value: 7 } } : type === 'text' ? { text: { field: 'g' } } : { size: { value: 60 } }) } },
+  })
+  const marks = [keyed(pick(r, ['symbol', 'rect'])), keyed(pick(r, ['text', 'symbol']))]
+  const scales = [{ name: 'x', type: 'linear', domain: [0, 20], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 10], range: 'height' }]
+  const nested = r() < 0.4
+  return {
+    spec: { ...FRAME, data: [hostData(r, 't', { transform: [...pipe] })], scales, marks: nested ? [{ type: 'group', encode: { update: { width: { signal: 'width' }, height: { signal: 'height' } } }, marks }] : marks } as unknown as VgSpec,
+    data: { t: rowsOf(r, int(r, 1, 9)) },
+    mutable: ['t'],
+    row: plainRow,
+  }
+}
+
 export const SHAPES: ReadonlyArray<readonly [string, (r: Rnd) => Scenario]> = [
+  ['keys, zindex and colour objects', keyedPaintOrder],
   ['mark-from-mark', markFromMark],
   ['group-scoped reads', groupScopedReads],
   ['fitted projection', fittedProjection],
