@@ -380,12 +380,13 @@ class Simulation {
 
   private readonly forces: Force[] = []
 
-  constructor(private readonly nodes: Node[]) {
+  constructor(private readonly nodes: Node[], continued = false) {
     for (let i = 0, n = nodes.length; i < n; ++i) {
       const node = nodes[i]!
       node.index = i
-      if (node.fx != null) node.x = node.fx
-      if (node.fy != null) node.y = node.fy
+      // (d3's initializeNodes: run when a simulation is given its nodes; a simulation that goes on with the ones it has does not)
+      if (!continued && node.fx != null) node.x = node.fx
+      if (!continued && node.fy != null) node.y = node.fy
       // (global isNaN: a missing or non-numeric position is placed too)
       if (isNaN(node.x) || isNaN(node.y)) {
         const radius = INITIAL_RADIUS * Math.sqrt(0.5 + i)
@@ -489,7 +490,7 @@ function buildForce(spec: Record<string, unknown>, ctx: TransformContext): Force
 export function forceRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext & { dynamicParams?: ReadonlySet<string> }): Row[] {
   const nodes = (ctx.inPlace ? rows : copiedRows(rows, 'force', true)) as Node[]
   const specs = ([] as Array<Record<string, unknown>>).concat((t.forces as Array<Record<string, unknown>> | undefined) ?? [])
-  const sim = new Simulation(nodes)
+  const sim = new Simulation(nodes, ctx.continued === true || ctx.settled === true)
   let iters = (t.iterations as number | undefined) || 300
   // vega applies alpha / alphaMin / alphaTarget / velocityDecay to the simulation only for a parameter its dataflow
   // reports as modified, which neither a literal nor a reference to a declared signal is: those are read where the
@@ -502,6 +503,8 @@ export function forceRows(rows: Row[], t: Record<string, unknown>, ctx: Transfor
   if (dyn?.has('alpha')) sim.alpha = +(t.alpha as number)
   // (each force is built and bound in turn: a failure in a later spec comes after the earlier forces have met the nodes)
   for (const spec of specs) sim.add(buildForce(spec, ctx))
+  // (nodes that hold the positions of a layout vega does not run again: bound to the forces, never ticked)
+  if (ctx.settled) return nodes as Row[]
   // `iterations` (and each force's own) come from the spec: the steps of the ticks the simulation runs here are bounded up front
   allot('work', (t.static ? passes(iters) : 1) * sim.tickCost(), 'force iterations')
   if (!t.static) sim.tick() // ensure we run on init
