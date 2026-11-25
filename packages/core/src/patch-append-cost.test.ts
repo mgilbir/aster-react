@@ -112,6 +112,30 @@ describe('an append costs the appended items', () => {
     }
   })
 
+  it('dense DOM chunks: an item that carries no generation is never taken for clean (a host-made edit of the scene is drawn)', () => {
+    const stream = createChartStream(spec([symbols('t', '#4c78a8')], ['t']) as never, { capacity: 8 })
+    stream.push({ data: { t: rows(3000) } })
+    let scene = stream.flush()!.scene
+    const o = { denseMarks: true }
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    document.body.appendChild(svg)
+    // an item whose generation is gone (a scene a host rebuilt or edited by hand), in the middle of the second chunk
+    const victim = (markOf(scene, 0).items as SceneItem[])[300]!
+    delete (victim as { __gen?: number }).__gen
+    patchSceneDom(svg, scene, o)
+    expect(svg.outerHTML).toBe(legacyDomElement(scene, document, o).outerHTML)
+    for (let k = 0; k < 3; k++) {
+      // the host changes the item in place; the engine appends rows and the scene is patched again
+      victim.fill = k % 2 === 0 ? '#e45756' : '#54a24b'
+      stream.push({ append: { t: rows(2, 7000 + k * 10) } })
+      scene = stream.flush()!.scene
+      expect(markOf(scene, 0).items).toContain(victim)
+      patchSceneDom(svg, scene, o)
+      expect(svg.outerHTML, `append ${k}`).toBe(legacyDomElement(scene, document, o).outerHTML)
+      expect(svg.outerHTML, `append ${k}: the changed paint is drawn`).toContain(k % 2 === 0 ? '#e45756' : '#54a24b')
+    }
+  })
+
   it('per-item symbols (not batched): no unchanged item is read, the patch appends only the new elements, the DOM matches the old implementation', () => {
     const stream = createChartStream(spec([symbols('t', '#4c78a8')], ['t']) as never, { capacity: 8 })
     stream.push({ data: { t: rows(400) } })
@@ -135,6 +159,42 @@ describe('an append costs the appended items', () => {
       expect(JSON.stringify(sceneToDomDesc(scene, {}))).toBe(legacy)
     }
     expect(svg.outerHTML).toBe(legacyDomElement(scene, document).outerHTML)
+  })
+
+  it('per-item symbols: a row changed in place, or an item without a generation edited by a host, is drawn after the next append', () => {
+    const stream = createChartStream(spec([symbols('t', '#4c78a8')], ['t']) as never, { capacity: 8 })
+    const current = rows(400)
+    stream.push({ data: { t: current.map((r) => ({ ...r })) } })
+    let scene = stream.flush()!.scene
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    document.body.appendChild(svg)
+    patchSceneDom(svg, scene)
+    // (the engine edits a row in place: the array is advanced, the items before and after the edit are the ones it had)
+    for (const [k, at] of [3, 399, 150].entries()) {
+      current[at] = { x: ((at * 17 + k) % 997) / 997, y: ((at + k * 7) % 100) / 10 }
+      stream.push({ data: { t: current.map((r) => ({ ...r })) } })
+      scene = stream.flush()!.scene
+      patchSceneDom(svg, scene)
+      expect(svg.outerHTML, `edit of row ${at}`).toBe(legacyDomElement(scene, document).outerHTML)
+      const more = rows(2, 900 + k * 5)
+      current.push(...more)
+      stream.push({ append: { t: more } })
+      scene = stream.flush()!.scene
+      patchSceneDom(svg, scene)
+      expect(svg.outerHTML, `append after the edit of row ${at}`).toBe(legacyDomElement(scene, document).outerHTML)
+    }
+    // an item with no generation (a scene a host edited by hand) is never taken for clean
+    const victim = (markOf(scene, 0).items as SceneItem[])[40]!
+    delete (victim as { __gen?: number }).__gen
+    patchSceneDom(svg, scene)
+    for (let k = 0; k < 3; k++) {
+      victim.fill = k % 2 === 0 ? '#e45756' : '#54a24b'
+      stream.push({ append: { t: rows(2, 1500 + k * 10) } })
+      scene = stream.flush()!.scene
+      patchSceneDom(svg, scene)
+      expect(svg.outerHTML, `append ${k}`).toBe(legacyDomElement(scene, document).outerHTML)
+      expect(svg.outerHTML).toContain(k % 2 === 0 ? '#e45756' : '#54a24b')
+    }
   })
 
   it('canvas append: a mark left alone is not read, and the calls match the old implementation\'s append (a pixel-level equality with a full repaint is the canvas gates\')', () => {
