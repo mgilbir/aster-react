@@ -488,9 +488,18 @@ describe('@aster-charts/vl == vega-lite: align on an hconcat and a vconcat', () 
   const view = { mark: 'point', encoding: { x: q('c'), y: q('b') } }
   const tall = { mark: 'bar', encoding: { x: n('a'), y: q('b', { aggregate: 'sum' }), color: n('g') } }
   for (const operator of ['hconcat', 'vconcat'] as const) {
-    // (the `{row, column}` form is refused by the schema check for a plain concat too, a defect of the generated table, not of this lane)
-    for (const align of ['all', 'each', 'none'] as const) {
+    // (the `{row, column}` form too: the schema table's first enumeration, the words of a layout alignment, was dropped from a type that is
+    // nothing else, and the form was refused for a plain concat as well)
+    for (const align of ['all', 'each', 'none', { row: 'each', column: 'none' }, { row: 'none', column: 'all' }] as const) {
       it(`${operator} align ${JSON.stringify(align)}`, () => same({ data: DATA, [operator]: [view, tall, view], align }), 30_000)
+    }
+  }
+  for (const align of [{ row: 'each', column: 'none' }, { column: 'all' }] as const) {
+    it(`concat align ${JSON.stringify(align)}`, () => same({ data: DATA, columns: 2, concat: [view, tall, view], align }), 30_000)
+  }
+  for (const channel of ['row', 'column'] as const) {
+    for (const align of ['all', 'each', 'none'] as const) {
+      it(`a ${channel} channel with align ${JSON.stringify(align)}`, () => same({ data: DATA, mark: 'point', encoding: { x: q('c'), y: q('b'), [channel]: { ...n('g'), align } } }), 30_000)
     }
   }
 })
