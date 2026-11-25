@@ -997,9 +997,12 @@ function prepareChartCtx(
     const h = kept.histories?.get(name)
     return h !== undefined ? historical(h) as Row[] : datasets.get(name)
   }
+  // (the items of the named marks made so far: what `data('<mark>')` reads, as vega's DataScope of a mark is its items)
+  const markItems = new Map<string, SceneItem[]>()
   const runtime: ExpressionRuntime = {
     scale: (name) => scales.get(name),
-    data: rowsOf,
+    // (vega-functions `data`: the values of the data scope of that name; a named mark's scope is its items, in the order it draws them)
+    data: (name) => rowsOf(name) ?? (markNamesOf(chart).has(name) ? markItems.get(name) : undefined),
     projection: (name) => transformProjections.get(name),
     tree: (name) => {
       const root = transformHierarchies.get(name)
@@ -1039,7 +1042,7 @@ function prepareChartCtx(
       // an explicit view size (the host's, or the fit loop's resize) wins over an `init`
       ...(explicitSize.width ? ['width'] : []), ...(explicitSize.height ? ['height'] : []),
     ]),
-    hierarchies: transformHierarchies, affected: new Set(), incremental: false, ...(txn.engine ? { engine: txn.engine } : {}), deadline, checkDeadline, markItems: new Map(), markContainers: new Map(),
+    hierarchies: transformHierarchies, affected: new Set(), incremental: false, ...(txn.engine ? { engine: txn.engine } : {}), deadline, checkDeadline, markItems, markContainers: new Map(),
     datasetPulses: new Map(),
     prev, committed: txn.prev, ...(txn.unchanged ? { unchanged: txn.unchanged } : {}), ...(txn.pulseBases ? { pulseBases: txn.pulseBases } : {}), ...(txn.lastPass ? { earlier: txn.lastPass } : {}), draft: newState(txn.gen), ids: { value: txn.prev?.idCounter ?? 0 }, idStart: txn.prev?.idCounter ?? 0, gen: txn.gen, claimed: txn.claimed, extraFp, ...encodeLogEntry(input.signals), dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(), defsAsked: { n: 0 },
     domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
@@ -2895,7 +2898,8 @@ function markDepsOf(mark: CompiledMark, chart: CompiledChart): MarkDeps {
     // (the datasets an expression reads by name, or all of them: see `datasetsReadIn`, which reads the hierarchy functions too)
     const read = datasetsReadIn(str)
     if (read === null) out.allData = true
-    else for (const n of read) exprData.add(n)
+    // (a mark's items read by name, `data('<mark>')`, depend on whatever that mark depends on, as `from: {data: <mark>}` does)
+    else for (const n of read) { exprData.add(n); if (!known.has(n) && markNamesOf(chart).has(n)) out.allData = true }
     // (the text as the lexer reads it: an escaped name is the name it stands for)
     if (SCALE_FN_EXPR.test(lexedText(str))) out.allScales = true
     if (owner && typeof owner.scale === 'string' && owner.scale === str) out.scales.add(str)
@@ -3080,7 +3084,27 @@ function cleanPass(ctx: EvalContext): boolean {
  * the same, whatever its rows (see `sameData`).
  */
 function sameRows(ctx: EvalContext, name: string): boolean {
+  // (a name that is a mark's, not a dataset's: its items, which nothing pins across evaluations, are never known to be the same)
+  if (!ctx.datasets.has(name) && markNamesOf(ctx.chart).has(name)) return false
   return !ctx.affected.has(name) && samePin(ctx.prev?.rows.get(name), ctx.datasets.get(name))
+}
+
+/** The names of a chart's marks, at any depth (what `data('<name>')` and `from: {data: <name>}` may read instead of a dataset). */
+const MARK_NAMES = new WeakMap<CompiledChart, ReadonlySet<string>>()
+function markNamesOf(chart: CompiledChart): ReadonlySet<string> {
+  let out = MARK_NAMES.get(chart)
+  if (out === undefined) {
+    const names = new Set<string>()
+    const visit = (marks: readonly CompiledMark[] | undefined): void => {
+      for (const m of marks ?? []) {
+        if (typeof m.userName === 'string') names.add(m.userName)
+        visit(m.marks)
+      }
+    }
+    visit(chart.marks)
+    MARK_NAMES.set(chart, (out = names))
+  }
+  return out
 }
 
 /**
@@ -5533,7 +5557,8 @@ let unkeyed = 0
  */
 function datasetKey(ctx: EvalContext, name: string): string {
   const rows = ctx.datasets.get(name)
-  if (rows === undefined) return '-'
+  // (a mark's items read by name, `data('<mark>')`: no key holds them, so nothing that reads them is kept)
+  if (rows === undefined) return markNamesOf(ctx.chart).has(name) ? `!${++unkeyed}` : '-'
   const key = dependencyKey(rows)
   return key.includes('#') && (ctx.affected.has(name) || !(ctx.incremental || ctx.unchanged !== undefined)) ? `!${++unkeyed}` : key
 }
