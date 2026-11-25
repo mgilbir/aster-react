@@ -776,6 +776,11 @@ export function copyTupleWith<T extends object>(r: T, more: Record<string, unkno
   return c
 }
 
+/** The row a copy stands for (the first row of the chain of copies it was made by), or the row itself (see above). */
+export function tupleOrigin(r: object): object {
+  return ORIGINS.get(r) ?? r
+}
+
 /** Whether `a` and `b` stand for one tuple: the same object, or copies of one (the expression language's `===` on objects). */
 export function sameTuple(a: unknown, b: unknown): boolean {
   if (a === b) return true
