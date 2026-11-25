@@ -6,14 +6,21 @@
  * root frame (and a data mark that calls itself `frame`), and a named `style` for any role. This file generates the
  * product of mark type x role x config block x style x encode override and compares the string renderer to vega.
  *
- * Not an exclusion: every cell of the product is compared. A cell that differs must belong to one of the named classes of
- * `scripts/lib/expected-differences.mjs` (vega's ViewLayout reads the role of an authored mark; Aster lays out only the guides it
- * generates, C205), the matrix fails a difference outside them, and each class is held to STILL DIFFER on its own probe (so a fix
- * on either side fails until the entry is removed). The classes:
- *  - a GROUP mark whose role starts with axis / legend / title;
- *  - a DATA mark whose role is exactly `axis`; or `legend` in a chart with a legend (vega's layout takes them as the guide);
- *  - a DATA mark whose role is `frame` or `scope` in a chart with a legend and a title;
- *  - a stroked `area` with `frame`, `scope`, `legend` or `title` (vega makes it a layout container).
+ * Not an exclusion: every cell of the product is compared. A cell that differs must belong to the named class of
+ * `scripts/lib/expected-differences.mjs` (a GROUP mark whose role starts with axis / legend / title: vega-parser does not make a
+ * scope of it, parses what it holds once in the scope around it and draws no container for it -- C205, open), the matrix fails a
+ * difference outside it, and the class is held to STILL DIFFER on its own probe (so a fix on either side fails until the entry is
+ * removed).
+ *
+ * Fixed, and compared in every cell (C205): the roles vega's ViewLayout reads an authored mark by --
+ *  - `axis`: the mark's first item is laid out as the axis's group item (placed with the half pixel), and its bounds are the mark's,
+ *    emptied: the mark adds nothing to the view's bounds;
+ *  - `legend`: legendLayout reads `items[0].items[0]`, which a mark of items has not: the walk of the view's layout throws there,
+ *    the legends and the title after it are not laid out (nor the view sized), the axes before it were;
+ *  - `title`: the last such mark is the title the layout lays out when the view has none; it throws the same way, after the legends
+ *    were laid out; one the view's own title follows adds nothing to the bounds;
+ *  - `frame`, `scope`: a layout container to vega-parser, whose ViewLayout reads each item as a group item and throws before the
+ *    mark is measured: the pass stops at the mark.
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
@@ -75,10 +82,6 @@ const FILE = 'mark-role-config-vs-vega'
 /** The named classes of difference: what tells one apart, and the probe cell that must still show it. */
 const KNOWN: Array<{ name: string; in: (type: string, role: string | undefined, guides: boolean) => boolean; probe: [type: string, role: string, guides: boolean, enc: Spec] }> = [
   { name: 'a group mark whose role starts with axis, legend or title', in: (t, r) => t === 'group' && r !== undefined && /^(axis|legend|title)/.test(r), probe: ['group', 'axis', false, {}] },
-  { name: 'a data mark whose role is exactly axis', in: (t, r) => t !== 'group' && r === 'axis', probe: ['rect', 'axis', false, {}] },
-  { name: 'a data mark whose role is legend, in a chart with a legend', in: (t, r, g) => t !== 'group' && r === 'legend' && g, probe: ['rect', 'legend', true, {}] },
-  { name: 'a data mark whose role is frame or scope, in a chart with a legend and a title', in: (t, r, g) => t !== 'group' && (r === 'frame' || r === 'scope') && g, probe: ['rect', 'frame', true, {}] },
-  { name: 'a stroked area whose role is frame, scope, legend or title', in: (t, r) => t === 'area' && (r === 'frame' || r === 'scope' || r === 'legend' || r === 'title'), probe: ['area', 'frame', false, { stroke: { value: '#456' } }] },
 ]
 const classOf = (type: string, role: string | undefined, guides: boolean): string | undefined => KNOWN.find((k) => k.in(type, role, guides))?.name
 

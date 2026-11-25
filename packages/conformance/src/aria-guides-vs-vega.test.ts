@@ -15,7 +15,6 @@ import * as vega from 'vega'
 import { buildA11yTree, compileChart, evaluateChart, renderSceneToSvg } from '@aster-charts/core'
 import { renderSceneToDomElement } from '@aster-charts/core/dom'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
-import { expectKnownDifference } from './known-differences.js'
 
 type Spec = Record<string, unknown>
 
@@ -110,9 +109,11 @@ function markSpec(r: () => number): Spec {
   if (type === 'group') m.marks = [{ type: 'rect', encode: { update: { width: { value: 5 }, height: { value: 5 }, description: { value: 'inner' } } } }]
   const d = pick(r, DESCRIPTIONS); if (d !== undefined) m.description = d
   const a = pick(r, ARIAS); if (a !== undefined) m.aria = a
-  // (the role a spec gives a mark. A guide's own roles on a DATA mark are read by vega's ARIA as the guide's. Not generated: a
-  // guide role on a GROUP mark, and `frame` / `scope` on a data mark -- vega then lays the chart's guides out differently (a layout
-  // matter that has no ARIA in it), and Aster does not follow: the classes are held, still differing, in
+  // (the role a spec gives a mark. A guide's own roles on a DATA mark are read by vega's ARIA as the guide's, and its layout lays the
+  // mark out by them (C205: `axis`, `legend`, `title`), generated and judged in full. Not generated: `frame` and `scope`, which
+  // mark-role-config-vs-vega.test.ts compares in every cell (over marks that read no late scale: this generator's marks read the
+  // chart's data-driven scales, where vega ranks the failing layout among the late operators, which is not modelled), and a guide
+  // role on a GROUP mark, which vega parses into the scope around it and draws no container for -- held, still differing, in
   // mark-role-config-vs-vega.test.ts (scripts/lib/expected-differences.mjs) and listed in docs/ARCHITECTURE.md "Deviations from Vega")
   const roles = type === 'group' ? ['mark', 'custom'] : ['mark', 'axis', 'legend', 'title', 'axis-label', 'legend-entry', 'title-text', 'title-subtitle', 'legend-label', 'custom']
   if (maybe(r, 0.2)) m.role = pick(r, roles)
@@ -228,16 +229,7 @@ describe('empty guides and empty marks', () => {
       marks: [{ type: 'rect', from: { data: 't' }, encode: { update: row } }, { type: 'group', from: { data: 't' }, encode: { update: row } }, { type: 'rect', role: 'custom', from: { data: 't' }, encode: { update: row } }],
     })],
   ]
-  for (const [what, spec] of cases) {
-    // (a data mark whose role is exactly `axis` is laid out by vega as the guide, a half-pixel offset: the ARIA is held to vega's, the
-    // geometry is the known difference of mark-role-config-vs-vega.test.ts. Every other case is judged in full.)
-    if (what.includes('the description of the first item only')) {
-      it(what, async () => {
-        await judgeStructure(spec, what)
-        expectKnownDifference('mark-role-config-vs-vega', 'a data mark whose role is exactly axis', canonicalizeSvg(await oracle(spec)), canonicalizeSvg(aster(spec).string))
-      })
-    } else it(what, async () => { await judge(spec, what) })
-  }
+  for (const [what, spec] of cases) it(what, async () => { await judge(spec, what) })
 })
 
 describe('generated guides and marks carry the ARIA vega writes', () => {

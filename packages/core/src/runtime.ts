@@ -723,6 +723,8 @@ interface EvalContext {
   setData: SetDataState
   /** The guides are not laid out (the layout of their scope never ran, or stopped before them). */
   rawGuides?: boolean
+  /** The view's layout threw at an authored mark of role `legend`: its legends and its title are not laid out (its axes were: they come first). */
+  legendsRaw?: boolean
   /** The guides are not laid out because the layout of their scope threw: what ranks before it (the grids of legend entries) ran. */
   layoutThrew?: true
   /** The guide host of this context (see guideHost). */
@@ -2279,7 +2281,7 @@ function guideDepsOf(def: object, chart: CompiledChart): GuideDeps {
 function guideKeyOf(def: object, ctx: EvalContext): string | null {
   const deps = guideDepsOf(def, ctx.chart)
   if (deps.names === null || deps.data === null) return null
-  let key = `${readsKey(ctx, deps.names)}\u0003${ctx.urlPolicy === undefined ? '' : dependencyKey(ctx.urlPolicy)}\u0003${ctx.rawGuides ? 1 : 0}${retainKey(ctx)}`
+  let key = `${readsKey(ctx, deps.names)}\u0003${ctx.urlPolicy === undefined ? '' : dependencyKey(ctx.urlPolicy)}\u0003${ctx.rawGuides ? 1 : ctx.legendsRaw ? 2 : 0}${retainKey(ctx)}`
   for (const n of deps.data) key += `\u0004${n}=${datasetKey(ctx, n)}`
   return key
 }
@@ -2404,7 +2406,7 @@ function buildAxisAndLegend(
   // What placing the legends reads besides the legends themselves: the anchors, the plot's size and whether they are laid out.
   // `config.legend.layout`, as vega reads it (`objectProperty`): signals at any depth, the value they hold now
   const legendLayout = legends.length ? resolvedLegendLayout(ctx) : NO_LAYOUT
-  const placement = keep && legends.length > 0 && guidesKeepable(ctx) ? legendPlacementKey(anchorsOf(), layoutW, layoutH, ctx.rawGuides === true) + '\u0001' + valueKey(legendLayout) : null
+  const placement = keep && legends.length > 0 && guidesKeepable(ctx) ? legendPlacementKey(anchorsOf(), layoutW, layoutH, ctx.rawGuides === true || ctx.legendsRaw === true) + '\u0001' + valueKey(legendLayout) : null
   // Every legend of the scope kept as the evaluation before placed it, when each is kept and they are placed against the same: the
   // placement of one depends on the others of its orient, so they are kept together or made again together (see `keptLegends`).
   const keptGroups = placement !== null ? keptLegends(ctx, legends, placement) : undefined
@@ -2450,7 +2452,7 @@ function buildAxisAndLegend(
 
     for (const [orient, list] of byOrient) {
       // Raw-guide mode skips the legend grid: the groups stay at (0,0) (the built legends are pushed unpositioned below).
-      if (ctx.rawGuides) continue
+      if (ctx.rawGuides || ctx.legendsRaw) continue
       placeLegendStack(orient, list.map((x) => x.group), list.map((x) => x.props.offset), legendLayout, xb, yb, layoutW, layoutH)
     }
   }
@@ -2616,7 +2618,8 @@ function computeGuidePadding(
  * the paint channels paint its box over what `config.view` gave it.
  */
 function frameEncodeOf(ctx: EvalContext): FrameEncode | undefined {
-  const geo = resolveEncodeSet(ctx.chart.frameEncode!, {}, ctx, 'group') as unknown as Record<string, unknown>
+  // (the view's own encode is the first operator of the pass: it ran before a mark whose encode stopped the pass)
+  const geo = resolveEncodeSet(ctx.chart.frameEncode!, {}, ctx.encodeAborted === true ? { ...ctx, encodeAborted: false } : ctx, 'group') as unknown as Record<string, unknown>
   const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
   const paint: Record<string, unknown> = {}
   const PAINT: Array<[string, string]> = [
@@ -3896,6 +3899,15 @@ function buildContentPass(
       layoutError = { error: e }
     }
   }
+  // vega's layoutGroup walks the view's items in order -- axes, marks, legends, title -- and reads a mark by its role: an authored mark
+  // whose role is `legend` is laid out as a legend (`legendLayout` reads its first item's `items`), which no other mark has, so the
+  // walk throws there: the axes before it were laid out, the legends and the title after it never are, and the view is not sized
+  const roleLegend = cut === undefined && !ctx.datasetAborted ? authoredRoleMark(items, 'legend') : undefined
+  if (roleLegend !== undefined) {
+    reportEvalError(ctx, authoredLayoutError(roleLegend))
+    ctx.layoutState.failed = true
+    ctx.legendsRaw = true
+  }
   const { groups: guideGroups } = withoutLateReads(ctx, () => stopped
     ? buildAxisAndLegend(ctx, items, ctx.chart.axes.slice(0, madeAxes(cut!)), ctx.chart.legends.slice(0, madeLegends(cut!)), true)
     : buildAxisAndLegend(ctx, items, ctx.chart.axes, ctx.chart.legends, true))
@@ -3904,8 +3916,15 @@ function buildContentPass(
   if (layoutError !== undefined && cut === undefined) failPass(ctx, { path: ctx.scope.last ?? [], axis: Infinity, late: true, layout: { items: [[]], at: 0 } }, layoutError.error)
 
   // Top-level title. (A pass that stopped at a failing dataset or signal never made it: it is ranked after them.)
-  const titleGroup = (stopped && !cut!.title && !cut!.labels && !cut!.lateSignal && !cut!.lateScale) || ctx.datasetAborted ? null : withoutLateReads(ctx, () => buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides, ctx, undefined, isFit(autosizeOf(chart, input).type), true))
+  const titleGroup = (stopped && !cut!.title && !cut!.labels && !cut!.lateSignal && !cut!.lateScale) || ctx.datasetAborted ? null : withoutLateReads(ctx, () => buildTitleGroup(ctx.chart.title, items, width, height, ctx.rawGuides || ctx.legendsRaw, ctx, undefined, isFit(autosizeOf(chart, input).type), true))
   if (titleGroup) items.push(titleGroup)
+  // (the last item of role `title` is the title the walk lays out: an authored one, with no title of the view after it, is read as a
+  // title and has none of a title's items -- the walk throws after the legends were laid out, and the view is not sized)
+  const roleTitle = cut === undefined && !titleGroup && !ctx.datasetAborted && roleLegend === undefined ? authoredRoleMark(items, 'title') : undefined
+  if (roleTitle !== undefined) {
+    reportEvalError(ctx, authoredLayoutError(roleTitle))
+    ctx.layoutState.failed = true
+  }
   // The root group's width / height are the view's `width` / `height` signals (0
   // for a composition that sizes only its children), whatever the grid inside covers.
 
@@ -6911,6 +6930,9 @@ function markItemsOf(
       stoppedAfterEncode = true
     }
   }
+  // vega's view layout lays an authored mark whose role is `axis` out as an axis (see `axisRoleLayout`)
+  const laidAsAxis = !stoppedAfterEncode && transformed && mark.type !== 'group' && mark.role === 'axis' && items.length > 0
+  if (laidAsAxis) items = axisRoleLayout(items)
   // vega's Bound: the items are measured after the transforms and the sort. A value that cannot be drawn (path text vega's reader
   // refuses, a custom symbol shape likewise, a curve that is not there, a clip path: see bound-failure.ts) stops the pass there,
   // the mark made in full: the marks after it are never made, and the view is not laid out.
@@ -6920,7 +6942,7 @@ function markItemsOf(
     // value on every item: the first item is judged for all; see boundFailure)
     const judged = mark.type === 'path' ? 'path' : 'shape'
     const uniform = !(mark.transform?.length) && !Object.values(mark.encode ?? {}).some((set) => set != null && Object.prototype.hasOwnProperty.call(set, judged))
-    const failure = boundFailure(mark.type, items, markClipPath(mark, ctx), mark.type === 'shape' && !shapeIsLiteral(mark), uniform)
+    const failure = layoutContainerFailure(mark, items, ctx) ?? boundFailure(mark.type, items, markClipPath(mark, ctx), mark.type === 'shape' && !shapeIsLiteral(mark), uniform)
     if (failure !== undefined) {
       failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0, afterEncode: true }, failure.error)
       stoppedAfterEncode = true
@@ -6979,6 +7001,8 @@ function markItemsOf(
     ...(encodesHref(mark) ? { hasLinks: true } : {}),
     ...markContainerInfo(mark),
     ...(unmeasuredFrom !== undefined ? { unmeasuredFrom } : {}),
+    // (the layout of an axis returns the first item's bounds, emptied, as the mark's own: it adds nothing to the view's)
+    ...(laidAsAxis || (mark.type !== 'group' && mark.role === 'title') ? { unbounded: true } : {}),
   }
   if (carriedBounds) {
     // (each added item measured as a fresh evaluation measures it: by the mark's type -- a text's own box, a rect's or a rule's miter)
@@ -7700,6 +7724,51 @@ function transformMarkItems(mark: CompiledMark, items: readonly SceneItem[], ctx
     if (numbers !== undefined) ctx.draft.numbered.set(numbers, items)
   }
   return true
+}
+
+/** The first authored leaf mark of this role among the view's items (`markRole`: the `role` the spec gave a mark). */
+function authoredRoleMark(items: readonly SceneGroup[], role: string): SceneGroup | undefined {
+  return items.find((g) => g.marktype !== undefined && g.marktype !== 'group' && (g as { markRole?: string }).markRole === role)
+}
+
+/** What vega's layout of a legend or a title throws over an authored mark: it reads `items[0].items[0]`, and a mark with no item has no `items[0]` to read. */
+function authoredLayoutError(mark: SceneGroup): TypeError {
+  return new TypeError(mark.items?.length ? "Cannot read properties of undefined (reading '0')" : "Cannot read properties of undefined (reading 'datum')")
+}
+
+/** The items `axisRoleLayout` moved: their position is already the axis's. */
+const AXIS_PLACED = new WeakSet<object>()
+
+/**
+ * The view's layout reads a mark whose `role` is `axis` as an axis (vega-view-transforms layout/axis.js): it takes the mark's first
+ * item for the axis's group item. An authored item has no `orient` of the four, so the layout leaves it where it was, then writes
+ * its position back with the axis's half pixel (`item.translate`, 0.5 by default) added, and returns the item's bounds -- cleared,
+ * with no ticks or labels to put in them -- as the mark's: the mark adds nothing to the bounds of the view. The other items are as
+ * they were. (An item whose `orient` is one of the four is placed by the axis's own rules, which read the group item's range,
+ * offset and position: not an authored mark's.)
+ */
+function axisRoleLayout(items: SceneItem[]): SceneItem[] {
+  const first = items[0] as SceneItem & Record<string, unknown>
+  if (AXIS_PLACED.has(first)) return items
+  const delta = first.translate != null ? (first.translate as number) : 0.5
+  const moved = { ...first, x: (first.x as number) + delta, y: (first.y as number) + delta } as SceneItem
+  AXIS_PLACED.add(moved)
+  return [moved, ...items.slice(1)]
+}
+
+/**
+ * A mark whose `role` is `frame` or `scope` is a layout container to vega-parser (`parseMark`: `layout = role === ScopeRole ||
+ * role === FrameRole`), which gives it a ViewLayout operator ranked after its encode, its transforms and its sort and before its
+ * Bound. That layout reads each of the mark's items as a group item, and an item of any other mark has no `items`: it throws
+ * `Cannot read properties of undefined (reading 'length')` when the mark has an item, nothing of the mark is measured, and the pass
+ * stops there (a failure at the mark's Bound, from its first item). A mark over a scale ranked late is not covered: see below.
+ */
+function layoutContainerFailure(mark: CompiledMark, items: readonly SceneItem[], ctx: EvalContext): { error: unknown; from: number | undefined } | undefined {
+  if (mark.type === 'group' || (mark.role !== 'frame' && mark.role !== 'scope') || !items.length) return undefined
+  // (Not modelled: a mark that reads a scale ranked late. Its layout is then ranked among the late operators, after the guides over
+  // early scales and before what reads a late scale one -- the later marks are made and left unencoded, the view is not laid out.)
+  if (encodeReadsLateScale(mark.encode?.update ?? {}, ctx.scope, ctx.chart)) return undefined
+  return { error: new TypeError("Cannot read properties of undefined (reading 'length')"), from: 0 }
 }
 
 /** The force parameters (without `restart`) an item's layout was run with, kept on the items the layout placed. */
@@ -9041,13 +9110,13 @@ function makeLegend(legend: CompiledLegend, ctx: EvalContext, index: number): Sc
       values, count: tickCountRaw, minstep,
       limit: +(guideScalar(ctx, spec.symbolLimit ?? config.symbolLimit) as number),
       formatSpecifier, formatType,
-      locale: chartLocale(ctx.chart.locale), host, style: guideStyles(ctx), raw: !!ctx.rawGuides,
+      locale: chartLocale(ctx.chart.locale), host, style: guideStyles(ctx), raw: !!(ctx.rawGuides || ctx.legendsRaw),
       ...(ctx.passMemory !== undefined ? { relayout: legendMemory(ctx.passMemory, `l${ctx.scope.path.join('/')}:${index}`) } : {}),
       ...(entries !== undefined ? { entries } : {}),
       ...(lateLabels ? { lateLabels } : {}),
       ...(lateStrip ? { lateStrip } : {}),
       ...(labels !== undefined ? { labels } : {}),
-      ...(ctx.rawGuides && slot !== undefined && (ctx.layoutThrew === true || (cut !== undefined && entryGridRan(ctx.scope.path, slot, cut))) ? { entryGrid: true } : {}),
+      ...((ctx.rawGuides || ctx.legendsRaw) && slot !== undefined && (ctx.layoutThrew === true || ctx.legendsRaw === true || (cut !== undefined && entryGridRan(ctx.scope.path, slot, cut))) ? { entryGrid: true } : {}),
     })
   } catch (e) {
     // (an expression of the spec threw while the entries were listed -- an entry's size is read there: the legend's entries
