@@ -9,6 +9,7 @@
     "bench:runtime": "tsx src/runtime.bench.tsx",
     "bench:differential": "tsx src/differential.bench.tsx",
     "bench:transforms": "tsx src/transform.bench.ts",
+    "bench:scope-signals": "tsx src/scope-signals.bench.ts",
     "bench:memory": "node --expose-gc --import tsx src/memory.bench.tsx",
     "bench:browser": "tsx scripts/browser.bench.mjs",
     "bench:pipeline": "tsx src/pipeline.bench.tsx",
