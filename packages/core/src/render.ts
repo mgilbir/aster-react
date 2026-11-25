@@ -318,9 +318,13 @@ export function computeLinePath(group: SceneGroup, exact = false): {
   return { path: gen(path), sw: lineStrokeWidth(items[0]!), first: items[0]! }
 }
 
-/** The width a line mark is stroked with, from its first item: vega's default is 2 when it has a stroke and no width. */
+/**
+ * The width a line mark is stroked with, from its first item, as vega's renderers read it: the item's own, else none (the SVG writes no
+ * `stroke-width`, the canvas strokes 1 wide). vega's 2 is the `line` config's, which the compiled encode carries (an explicit null
+ * included: C396), never the renderer's.
+ */
 export function lineStrokeWidth(first: SceneItem): number | undefined {
-  return (first.strokeWidth as number | undefined) ?? (first.stroke != null ? 2 : undefined)
+  return first.strokeWidth == null ? undefined : (first.strokeWidth as number)
 }
 
 /** Shared area-path geometry for the string renderer and the DOM patcher; `exact` as for {@link computeLinePath}. */
