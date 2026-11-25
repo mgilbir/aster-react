@@ -28,9 +28,7 @@
  *                    "10px" == "10" for user-unit lengths.
  *   N-transform      every transform form (translate/scale/rotate/skew/matrix,
  *                    any nesting) is composed to one matrix; element geometry is
- *                    mapped through it, so `translate(a,b) x=0` == `x=a y=b`. A
- *                    list that does not parse (`translate(Infinity,0)`) is the
- *                    identity, as a browser ignores an invalid attribute.
+ *                    mapped through it, so `translate(a,b) x=0` == `x=a y=b`.
  *   N-path           path data is converted to absolute commands with explicit
  *                    repetition; H/V become L.
  *   N-color          colours are compared as the sRGB value they denote
@@ -136,81 +134,39 @@ function isIdentityLinear(m: Mat): boolean {
   return Math.abs(m[0] - 1) < 1e-9 && Math.abs(m[1]) < 1e-9 && Math.abs(m[2]) < 1e-9 && Math.abs(m[3] - 1) < 1e-9
 }
 
-/**
- * Compose an SVG transform list into one matrix (N-transform), read as a browser reads the attribute (SVG 1.1 transform-list
- * grammar, checked against Chromium's `getCTM`): the five forms with their argument counts, numbers in the SVG number grammar
- * (`.5`, `+1`, `1e3`; two numbers may touch, `1.5.5` is 1.5 and .5), comma-or-space separators, transforms side by side with or
- * without a separator. A list that does not parse -- a word where a number goes (`Infinity`, `NaN`, `163px0`), a number that
- * overflows (`1e400`), a dangling comma, a wrong argument count, an unknown form -- is an invalid attribute, which a browser
- * ignores: the element is drawn with no transform of its own, so the list is the identity.
- */
+/** Compose any SVG transform list into one matrix (N-transform). Throws on junk. */
 export function parseTransform(t: string | undefined): Mat {
-  if (t === undefined) return IDENT
-  return transformList(t) ?? IDENT
-}
-
-const WSP = /[\x20\x09\x0a\x0d]*/y
-const NUMBER = /[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/y
-const NAME = /(matrix|translate|scale|rotate|skewX|skewY)[\x20\x09\x0a\x0d]*\(/y
-
-/** The matrix of a transform list, or null when the list is not one (see {@link parseTransform}). Every step consumes input. */
-function transformList(s: string): Mat | null {
+  if (!t || !t.trim()) return IDENT
+  let m: Mat = IDENT
+  const re = /\s*([a-zA-Z]+)\s*\(([^)]*)\)\s*,?/y
   let pos = 0
-  const take = (re: RegExp): string | null => {
+  const s = t.trim()
+  while (pos < s.length) {
     re.lastIndex = pos
     const hit = re.exec(s)
-    if (!hit) return null
+    if (!hit) throw new Error(`canonicalizeSvg: unparseable transform "${t}"`)
     pos = re.lastIndex
-    return hit[0]
-  }
-  /** comma-wsp?: whitespace, at most one comma, whitespace; whether a comma was read */
-  const commaWsp = (): boolean => {
-    take(WSP)
-    if (s[pos] !== ',') return false
-    pos++
-    take(WSP)
-    return true
-  }
-  let m: Mat = IDENT
-  take(WSP)
-  while (pos < s.length) {
-    const name = take(NAME)
-    if (name === null) return null
-    const form = /^[a-zA-Z]+/.exec(name)![0]
-    take(WSP)
-    const a: number[] = []
-    for (;;) {
-      const tok = take(NUMBER)
-      if (tok === null) return null
-      const v = Number(tok)
-      if (!Number.isFinite(v)) return null
-      a.push(v)
-      const comma = commaWsp()
-      if (s[pos] === ')') {
-        if (comma) return null
-        break
-      }
-    }
-    pos++ // ')'
+    const name = hit[1]!
+    const a = hit[2]!.trim().split(/[\s,]+/).filter(Boolean).map(Number)
+    if (a.some((v) => !Number.isFinite(v))) throw new Error(`canonicalizeSvg: non-finite transform "${t}"`)
     let n: Mat
-    if (form === 'translate' && (a.length === 1 || a.length === 2)) n = [1, 0, 0, 1, a[0]!, a[1] ?? 0]
-    else if (form === 'scale' && (a.length === 1 || a.length === 2)) n = [a[0]!, 0, 0, a[1] ?? a[0]!, 0, 0]
-    else if (form === 'rotate' && (a.length === 1 || a.length === 3)) {
+    if (name === 'translate' && (a.length === 1 || a.length === 2)) n = [1, 0, 0, 1, a[0]!, a[1] ?? 0]
+    else if (name === 'scale' && (a.length === 1 || a.length === 2)) n = [a[0]!, 0, 0, a[1] ?? a[0]!, 0, 0]
+    else if (name === 'rotate' && (a.length === 1 || a.length === 3)) {
       const r = (a[0]! * Math.PI) / 180
       const c = Math.cos(r)
       const sn = Math.sin(r)
       n = [c, sn, -sn, c, 0, 0]
       if (a.length === 3) n = mul(mul([1, 0, 0, 1, a[1]!, a[2]!], n), [1, 0, 0, 1, -a[1]!, -a[2]!])
-    } else if (form === 'skewX' && a.length === 1) n = [1, 0, Math.tan((a[0]! * Math.PI) / 180), 1, 0, 0]
-    else if (form === 'skewY' && a.length === 1) n = [1, Math.tan((a[0]! * Math.PI) / 180), 0, 1, 0, 0]
-    else if (form === 'matrix' && a.length === 6) n = a as Mat
-    else return null
+    } else if (name === 'skewX' && a.length === 1) n = [1, 0, Math.tan((a[0]! * Math.PI) / 180), 1, 0, 0]
+    else if (name === 'skewY' && a.length === 1) n = [1, Math.tan((a[0]! * Math.PI) / 180), 0, 1, 0, 0]
+    else if (name === 'matrix' && a.length === 6) n = a as Mat
+    else throw new Error(`canonicalizeSvg: unsupported transform "${t}"`)
     m = mul(m, n)
-    // (between two transforms: an optional comma-wsp; after the last, whitespace only)
-    if (commaWsp() && pos >= s.length) return null
   }
   return m
 }
+
 
 // ---------------------------------------------------------------- attributes
 
