@@ -99,7 +99,7 @@ async function vegaRun(spec: Spec): Promise<{ svg: string; rows: number[][] }> {
   const view = new vega.View(vega.parse(spec as never), { renderer: 'none' })
   try {
     await view.runAsync()
-    return { svg: await view.toSVG(), rows: itemRows(view.scenegraph().root) }
+    return { svg: await view.toSVG(), rows: itemRows((view.scenegraph() as unknown as { root: unknown }).root) }
   } finally {
     view.finalize()
   }
