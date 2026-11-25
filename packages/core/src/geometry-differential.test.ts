@@ -1,8 +1,9 @@
 /**
- * The SVG, DOM and canvas renderers against their refactor baseline (see geometry-differential.testlib.ts) on the scenes the
- * evaluator makes: the vega corpus, random specs (and their incremental updates, where items are reused), transition frames (one
- * scene object rewritten in place), and the canvas append path. Every scene is drawn twice in a row, so a cached geometry is
- * compared as well as a fresh one. (Hand-built scenes with the values no scale writes -- NaN, the infinities, strings, sizes vega
+ * The SVG, DOM and canvas renderers on a scene and on its cold copy (see geometry-differential.testlib.ts: a cache never changes what
+ * is drawn) on the scenes the evaluator makes: the vega corpus, random specs (and their incremental updates, where items are reused),
+ * transition frames (one scene object rewritten in place), and the canvas append path. Every scene is drawn twice in a row, so a cached
+ * geometry is compared as well as a fresh one. Whether what is drawn is RIGHT is the renderers against vega:
+ * packages/conformance/src/render-updates-vs-vega.test.ts (generated specs, their updates and the transition endpoints), the corpus gates. (Hand-built scenes with the values no scale writes -- NaN, the infinities, strings, sizes vega
  * reads as numbers -- are not compared here: their baseline is the behaviour before the fixes that made those values read as vega
  * reads them. Their bounds, pick and `intersect()` are compared with vega, geometry-vs-vega.test.ts and `pnpm conformance:geometry`.)
  */
@@ -44,7 +45,7 @@ const runs = (from: number, to: number, size: number): Array<[number, number]> =
 
 const CORPUS = vegaCorpusFiles()
 
-describe('mark geometry: old vs new, every consumer', () => {
+describe('mark geometry: a scene and its cold copy draw the same, every consumer', () => {
   it('the corpus is there', () => { expect(CORPUS.length).toBeGreaterThan(300) })
 
   for (const [lo, hi] of runs(0, CORPUS.length - 1, 60)) {
@@ -139,8 +140,8 @@ describe('mark geometry: old vs new, every consumer', () => {
 })
 
 describe('sceneIntersect on non-finite scenes', () => {
-  // The legacy copy of intersect() hangs on these (seed 112), so the differential leaves it out for them. The current one is checked
-  // here on its own: it ends on every NaN / infinite arc, shape and path, quickly, and refuses only with an AsterLimitError (a
+  // The hand-built scenes with values no scale writes (NaN, the infinities, strings) have no vega output to compare with; their
+  // bounds, pick and intersect() are compared with vega in geometry-vs-vega.test.ts. intersect() is checked here on its own: it ends on every NaN / infinite arc, shape and path, quickly, and refuses only with an AsterLimitError (a
   // region beyond 2^52 or a walk past its ceiling); it never throws anything else.
   const BOXES: Array<[[number, number], [number, number]]> = [[[0, 0], [300, 200]], [[10, 10], [20, 20]], [[-1e9, -1e9], [1e9, 1e9]], [[0, 0], [0, 0]], [[250, 150], [40, 30]], [[Number.NEGATIVE_INFINITY, 0], [100, Number.POSITIVE_INFINITY]]]
   for (const [lo, hi] of [[1, 100], [101, 200], [201, 300], [301, 400]] as const) {

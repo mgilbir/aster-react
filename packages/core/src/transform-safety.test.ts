@@ -58,7 +58,6 @@ function workspaceSrcDirs(root: string): string[] {
 interface AllowedSpread { file: string; call: RegExp; why: string }
 const SPREAD_ALLOWED: AllowedSpread[] = [
   { file: 'packages/core/src/dom.ts', call: /replaceChildren\(\.\.\.desc\.children\.map/, why: 'a dense mark container: its few hundred chunk elements, never one per item' },
-  { file: 'packages/core/src/legacy-dom.testlib.ts', call: /replaceChildren\(\.\.\.desc\.children\.map/, why: 'the frozen copy of the dom patcher above' },
   { file: 'packages/core/src/runtime.ts', call: /logger\[level\]\?\.\(\.\.\.args\)/, why: 'the arguments of one logged message' },
   { file: 'packages/conformance/src/gallery/virtual-clock.ts', call: /due\.fn\(\.\.\.due\.args\)/, why: 'the arguments a timer was scheduled with' },
   { file: 'packages/core/src/raster-image.ts', call: /fromCharCode\(\.\.\.png\.subarray\(i, i \+ 0x8000\)\)/, why: 'a 32 KiB slice' },

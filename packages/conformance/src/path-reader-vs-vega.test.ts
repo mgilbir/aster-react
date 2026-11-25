@@ -9,14 +9,13 @@
  *  - a path mark on a canvas: the same paths painted, as vega's `Marks.path.draw` paints them, turned and scaled included;
  *  - its outline for the hit index and `intersect()`: vega's replay, flattened;
  *  - a custom symbol shape and a legend's symbols: the same SVG;
- *  - the engine's own path text (what the canvas and the hit index read back): what the reader before the merge read.
+ *  - the engine's own path text (what the canvas and the hit index read back): the commands vega reads from it.
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
 import { compileChart, evaluateChart, renderSpec } from '@aster-charts/core'
 import { renderSceneToCanvas } from '@aster-charts/core/canvas'
 import { drawnPathCommands, parsePathData, renderSvgPath, svgPathCommands, type PathCommand } from '../../core/src/path-data.js'
-import { parsePathData as legacyParsePathData } from '../../core/src/legacy-path-data.testlib.js'
 import { pathMarkPolys, transformPolys } from '../../core/src/geometry-read.js'
 import { Flattener } from '../../core/src/path-flatten.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
@@ -363,7 +362,7 @@ describe('a custom symbol shape, as vega writes it', () => {
 // --- the engine's own text -----------------------------------------------------------------------------------------------------
 
 describe('the engine\'s own path text, read back', () => {
-  it('every path a scene of every mark type carries reads as the reader before the merge read it', () => {
+  it('every path a scene of every mark type carries reads as vega reads it', () => {
     const spec = {
       width: 300, height: 200, padding: 5,
       data: [{ name: 't', values: Array.from({ length: 12 }, (_, i) => ({ x: i, y: Math.sin(i) * 10 + 0.123456 * i, c: i % 3 })) }],
@@ -388,13 +387,14 @@ describe('the engine\'s own path text, read back', () => {
     const svg = renderSpec(spec as never)
     const texts = new Set([...svg.matchAll(/ d="([^"]*)"/g)].map((m) => m[1]!))
     expect(texts.size).toBeGreaterThan(30)
-    for (const d of texts) expect(parsePathData(d), d).toEqual(legacyParsePathData(d))
+    for (const d of texts) expect(outcome(() => svgPathCommands(d)), d).toEqual(outcome(() => vegaParse(d)))
   })
 
   it('a number that is not finite is NaN where it stands (a canvas ignores the call, as it ignores vega\'s)', () => {
     expect(parsePathData('MNaN,0')).toEqual([{ cmd: 'M', x: NaN, y: 0 }])
     expect(parsePathData('M0,0LInfinity,5L-Infinity,1Z')).toEqual([{ cmd: 'M', x: 0, y: 0 }, { cmd: 'L', x: NaN, y: 5 }, { cmd: 'L', x: NaN, y: 1 }, { cmd: 'Z' }])
-    // (where the reader before the merge happened to read it so too: the word last in its command)
-    for (const d of ['M0,0L5,NaNL10,10', 'M219.5,InfinityL3,4', 'M1,2C3,4,5,6,7,-InfinityZ']) expect(parsePathData(d)).toEqual(legacyParsePathData(d))
+    // (the word last in its command reads as NaN where it stands: vega refuses the text, the reader reads as far as vega's canvas would)
+    expect(parsePathData('M0,0L5,NaNL10,10')).toEqual([{ cmd: 'M', x: 0, y: 0 }, { cmd: 'L', x: 5, y: NaN }, { cmd: 'L', x: 10, y: 10 }])
+    expect(parsePathData('M219.5,InfinityL3,4')).toEqual([{ cmd: 'M', x: 219.5, y: NaN }, { cmd: 'L', x: 3, y: 4 }])
   })
 })
