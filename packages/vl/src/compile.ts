@@ -5580,9 +5580,32 @@ function customLabelText(def: FieldDef, guide: Record<string, unknown> | null | 
   return undefined
 }
 
+/**
+ * format.ts guideFormat: a guide's `format` that is not a string (a time unit's formats, `{year: "%Y"}`) is a time format, and means nothing
+ * to a guide that does not format a time; vega-lite drops it there, and the guide takes the default of its field. A signal reference, and the
+ * format of a custom format type (the guide's labels are encoded by it), are not this.
+ */
+function foreignGuideFormat(def: FieldDef, format: unknown, formatType: unknown): boolean {
+  if (format === undefined || typeof format === 'string' || !isObject(format) || 'signal' in format || 'expr' in format) return false
+  if (isCustomFormatType(formatType) || isObject(formatType)) return false
+  const timeFormatted = formatType === 'time' || (formatType === undefined && (def.type === 'temporal' || def.tu !== undefined))
+  return !timeFormatted
+}
+
 /** Non-positional legends format timeUnit fields with timeFormat. */
 function applyTimeUnitLegend(lg: Record<string, unknown>, def: FieldDef, userLegend: Record<string, unknown> | undefined, formats: { numberFormat?: string; timeFormat?: string }): void {
-  const userFormat = userLegend && userLegend.format !== undefined
+  const foreign = userLegend !== undefined && foreignGuideFormat(def, userLegend.format, userLegend.formatType)
+  if (foreign) {
+    // (the legend takes its field's default format, kept for after its own properties are copied over it)
+    for (const k of Object.keys(userLegend!.format as Record<string, unknown>)) ignore(userLegend!.format as Record<string, unknown>, k, 'vega-lite drops a time format from a guide that does not format a time')
+  }
+  applyTimeUnitLegendFormat(lg, def, userLegend, formats, foreign)
+  if (foreign) LEGEND_FOREIGN_FORMAT.set(lg, lg.format)
+}
+/** The default format of a legend whose own was a time format its field does not take: it is put back once the legend's properties are copied. */
+const LEGEND_FOREIGN_FORMAT = new WeakMap<object, unknown>()
+function applyTimeUnitLegendFormat(lg: Record<string, unknown>, def: FieldDef, userLegend: Record<string, unknown> | undefined, formats: { numberFormat?: string; timeFormat?: string }, foreign: boolean): void {
+  const userFormat = userLegend && userLegend.format !== undefined && !foreign
   // a raw temporal field formats through config.timeFormat, a quantitative one through config.numberFormat
   if (!def.timeUnit) {
     const ft = userLegend?.formatType
@@ -6793,12 +6816,19 @@ function buildAxes(fields: FieldDef[], mark: string, scales: ScaleSpec[], scaleN
       setGuideTimeFormatType(labelAxis, def, sc.type)
     }
     if (userAxis) {
+      const formatBefore = labelAxis.format
       for (const [k, v] of Object.entries(userAxis)) {
         if (k === 'grid' || k === 'title' || k === 'orient' || k === 'scale') continue
         if (fromConfigOnly(k)) continue
         setOwn(labelAxis, k, v)
       }
       if (userAxis.orient) labelAxis.orient = userAxis.orient
+      // (the axis takes its field's default format where its own is a time format the field does not take)
+      if (foreignGuideFormat(def, userAxis.format, userAxis.formatType)) {
+        for (const k of Object.keys(userAxis.format as Record<string, unknown>)) ignore(userAxis.format as Record<string, unknown>, k, 'vega-lite drops a time format from a guide that does not format a time')
+        if (formatBefore === undefined) delete labelAxis.format
+        else labelAxis.format = formatBefore
+      }
     }
     // a custom format type moves the label text into the labels encode and leaves vega's own `format` unset
     // (vega-lite axis/encode.ts labels(), format.ts guideFormat)
@@ -7064,6 +7094,12 @@ function buildLegends(fields: FieldDef[], mark: string, markOpacity: number | { 
       delete lg.labelExpr
     }
     legends.push(lg)
+  }
+  for (const lg of legends) {
+    if (!LEGEND_FOREIGN_FORMAT.has(lg)) continue
+    const dflt = LEGEND_FOREIGN_FORMAT.get(lg)
+    if (dflt === undefined) delete lg.format
+    else lg.format = dflt
   }
   return legends
 }
@@ -9075,6 +9111,9 @@ function fieldTextExpr(def0: FieldDef, opts: { lineBreaks: boolean; spec: VLSpec
   const { format: guideFmt, formatType: guideFmtType } = defFormat(def)
   const fmt = opts.format ?? guideFmt
   const formatType = opts.formatType ?? guideFmtType
+  // (a format that is an object, a time unit's formats, is read by the guides of a time scale only: the text of a field is formatted by a
+  // string, and an object is no format of it - format.ts numberFormat, timeFormatExpression)
+  if (isObject(fmt) && !('signal' in fmt) && !('expr' in fmt)) for (const k of Object.keys(fmt)) ignore(fmt, k, 'vega-lite formats the text of a field by a string format only')
   // addLineBreaksToTooltip comes first: a discrete field (a binned one included) shows its own value, line breaks joined
   if (opts.lineBreaks && (def.type === 'nominal' || def.type === 'ordinal') && def.tu === undefined && opts.format === undefined && guideFmt === undefined && guideFmtType === undefined) {
     const raw = refOf(def.field)
@@ -9108,10 +9147,12 @@ function fieldTextExpr(def0: FieldDef, opts: { lineBreaks: boolean; spec: VLSpec
   if (opts.normalizeStack && (def.type === 'quantitative' || typeof fmt === 'string')) {
     return `format(${f}, ${JSON.stringify((typeof fmt === 'string' ? fmt : undefined) ?? (binCfg as { normalizedNumberFormat?: string } | undefined)?.normalizedNumberFormat ?? '.0%')})`
   }
+  // (format.ts numberFormat: only a string is a number format; a time unit's format object means nothing to a number)
+  const numberFmt = typeof fmt === 'string' ? fmt : undefined
   if (def.type === 'quantitative' || (def.aggregate != null && ['count', 'distinct', 'valid', 'missing'].includes(def.aggregate))) {
-    return `format(${f}, ${JSON.stringify(fmt ?? cfg?.numberFormat ?? '')})`
+    return `format(${f}, ${JSON.stringify(numberFmt ?? cfg?.numberFormat ?? '')})`
   }
-  if (fmt !== undefined) return `format(${f}, ${JSON.stringify(fmt)})`
+  if (numberFmt !== undefined) return `format(${f}, ${JSON.stringify(numberFmt)})`
   // a geojson shape field is shown as the geometry itself (never joined as an array)
   if (def.type === 'geojson') return `isValid(${f}) ? ${f} : ""+${f}`
   // (vega-lite addLineBreaksToTooltip reads a discrete field by its own name, not the aggregate's: `datum["c"]` for the `max` of c)
@@ -9119,7 +9160,9 @@ function fieldTextExpr(def0: FieldDef, opts: { lineBreaks: boolean; spec: VLSpec
     const raw = refOf(def.field)
     return `isValid(${raw}) ? isArray(${raw}) ? join(${raw}, '\\n') : ${raw} : ""+${raw}`
   }
-  return opts.lineBreaks
+  // (tooltip.ts addLineBreaksToTooltip joins a list of a discrete field that has no format of any kind: a format object is one that is
+  // given, if it is no format of this field)
+  return opts.lineBreaks && fmt === undefined
     ? `isValid(${f}) ? isArray(${f}) ? join(${f}, '\\n') : ${f} : ""+${f}`
     : `isValid(${f}) ? ${f} : ""+${f}`
 }
