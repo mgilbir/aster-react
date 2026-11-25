@@ -20,9 +20,9 @@
  */
 import { compileChart } from './compiler.js'
 import { assertSpecObject } from './spec-guards.js'
-import { dict, ownGet } from './util.js'
+import { dict, ownGet, sameTuple } from './util.js'
 import { dataInputOf, valuesSignal } from './spec-structure.js'
-import { checkHintShapes, evaluateChartPending, type DataStability, type IncrementalEngine } from './runtime.js'
+import { checkHintShapes, evaluateChartPending, keepsTupleHistory, type DataStability, type IncrementalEngine } from './runtime.js'
 import { applyOneWithState } from './incremental-state.js'
 import { optionalPart } from './engine-parts.js'
 import { refId, valueKey } from './fingerprint.js'
@@ -313,6 +313,19 @@ function withSettings(last: RuntimeInput, given: RuntimeInput): RuntimeInput {
   return { ...last, ...given }
 }
 
+/**
+ * Whether a signal was given another object than it was given last (vega's dataflow takes a value set to another object for a change,
+ * whatever it holds: `Operator.set` compares by reference), the same tuple excepted whichever of the engine's copies of it it is.
+ */
+function setAgain(before: Record<string, unknown> | undefined, now: Record<string, unknown> | undefined): boolean {
+  for (const k of Object.keys(now ?? {})) {
+    const v = now![k]
+    const was = before === undefined ? undefined : ownGet(before, k)
+    if (v !== null && typeof v === 'object' && !Object.is(v, was) && !sameTuple(v, was)) return true
+  }
+  return false
+}
+
 /** Union of the pulse's structural datasets and the host's own `changedDatasets` hint. */
 function mergeNames(a: Iterable<string>, b: readonly string[] | undefined): string[] {
   return [...new Set<string>([...a, ...(b ?? [])])]
@@ -333,6 +346,8 @@ export function createChartSession(): ChartSession {
   let lastPulse: DataPulse | null = null
   // what the last accepted evaluation was given besides its data and its change descriptions: a `change` goes on from there
   let lastSettings: RuntimeInput = {}
+  // the signal values the session was last given (see `setAgain`)
+  let lastSignals: Record<string, unknown> | undefined
 
   /**
    * The datasets whose rows are equal to the ones the engine's state was made from, so the steps made from them need not run: every
@@ -459,7 +474,11 @@ export function createChartSession(): ChartSession {
     // array identity and thus the fingerprint is unchanged — so the no-op
     // cache must not short-circuit the re-evaluation.
     const hinted = !!input.dataChanges || !!input.dataPulse || !!input.changedDatasets?.length
-    if (!hinted && key === lastKey && lastScene) {
+    // (a chart whose tuples carry what the run before wrote -- runtime.ts `historyRun` -- is not a function of its inputs: a signal set
+    // again to another object is a run of vega's dataflow even when the object holds what the one before held)
+    const signalSetAgain = lastChart !== null && skeleton === lastSkeleton && keepsTupleHistory(lastChart) && setAgain(lastSignals, input.signals)
+    lastSignals = input.signals
+    if (!hinted && !signalSetAgain && key === lastKey && lastScene) {
       lastRaw = currentRaw
       lastPulse = pulse
       lastSettings = settingsOf(input)
@@ -467,7 +486,7 @@ export function createChartSession(): ChartSession {
     }
     // New row arrays with identical values are a no-op for the scene: the
     // inferred pulse is empty and everything else matches the previous run.
-    if (input.autoChanges !== false && !hinted && !pulse.datasets.size && !pulse.structural.size && metaKey === lastMetaKey && lastScene) {
+    if (input.autoChanges !== false && !hinted && !signalSetAgain && !pulse.datasets.size && !pulse.structural.size && metaKey === lastMetaKey && lastScene) {
       lastRaw = currentRaw
       lastPulse = pulse
       lastSettings = settingsOf(input)
@@ -527,6 +546,7 @@ export function createChartSession(): ChartSession {
     pending.commit()
     engineRaw = currentRaw
     lastSettings = settingsOf(input)
+    lastSignals = input.signals
     lastScene = pending.scene
     // Every key follows the state that was just committed, or the no-op cache
     // would serve a scene built for different inputs.
