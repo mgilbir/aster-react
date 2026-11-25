@@ -8,6 +8,12 @@ paths a user takes, and compares the canonical SVG exactly (`src/normalize.ts`, 
 | static | vega in Node (`vega-lite` compiles first for Vega-Lite)        | `loadSpecData` + `renderSpec` (`@aster-charts/vl` compiles Vega-Lite)                                                 |
 | react  | the same vega in headless Chromium, in a 600 x 400 host        | `<Chart>` mounted as an app would: `@aster-charts/react/vl`, **no** add-on imported (`<Chart>` loads geo / transforms itself, and the page checks it loaded exactly what the spec needs), data through `loadSpecData`, **no** size props unless the (compiled) spec has numeric top-level `width` / `height` |
 
+**Which frame the static oracle is (C624).** The static oracle is `view.runAsync()` and then `view.toSVG()`, and `toSVG` runs the
+dataflow again: for an `autosize: fit` view whose layout does not settle in one run (`time-units` at some widget values: the
+width moves by a pixel on the second run), the reference is vega's SECOND run, while a browser's SVG view shows the first one
+(which is what Aster draws: one evaluation fits the view in its two passes). Every default of the gallery settles in one run; a
+spec that does not would fail the static path and may pass the React path, which compares the DOM the browser shows.
+
 Both read the data from the pinned `vega-datasets` package (3.2.1, the version both repositories' lockfiles use) through one offline
 `fetch`; the browser page has every request routed to disk or aborted. There is no network at test time.
 
