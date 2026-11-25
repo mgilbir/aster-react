@@ -43,7 +43,10 @@ import { applyOp, genSpec, int, MARKS, mulberry32, OPS, pick, rowOf, type MarkKi
 type Spec = Record<string, unknown>
 type VegaView = { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void; scenegraph(): { root: unknown } }
 const quiet = { level() { return this }, error() { return this }, warn() { return this }, info() { return this }, debug() { return this } }
-const DIGITS = 3
+/** The canvas records keep numbers to this many decimals: more than float error shows in a pixel, so rounding never decides a comparison. */
+const DIGITS = 9
+/** What two canvas numbers may differ by: float error (Aster's trail finds an arc's centre from its ends, 1e-7 px off vega's), never a visible shift. */
+const ABS_EPS = 1e-6, REL_EPS = 1e-9
 
 /** The kinds of mark vega draws (scene-fuzz's `circle` is an Aster-only extension, see the header). */
 const KINDS: readonly MarkKind[] = MARKS.filter((k) => k !== 'circle')
@@ -127,22 +130,18 @@ function svgDiff(oracle: string, aster: string): string[] {
 }
 
 const NUMBER = /-?\d+(?:\.\d+)?(?:e[-+]?\d+)?/g
-/**
- * Two records that are the same but for numbers one unit of their last (third) decimal apart: one value either side of a rounding
- * boundary, which a computation that differs from vega's in its last bits lands on now and then (Aster's canvas trail finds an arc's
- * centre from its ends, 1e-7 px off vega's). Every number is compared at the canvas records' precision, never coarser.
- */
-function sameAtPrecision(a: string, b: string): boolean {
+/** Two records that are the same but for numbers within float error of each other (ABS_EPS + REL_EPS of the larger). */
+function sameWithinFloatError(a: string, b: string): boolean {
   if (a.replace(NUMBER, '#') !== b.replace(NUMBER, '#')) return false
   const x = a.match(NUMBER) ?? [], y = b.match(NUMBER) ?? []
-  return x.length === y.length && x.every((v, i) => Math.abs(Number(v) - Number(y[i])) <= 1.000001 * 10 ** -DIGITS)
+  return x.length === y.length && x.every((v, i) => Math.abs(Number(v) - Number(y[i])) <= ABS_EPS + REL_EPS * Math.max(Math.abs(Number(v)), Math.abs(Number(y[i]))))
 }
 
 function sequenceDiff(oracle: string[], aster: string[]): string | null {
   const n = Math.max(oracle.length, aster.length)
   for (let i = 0; i < n; i++) {
     const a = oracle[i], b = aster[i]
-    if (a === b || (a !== undefined && b !== undefined && sameAtPrecision(a, b))) continue
+    if (a === b || (a !== undefined && b !== undefined && sameWithinFloatError(a, b))) continue
     // (from a little before the first character that differs)
     let k = 0
     while (a !== undefined && b !== undefined && k < a.length && a[k] === b[k]) k++
@@ -257,6 +256,29 @@ function seedCount(): number {
 }
 const SEEDS = seedCount()
 const RUN = 10
+
+describe('the canvas comparison sees a shift of half a thousandth of a pixel (it is sized to float error)', () => {
+  it('1e-7 is the same number, 0.0005 is not', () => {
+    expect(sameWithinFloatError('M10.0000001,5', 'M10,5')).toBe(true)
+    expect(sameWithinFloatError('M10.0005,5', 'M10,5')).toBe(false)
+    expect(sameWithinFloatError('M1e3,5', 'M1000.0005,5')).toBe(false)
+  })
+  it('a drawing moved by 0.0005 px is a difference', async () => {
+    const sc = scenario(2)
+    const want = await vegaOutput(withRows(sc.spec, sc.states[0]!))
+    if (want instanceof Error) throw want
+    const scene = evaluateChart(compileChart(structuredClone(sc.spec) as never), { data: { t: structuredClone(sc.states[0]!.t), u: structuredClone(sc.states[0]!.u) } })
+    const draw = (shift: number): string[] => {
+      const { ctx, painted } = recorder({ state: true, digits: DIGITS })
+      ;(ctx as unknown as { translate(x: number, y: number): void }).translate(shift, 0)
+      renderSceneToCanvas(scene, ctx, {})
+      return canonicalPaints(painted)
+    }
+    expect(sequenceDiff(draw(0), draw(0))).toBeNull()
+    expect(sequenceDiff(draw(0), draw(0.0005))).not.toBeNull()
+    expect(sequenceDiff(canonicalPaints(want.canvas), draw(0))).toBeNull()
+  })
+})
 
 describe('Aster renders generated specs and their incremental updates as vega does: SVG, DOM, canvas', () => {
   for (let lo = 1; lo <= SEEDS; lo += RUN) {
