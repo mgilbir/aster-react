@@ -4227,6 +4227,11 @@ function evaluateViewPass(chart: CompiledChart, hostInput: RuntimeInput, txn: Ev
   }
   // Event-loop wiring (non-serialized internals)
   ;(scene as unknown as { runtime?: unknown }).runtime = ctx.runtime
+  // (a signal whose value is a dataset's own rows -- `update: "data('t')"` -- holds the array the evaluation reads, which a later pulse
+  // advances in place: the scene keeps the rows it was made with as its dataset does, through a copy made here, at the one place
+  // the scene takes its signals; C30, Q14)
+  const liveRows = new Set<unknown>(ctx.datasets.values())
+  for (const [name, value] of Object.entries(ctx.signalParams)) if (Array.isArray(value) && liveRows.has(value)) ctx.signalParams[name] = value.slice()
   ;(scene as unknown as { signalParams?: Record<string, unknown> }).signalParams = ctx.signalParams
   ;(scene as unknown as { compiled?: unknown }).compiled = ctx.chart
   // the limits the scene was evaluated under: the event loop runs the scene's handlers under them (signals.ts `bindSceneSignals`)
