@@ -149,9 +149,11 @@ function isBootstrapCase(c: SweepCase): boolean {
  * Every render parses a copy of its own: vega writes onto the rows it ingests, so a second render of `vgSpec` (the
  * nondeterminism check, the fresh render of a signals case) would otherwise read the first one's answers.
  */
-async function renderOracle(vgSpec: Record<string, unknown>, writes: SweepCase['writes']): Promise<string> {
+async function renderOracle(vgSpec: Record<string, unknown>, writes: SweepCase['writes'], logged?: string[]): Promise<string> {
   const runtime = vega.parse(structuredClone(vgSpec) as never)
   const view = new (vega as any).View(runtime, { renderer: 'none' })
+  // (what the view logs as an error is kept, not printed: when the render then crashes, the case is judged by what was logged)
+  if (logged) view.logger(collectingLogger(logged))
   try {
     await settleWithin(view.runAsync(), 'the oracle (vega runAsync)')
     let svg: string = await settleWithin(view.toSVG() as Promise<string>, 'the oracle (vega toSVG)')
@@ -165,6 +167,30 @@ async function renderOracle(vgSpec: Record<string, unknown>, writes: SweepCase['
   } finally {
     view.finalize()
   }
+}
+
+/** A vega logger that keeps the messages it is given as errors, in `into`, and prints nothing. */
+function collectingLogger(into: string[]): unknown {
+  const logger = {
+    level: () => 2,
+    error: (...a: unknown[]) => { into.push(errorMessage(a)); return logger },
+    warn: () => logger,
+    info: () => logger,
+    debug: () => logger,
+  }
+  return logger
+}
+
+/** The message of what a logger was given: the first line, without the error's name (vega logs the Error, Aster the message). */
+const errorMessage = (a: readonly unknown[]): string => a.map((x) => (x as Error)?.message ?? String(x)).join(' ').split('\n')[0]!.replace(/^[A-Za-z]*Error: /, '')
+
+/**
+ * Whether the two engines refused the spec for the same reason: vega logged errors and then failed to draw (a view whose scale could
+ * not be made crashes its renderer later), and Aster logged the same errors, in the same order, and drew what it could. That is
+ * an agreement about the spec, not an oracle crash nobody can explain: the engines say the same of it.
+ */
+export function refusedForTheSameReason(oracleLogged: readonly string[], asterLogged: readonly string[]): boolean {
+  return oracleLogged.length > 0 && oracleLogged.length === asterLogged.length && oracleLogged.every((m, i) => m === asterLogged[i])
 }
 
 /** True when two oracle renders of the same spec canonicalize differently. */
@@ -235,14 +261,17 @@ async function runOneCase(c: SweepCase, nodeModules: string, serial = false): Pr
   }
   let oracleSvg: string | null = null
   let oracleErr = ''
+  const oracleLogged: string[] = []
   try {
-    oracleSvg = await renderOracle(vgSpec, c.writes)
+    oracleSvg = await renderOracle(vgSpec, c.writes, oracleLogged)
   } catch (e) {
     oracleErr = (e as Error).message
   }
 
   let ourSvg: string | null = null
   let ourErr = ''
+  const ourLogged: string[] = []
+  const logger = { error: (...a: unknown[]) => { ourLogged.push(errorMessage(a)) }, warn: () => {} }
   try {
     const loaded = await settleWithin(loadSpecData(ourVgSpec as never, TRUSTED_LOAD_OPTIONS), "Aster's data load")
     if (c.writes?.length) {
@@ -250,11 +279,11 @@ async function runOneCase(c: SweepCase, nodeModules: string, serial = false): Pr
       // signals into the running chart, draw again (an incremental session, so
       // retained state across the write is compared too).
       const session = createChartSession()
-      session.evaluate(loaded as never)
-      const input = { signals: Object.fromEntries(c.writes.map((w) => [w.name, w.value])) }
-      ourSvg = renderSceneToSvg(session.evaluate(loaded as never, input))
+      session.evaluate(loaded as never, { logger } as never)
+      const input = { signals: Object.fromEntries(c.writes.map((w) => [w.name, w.value])), logger }
+      ourSvg = renderSceneToSvg(session.evaluate(loaded as never, input as never))
     } else {
-      ourSvg = renderSpec(loaded as never)
+      ourSvg = renderSpec(loaded as never, { logger } as never)
     }
   } catch (e) {
     ourErr = (e as Error).message
@@ -266,6 +295,10 @@ async function runOneCase(c: SweepCase, nodeModules: string, serial = false): Pr
     return 'engine-error'
   }
   if (oracleErr) {
+    // vega logged an error and went on, and its renderer then crashed on what the failed step left: the case is vega's own refusal,
+    // and Aster's agreement with it is the same error logged (a scheme word the pinned vega does not know, an interval `nice` on a
+    // scale that takes none). An oracle that crashed with nothing logged, or with something Aster did not say, is a node error.
+    if (refusedForTheSameReason(oracleLogged, ourLogged)) return 'both-refused'
     console.error(`  [node-error] ${c.name}: ${oracleErr.split('\n')[0]}`)
     return 'node-error'
   }
