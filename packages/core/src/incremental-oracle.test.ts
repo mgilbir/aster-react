@@ -1,1085 +1,50 @@
 /**
- * The incremental-equivalence oracle.
+ * The incremental-equivalence oracle: for every spec and every sequence of updates, the scene the incremental or streamed path
+ * produces deep-equals `evaluateChart(compileChart(spec), input)` built from scratch at that step. The harness, the generators and
+ * the coverage counter are in incremental-oracle.testlib.ts (its header says what is compared and how); this file runs the families
+ * of scenarios over seeds and holds the sweep to its floors.
  *
- * The contract under test is a CORRECTNESS GUARANTEE, not a best-effort
- * optimisation:
+ * Every scenario family takes the pipelines in turn (seed n runs pipeline n mod the list), so any run of `PIPES.length` consecutive
+ * seeds runs every pipeline, and each family starts from seeds of its own. The floors at the end count what the scenarios that RAN
+ * contained (read off their built specs), never what a generator meant to draw: a feature that is not in them fails the test.
  *
- *   for every spec and every sequence of updates, the scene produced by the
- *   incremental/streamed path deep-equals
- *   `evaluateChart(compileChart(spec), input)` built from scratch at that step.
- *
- * The earlier fuzz compared the incremental result against the SAME mutated
- * compiled chart, so it could only ever catch bugs that survive a second
- * evaluation of the mutated state (it was structurally blind to stale caches).
- * Here the reference is always a freshly compiled chart fed the freshly built
- * input, so any stale cache, mis-keyed reuse or drifting transform state shows
- * up as a scene diff.
- *
- * Both incremental surfaces are exercised:
- *  - `evaluateChart` reuse of one compiled chart (explicit hints: `dataChanges`,
- *    `dataPulse`, `changedDatasets`, in-place array mutation, or none), and
- *  - `createChartSession` (the default `<Chart>` path): auto-diffed `evaluate`,
- *    explicit hints, `change()`, and the no-op cache.
- *
- * Determinism: everything derives from a seed (mulberry32). A failure prints the
- * seed, target, the (greedily shrunk) step list and the first differing scene
- * path. Knobs:
- *   ASTER_ORACLE_SEEDS=200        number of seeds (CI default: 40)
- *   ASTER_ORACLE_SEED=17          run exactly one seed (reproduce a failure)
+ * Knobs (a value that is not a whole number is an error, never a sweep of nothing):
+ *   ASTER_ORACLE_SEEDS=200        seeds per family (a sweep shorter than the pipeline list cannot hold the floors, and is refused)
+ *   ASTER_ORACLE_SEED=17          run exactly one seed of every family (replay a failure; the floors are not held)
  *   ASTER_ORACLE_STEPS=14         steps per seed
  *   ASTER_ORACLE_START=1000       first seed when sweeping
  */
 import { describe, it, expect } from 'vitest'
 import { compileChart } from './compiler.js'
 import { evaluateChart } from './evaluate.js'
-import { createChartSession } from './session.js'
-import { diffRows, type RowDiff } from './pulse.js'
-import { applyChangeset, newChangeset, planModify, type Changeset } from './modify.js'
 import { renderSceneToSvg } from './index.js'
-import type { CompiledChart, RuntimeInput, SceneGroup, SceneRoot } from './types.js'
-import { scopedSignalName } from './util.js'
+import type { SceneGroup, SceneRoot } from './types.js'
+import {
+  OFFSET, PIPES, applyStep, wholeNumberKnob, checkSeed, coverage, featuresOf, inputOf, pipeFor, scenario, scenarioCensus, scenarioContainer, scenarioRelational, scenarioScoped, scenarioSel, SHAPE_NAMES,
+  type Op, type World,
+} from './incremental-oracle.testlib.js'
 
-type Row = Record<string, unknown>
-type Rnd = () => number
-
-function mulberry32(seed: number): Rnd {
-  let a = seed | 0
-  return () => {
-    a = (a + 0x6d2b79f5) | 0
-    let t = Math.imul(a ^ (a >>> 15), 1 | a)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
-const pick = <T,>(r: Rnd, a: readonly T[]): T => a[Math.floor(r() * a.length)]!
-const int = (r: Rnd, lo: number, hi: number): number => lo + Math.floor(r() * (hi - lo + 1))
 const clone = <T,>(v: T): T => structuredClone(v)
-
-// ---------------------------------------------------------------------------
-// Spec generator
-// ---------------------------------------------------------------------------
-
-interface Pipe {
-  name: string
-  tr: Array<Record<string, unknown>>
-  /** Numeric field for the x channel / y channel, and a category field. */
-  xf: string
-  yf: string
-  cf?: string
-  /** The pipe reads dataset `t`, so it cannot run on `t` itself. */
-  skipSource?: boolean
-}
-
-const PIPES: Pipe[] = [
-  { name: 'none', tr: [], xf: 'x', yf: 'v', cf: 'g' },
-  { name: 'filter', tr: [{ type: 'filter', expr: 'datum.v > 4' }], xf: 'x', yf: 'v', cf: 'g' },
-  { name: 'filter-signal', tr: [{ type: 'filter', expr: 'datum.v > thr' }], xf: 'x', yf: 'v', cf: 'g' },
-  { name: 'formula', tr: [{ type: 'formula', expr: 'datum.x * 2 + sig', as: 'f' }], xf: 'f', yf: 'v', cf: 'g' },
-  { name: 'aggregate', tr: [{ type: 'aggregate', groupby: ['g'], fields: ['v', 'x'], ops: ['sum', 'max'], as: ['s', 'm'] }], xf: 'm', yf: 's', cf: 'g' },
-  { name: 'aggregate-count', tr: [{ type: 'aggregate', groupby: ['g'], fields: [null], ops: ['count'], as: ['c'] }], xf: 'c', yf: 'c', cf: 'g' },
-  { name: 'aggregate-global', tr: [{ type: 'aggregate', fields: ['v'], ops: ['mean'], as: ['mv'] }], xf: 'mv', yf: 'mv' },
-  { name: 'joinaggregate', tr: [{ type: 'joinaggregate', groupby: ['g'], fields: ['v'], ops: ['mean'], as: ['mv'] }], xf: 'x', yf: 'mv', cf: 'g' },
-  { name: 'window-sort', tr: [{ type: 'window', groupby: ['g'], sort: { field: 'v' }, ops: ['row_number', 'sum'], fields: [null, 'v'], as: ['rn', 'cs'] }], xf: 'rn', yf: 'cs', cf: 'g' },
-  { name: 'window-nosort', tr: [{ type: 'window', groupby: ['g'], ops: ['sum'], fields: ['v'], as: ['cs'] }], xf: 'x', yf: 'cs', cf: 'g' },
-  { name: 'window-global', tr: [{ type: 'window', sort: { field: 'x' }, ops: ['rank'], fields: [null], as: ['rk'] }], xf: 'x', yf: 'rk' },
-  { name: 'identifier', tr: [{ type: 'identifier', as: 'id' }], xf: 'id', yf: 'v', cf: 'g' },
-  { name: 'bin-data', tr: [{ type: 'bin', field: 'x', maxbins: 5, as: ['b0', 'b1'] }], xf: 'b0', yf: 'v', cf: 'g' },
-  { name: 'bin-extent', tr: [{ type: 'bin', field: 'x', extent: [0, 10], maxbins: 5, as: ['b0', 'b1'] }], xf: 'b0', yf: 'v', cf: 'g' },
-  { name: 'stack', tr: [{ type: 'stack', groupby: ['g'], field: 'v', sort: { field: 'x' }, as: ['y0', 'y1'] }], xf: 'x', yf: 'y1', cf: 'g' },
-  { name: 'fold', tr: [{ type: 'fold', fields: ['x', 'y'], as: ['k', 'val'] }], xf: 'val', yf: 'v', cf: 'k' },
-  { name: 'flatten', tr: [{ type: 'flatten', fields: ['arr'], as: ['e'] }], xf: 'e', yf: 'v', cf: 'g' },
-  { name: 'lookup', tr: [{ type: 'lookup', from: 'u', key: 'g', fields: ['g'], values: ['w'], as: ['w'] }], xf: 'w', yf: 'v', cf: 'g' },
-  { name: 'collect', tr: [{ type: 'collect', sort: { field: 'v' } }], xf: 'x', yf: 'v', cf: 'g' },
-  { name: 'filter>aggregate', tr: [{ type: 'filter', expr: 'datum.v > 3' }, { type: 'aggregate', groupby: ['g'], fields: ['v'], ops: ['sum'], as: ['s'] }], xf: 's', yf: 's', cf: 'g' },
-  { name: 'formula>window', tr: [{ type: 'formula', expr: 'datum.v + 1', as: 'v1' }, { type: 'window', groupby: ['g'], sort: { field: 'v1' }, ops: ['sum'], fields: ['v1'], as: ['cs'] }], xf: 'v1', yf: 'cs', cf: 'g' },
-  { name: 'filter>identifier', tr: [{ type: 'filter', expr: 'datum.x > 2' }, { type: 'identifier', as: 'id' }], xf: 'id', yf: 'v', cf: 'g' },
-  { name: 'fold>filter', tr: [{ type: 'fold', fields: ['x', 'y'], as: ['k', 'val'] }, { type: 'filter', expr: 'datum.val > 2' }], xf: 'val', yf: 'v', cf: 'k' },
-  { name: 'aggregate>filter', tr: [{ type: 'aggregate', groupby: ['g'], fields: ['v'], ops: ['sum'], as: ['s'] }, { type: 'filter', expr: 'datum.s > 5' }], xf: 's', yf: 's', cf: 'g' },
-  { name: 'lookup>formula', tr: [{ type: 'lookup', from: 'u', key: 'g', fields: ['g'], values: ['w'], as: ['w'] }, { type: 'formula', expr: 'datum.w + datum.v', as: 'wv' }], xf: 'wv', yf: 'v', cf: 'g' },
-  { name: 'bin>aggregate', tr: [{ type: 'bin', field: 'x', maxbins: 4, as: ['b0', 'b1'] }, { type: 'aggregate', groupby: ['b0'], fields: ['v'], ops: ['sum'], as: ['s'] }], xf: 'b0', yf: 's' },
-  // -- Vega-faithful transform semantics: odd values (`s` numeric strings, `n` nullable),
-  //    nested paths (`o.a`, `o.b[0]`), argmin/argmax/ci0/ci1, window ranks and frames, stack offsets, impute,
-  //    sample, identifier, project, pivot, lookup (last wins), timeunit (fixed units and data-derived).
-  { name: 'aggregate-stats', tr: [{ type: 'aggregate', groupby: ['g'], fields: ['v', 'v', 'v', 'n', 's', 'x'], ops: ['stdev', 'median', 'distinct', 'valid', 'sum', 'argmin'], as: ['sd', 'md', 'ds', 'vl', 'ss', 'am'] }], xf: 'md', yf: 'ss', cf: 'g' },
-  { name: 'aggregate-argmax-values', tr: [{ type: 'aggregate', groupby: ['g'], fields: ['n', 'v', 'x'], ops: ['argmax', 'values', 'missing'], as: ['ax', 'vs', 'ms'] }, { type: 'formula', expr: 'datum.ms + 1', as: 'ms1' }], xf: 'ms1', yf: 'ms1', cf: 'g' },
-  { name: 'aggregate-ci', tr: [{ type: 'aggregate', groupby: ['g'], fields: ['v', 'v'], ops: ['ci0', 'ci1'], as: ['c0', 'c1'] }], xf: 'c0', yf: 'c1', cf: 'g' },
-  { name: 'aggregate-ci-global', tr: [{ type: 'aggregate', fields: ['v', 'v', null], ops: ['ci0', 'ci1', 'count'], as: ['c0', 'c1', 'n'] }], xf: 'c0', yf: 'c1' },
-  { name: 'aggregate-cross', tr: [{ type: 'aggregate', groupby: ['g', 'x'], cross: true, fields: ['v'], ops: ['sum'], as: ['s'] }], xf: 'x', yf: 's', cf: 'g' },
-  { name: 'aggregate-nested', tr: [{ type: 'aggregate', groupby: ['o.a'], fields: ['o.b[0]'], ops: ['sum'], as: ['sb'] }, { type: 'formula', expr: 'datum["o.a"]', as: 'k' }], xf: 'k', yf: 'sb' },
-  { name: 'aggregate-strings', tr: [{ type: 'aggregate', groupby: ['g'], fields: ['s', 's', 's'], ops: ['sum', 'min', 'max'], as: ['ss', 'lo', 'hi'] }, { type: 'formula', expr: 'toNumber(datum.lo)', as: 'lon' }], xf: 'lon', yf: 'ss', cf: 'g' },
-  { name: 'joinaggregate-ci', tr: [{ type: 'joinaggregate', groupby: ['g'], fields: ['v'], ops: ['ci1'], as: ['hi'] }], xf: 'x', yf: 'hi', cf: 'g' },
-  { name: 'joinaggregate-key', tr: [{ type: 'joinaggregate', groupby: ['g'], key: 'x', fields: ['v'], ops: ['sum'], as: ['sv'] }], xf: 'x', yf: 'sv', cf: 'g' },
-  { name: 'joinaggregate-odd', tr: [{ type: 'joinaggregate', groupby: ['g'], fields: ['n', 's', 'n'], ops: ['mean', 'max', 'valid'], as: ['mn', 'mx', 'vd'] }, { type: 'formula', expr: 'toNumber(datum.mx)', as: 'mxn' }], xf: 'mxn', yf: 'mn', cf: 'g' },
-  { name: 'window-ranks', tr: [{ type: 'window', sort: { field: 'v' }, groupby: ['g'], ops: ['rank', 'dense_rank', 'percent_rank', 'cume_dist', 'ntile', 'lag', 'lead', 'first_value'], fields: [null, null, null, null, null, 'v', 'v', 'v'], params: [null, null, null, null, 2, 1, 1, null], as: ['rk', 'dr', 'pr', 'cd', 'nt', 'lg', 'ld', 'fv'] }], xf: 'rk', yf: 'cd', cf: 'g' },
-  { name: 'window-frame', tr: [{ type: 'window', sort: { field: 'x' }, ops: ['mean', 'min', 'max', 'median'], fields: ['v', 'v', 'v', 'v'], frame: [-1, 1], as: ['m', 'lo', 'hi', 'md'] }], xf: 'lo', yf: 'hi' },
-  { name: 'window-null-sort', tr: [{ type: 'window', sort: { field: 'n', order: 'descending' }, ops: ['row_number', 'sum'], fields: [null, 'n'], as: ['rn', 'cs'] }], xf: 'rn', yf: 'cs' },
-  { name: 'window-ci', tr: [{ type: 'window', groupby: ['g'], sort: { field: 'x' }, ops: ['ci0'], fields: ['v'], as: ['c0'] }], xf: 'x', yf: 'c0', cf: 'g' },
-  { name: 'stack-center', tr: [{ type: 'stack', groupby: ['g'], field: 'v', offset: 'center', sort: { field: 'x' }, as: ['y0', 'y1'] }], xf: 'x', yf: 'y1', cf: 'g' },
-  { name: 'stack-normalize', tr: [{ type: 'stack', groupby: ['x'], field: 'n', offset: 'normalize', as: ['y0', 'y1'] }], xf: 'x', yf: 'y1', cf: 'g' },
-  { name: 'stack-zero-sort-desc', tr: [{ type: 'stack', groupby: ['x'], field: 'v', sort: { field: 'g', order: 'descending' }, as: ['y0', 'y1'] }], xf: 'x', yf: 'y1', cf: 'g' },
-  { name: 'impute-mean', tr: [{ type: 'impute', field: 'v', key: 'x', groupby: ['g'], keyvals: [0, 1, 2, 3, 4, 5], method: 'mean' }], xf: 'x', yf: 'v', cf: 'g' },
-  { name: 'impute-value', tr: [{ type: 'impute', field: 'n', key: 'x', keyvals: [0, 5, 10], value: 7 }], xf: 'x', yf: 'n' },
-  { name: 'sample', tr: [{ type: 'sample', size: 4 }], xf: 'x', yf: 'v', cf: 'g' },
-  { name: 'identifier-falsy', tr: [{ type: 'identifier', as: 'x' }], xf: 'x', yf: 'v', cf: 'g' },
-  { name: 'project', tr: [{ type: 'project', fields: ['x', 'v', 'g'], as: ['px', 'pv', 'pg'] }], xf: 'px', yf: 'pv', cf: 'pg' },
-  { name: 'project-all', tr: [{ type: 'project' }], xf: 'x', yf: 'v', cf: 'g' },
-  { name: 'pivot', tr: [{ type: 'pivot', field: 'g', value: 'v', groupby: ['x'], op: 'sum' }], xf: 'x', yf: 'x' },
-  { name: 'lookup-self-last-wins', tr: [{ type: 'lookup', from: 't', key: 'x', fields: ['x'], values: ['v', 'g'], as: ['lv', 'lg'], default: -1 }], xf: 'x', yf: 'lv', cf: 'lg', skipSource: true },
-  { name: 'lookup-row', tr: [{ type: 'lookup', from: 'u', key: 'g', fields: ['g'], as: ['urow'], default: null }, { type: 'formula', expr: 'datum.urow ? datum.urow.w : -1', as: 'w' }], xf: 'w', yf: 'v', cf: 'g' },
-  { name: 'timeunit-units', tr: [{ type: 'formula', expr: 'datetime(2020, datum.x, 1 + datum.y, datum.v)', as: 'dt' }, { type: 'timeunit', field: 'dt', units: ['month', 'date'], as: ['u0', 'u1'] }, { type: 'formula', expr: 'datum.u1 - datum.u0', as: 'ux' }], xf: 'ux', yf: 'v', cf: 'g' },
-  { name: 'timeunit-utc-year-month', tr: [{ type: 'formula', expr: 'datetime(2000 + datum.x * 3, datum.y, 15)', as: 'dt' }, { type: 'timeunit', field: 'dt', units: ['year', 'month'], timezone: 'utc', as: ['u0', 'u1'] }, { type: 'formula', expr: 'datum.u1 - datum.u0', as: 'ux' }], xf: 'ux', yf: 'v' },
-  { name: 'timeunit-data-derived', tr: [{ type: 'formula', expr: 'datetime(2020, datum.x, 1 + datum.y)', as: 'dt' }, { type: 'timeunit', field: 'dt', maxbins: 6, as: ['u0', 'u1'] }, { type: 'formula', expr: 'datum.u1 - datum.u0', as: 'ux' }], xf: 'ux', yf: 'v', cf: 'g' },
-  { name: 'bin-strings', tr: [{ type: 'bin', field: 's', extent: [0, 20], maxbins: 5, as: ['b0', 'b1'] }], xf: 'b0', yf: 'v', cf: 'g' },
-  { name: 'collect-null-sort', tr: [{ type: 'collect', sort: { field: ['n', 'v'], order: ['descending', 'ascending'] } }], xf: 'x', yf: 'v', cf: 'g' },
-  { name: 'fold-flatten-nested', tr: [{ type: 'flatten', fields: ['o.b'], as: ['bv'] }], xf: 'x', yf: 'bv', cf: 'g' },
-]
-
-export interface GenSpec {
-  spec: Record<string, unknown>
-  /** Human-readable summary of the generated features (printed on failure). */
-  label: string
-  /** Inline `values` in the spec (true) or only via `input.data` (false). */
-  inlineValues: boolean
-  /** A selection store dataset `sel` the scenario edits (see `scenarioSel`): field tuples, or `_vgsid_` ids. */
-  store?: 'fields' | 'ids'
-  /** The scope ids of the two group scopes `scenarioScoped` adds (outer, and the one nested in it). */
-  scoped?: { outer: string; inner: string }
-}
-
-function genSpec(r: Rnd): GenSpec {
-  const pipe = pick(r, PIPES)
-  const onSource = pipe.tr.length > 0 && !pipe.skipSource && r() < 0.35
-  const ds = onSource ? 't' : pipe.tr.length ? 'd' : 't'
-  const inlineValues = r() < 0.5
-  const features: string[] = [`pipe=${pipe.name}${onSource ? '@source' : ''}`]
-
-  const data: Array<Record<string, unknown>> = []
-  const t: Record<string, unknown> = { name: 't' }
-  if (inlineValues) t.values = []
-  if (onSource) t.transform = clone(pipe.tr)
-  const u: Record<string, unknown> = { name: 'u' }
-  if (inlineValues) u.values = []
-  // (a lookup reads a data set declared before it, as vega requires: a pipeline on `t` that looks `u` up follows it)
-  if (onSource && JSON.stringify(pipe.tr).includes('"from":"u"')) data.push(u, t)
-  else data.push(t, u)
-  if (!onSource && pipe.tr.length) data.push({ name: 'd', source: 't', transform: clone(pipe.tr) })
-
-  // Scales ---------------------------------------------------------------
-  const xdomKind = pick(r, ['data', 'data', 'fixed', 'multi', 'signal'] as const)
-  const ydomKind = pick(r, ['data', 'data', 'fixed', 'multi'] as const)
-  const dom = (kind: string, field: string, fixed: number[], other: { data: string; field: string }): unknown =>
-    kind === 'data' ? { data: ds, field }
-      : kind === 'fixed' ? fixed
-        : kind === 'signal' ? { signal: 'lim' }
-          : { fields: [{ data: ds, field }, other] }
-  features.push(`xdom=${xdomKind}`, `ydom=${ydomKind}`)
-  const nice = r() < 0.4
-  const scales: Array<Record<string, unknown>> = [
-    { name: 'x', type: 'linear', domain: dom(xdomKind, pipe.xf, [0, 30], { data: 't', field: 'x' }), range: r() < 0.25 ? { signal: 'rng' } : 'width', nice },
-    { name: 'y', type: 'linear', domain: dom(ydomKind, pipe.yf, [0, 40], { data: 't', field: 'v' }), range: 'height', zero: r() < 0.6, nice: r() < 0.4 },
-  ]
-  if (pipe.cf) {
-    scales.push({ name: 'bx', type: r() < 0.7 ? 'band' : 'point', domain: { data: ds, field: pipe.cf }, range: 'width', padding: 0.1 })
-    scales.push({ name: 'color', type: 'ordinal', domain: { data: ds, field: pipe.cf, sort: r() < 0.5 }, range: 'category' })
-  }
-
-  // Marks ----------------------------------------------------------------
-  const xy = (_dataset: string, xf: string, yf: string, extra: Record<string, unknown> = {}): Record<string, unknown> =>
-    ({ x: { scale: 'x', field: xf }, y: { scale: 'y', field: yf }, ...extra })
-  const fillFor = pipe.cf ? { fill: { scale: 'color', field: pipe.cf } } : { fill: { value: '#4c78a8' } }
-  // Marks whose encode reads a signal directly (not only through a scale).
-  const sigSize = r() < 0.4
-  const sym = (dataset: string): Record<string, unknown> => ({
-    type: 'symbol', from: { data: dataset },
-    encode: { update: { ...xy(dataset, pipe.xf, pipe.yf), size: sigSize ? { signal: '10 + sig * 5' } : { value: 30 }, ...fillFor } },
-  })
-  const txt = (dataset: string): Record<string, unknown> => ({
-    type: 'text', from: { data: dataset },
-    encode: { update: { ...xy(dataset, pipe.xf, pipe.yf), text: { field: pipe.yf }, dy: { value: -4 }, fontSize: { value: 9 } } },
-  })
-  const line = (dataset: string, sortField?: string): Record<string, unknown> => ({
-    type: 'line', from: { data: dataset },
-    ...(sortField ? { sort: { field: sortField } } : {}),
-    encode: { update: { ...xy(dataset, pipe.xf, pipe.yf), stroke: { value: '#333' } } },
-  })
-  const rect = (dataset: string): Record<string, unknown> => ({
-    type: 'rect', from: { data: dataset },
-    encode: { update: { x: { scale: 'bx', field: pipe.cf }, width: { scale: 'bx', band: 1 }, y: { scale: 'y', field: pipe.yf }, y2: { scale: 'y', value: 0 }, ...fillFor } },
-  })
-
-  const marks: Array<Record<string, unknown>> = []
-  const layered = r() < 0.55
-  const primary = pick(r, pipe.cf ? ['symbol', 'symbol', 'rect', 'line'] : ['symbol', 'symbol', 'line'])
-  features.push(`primary=${primary}`)
-  if (primary === 'symbol') marks.push(sym(ds))
-  else if (primary === 'rect') marks.push(rect(ds))
-  else marks.push(line(ds, r() < 0.5 ? pipe.xf : undefined))
-  if (layered) {
-    // Layered marks over ONE shared dataset (symbol + text), the classic
-    // labels-over-points chart.
-    marks.push(txt(ds))
-    features.push('layered(text)')
-    if (r() < 0.4) { marks.push(sym(ds)); features.push('layered(sym2)') }
-  }
-  const nested = pick(r, ['none', 'none', 'group', 'facet', 'scoped', 'other', 'umark'] as const)
-  features.push(`nested=${nested}`)
-  if (nested === 'group') {
-    marks.push({ type: 'group', marks: [sym(ds), txt(ds)] })
-  } else if (nested === 'facet' && pipe.cf) {
-    marks.push({
-      type: 'group',
-      from: { facet: { name: 'fc', data: ds, groupby: [pipe.cf] } },
-      marks: [{ ...line('fc'), from: { data: 'fc' } }, { ...sym('fc'), from: { data: 'fc' } }],
-    })
-  } else if (nested === 'scoped') {
-    marks.push({
-      type: 'group',
-      encode: { update: { width: { value: 120 }, height: { value: 80 } } },
-      scales: [{ name: 'sx', type: 'linear', domain: [0, 10], range: 'width' }],
-      axes: [{ scale: 'sx', orient: 'bottom' }],
-      marks: [sym(ds)],
-    })
-  } else if (nested === 'umark') {
-    // A mark over an UNRELATED dataset positioned by a scale whose domain spans
-    // the changed data: the whole group must not be reused with stale positions.
-    marks.push({
-      type: 'symbol', from: { data: 'u' },
-      encode: { update: { x: { scale: 'x', field: 'w' }, y: { scale: 'y', field: 'w' }, size: { value: 12 }, fill: { value: '#54a24b' } } },
-    })
-  } else if (nested === 'other') {
-    // A mark over a DIFFERENT dataset sharing the same scales.
-    marks.push({
-      type: 'symbol', from: { data: 't' },
-      encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'v' }, size: { value: 14 }, fill: { value: '#e45756' } } },
-    })
-  }
-
-  const axes: Array<Record<string, unknown>> = [
-    { scale: 'x', orient: 'bottom', grid: r() < 0.3 },
-    { scale: 'y', orient: 'left' },
-  ]
-  const legends: Array<Record<string, unknown>> = pipe.cf && r() < 0.35 ? [{ fill: 'color' }] : []
-  if (legends.length) features.push('legend')
-
-  const autosize = pick(r, ['none', 'pad', 'pad', 'fit'] as const)
-  features.push(`autosize=${autosize}`)
-  const spec: Record<string, unknown> = {
-    $schema: 'https://vega.github.io/schema/vega/v6.json',
-    width: pick(r, [200, 260, 320]), height: pick(r, [160, 200, 240]), padding: 5, autosize,
-    signals: [
-      { name: 'sig', value: 3 },
-      { name: 'thr', update: 'sig + 1' },
-      { name: 'rng', update: '[0, width]' },
-      { name: 'lim', update: '[0, 10 + sig]' },
-    ],
-    data, scales, axes, legends, marks,
-  }
-  if (r() < 0.2) {
-    spec.title = { text: 'oracle' }
-    features.push('title')
-  }
-  return { spec, label: features.join(' '), inlineValues }
-}
-
-// ---------------------------------------------------------------------------
-// World + steps
-// ---------------------------------------------------------------------------
-
-interface World { t: Row[]; u: Row[]; sel: Row[]; /** the store holds `_vgsid_` ids (else field tuples) */ selIds?: boolean; /** the values the events wrote to the signals of the two group scopes (see `scenarioScoped`) */ scoped?: { outer: number; inner: number }; sig: number; width: number | undefined; height: number | undefined
-  /** The host's container element size (`containerSize`, see `scenarioContainer`). */
-  container?: { width: number; height: number } | undefined
-  /** The container a <Chart> without size props measured (`measuredSize`). */
-  measured?: { width: number; height: number } | undefined
-  /** The `width` / `height` signal values a `window:resize` handler wrote through the event loop (see `scenarioContainer`). */
-  sizeSig?: { width?: number; height?: number } | undefined
-}
-
-const GROUPS = ['A', 'B', 'C', 'D'] as const
-
-function genRow(r: Rnd): Row {
-  const n = pick(r, [2, 2, 2, 1, 3])
-  return {
-    ...oddFields(int(r, 0, 10), int(r, 0, 20)),
-    y: int(r, 0, 10), g: pick(r, GROUPS),
-    arr: Array.from({ length: n }, () => int(r, 0, 10)),
-  }
-}
-
-/** x, v plus the fields the new pipes read: a nested copy `o`, a numeric string `s` and a nullable number `n`. */
-function oddFields(x: number, v: number): Row {
-  return { x, v, o: { a: x, b: [v] }, s: String(v), n: v % 5 === 0 ? null : v }
-}
-
-function genWorld(r: Rnd): World {
-  const n = int(r, 3, 9)
-  const keys = [...GROUPS].filter(() => r() < 0.85)
-  return {
-    t: Array.from({ length: n }, () => genRow(r)),
-    u: keys.map((g) => ({ g, w: int(r, 1, 12) })),
-    sel: [], sig: 3, width: undefined, height: undefined,
-  }
-}
-
-type Op = 'edit' | 'grow' | 'shrink' | 'insert' | 'remove' | 'append' | 'truncate' | 'swap' | 'shuffle'
-  | 'replaceAll' | 'editU' | 'signal' | 'size' | 'noop' | 'edit-group' | 'store' | 'scoped' | 'resize'
-  // the domain-census ops: values below the current minimum, the minimum row leaving the extreme, the extreme row removed, a new category
-  | 'low' | 'dropMin' | 'removeExt' | 'newGroup' | 'swapCat'
-type Delivery = 'none' | 'changedDatasets' | 'dataChanges' | 'dataPulse' | 'inplace'
-type Via = 'evaluate' | 'change'
-
-interface Step { op: Op; delivery: Delivery; via: Via; r: number[] }
-
-const OPS: Op[] = ['edit', 'edit', 'grow', 'shrink', 'shrink', 'insert', 'remove', 'append', 'append', 'truncate',
-  'swap', 'shuffle', 'replaceAll', 'editU', 'signal', 'size', 'noop', 'edit-group', 'low', 'low', 'dropMin', 'dropMin', 'removeExt', 'removeExt', 'newGroup']
-
-function genStep(r: Rnd): Step {
-  return {
-    op: pick(r, OPS),
-    delivery: pick(r, ['none', 'changedDatasets', 'dataChanges', 'dataPulse', 'dataPulse', 'inplace'] as const),
-    via: r() < 0.2 ? 'change' : 'evaluate',
-    r: Array.from({ length: 8 }, () => r()),
-  }
-}
-
-const ix = (x: number, n: number): number => (n <= 0 ? 0 : Math.min(n - 1, Math.floor(x * n)))
-
-/** Apply a step to a world, purely (new arrays, new row objects for changed rows). */
-export function applyStep(w: World, s: Step): World {
-  const next: World = { ...w, t: w.t.slice(), u: w.u.slice(), sel: w.sel.slice() }
-  const t = next.t
-  const maxV = t.reduce((m, row) => Math.max(m, Number(row.v)), 0)
-  const maxX = t.reduce((m, row) => Math.max(m, Number(row.x)), 0)
-  const rowAt = (k: number): Row => ({
-    ...oddFields(Math.floor(s.r[(k + 2) % 8]! * 11), Math.floor(s.r[(k + 4) % 8]! * 21)), y: Math.floor(s.r[(k + 3) % 8]! * 11),
-    g: GROUPS[Math.floor(s.r[(k + 5) % 8]! * 4)]!, arr: Array.from({ length: 1 + Math.floor(s.r[(k + 6) % 8]! * 3) }, (_, i) => (i * 3 + k) % 11),
-  })
-  switch (s.op) {
-    case 'edit': {
-      const k = 1 + Math.floor(s.r[0]! * 3)
-      for (let j = 0; j < k && t.length; j++) {
-        const i = ix(s.r[(j + 1) % 8]!, t.length)
-        t[i] = { ...t[i]!, ...rowAt(j), g: s.r[7]! < 0.5 ? t[i]!.g : rowAt(j).g }
-      }
-      break
-    }
-    case 'grow': {
-      if (t.length) {
-        const i = ix(s.r[0]!, t.length)
-        t[i] = { ...t[i]!, v: maxV + 1 + Math.floor(s.r[1]! * 6), x: maxX + 1 + Math.floor(s.r[2]! * 4) }
-      }
-      break
-    }
-    case 'shrink': {
-      // Move rows that hold the extreme values back into the interior: the
-      // domain census must shrink with them.
-      const hi = t.reduce((best, row, i) => (Number(row.v) >= Number(t[best]!.v) ? i : best), 0)
-      const lo = t.reduce((best, row, i) => (Number(row.x) <= Number(t[best]!.x) ? i : best), 0)
-      if (t.length) {
-        t[hi] = { ...t[hi]!, v: Math.floor(s.r[0]! * 4), x: Math.floor(s.r[1]! * 4) }
-        if (s.r[2]! < 0.5) t[lo] = { ...t[lo]!, x: 5 + Math.floor(s.r[3]! * 5) }
-      }
-      break
-    }
-    case 'insert': {
-      const k = 1 + Math.floor(s.r[0]! * 3)
-      const at = Math.floor(s.r[1]! * (t.length + 1))
-      t.splice(at, 0, ...Array.from({ length: k }, (_, j) => rowAt(j)))
-      break
-    }
-    case 'remove': {
-      const k = Math.min(t.length - 1, 1 + Math.floor(s.r[0]! * 2))
-      for (let j = 0; j < k; j++) t.splice(ix(s.r[(j + 1) % 8]!, t.length), 1)
-      break
-    }
-    case 'append': {
-      const k = 1 + Math.floor(s.r[0]! * 3)
-      for (let j = 0; j < k; j++) t.push(rowAt(j))
-      break
-    }
-    case 'truncate': {
-      const k = Math.min(t.length - 1, 1 + Math.floor(s.r[0]! * 2))
-      t.length = t.length - Math.max(0, k)
-      break
-    }
-    case 'swap': {
-      if (t.length > 1) {
-        const a = ix(s.r[0]!, t.length), b = ix(s.r[1]!, t.length)
-        const tmp = t[a]!; t[a] = t[b]!; t[b] = tmp
-      }
-      break
-    }
-    case 'shuffle': {
-      for (let i = t.length - 1; i > 0; i--) {
-        const j = Math.floor(s.r[i % 8]! * (i + 1))
-        const tmp = t[i]!; t[i] = t[j]!; t[j] = tmp
-      }
-      break
-    }
-    case 'replaceAll': {
-      const n = 2 + Math.floor(s.r[0]! * 8)
-      t.length = 0
-      for (let j = 0; j < n; j++) t.push(rowAt(j + Math.floor(s.r[1]! * 5)))
-      break
-    }
-    case 'edit-group': {
-      // Move one row to another group: membership change for grouped transforms.
-      if (t.length) {
-        const i = ix(s.r[0]!, t.length)
-        t[i] = { ...t[i]!, g: GROUPS[Math.floor(s.r[1]! * 4)]! }
-      }
-      break
-    }
-    case 'editU': {
-      const u = next.u
-      if (u.length) {
-        const i = ix(s.r[0]!, u.length)
-        if (s.r[1]! < 0.3 && u.length > 1) u.splice(i, 1)
-        else u[i] = { ...u[i]!, w: 1 + Math.floor(s.r[2]! * 12) }
-      }
-      if (s.r[3]! < 0.3) {
-        const g = GROUPS[Math.floor(s.r[4]! * 4)]!
-        if (!u.some((row) => row.g === g)) u.push({ g, w: 1 + Math.floor(s.r[5]! * 12) })
-      }
-      break
-    }
-    case 'signal': {
-      next.sig = Math.floor(s.r[0]! * 9)
-      // Often together with a data edit: reuse must notice the signal anyway.
-      if (s.r[7]! < 0.6 && t.length) { const i = ix(s.r[6]!, t.length); t[i] = { ...t[i]!, ...rowAt(1), g: t[i]!.g } }
-      break
-    }
-    case 'size': {
-      next.width = s.r[0]! < 0.2 ? undefined : 150 + Math.floor(s.r[0]! * 200)
-      next.height = s.r[1]! < 0.2 ? undefined : 120 + Math.floor(s.r[1]! * 160)
-      if (s.r[7]! < 0.6 && t.length) { const i = ix(s.r[6]!, t.length); t[i] = { ...t[i]!, ...rowAt(2), g: t[i]!.g } }
-      break
-    }
-    case 'resize': {
-      // The viewport was resized: the host's container changes size, the spec's `window:resize` handlers write the
-      // `width` / `height` signals (to the container, or to their 300 fallback when the container has no size), and the
-      // host may also fix or release the view size itself. Often together with a data edit.
-      const known = s.r[0]! < 0.7
-      next.container = known ? { width: 200 + Math.floor(s.r[1]! * 400), height: 150 + Math.floor(s.r[2]! * 250) } : undefined
-      next.measured = next.container && s.r[6]! < 0.6 ? { ...next.container } : undefined
-      next.sizeSig = s.r[3]! < 0.15 ? undefined : { width: next.container?.width ?? 300, height: next.container?.height ?? 300 }
-      if (s.r[4]! < 0.3) { next.width = 150 + Math.floor(s.r[5]! * 200); next.height = s.r[3]! < 0.5 ? undefined : 120 + Math.floor(s.r[2]! * 160) }
-      else if (s.r[4]! < 0.45) { next.width = undefined; next.height = undefined }
-      if (s.r[7]! < 0.6 && t.length) { const i = ix(s.r[6]!, t.length); t[i] = { ...t[i]!, ...rowAt(4), g: t[i]!.g } }
-      break
-    }
-    case 'scoped': {
-      // an event wrote the signals of the group scopes; often together with a data edit (reuse must notice the signal anyway)
-      next.scoped = { outer: Math.floor(s.r[0]! * 7), inner: Math.floor(s.r[1]! * 7) }
-      if (s.r[7]! < 0.5 && t.length) { const i = ix(s.r[6]!, t.length); t[i] = { ...t[i]!, ...rowAt(3), g: t[i]!.g } }
-      break
-    }
-    case 'store': {
-      // A `modify(sel, ...)` as vega-lite's selections issue it: replace with one tuple, add one (a shift-click),
-      // toggle one, replace within a unit, or clear. The edit is the dataflow's own (modify.ts).
-      const mode = Math.floor(s.r[0]! * 6)
-      const ids = w.selIds === true
-      const tuple = (k: number): Row => (ids
-        ? { unit: s.r[(k + 5) % 8]! < 0.3 ? 'u2' : '', _vgsid_: 1 + Math.floor(s.r[(k + 1) % 8]! * 9) }
-        : s.r[(k + 2) % 8]! < 0.5
-          ? { unit: '', fields: [{ field: 'g', type: 'E' }], values: [GROUPS[Math.floor(s.r[(k + 3) % 8]! * 4)]!] }
-          : { unit: '', fields: [{ field: 'x', type: 'R' }], values: [[Math.floor(s.r[(k + 3) % 8]! * 6), 5 + Math.floor(s.r[(k + 4) % 8]! * 8)]] })
-      let cs: Changeset | null = null
-      const changes = (): Changeset => (cs ??= newChangeset())
-      const rows = next.sel
-      const mod = (insert: unknown, remove: unknown, toggle: unknown): void => { planModify(rows, changes, insert, remove, toggle, null, null) }
-      if (mode === 0) mod(tuple(0), true, null)
-      else if (mode === 1) mod(tuple(1), null, null)
-      else if (mode === 2) mod(null, null, tuple(2))
-      else if (mode === 3 && rows.length) mod(null, null, { ...rows[Math.floor(s.r[1]! * rows.length)]! })
-      else if (mode === 4) mod(tuple(3), { unit: 'u2' }, null)
-      else mod(null, true, null)
-      next.sel = cs ? (applyChangeset(rows, cs) as Row[]) : rows
-      break
-    }
-    case 'low': {
-      // A value BELOW the current minimum (the census must widen at the low end too), by an edit or by an append.
-      const minV = t.reduce((m, row) => Math.min(m, Number(row.v)), Infinity)
-      const minX = t.reduce((m, row) => Math.min(m, Number(row.x)), Infinity)
-      const low = (): Row => ({ ...rowAt(0), ...oddFields(minX - 1 - Math.floor(s.r[1]! * 4), minV - 1 - Math.floor(s.r[2]! * 5)) })
-      if (t.length && s.r[3]! < 0.5) { const i = ix(s.r[4]!, t.length); t[i] = { ...t[i]!, ...low(), g: t[i]!.g } } else t.push(low())
-      break
-    }
-    case 'dropMin': {
-      // The row(s) holding the minimum x / v move up into the interior (or stay tied for it when a second row holds it).
-      if (t.length) {
-        const lo = (f: 'x' | 'v'): number => t.reduce((best, row, i) => (Number(row[f]) < Number(t[best]![f]) ? i : best), 0)
-        const a = lo('x'), b = lo('v')
-        t[a] = { ...t[a]!, ...oddFields(5 + Math.floor(s.r[0]! * 5), Number(t[a]!.v)), g: t[a]!.g }
-        if (s.r[1]! < 0.7) t[b] = { ...t[b]!, ...oddFields(Number(t[b]!.x), 8 + Math.floor(s.r[2]! * 8)), g: t[b]!.g }
-        if (s.r[3]! < 0.3 && t.length > 2) { const c = ix(s.r[4]!, t.length); t[c] = { ...t[c]!, ...oddFields(Number(t[a]!.x), Number(t[b]!.v)), g: t[c]!.g } }
-      }
-      break
-    }
-    case 'removeExt': {
-      // Remove the row holding the maximum v, or the minimum x (so its category may vanish with it).
-      if (t.length > 1) {
-        const i = s.r[0]! < 0.5
-          ? t.reduce((best, row, j) => (Number(row.v) > Number(t[best]!.v) ? j : best), 0)
-          : t.reduce((best, row, j) => (Number(row.x) < Number(t[best]!.x) ? j : best), 0)
-        t.splice(i, 1)
-      }
-      break
-    }
-    case 'swapCat': {
-      // A row takes the category of another row: the same-length swap the ordered domain survives only while the old value keeps
-      // another row and its own first occurrence, and the new one already stands earlier than the row.
-      if (t.length > 1) {
-        const i = ix(s.r[0]!, t.length), j = s.r[5]! < 0.5 ? ix(s.r[1]!, i) : (i + 1 + ix(s.r[1]!, t.length - i - 1)) % t.length
-        t[i] = { ...t[i]!, g: t[j]!.g }
-        if (s.r[2]! < 0.4) { const k = ix(s.r[3]!, t.length); t[k] = { ...t[k]!, g: GROUPS[Math.floor(s.r[4]! * 4)]! } }
-      }
-      break
-    }
-    case 'newGroup': {
-      // A category no row had yet (the discrete census must grow), sometimes replacing the only row of its group.
-      const g = `N${Math.floor(s.r[0]! * 3)}`
-      if (t.length && s.r[1]! < 0.5) { const i = ix(s.r[2]!, t.length); t[i] = { ...t[i]!, g } } else t.push({ ...rowAt(1), g })
-      break
-    }
-    case 'noop': break
-  }
-  return next
-}
-
-// ---------------------------------------------------------------------------
-// Scene normalisation + comparison
-// ---------------------------------------------------------------------------
-
-// Non-serialised internals and run-dependent bookkeeping. `__scales` (the
-// resolved-scale snapshot) is deliberately KEPT: a stale scale must show up.
-const SKIP_KEYS = new Set(['runtime', 'compiled', '__scaleMap', '__gen', '__itemGen', '__domDesc', '__source'])
-
-function norm(v: unknown, depth = 0): unknown {
-  if (depth > 40) return '[deep]'
-  if (v === undefined) return undefined
-  if (v === null || typeof v === 'string' || typeof v === 'boolean') return v
-  if (typeof v === 'number') return Number.isNaN(v) ? '[NaN]' : v === Infinity ? '[Inf]' : v === -Infinity ? '[-Inf]' : v
-  if (typeof v === 'function') return '[fn]'
-  if (v instanceof Date) return { $date: v.getTime() }
-  if (v instanceof Map || v instanceof Set) return '[collection]'
-  if (Array.isArray(v)) return v.map((x) => { const n = norm(x, depth + 1); return n === undefined ? null : n })
-  const out: Record<string, unknown> = {}
-  for (const k of Object.keys(v as object).sort()) {
-    if (SKIP_KEYS.has(k)) continue
-    const n = norm((v as Record<string, unknown>)[k], depth + 1)
-    if (n !== undefined) out[k] = n
-  }
-  return out
-}
-
-function firstDiff(a: unknown, b: unknown, path = '$'): string | null {
-  if (Object.is(a, b)) return null
-  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') {
-    return `${path}: expected ${JSON.stringify(a)?.slice(0, 120)} got ${JSON.stringify(b)?.slice(0, 120)}`
-  }
-  if (Array.isArray(a) !== Array.isArray(b)) return `${path}: array/object mismatch`
-  if (Array.isArray(a) && Array.isArray(b)) {
-    if (a.length !== b.length) return `${path}: length expected ${a.length} got ${b.length}`
-    for (let i = 0; i < a.length; i++) { const d = firstDiff(a[i], b[i], `${path}[${i}]`); if (d) return d }
-    return null
-  }
-  const ak = Object.keys(a as object), bk = Object.keys(b as object)
-  for (const k of new Set([...ak, ...bk])) {
-    const d = firstDiff((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k], `${path}.${k}`)
-    if (d) return d
-  }
-  return null
-}
-
-function sceneKey(scene: SceneRoot): { norm: unknown; svg: string } {
-  return { norm: norm(scene), svg: renderSceneToSvg(scene) }
-}
-
-// ---------------------------------------------------------------------------
-// Harness
-// ---------------------------------------------------------------------------
-
-/** The signals the host stores for the group scopes of a scenario: what the event loop writes as `<scope id>:<name>`. */
-function scopedSignals(g: GenSpec, w: World): Record<string, unknown> {
-  if (!g.scoped || !w.scoped) return {}
-  return { [scopedSignalName(g.scoped.outer, 'gs')]: w.scoped.outer, [scopedSignalName(g.scoped.inner, 'gs')]: w.scoped.inner }
-}
-
-/** What the host adds for the view size: the container it measured, and the size signals the event loop wrote. */
-function sizeInputs(w: World, input: RuntimeInput): void {
-  if (w.container) input.containerSize = w.container
-  if (w.measured) input.measuredSize = w.measured
-  if (w.sizeSig) Object.assign(input.signals!, w.sizeSig)
-}
-
-export function inputOf(g: GenSpec, w: World): RuntimeInput {
-  const input: RuntimeInput = { signals: { sig: w.sig, ...scopedSignals(g, w) } }
-  if (w.width != null) input.width = w.width
-  if (w.height != null) input.height = w.height
-  sizeInputs(w, input)
-  input.data = { t: clone(w.t), u: clone(w.u), ...(g.store ? { sel: clone(w.sel) } : {}) }
-  return input
-}
-
-/**
- * The fresh reference of a state. A spec with an `identifier` is the one thing whose result depends on how the view got there
- * (vega's id counter is the view's, and a row keeps its id as the data changes), so its reference is a chart of its own that is
- * evaluated through the same states, each time from scratch with no hint of what changed but one: rows changed where they stood
- * (`modified`) are the same rows in a new state, which keeps their ids, while a row that moved is a row that moved. `kept` is that chart.
- */
-function reference(g: GenSpec, w: World, kept?: CompiledChart, modified?: Record<string, number[]>): SceneRoot | Error {
-  try {
-    const spec = clone(g.spec)
-    // The reference sees the SAME visible state: data via input.data, always. A view size the host fixed IS the size:
-    // the `width` / `height` signals a `window:resize` handler wrote do not move it, so the reference never sees them.
-    const sizeSig = w.sizeSig && { ...(w.width == null ? { width: w.sizeSig.width } : {}), ...(w.height == null ? { height: w.sizeSig.height } : {}) }
-    return evaluateChart(kept ?? compileChart(spec as never), { ...inputOf(g, { ...w, sizeSig }), ...(modified ? { dataChanges: modified } : {}) })
-  } catch (e) {
-    return e as Error
-  }
-}
-
-function toDataPulse(d: RowDiff): NonNullable<RuntimeInput['dataPulse']>[string] {
-  return {
-    changed: d.changed,
-    ...(d.from ? { from: d.from } : {}),
-    ...(d.to ? { to: d.to } : {}),
-    ...(d.addedRanges ? { added: d.addedRanges } : {}),
-    ...(d.removedRanges ? { removed: d.removedRanges } : {}),
-    ...(d.appendOnly ? { appendOnly: true, baseLength: d.baseLength } : {}),
-  }
-}
-
-/** The rows a step's hints say changed where they stood (and nothing else about them). */
-function modifiedBy(hints: Partial<RuntimeInput>, more?: Record<string, number[]>): Record<string, number[]> | undefined {
-  const out: Record<string, number[]> = { ...more, ...hints.dataChanges }
-  for (const [name, p] of Object.entries(hints.dataPulse ?? {})) if (!p.from) out[name] = p.changed ?? []
-  return Object.keys(out).length ? out : undefined
-}
-
-/** The data sets that have the same number of rows in both worlds, and the rows of each that differ. */
-function sameLengthChanges(prev: World, next: World): Record<string, number[]> {
-  const out: Record<string, number[]> = {}
-  for (const name of ['t', 'u', 'sel'] as const) {
-    const d = diffRows(prev[name], next[name])
-    if (d?.sameLength && d.changed.length) out[name] = d.changed
-  }
-  return out
-}
-
-/** Truthful change hints for a step, given the previous and next worlds. */
-function hintsFor(s: Step, prev: World, next: World): Partial<RuntimeInput> {
-  const hints: Partial<RuntimeInput> = {}
-  const touched: Array<'t' | 'u' | 'sel'> = []
-  for (const name of ['t', 'u', 'sel'] as const) {
-    const a = prev[name], b = next[name]
-    if (a.length !== b.length || b.some((row, i) => row !== a[i])) touched.push(name)
-  }
-  if (!touched.length) return hints
-  if (s.delivery === 'none') return hints
-  if (s.delivery === 'changedDatasets') { hints.changedDatasets = touched; return hints }
-  const changes: Record<string, number[]> = {}
-  const pulses: NonNullable<RuntimeInput['dataPulse']> = {}
-  const structural: string[] = []
-  for (const name of touched) {
-    const d = diffRows(prev[name], next[name])
-    if (!d) { structural.push(name); continue }
-    if (d.sameLength && s.delivery !== 'dataPulse') { changes[name] = d.changed; continue }
-    if (s.delivery === 'dataChanges') { structural.push(name); continue }
-    pulses[name] = toDataPulse(d)
-  }
-  if (Object.keys(changes).length) hints.dataChanges = changes
-  if (Object.keys(pulses).length) hints.dataPulse = pulses
-  if (structural.length) hints.changedDatasets = structural
-  return hints
-}
-
-export interface Failure {
-  seed: number
-  target: string
-  step: number
-  op: string
-  where: string
-  detail: string
-}
-
-interface RunResult { failure: Failure | null; steps: number }
-
-/**
- * Run one generated scenario against one target and compare every step with the
- * fresh reference. Returns the first failure.
- */
-function run(target: 'chart' | 'session', g: GenSpec, world0: World, steps: Step[], seed: number): RunResult {
-  const fail = (step: number, op: string, where: string, detail: string): RunResult => ({ failure: { seed, target, step, op, where, detail }, steps: step })
-  let world = world0
-  // Previously returned scenes must never change under the caller.
-  const retained: Array<{ scene: SceneRoot; key: ReturnType<typeof sceneKey>; step: number }> = []
-
-  const keptReference = JSON.stringify(g.spec).includes('"identifier"') ? compileChart(clone(g.spec) as never) : undefined
-  const compare = (stepNo: number, op: string, actual: SceneRoot | Error, w: World, modified?: Record<string, number[]>): RunResult | null => {
-    const ref = reference(g, w, keptReference, keptReference ? modified : undefined)
-    if (ref instanceof Error || actual instanceof Error) {
-      const a = actual instanceof Error ? actual.message : 'ok'
-      const b = ref instanceof Error ? ref.message : 'ok'
-      return a === b ? null : fail(stepNo, op, 'error', `reference: ${b}; incremental: ${a}`)
-    }
-    const want = sceneKey(ref)
-    const got = sceneKey(actual)
-    const d = firstDiff(want.norm, got.norm)
-    if (d) return fail(stepNo, op, 'scene', d)
-    if (want.svg !== got.svg) return fail(stepNo, op, 'svg', 'serialised SVG differs although the normalised scenes are equal')
-    // Earlier returned scenes must read exactly as they did when returned, in
-    // ANY read order (the engine hands superseded groups lazy snapshots):
-    // oldest first, newest first, or not at all until much later.
-    const mode = stepNo % 3
-    if (mode !== 2) {
-      const order = mode === 0 ? retained.slice() : retained.slice().reverse()
-      for (const old of order) {
-        const dd = firstDiff(old.key.norm, sceneKey(old.scene).norm)
-        if (dd) return fail(stepNo, op, `retained scene from step ${old.step} mutated`, dd)
-      }
-    }
-    retained.push({ scene: actual, key: got, step: stepNo })
-    return null
-  }
-
-  /** Final audit: scenes that were never re-read, in pseudo-random order. */
-  const finalAudit = (): RunResult | null => {
-    const order = retained.map((_, i) => i).sort((a, b) => ((a * 7919) % 13) - ((b * 7919) % 13) || a - b)
-    for (const i of order) {
-      const old = retained[i]!
-      const dd = firstDiff(old.key.norm, sceneKey(old.scene).norm)
-      if (dd) return fail(old.step, 'final audit', `retained scene from step ${old.step} mutated`, dd)
-    }
-    return null
-  }
-
-  const attempt = (fn: () => SceneRoot | null): SceneRoot | Error => {
-    try {
-      const s = fn()
-      return s ?? new Error('null scene')
-    } catch (e) {
-      return e as Error
-    }
-  }
-
-  if (target === 'chart') {
-    const chart = compileChart(clone(g.spec) as never)
-    const live = { t: clone(world.t), u: clone(world.u), sel: clone(world.sel) }
-    // The compiled IR must stay byte-identical across every evaluation.
-    const irAtCompile = JSON.stringify(chart)
-    const irCheck = (stepNo: number, op: string): RunResult | null => {
-      const now = JSON.stringify(chart)
-      return now === irAtCompile ? null : fail(stepNo, op, 'compiled IR mutated by evaluateChart', firstDiff(JSON.parse(irAtCompile), JSON.parse(now)) ?? '')
-    }
-    const first = attempt(() => evaluateChart(chart, { ...inputOf(g, world), data: { t: live.t, u: live.u, ...(g.store ? { sel: live.sel } : {}) } }))
-    const r0 = compare(-1, 'init', first, world) ?? irCheck(-1, 'init')
-    if (r0) return r0
-    for (let i = 0; i < steps.length; i++) {
-      const s = steps[i]!
-      const prev = world
-      world = applyStep(world, s)
-      const base = inputOf(g, world)
-      const hints = hintsFor(s, prev, world)
-      const input: RuntimeInput = { ...base, ...hints }
-      if (s.delivery === 'inplace') {
-        // Mutate the previous arrays IN PLACE (the bench / host pattern): the
-        // same array identity carries the new rows, announced via the hints.
-        for (const name of ['t', 'u', 'sel'] as const) {
-          const arr = live[name]
-          arr.length = 0
-          for (const row of world[name]) arr.push(clone(row))
-        }
-        input.data = { t: live.t, u: live.u, ...(g.store ? { sel: live.sel } : {}) }
-      } else {
-        live.t = clone(world.t)
-        live.u = clone(world.u)
-        live.sel = clone(world.sel)
-      }
-      const scene = attempt(() => evaluateChart(chart, input))
-      const r = compare(i, `${s.op}/${s.delivery}`, scene, world, modifiedBy(hints)) ?? irCheck(i, s.op)
-      if (r) return r
-    }
-    return finalAudit() ?? { failure: null, steps: steps.length }
-  }
-
-  // session target
-  const session = createChartSession()
-  const specFor = (w: World): Record<string, unknown> => {
-    const spec = clone(g.spec)
-    if (g.inlineValues) {
-      for (const d of spec.data as Array<Record<string, unknown>>) {
-        if (d.name === 't') d.values = clone(w.t)
-        if (d.name === 'u') d.values = clone(w.u)
-        if (d.name === 'sel') d.values = clone(w.sel)
-      }
-    }
-    return spec
-  }
-  const sessionInput = (w: World, extra: Partial<RuntimeInput>): RuntimeInput => {
-    const input: RuntimeInput = { signals: { sig: w.sig, ...scopedSignals(g, w) }, ...extra }
-    if (w.width != null) input.width = w.width
-    if (w.height != null) input.height = w.height
-    sizeInputs(w, input)
-    if (!g.inlineValues || extra.dataChanges || extra.dataPulse) input.data = { t: clone(w.t), u: clone(w.u), ...(g.store ? { sel: clone(w.sel) } : {}) }
-    return input
-  }
-  const first = attempt(() => session.evaluate(specFor(world) as never, sessionInput(world, {})))
-  const irAtCompile = JSON.stringify(session.last()?.chart ?? null)
-  const irCheck = (stepNo: number, op: string): RunResult | null => {
-    const now = JSON.stringify(session.last()?.chart ?? null)
-    return now === irAtCompile ? null : fail(stepNo, op, 'compiled IR mutated by the session', firstDiff(JSON.parse(irAtCompile), JSON.parse(now)) ?? '')
-  }
-  const r0 = compare(-1, 'init', first, world) ?? irCheck(-1, 'init')
-  if (r0) return r0
-  for (let i = 0; i < steps.length; i++) {
-    const s = steps[i]!
-    const prev = world
-    world = applyStep(world, s)
-    const hints = hintsFor(s, prev, world)
-    // The session auto-diffs by default; only 'dataChanges'/'dataPulse' are
-    // passed through as explicit hints, 'none' leaves it to the auto-diff.
-    const extra: Partial<RuntimeInput> = {}
-    if (hints.dataChanges) extra.dataChanges = hints.dataChanges
-    if (hints.dataPulse) extra.dataPulse = hints.dataPulse
-    if (s.delivery === 'changedDatasets' && hints.changedDatasets) extra.autoChanges = false
-    let scene: SceneRoot | Error
-    if (s.via === 'change') {
-      // `change()` re-evaluates the last compiled chart: it must be handed the
-      // complete state (data, signals, size), exactly like a host would. What it is not given it keeps from the last
-      // evaluation, so a size the world no longer has is given as `undefined` (which removes it).
-      const input = {
-        width: undefined, height: undefined, containerSize: undefined, measuredSize: undefined,
-        ...sessionInput(world, extra), data: { t: clone(world.t), u: clone(world.u), ...(g.store ? { sel: clone(world.sel) } : {}) },
-      }
-      scene = attempt(() => session.change(input))
-    } else {
-      scene = attempt(() => session.evaluate(specFor(world) as never, sessionInput(world, extra)))
-    }
-    // (the session works out what changed itself, unless the step says only which data sets did)
-    let r = compare(i, `${s.op}/${s.delivery}/${s.via}`, scene, world, extra.autoChanges === false ? undefined : modifiedBy(hints, sameLengthChanges(prev, world))) ?? irCheck(i, s.op)
-    if (r) return r
-    // The no-op cache: re-evaluating the identical state must be correct too,
-    // with fresh equal arrays and with the very same inputs.
-    if (s.op === 'noop' || i % 3 === 1) {
-      const again = attempt(() => session.evaluate(specFor(world) as never, sessionInput(world, {})))
-      r = compare(i, `${s.op}/re-evaluate`, again, world, undefined)
-      if (r) return r
-    }
-  }
-  return finalAudit() ?? { failure: null, steps: steps.length }
-}
-
-export function scenario(seed: number, nSteps: number): { g: GenSpec; world: World; steps: Step[] } {
-  const r = mulberry32(seed)
-  const g = genSpec(r)
-  const world = genWorld(r)
-  const steps = Array.from({ length: nSteps }, () => genStep(r))
-  return { g, world, steps }
-}
-
-/**
- * The scale-reuse scenario: every scale reads the source dataset `t` DIRECTLY (a numeric domain per axis, a band or ordinal domain
- * over the category), so each small edit goes through the domain census instead of a rebuild, and the steps are the edits that
- * decide whether the domain moved: values below the minimum, above the maximum, the extreme row leaving or removed, ties, a
- * category that is new, gone, or swapped for an earlier row's.
- */
-const CENSUS_OPS: Op[] = ['edit', 'edit-group', 'edit-group', 'edit-group', 'swapCat', 'swapCat', 'swapCat', 'swapCat', 'swapCat', 'low', 'low', 'dropMin', 'dropMin',
-  'removeExt', 'removeExt', 'newGroup', 'grow', 'shrink', 'append', 'truncate', 'remove', 'insert', 'shuffle', 'swap', 'noop']
-
-export function scenarioCensus(seed: number, nSteps: number): { g: GenSpec; world: World; steps: Step[] } {
-  const r = mulberry32(seed ^ 0xce45a5)
-  const inlineValues = r() < 0.5
-  const xType = pick(r, ['linear', 'linear', 'pow'] as const)
-  const nice = r() < 0.5
-  const zero = r() < 0.5
-  const bandType = pick(r, ['band', 'point', 'ordinal'] as const)
-  const sortColor = r() < 0.5
-  const data: Array<Record<string, unknown>> = [{ name: 't', ...(inlineValues ? { values: [] } : {}) }, { name: 'u', ...(inlineValues ? { values: [] } : {}) }]
-  const scales: Array<Record<string, unknown>> = [
-    { name: 'x', type: xType, ...(xType === 'pow' ? { exponent: 2 } : {}), domain: { data: 't', field: 'x' }, range: 'width', nice },
-    { name: 'y', type: 'linear', domain: { data: 't', field: 'v' }, range: 'height', zero, nice: r() < 0.4 },
-    { name: 'bx', type: bandType === 'ordinal' ? 'band' : bandType, domain: { data: 't', field: 'g' }, range: 'width', padding: 0.1 },
-    { name: 'color', type: 'ordinal', domain: { data: 't', field: 'g', sort: sortColor }, range: 'category' },
-  ]
-  const marks: Array<Record<string, unknown>> = [{
-    type: 'symbol', from: { data: 't' },
-    encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'v' }, size: { value: 30 }, fill: { scale: 'color', field: 'g' } } },
-  }]
-  if (r() < 0.6) {
-    marks.push({
-      type: 'rect', from: { data: 't' },
-      encode: { update: { x: { scale: 'bx', field: 'g' }, width: { scale: 'bx', band: 1 }, y: { scale: 'y', field: 'v' }, y2: { scale: 'y', value: 0 }, fill: { scale: 'color', field: 'g' } } },
-    })
-  }
-  const spec: Record<string, unknown> = {
-    $schema: 'https://vega.github.io/schema/vega/v6.json', width: pick(r, [200, 300]), height: pick(r, [160, 220]), padding: 5, autosize: pick(r, ['none', 'pad'] as const),
-    signals: [{ name: 'sig', value: 3 }, { name: 'thr', update: 'sig + 1' }], data, scales,
-    axes: [{ scale: 'x', orient: 'bottom' }, { scale: 'y', orient: 'left' }, { scale: 'bx', orient: 'top' }],
-    legends: r() < 0.5 ? [{ fill: 'color' }] : [], marks,
-  }
-  const g: GenSpec = { spec, inlineValues, label: `census x=${xType}${nice ? '/nice' : ''} y=${zero ? 'zero' : 'free'} bx=${bandType} color${sortColor ? '/sorted' : ''}` }
-  const world = genWorld(r)
-  const steps = Array.from({ length: nSteps }, () => ({ ...genStep(r), op: pick(r, CENSUS_OPS) }))
-  return { g, world, steps }
-}
-
-/**
- * The same scenarios with a selection store: a dataset `sel` (vega-lite's `<name>_store`: field tuples, or `_vgsid_`
- * ids kept sorted by a `collect`) that the pipeline filters by (`vlSelectionTest` / `vlSelectionIdTest`), a mark
- * highlights by, and a derived signal resolves (`vlSelectionResolve`), edited by `modify`-style updates between the
- * data edits, signal changes and resizes the base scenario already has.
- */
-export function scenarioSel(seed: number, nSteps: number): { g: GenSpec; world: World; steps: Step[] } {
-  const base = scenario(seed, nSteps)
-  const r = mulberry32(seed ^ 0x5e1ec7)
-  const ids = r() < 0.5
-  const spec = base.g.spec
-  const data = spec.data as Array<Record<string, unknown>>
-  const op = pick(r, ['union', 'intersect'] as const)
-  const test = ids ? 'vlSelectionIdTest("sel", datum)' : `vlSelectionTest("sel", datum, "${op}")`
-  const features = [`sel=${ids ? 'ids' : 'fields'}${ids ? '' : '/' + op}`]
-  data.unshift({
-    name: 'sel',
-    ...(base.g.inlineValues ? { values: [] } : {}),
-    ...(ids ? { transform: [{ type: 'collect', sort: { field: '_vgsid_' } }] } : {}),
-  })
-  const t = data.find((d) => d.name === 't')!
-  const head: Array<Record<string, unknown>> = ids ? [{ type: 'identifier', as: '_vgsid_' }] : []
-  const kinds = { filter: r() < 0.5, encode: r() < 0.7, signal: r() < 0.5 }
-  if (!kinds.filter && !kinds.encode && !kinds.signal) kinds.encode = true
-  if (kinds.filter) {
-    // guarded the way vega-lite writes it, or the bare test (which reads the store only through its own function)
-    head.push({ type: 'filter', expr: r() < 0.5 ? `!length(data("sel")) || ${test}` : test })
-    features.push('filter')
-  }
-  if (head.length) t.transform = [...head, ...((t.transform as Array<Record<string, unknown>> | undefined) ?? [])]
-  const marks = spec.marks as Array<Record<string, unknown>>
-  const first = marks.find((m) => (m.encode as { update?: Record<string, unknown> } | undefined)?.update?.fill !== undefined)
-  if (first && kinds.encode) {
-    const upd = (first.encode as { update: Record<string, unknown> }).update
-    upd.fill = [{ test: r() < 0.5 ? `length(data("sel")) && ${test}` : test, value: '#e45756' }, ...([] as unknown[]).concat(upd.fill)]
-    upd.opacity = [{ test, value: 1 }, { value: 0.45 }]
-    features.push('encode')
-  }
-  if (first && kinds.signal) {
-    ;(spec.signals as Array<Record<string, unknown>>).push({ name: 'selres', update: 'vlSelectionResolve("sel", "union", true, true)' })
-    const upd = (first.encode as { update: Record<string, unknown> }).update
-    upd.strokeWidth = { signal: 'isObject(selres) && selres.vlPoint ? 1 + length(selres.vlPoint.or) : 1' }
-    upd.stroke = { value: '#333' }
-    features.push('resolve')
-  }
-  base.g.label += ' ' + features.join(' ')
-  base.g.store = ids ? 'ids' : 'fields'
-  const steps = base.steps.map((s) => (r() < 0.4 ? { ...s, op: 'store' as const } : s))
-  return { g: base.g, world: { ...base.world, selIds: ids }, steps }
-}
-
-/**
- * The same scenarios with group scopes: a group mark declaring signals (one derived from the view's `sig`), whose marks read
- * them, with a second scope nested in it that shadows one. The steps write the scopes' signals the way the event loop does
- * (`<scope id>:gs` in the signal store), between the data edits, signal changes and resizes the base scenario already has.
- */
-export function scenarioScoped(seed: number, nSteps: number): { g: GenSpec; world: World; steps: Step[] } {
-  const base = scenario(seed, nSteps)
-  const r = mulberry32(seed ^ 0x5c09ed)
-  const spec = base.g.spec
-  const xs = (spec.scales as Array<{ name: string }>).some((sc) => sc.name === 'x') && (spec.scales as Array<{ name: string }>).some((sc) => sc.name === 'y')
-  const group = {
-    type: 'group', name: 'sc_outer', signals: [{ name: 'gs', value: 2 }, { name: 'gd', update: 'gs * 2 + sig' }],
-    encode: { update: { x: { value: 0 }, y: { value: 0 }, width: { value: 120 }, height: { value: 80 }, fill: { value: '#eee' } } },
-    marks: [
-      ...(xs ? [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'v' }, size: { signal: '10 + gs * 30 + gd' }, fill: { signal: 'gd > 6 ? "#c33" : "#33c"' } } } }] : []),
-      {
-        type: 'group', name: 'sc_inner', signals: [{ name: 'gs', value: 1 }],
-        encode: { update: { x: { value: 10 }, y: { value: 10 }, width: { value: 60 }, height: { value: 40 }, stroke: { value: '#999' } } },
-        marks: [{ type: 'rect', encode: { update: { x: { value: 0 }, y: { value: 0 }, width: { signal: '10 + gs * 8' }, height: { value: 10 }, fill: { value: '#6a6' } } } }],
-      },
-    ],
-  }
-  ;(spec.marks as unknown[]).push(group)
-  // the scope ids the compiled chart gives them: the marks' places in the spec
-  const chart = compileChart(clone(spec) as never)
-  const outerMark = chart.marks.find((m) => m.name === 'sc_outer')!
-  const innerMark = outerMark.marks!.find((m) => m.name === 'sc_inner')!
-  const outer = `sc_outer@${outerMark.seq}`
-  base.g.scoped = { outer, inner: `${outer}/sc_inner@${innerMark.seq}` }
-  base.g.label += ' scoped'
-  const steps = base.steps.map((s) => (r() < 0.4 ? { ...s, op: 'scoped' as const } : s))
-  return { g: base.g, world: { ...base.world, scoped: { outer: 2, inner: 1 } }, steps }
-}
-
-/**
- * The same scenarios on container-sized views, as `width: "container"` compiles (vega-lite): no top-level width / height,
- * `width` / `height` signals whose `init` reads `containerSize()` and that a `window:resize` handler re-runs, and an
- * `autosize` of any kind that contains the padding. The steps resize the viewport the way a browser does (the container
- * changes size, the handlers write the signals) and fix or release the view size from the host, between the data edits,
- * signal changes and size changes the base scenario already has. Every step is compared with a fresh evaluation, and a
- * view size the host fixed must not be moved by those signals.
- */
-export function scenarioContainer(seed: number, nSteps: number): { g: GenSpec; world: World; steps: Step[] } {
-  const base = scenario(seed, nSteps)
-  const r = mulberry32(seed ^ 0xc0117a)
-  const spec = base.g.spec
-  // a third of the views keep their own numeric size: the measured container then sizes them (a <Chart> without size props)
-  const fill = r() < 0.3
-  if (fill) {
-    base.g.label += ' container(fill)'
-  } else {
-    delete spec.width
-    delete spec.height
-    const auto = pick(r, ['fit', 'fit', 'fit-x', 'fit-y', 'pad', 'none'] as const)
-    spec.autosize = { type: auto, contains: 'padding' }
-    const size = (i: 0 | 1): Record<string, unknown> => {
-      const expr = `isFinite(containerSize()[${i}]) ? containerSize()[${i}] : 300`
-      return { init: expr, on: [{ update: expr, events: 'window:resize' }] }
-    }
-    const sigs = spec.signals as Array<Record<string, unknown>>
-    sigs.unshift({ name: 'width', ...size(0) }, { name: 'height', ...size(1) })
-    base.g.label += ` container(${auto})`
-  }
-  const steps = base.steps.map((s) => (r() < 0.45 ? { ...s, op: 'resize' as const } : s))
-  return { g: base.g, world: { ...base.world, container: { width: 480, height: 300 } }, steps }
-}
-
-/** Greedy delta-debugging: drop steps while the failure persists. */
-function shrink(target: 'chart' | 'session', g: GenSpec, world: World, steps: Step[], seed: number): Step[] {
-  let cur = steps
-  const fails = (s: Step[]): boolean => run(target, g, world, s, seed).failure !== null
-  for (let pass = 0; pass < 2; pass++) {
-    for (let i = cur.length - 1; i >= 0; i--) {
-      const trial = cur.slice(0, i).concat(cur.slice(i + 1))
-      if (fails(trial)) cur = trial
-    }
-  }
-  return cur
-}
-
-export function checkSeed(seed: number, nSteps: number, make: typeof scenario = scenario): string | null {
-  const { g, world, steps } = make(seed, nSteps)
-  for (const target of ['chart', 'session'] as const) {
-    const res = run(target, g, world, steps, seed)
-    if (!res.failure) continue
-    const f = res.failure
-    const minimal = shrink(target, g, world, steps.slice(0, Math.max(0, f.step + 1)), seed)
-    const again = run(target, g, world, minimal, seed).failure ?? f
-    const names = minimal.map((s) => `${s.op}/${s.delivery}${s.via === 'change' ? '/change' : ''}`).join(' -> ')
-    return [
-      `seed=${seed} target=${target} (reproduce: ASTER_ORACLE_SEED=${seed})`,
-      `spec: ${g.label} inlineValues=${g.inlineValues}`,
-      `first failing step: ${f.step} (${f.op}) ${f.where}: ${f.detail}`,
-      `minimal steps (${minimal.length}): ${names || '(initial evaluation)'}`,
-      `minimal failure: step ${again.step} (${again.op}) ${again.where}: ${again.detail}`,
-    ].join('\n  ')
-  }
-  return null
-}
-
 const env = (k: string): string | undefined => (typeof process !== 'undefined' ? process.env[k] : undefined)
-const SEEDS = Number(env('ASTER_ORACLE_SEEDS') ?? 40)
-const STEPS = Number(env('ASTER_ORACLE_STEPS') ?? 12)
-const START = Number(env('ASTER_ORACLE_START') ?? 1)
-const ONE = env('ASTER_ORACLE_SEED')
+
+const knob = (name: string, dflt: number, min: number): number => wholeNumberKnob(name, env(name), dflt, min)
+
+const ONE = env('ASTER_ORACLE_SEED') === undefined ? undefined : knob('ASTER_ORACLE_SEED', 0, 0)
+const STEPS = knob('ASTER_ORACLE_STEPS', 12, 1)
+const START = knob('ASTER_ORACLE_START', 1, 1)
+/** The default sweep is one run of every pipeline per family; a shorter one cannot hold the floors (a replay of one seed does not hold them). */
+const SEEDS = knob('ASTER_ORACLE_SEEDS', PIPES.length, ONE === undefined ? PIPES.length : 1)
+const SWEEP = ONE === undefined
+
+const seedList = (n = SEEDS): number[] => (ONE !== undefined ? [ONE] : Array.from({ length: n }, (_, i) => START + i))
+/** The relational family takes every shape in turn, several times over (the shapes rotate their marks and scales by occurrence). */
+const RELATIONAL_SEEDS = Math.max(SEEDS, 8 * SHAPE_NAMES.length)
+
+describe('the knobs', () => {
+  it('the sweep has seeds to run', () => {
+    expect(seedList().length).toBeGreaterThan(0)
+  })
+})
 
 describe('incremental === fresh evaluateChart(compileChart(spec))', () => {
   it('the generator is deterministic per seed', () => {
@@ -1088,21 +53,17 @@ describe('incremental === fresh evaluateChart(compileChart(spec))', () => {
     expect(JSON.stringify(scenario(8, 6))).not.toBe(JSON.stringify(a))
   })
 
-  it('the generator covers every required feature', () => {
-    const seen = new Set<string>()
-    const text: string[] = []
-    for (let s = 1; s <= 400; s++) text.push(scenario(s, 1).g.label)
-    const all = text.join('\n')
-    for (const p of PIPES) seen.add(p.name)
-    for (const need of ['filter', 'aggregate', 'window-sort', 'window-nosort', 'identifier', 'bin-data', 'stack', 'fold', 'flatten', 'lookup',
-      'layered(text)', 'nested=group', 'nested=facet', 'nested=scoped', 'nested=other', 'nested=umark', 'xdom=multi', 'xdom=signal', 'autosize=fit', 'legend']) {
-      expect(all, `generator never produces ${need}`).toContain(need)
+  it('every pipeline runs, in turn, over any run of as many seeds as there are pipelines', () => {
+    for (const start of [1, 17, 1000]) {
+      const names = Array.from({ length: PIPES.length }, (_, i) => pipeFor(start + i).name)
+      expect(new Set(names).size).toBe(PIPES.length)
     }
+    // ... and the scenario of a seed really is built from its pipeline (the label reads the built spec)
+    for (let seed = 1; seed <= PIPES.length; seed++) expect(scenario(seed, 1).g.features.has(`pipe=${pipeFor(seed).name}`)).toBe(true)
   })
 
-  const seeds = ONE != null ? [Number(ONE)] : Array.from({ length: SEEDS }, (_, i) => START + i)
   // one test per seed: a worker that runs one long synchronous test cannot answer its host (vitest's onTaskUpdate RPC)
-  for (const seed of seeds) {
+  for (const seed of seedList()) {
     it(`holds for seed ${seed} x ${STEPS} steps (chart reuse + session)`, () => {
       expect(checkSeed(seed, STEPS) ?? '', `seed ${seed}`).toBe('')
     }, 600_000)
@@ -1131,9 +92,7 @@ describe('incremental === fresh with selection stores that are edited between up
     expect(nonEmpty).toBeGreaterThan(10)
   })
 
-  const seedsSel = ONE != null ? [Number(ONE)] : Array.from({ length: SEEDS }, (_, i) => START + i)
-  // one test per seed: a worker that runs one long synchronous test cannot answer its host (vitest's onTaskUpdate RPC)
-  for (const seed of seedsSel) {
+  for (const seed of seedList()) {
     it(`holds for seed ${seed} x ${STEPS} steps (chart reuse + session)`, () => {
       expect(checkSeed(seed, STEPS, scenarioSel) ?? '', `seed ${seed}`).toBe('')
     }, 600_000)
@@ -1159,9 +118,7 @@ describe('incremental === fresh with group scopes whose signals events write bet
     expect(renderSceneToSvg(a)).not.toBe(renderSceneToSvg(b))
   })
 
-  const seedsScoped = ONE != null ? [Number(ONE)] : Array.from({ length: SEEDS }, (_, i) => START + i)
-  // one test per seed: a worker that runs one long synchronous test cannot answer its host (vitest's onTaskUpdate RPC)
-  for (const seed of seedsScoped) {
+  for (const seed of seedList()) {
     it(`holds for seed ${seed} x ${STEPS} steps (chart reuse + session)`, () => {
       expect(checkSeed(seed, STEPS, scenarioScoped) ?? '', `seed ${seed}`).toBe('')
     }, 600_000)
@@ -1191,42 +148,21 @@ describe('incremental === fresh on container-sized views that are resized betwee
     expect(renderSceneToSvg(at({ ...fixed, sizeSig: { width: 300, height: 300 } }))).toBe(renderSceneToSvg(at({ ...fixed })))
   })
 
-  const seedsContainer = ONE != null ? [Number(ONE)] : Array.from({ length: SEEDS }, (_, i) => START + i)
-  // one test per seed: a worker that runs one long synchronous test cannot answer its host (vitest's onTaskUpdate RPC)
-  for (const seed of seedsContainer) {
+  for (const seed of seedList()) {
     it(`holds for seed ${seed} x ${STEPS} steps (chart reuse + session)`, () => {
       expect(checkSeed(seed, STEPS, scenarioContainer) ?? '', `seed ${seed}`).toBe('')
     }, 600_000)
   }
 })
 
-// Seed 100 of the container scenario: a data set whose rows are shuffled, evaluated in a view that was a different size the time
-// before. The first fit pass numbered the rows by alignment, the second by the pulse, so the legend the padding comes from showed
-// other ids than the scene drew (padding.right 78 for 47). Every pass of one evaluation must see the ids of the same rows.
+// Seed 100 of the container scenario as the generator drew it before the families took seeds of their own: a data set whose rows are
+// shuffled, evaluated in a view that was a different size the time before. The first fit pass numbered the rows by alignment, the
+// second by the pulse, so the legend the padding comes from showed other ids than the scene drew (padding.right 78 for 47). Every pass
+// of one evaluation must see the ids of the same rows. (The seed is kept; what it draws changed with the generator.)
 describe('the passes of one evaluation number the same rows alike', () => {
   it('seed 100 of the container-sized views', () => {
     expect(checkSeed(100, STEPS, scenarioContainer) ?? '').toBe('')
   }, 600_000)
-})
-
-// Seeds the default sweep does not reach. They drew a pipeline on `t` that looks `u` up, and the generator declared `u` after `t`, which
-// vega (and the engine) refuse: "Undefined data set name". The generator now declares `u` first when `t` looks it up.
-describe('seeds whose pipeline looks up a data set declared after it', () => {
-  for (const seed of [77, 159, 230, 280, 297, 375, 399]) {
-    it(`holds for seed ${seed} x ${STEPS} steps`, () => {
-      expect(checkSeed(seed, STEPS) ?? '', `seed ${seed}`).toBe('')
-    }, 600_000)
-  }
-})
-
-// Seeds past the default sweep whose `identifier` follows a filter: its rows are numbered as their source rows, the one way whether an
-// update comes with a pulse or not (a pipeline so numbered takes no pulse; one that did numbered the rows of a pulse otherwise).
-describe('seeds whose identifier follows a filter', () => {
-  for (const seed of [136, 290, 356, 384, 387]) {
-    it(`holds for seed ${seed} x ${STEPS} steps`, () => {
-      expect(checkSeed(seed, STEPS) ?? '', `seed ${seed}`).toBe('')
-    }, 600_000)
-  }
 })
 
 describe('incremental === fresh when every scale reads the source dataset (the domain census, scale reuse)', () => {
@@ -1234,14 +170,89 @@ describe('incremental === fresh when every scale reads the source dataset (the d
     expect(JSON.stringify(scenarioCensus(7, 6))).toBe(JSON.stringify(scenarioCensus(7, 6)))
     const ops = new Set(Array.from({ length: 40 }, (_, i) => scenarioCensus(i + 1, 12).steps.map((x) => x.op)).flat())
     for (const need of ['low', 'dropMin', 'removeExt', 'newGroup', 'swapCat', 'edit-group']) expect(ops.has(need as Op), `no ${need} step`).toBe(true)
-    const all = Array.from({ length: 100 }, (_, i) => scenarioCensus(i + 1, 1).g.label).join('\n')
-    for (const need of ['x=pow', 'y=zero', 'y=free', 'bx=band', 'bx=point', 'bx=ordinal', 'color/sorted', 'x=linear/nice']) expect(all, `no ${need} scenario`).toContain(need)
+    // (what the scenarios are, read off their specs: a band scale is a band scale, an ordinal one is not drawn as one)
+    const types = new Set(Array.from({ length: 100 }, (_, i) => featuresOf(scenarioCensus(i + 1, 1).g.spec)).flat())
+    for (const need of ['scale:pow', 'scale:linear', 'scale:band', 'scale:point', 'scale:ordinal', 'scale.zero', 'scale.no-zero', 'scale.nice', 'domain.sort']) expect(types.has(need), `no ${need} scenario`).toBe(true)
   })
 
-  const seedsCensus = ONE != null ? [Number(ONE)] : Array.from({ length: SEEDS }, (_, i) => START + i)
-  for (const seed of seedsCensus) {
+  for (const seed of seedList()) {
     it(`holds for seed ${seed} x ${STEPS} steps (chart reuse + session)`, () => {
       expect(checkSeed(seed, STEPS, scenarioCensus) ?? '', `seed ${seed}`).toBe('')
     }, 600_000)
   }
+})
+
+describe('incremental === fresh over the relational layer (what a node reads, not the rows it is drawn from)', () => {
+  it('the generator is deterministic per seed and takes every shape in turn', () => {
+    expect(seedList(RELATIONAL_SEEDS).length === 1 || RELATIONAL_SEEDS >= 8 * SHAPE_NAMES.length).toBe(true)
+    expect(JSON.stringify(scenarioRelational(7, 6))).toBe(JSON.stringify(scenarioRelational(7, 6)))
+    for (let seed = 1; seed <= SHAPE_NAMES.length; seed++) expect(scenarioRelational(seed, 1).g.features.has(`shape=${SHAPE_NAMES[seed - 1]}`), `seed ${seed}`).toBe(true)
+  })
+
+  for (const seed of seedList(RELATIONAL_SEEDS)) {
+    it(`holds for seed ${seed} x ${STEPS} steps (chart reuse + session)`, () => {
+      expect(checkSeed(seed, STEPS, scenarioRelational) ?? '', `seed ${seed}`).toBe('')
+    }, 600_000)
+  }
+})
+
+// The audited defects of the incremental path, as the relational family draws them. Each seed below FAILED on the base the audit ran on
+// (d30ead9) and passes now; it is kept because the shape it draws is the one the defect lived in, not because of the seed. The seeds are
+// those of the generator as it is: a test that each still draws its shape (below) fails the day the generator moves them.
+const HISTORICAL: ReadonlyArray<{ finding: string; seed: number; shape: string }> = [
+  { finding: 'C7 (a mark drawn from a mark kept its items when the rows it was drawn from were edited in place)', seed: 67, shape: 'mark-from-mark' },
+  { finding: 'C7 (the same, with a second mark layered on it)', seed: 186, shape: 'mark-from-mark' },
+  { finding: 'C24 (a signal that holds a dataset past 512 values was keyed by identity)', seed: 116, shape: 'large-signal' },
+  { finding: 'C24 (the same, a larger dataset)', seed: 193, shape: 'large-signal' },
+  { finding: 'C26 (a leaf mark in a group item went stale when another dataset it reads grew)', seed: 179, shape: 'nested-reads' },
+  { finding: 'C26 (the same, from a facet cell)', seed: 69, shape: 'nested-reads' },
+  { finding: 'C26 (the same, a dataset that gains rows)', seed: 153, shape: 'nested-reads' },
+  { finding: 'C42 (a fitted projection went stale for the consumers whose own rows did not change)', seed: 27, shape: 'fitted-projection' },
+  { finding: 'C42 (the same, in the size the legend padding comes from)', seed: 49, shape: 'fitted-projection' },
+]
+
+describe('the seeds that caught the audited defects still draw their shapes and hold', () => {
+  for (const h of HISTORICAL) {
+    it(`${h.finding}: seed ${h.seed}`, () => {
+      expect(scenarioRelational(h.seed, STEPS).g.features.has(`shape=${h.shape}`), `seed ${h.seed} no longer draws ${h.shape}`).toBe(true)
+      expect(checkSeed(h.seed, STEPS, scenarioRelational) ?? '').toBe('')
+    }, 600_000)
+  }
+})
+
+/** What the scenarios that ran must have contained, at least this many times (read off their built specs, see `featuresOf`). */
+const FLOORS: ReadonlyArray<readonly [string, number]> = [
+  ...SHAPE_NAMES.map((n) => [`shape=${n}`, 3] as const),
+  ...['symbol', 'rect', 'text', 'line', 'area', 'rule', 'arc', 'trail', 'path', 'group', 'shape'].map((m) => [`mark:${m}`, 2] as const),
+  ...['linear', 'band', 'point', 'ordinal', 'pow', 'sqrt', 'symlog', 'log', 'quantize', 'quantile', 'threshold', 'sequential', 'bin-ordinal'].map((t) => [`scale:${t}`, 1] as const),
+  ['mark-from-mark', 5], ['mark-from-mark@group', 2], ['nested=facet', 5], ['nested=scoped', 5], ['nested=leaf-reads-data', 5], ['enter+update', 3], ['exit', 2], ['hover', 2],
+  ['mark.key', 2], ['mark.zindex', 2], ['mark.sort', 2], ['layout', 2], ['axis:encode', 2], ['projection:fit', 5], ['signal:init', 3], ['signal:reads-data', 3],
+  ['encode:per-item-signal', 5], ['encode:rules', 5], ['range=scheme', 1], ['mark.transform:label', 1], ['mark.transform:geopoint', 1], ['mark.transform:geoshape', 1], ['transform:extent', 2],
+  ['op:empty', 5], ['op:odd', 10], ['op:appendU', 5], ['op:bulk', 2], ['op:bulkU', 2], ['rows:kept', 20], ['delivery:dataPulse', 20], ['delivery:inplace', 20], ['via:change', 10],
+  ['sel=ids', 3], ['sel=fields/union', 3], ['scoped-signals', 3], ['container(fit)', 1], ['census', 3],
+]
+
+describe('the sweep covered what it claims to', () => {
+  it('every feature the oracle claims was in scenarios that ran, at least its floor many times', () => {
+    // (a replay of one seed runs one scenario of each family: it holds no floor)
+    const short = FLOORS.filter(([name, floor]) => (coverage().get(name) ?? 0) < floor).map(([name, floor]) => `${name}: ${coverage().get(name) ?? 0} < ${floor}`)
+    expect(SWEEP ? short : []).toEqual([])
+  })
+
+  it('every pipeline the seeds that ran draw ran, in every family it takes pipelines from', () => {
+    const missing: string[] = []
+    for (const family of ['scenario', 'scenarioSel', 'scenarioScoped', 'scenarioContainer'] as const) {
+      const drawn = new Set(seedList().map((seed) => pipeFor(seed + OFFSET[family]).name))
+      for (const name of drawn) if ((coverage().get(`${family}:pipe=${name}`) ?? 0) < 1) missing.push(`${family}:${name}`)
+    }
+    expect(missing).toEqual([])
+  })
+
+  it('a sweep runs every pipeline in every family (a shorter list is refused above, a replay of one seed holds only its own)', () => {
+    const families = ['scenario', 'scenarioSel', 'scenarioScoped', 'scenarioContainer'] as const
+    for (const family of families) {
+      const names = new Set(seedList().map((seed) => pipeFor(seed + OFFSET[family]).name))
+      expect(SWEEP ? names.size : 1).toBe(SWEEP ? PIPES.length : 1)
+    }
+  })
 })
