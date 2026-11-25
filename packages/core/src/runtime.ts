@@ -6,6 +6,7 @@
  * transform steps, scales and mark items that cannot have changed; the result is
  * the scene a fresh evaluation would produce.
  */
+import { entryText } from './spec-expressions.js'
 import { compileExpr, engineParams, evalSignal, expressionRegistryEpoch, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { scaleCallFailure, scaleRangeFailure } from './missing-scale.js'
 import { ingestRows, isNotATupleError, notATuple, readData, type DataFormatSpec } from './data-format.js'
@@ -8203,8 +8204,6 @@ interface EncodeEntry {
   mult?: unknown
   offset?: unknown
   round?: unknown
-  format?: unknown
-  formatType?: unknown
 }
 
 /**
@@ -8320,14 +8319,15 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
   const enc = value as EncodeEntry
   // (a gradient entry is the whole entry: nothing else it says is read)
   if (enc.gradient != null) return gradientOfEntry(enc, datum, ctx)
+  // (an entry whose meaning is the text vega writes for it -- a colour object, a property given as text -- is that text, evaluated)
+  if (writtenEntry(enc)) return ctx.runtime.expr(writtenEntryText(enc))(datum, ctx.signalParams, undefined, ctx.encodeItem)
   let head: unknown
   let hasHead = true
   if (enc.signal) head = ctx.runtime.expr(enc.signal)(datum, ctx.signalParams, undefined, ctx.encodeItem)
   else if (enc.field != null) head = encodeFieldValue(enc.field, datum, ctx)
-  else if (enc.value !== undefined) {
-    const v = enc.value
-    head = v !== null && typeof v === 'object' && 'signal' in v ? resolveEncodeValueInternal(v as EncodeValue, datum, ctx, binding) : v
-  } else hasHead = false
+  // (a value is what it says, an object as written: vega quotes it into the entry's code, so a `{signal}` in it is an object, C397)
+  else if (enc.value !== undefined) head = enc.value
+  else hasHead = false
 
   // `tail` is a product term added to `head` (the band step `_bandwidth(scale)*band`)
   let tail: number | undefined
@@ -8371,7 +8371,7 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
   if (exponent == null && mult == null && offset == null && !enc.round) {
     if (tail !== undefined) return hasHead ? (head as number) + tail : tail
     if (!hasHead) return undefined
-    return enc.field != null && enc.scale == null && enc.format !== undefined && typeof head === 'number' ? formatValue(head, value, ctx) : head
+    return head
   }
 
   // from here the text is `value [pow] [*mult] [+offset]`, rounded as a whole
@@ -8392,35 +8392,47 @@ function resolveEncodeValueInternal(value: EncodeValue | undefined, datum: Row, 
   if (tail !== undefined) result = !hasHead ? tail : (result as number) + tail
   if (offset != null) result = (result as number) + (entryProperty(offset, datum, ctx, binding) as number)
   if (enc.round) result = Math.round(result as number)
-  if (enc.field != null && enc.scale == null && enc.format !== undefined && typeof result === 'number') result = formatValue(result, value, ctx)
   return result
 }
 
 /**
- * Which calendar a label is formatted in, vega-scale `tickFormat`'s precedence: a
- * `time` scale / formatType is local time, then a `utc` scale / formatType is UTC.
- * (A UTC scale formatted in local time shifts every label by the viewer's offset.)
+ * Whether an entry means what vega's code for it means and nothing this resolver reads directly: a colour object (`{color: {r, g,
+ * b}}`, `{h, s, l}`, `{h, c, l}`, `{l, a, b}`: vega writes `rgb(...)+''` and the like, C27), or an `exponent`, `mult`, `offset` or
+ * `band` that is neither a number nor an entry (vega pastes such a property into its code as text: `offset: '5'` adds 5, C397).
+ * vega-parser encode/entry.js; the text is the one the compile-time check reads (`entryText`).
  */
-function calendarOf(scaleType: string | undefined, formatType: unknown): 'time' | 'utc' | undefined {
-  if (scaleType === 'time' || formatType === 'time') return 'time'
-  if (scaleType === 'utc' || formatType === 'utc') return 'utc'
-  return undefined
+function writtenEntry(enc: EncodeEntry): boolean {
+  if ((enc as { color?: unknown }).color && !enc.signal) return true
+  return writtenProperty(enc.exponent) || writtenProperty(enc.mult) || writtenProperty(enc.offset)
+    || (enc.scale != null && enc.range == null && Boolean(enc.band) && +(enc.band as number) !== 1 && writtenProperty(enc.band))
 }
+
+/**
+ * A property this resolver does not read as vega's code does: anything but a number, an entry object (`{signal}`, `{field}`, ...) or
+ * nothing -- vega writes text as it is, a list as an entry, and an entry that gives no value as `null` (where this resolver has none).
+ */
+function writtenProperty(p: unknown): boolean {
+  if (p == null || typeof p === 'number') return false
+  if (typeof p !== 'object' || Array.isArray(p)) return true
+  const e = p as EncodeEntry & { color?: unknown }
+  return !(e.signal || e.field != null || e.value !== undefined || e.scale != null || e.gradient != null) || writtenEntry(e)
+}
+
+/** The code vega writes for an entry (cached by entry object: an encode's entries are the same objects for every item). */
+function writtenEntryText(enc: EncodeEntry): string {
+  let text = WRITTEN_ENTRIES.get(enc)
+  if (text === undefined) {
+    const t = entryText(enc)
+    // (an entry vega's parser refuses was refused when the spec was compiled: the check reads this same text)
+    if (t === null) throw new Error('Invalid encoding entry: ' + JSON.stringify(enc))
+    WRITTEN_ENTRIES.set(enc, (text = t))
+  }
+  return text
+}
+const WRITTEN_ENTRIES = new WeakMap<object, string>()
 
 /** The locale a chart's data is parsed with (`format.parse` date patterns): its own, when its config has one. */
 const dataLocale = (chart: CompiledChart): Locale | undefined => (chart.locale ? chartLocale(chart.locale) : undefined)
-
-function formatValue(v: unknown, spec: EncodeValue, ctx: EvalContext): unknown {
-  const format = (spec as { format?: unknown }).format
-  const formatType = (spec as { formatType?: unknown }).formatType
-  if (format === undefined) return v
-  const fmt = format as string
-  const L = chartLocale(ctx.chart.locale)
-  const cal = calendarOf(undefined, formatType)
-  if (cal === 'utc') return L.utcFormat(fmt)(v as Date)
-  if (cal === 'time' || v instanceof Date) return L.timeFormat(fmt)(v as Date)
-  return L.format(fmt)(v as number)
-}
 
 /** A legend's explicit `values` (a literal array, a signal, or an array holding signals), or undefined. */
 function resolveLegendValues(legend: CompiledLegend, ctx: EvalContext): unknown[] | undefined {

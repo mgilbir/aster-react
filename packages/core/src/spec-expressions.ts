@@ -830,9 +830,18 @@ function holdsSignal(node: unknown, depth = 0): boolean {
 /** Whether an entry (or list of rules) has a signal or a test anywhere in it, or is a gradient (its start, stop and count may leave a hole in the call). */
 function holdsExpression(node: unknown, depth = 0): boolean {
   if (!isObject(node) || depth > 8) return false
-  if (!Array.isArray(node) && (node.signal || node.test || node.gradient != null)) return true
+  if (!Array.isArray(node) && (node.signal || node.test || node.gradient != null || node.color || writesText(node))) return true
   for (const key of Object.keys(node)) if (holdsExpression(node[key], depth + 1)) return true
   return false
+}
+
+/**
+ * Whether an entry pastes a property into its code as text (vega's `property`: anything but an object goes in as it is written), so
+ * the code may not parse (`offset: "1+"`) or name a signal that is not there (`band: "abc"`).
+ */
+function writesText(e: Rec): boolean {
+  const raw = (p: unknown): boolean => p != null && !isObject(p) && typeof p !== 'number'
+  return raw(e.exponent) || raw(e.mult) || raw(e.offset) || (e.scale != null && e.range == null && Boolean(e.band) && +(e.band as number) !== 1 && raw(e.band))
 }
 
 /** A field reference as vega writes it into the expression of an entry: `datum["a"]`, `item.mark.group["a"]`, `datum[signal]`. */
@@ -856,11 +865,22 @@ function fieldText(ref: unknown): string | null {
 const scaleText = (scale: unknown): string | null =>
   typeof scale === 'string' ? stringValue(scale) : isRecord(scale) && scale.signal ? `(${scale.signal as string})` : fieldText(scale)
 
-const propertyText = (p: unknown): string | null => (isRecord(p) ? (() => { const t = entryText(p); return t === null ? null : `(${t})` })() : `${p as string}`)
+/** A property (`exponent`, `mult`, `offset`, `band`) as vega writes it: an object (a list too) is an entry in parentheses, anything else its text. */
+const propertyText = (p: unknown): string | null => (isObject(p) ? (() => { const t = entryText(p); return t === null ? null : `(${t})` })() : `${p as string}`)
 
+/**
+ * A colour object's call (`(rgb(r,g,b)+'')`): each part is an entry, and an entry with no value is vega's `null`, which its list
+ * of arguments writes as nothing (`rgb(,0,0)`, a parse error, as in vega). A part that is not there fails as vega's parser does.
+ */
 const colorText = (type: string, parts: unknown[]): string | null => {
-  const texts = parts.map((p) => (isObject(p) ? entryText(p) : 'null'))
-  return texts.some((t) => t === null) ? null : `(${type}(${texts.join(',')})+'')`
+  const texts: string[] = []
+  for (const p of parts) {
+    if (p == null) throw new TypeError(`Cannot read properties of ${p === null ? 'null' : 'undefined'} (reading 'gradient')`)
+    const t = entryCode(p)
+    if (t === null) return null
+    texts.push(t === VNULL ? '' : t)
+  }
+  return `(${type}(${texts.join(',')})+'')`
 }
 
 /** The expression vega builds for an entry (null: for one it would refuse in another way, which is not this check's). */
@@ -871,7 +891,17 @@ const CONFIG_VALUES: Readonly<Record<'axis' | 'legend', readonly string[]>> = {
 }
 
 export function entryText(spec: unknown): string | null {
-  if (!isObject(spec) || Array.isArray(spec)) return 'null'
+  const code = entryCode(spec)
+  return code === VNULL ? 'null' : code
+}
+
+/** vega's `null` as the code of an entry: the value null, which a template writes as `null` and a list of arguments as nothing. */
+const VNULL = Symbol('null')
+
+/** vega-parser encode/entry.js `entry`: the code of an entry, `VNULL` where vega's is the value `null`, `null` as for `entryText`. */
+function entryCode(spec: unknown): string | null | typeof VNULL {
+  // (vega reads the keys of whatever it is given: anything but an object with them gives no value)
+  if (!isObject(spec)) return VNULL
   const e = spec as Rec
   if (e.gradient != null) {
     const args: Array<string | null> = [e.start, e.stop, e.count].map((v) => (v == null ? null : stringValue(v)))
@@ -879,33 +909,38 @@ export function entryText(spec: unknown): string | null {
     const scale = scaleText(e.gradient)
     return scale === null ? null : `gradient(${[scale, ...args].join(',')})`
   }
-  let value: string | undefined | null
+  let value: string | null | typeof VNULL | undefined
   if (e.signal) value = `(${e.signal as string})`
   else if (e.color) {
     const c = e.color as Rec
-    value = c.c ? colorText('hcl', [c.h, c.c, c.l]) : c.h || c.s ? colorText('hsl', [c.h, c.s, c.l]) : c.l || c.a ? colorText('lab', [c.l, c.a, c.b]) : c.r || c.g || c.b ? colorText('rgb', [c.r, c.g, c.b]) : 'null'
+    value = c.c ? colorText('hcl', [c.h, c.c, c.l]) : c.h || c.s ? colorText('hsl', [c.h, c.s, c.l]) : c.l || c.a ? colorText('lab', [c.l, c.a, c.b]) : c.r || c.g || c.b ? colorText('rgb', [c.r, c.g, c.b]) : VNULL
   } else if (e.field != null) value = fieldText(e.field)
   else if (e.value !== undefined) value = stringValue(e.value)
   if (value === null) return null
+  const text = (v: string | typeof VNULL): string => (v === VNULL ? 'null' : v)
   if (e.scale != null) {
     const scale = scaleText(e.scale)
     if (scale === null) return null
     if (e.range != null) value = `lerp(_range(${scale}), ${+(e.range as number)})`
     else {
-      if (value !== undefined) value = `_scale(${scale}, ${value})`
+      if (value !== undefined) value = `_scale(${scale}, ${text(value)})`
       if (e.band) {
-        const band = +(e.band as number) === 1 ? '' : '*' + propertyText(e.band)
-        value = (value ? value + '+' : '') + `_bandwidth(${scale})` + band
+        const band = +(e.band as number) === 1 ? '' : propertyText(e.band)
+        if (band === null) return null
+        value = (typeof value === 'string' && value ? value + '+' : '') + `_bandwidth(${scale})` + (band === '' ? '' : '*' + band)
         if (e.extra) value = `(datum.extra ? _scale(${scale}, datum.extra.value) : ${value})`
       }
-      if (value == null) value = '0'
+      if (value === undefined) value = '0'
     }
   }
-  if (value === undefined) value = 'null'
-  if (e.exponent != null) value = `pow(${value},${propertyText(e.exponent)})`
-  if (e.mult != null) value += `*${propertyText(e.mult)}`
-  if (e.offset != null) value += `+${propertyText(e.offset)}`
-  if (e.round) value = `round(${value})`
+  if (value === undefined) value = VNULL
+  for (const [key, wrap] of [['exponent', (v: string, p: string) => `pow(${v},${p})`], ['mult', (v: string, p: string) => `${v}*${p}`], ['offset', (v: string, p: string) => `${v}+${p}`]] as const) {
+    if (e[key] == null) continue
+    const p = propertyText(e[key])
+    if (p === null) return null
+    value = wrap(text(value), p)
+  }
+  if (e.round) value = `round(${text(value)})`
   return value
 }
 
