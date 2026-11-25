@@ -230,6 +230,18 @@ let vegaCheck = false
  * `serial`: the case runs alone (nothing else draws random numbers meanwhile), so the --vega-check renders of a bootstrap case
  * can each draw from the same seeded stream and be compared exactly (see the pool in `main`).
  */
+/** Whether a compiled Vega spec encodes a mark property named `undefined`: vega-lite's own sign that it placed nothing where it meant to. */
+function writesUndefinedChannel(node: unknown): boolean {
+  if (Array.isArray(node)) return node.some(writesUndefinedChannel)
+  if (node === null || typeof node !== 'object') return false
+  const rec = node as Record<string, unknown>
+  const encode = rec.encode as Record<string, Record<string, unknown>> | undefined
+  if (encode !== undefined && typeof encode === 'object') {
+    for (const set of Object.values(encode)) if (set !== null && typeof set === 'object' && Object.hasOwn(set, 'undefined')) return true
+  }
+  return Object.values(rec).some(writesUndefinedChannel)
+}
+
 async function runOneCase(c: SweepCase, serial = false): Promise<'ok' | 'retained' | 'both-refused' | 'node-error' | 'engine-error' | 'differ' | 'nondeterministic' | 'vega-differ'> {
   // Each engine is handed a copy of its own, taken before either runs (engines.ts): vega writes its transforms' answers onto
   // the rows it ingests, and an Aster handed those rows would agree with the oracle without running a transform at all.
@@ -259,6 +271,8 @@ async function runOneCase(c: SweepCase, serial = false): Promise<'ok' | 'retaine
       // compiled a chart that is wrong, and the compiler would not draw it. Any other refusal, or one of a chart Vega does run, is an
       // engine error.
       if (e instanceof VLCompileError) {
+        // (and so is a chart vega-lite writes a property under the name `undefined` of: the encoding of a position it could not place)
+        if (writesUndefinedChannel(vgSpec)) return 'both-refused'
         try {
           await renderOracle(vgSpec, c.writes, [])
         } catch {
