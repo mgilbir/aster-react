@@ -655,6 +655,17 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
    */
   const frameClip = (x: number, y: number, w: number, h: number): Clip =>
     !Number.isFinite(w) || !Number.isFinite(h) || (!canvas && (w < 0 || h < 0)) ? { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity } : rectClip(x, y, w, h)
+  /**
+   * `frameClip` for a frame at (x, y) in the frame content is drawn in, on the canvas index where (skewX, skewY) is what vega's pick
+   * asks it in on top of that (see `skewX`): vega's pick tests a clipped group's box against the pointer as it holds it, so an axis
+   * on which the frame is no number takes every point.
+   */
+  const frameClipAsked = (x: number, y: number, w: number, h: number, sx: number, sy: number): Clip => {
+    const c = frameClip(x + sx, y + sy, w, h)
+    if (Number.isNaN(c.x1) || Number.isNaN(c.x2)) { c.x1 = -Infinity; c.x2 = Infinity }
+    if (Number.isNaN(c.y1) || Number.isNaN(c.y2)) { c.y1 = -Infinity; c.y2 = Infinity }
+    return c
+  }
   /** A group item's bounds (vega's: what it holds, its box unless `noBound`, its stroke) in scene coordinates. */
   /** A group item's bounds as vega measured them, made once per index (the group item's own clip and its group mark's union ask them). */
   const groupBounds = new Map<SceneGroup, Bounds>()
@@ -781,7 +792,7 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
       const w = frameSize(group, 'width', fw)
       const h = frameSize(group, 'height', fh)
       // a group item's `clip` (encode) clips what it holds to its box: the content `<g>` of the SVG
-      const content = rec(group).contentClip === true ? (group.clipPathD !== undefined ? pathClip(group.clipPathD, gx, gy) : frameClip(gx, gy, w, h)) : null
+      const content = rec(group).contentClip === true ? (group.clipPathD !== undefined ? pathClip(group.clipPathD, gx, gy) : frameClipAsked(gx, gy, w, h, skewX, skewY)) : null
       // vega looks for a group item, its box and what it holds, only within its bounds: they hold all of it, unless its box is
       // left out of them (`noBound`), where its box takes the pointer only as far as what it holds reaches
       // (vega's canvas pick tests every group item's bounds first, an axis' and a legend's too: they bound what it finds there)
@@ -792,10 +803,10 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
       // (the scene keeps a clipped group item's content in a child group that clips it: on the canvas its clip bounds the whole item)
       const clipped = canvas && scope ? ((group.items ?? []) as SceneGroup[]).find((c) => isGroup(c as SceneItem) && rec(c).contentClip === true) : undefined
       const itemClip = clipped === undefined ? null
-        : clipped.clipPathD !== undefined ? pathClip(clipped.clipPathD, gx + (clipped.x ?? 0), gy + (clipped.y ?? 0)) : frameClip(gx + (clipped.x ?? 0), gy + (clipped.y ?? 0), frameSize(clipped, 'width', w), frameSize(clipped, 'height', h))
+        : clipped.clipPathD !== undefined ? pathClip(clipped.clipPathD, gx + (clipped.x ?? 0), gy + (clipped.y ?? 0)) : frameClipAsked(gx + (clipped.x ?? 0), gy + (clipped.y ?? 0), frameSize(clipped, 'width', w), frameSize(clipped, 'height', h), skewX, skewY)
       // an axis's or a title's group item, held as its box: picked where it is painted when the spec made it `interactive`
       const held = !scope ? guideBoxFaces(group, gx, gy, outer) : null
-      withClip(rec(group).markClip === true ? (group.markClipPathD !== undefined ? pathClip(group.markClipPathD, tx, ty) : frameClip(tx, ty, fw, fh)) : null, () => withClip(bounds, () => withClip(itemClip, () => {
+      withClip(rec(group).markClip === true ? (group.markClipPathD !== undefined ? pathClip(group.markClipPathD, tx, ty) : frameClipAsked(tx, ty, fw, fh, boundsX - tx, boundsY - ty)) : null, () => withClip(bounds, () => withClip(itemClip, () => {
         if (box.background) { entries.push(box.background); clipFrom(entries.length - 1) }
         if (held?.background) { entries.push(held.background); clipFrom(entries.length - 1) }
         withClip(content, () => {
@@ -831,7 +842,7 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
     const e0 = entries.length
     const guidePart = group.role === 'title-text' || group.role === 'title-subtitle'
     // a mark's `clip`: its items are clipped to the frame of the group they are in (or to its rounded outline)
-    const clip = group.clip === true ? (group.clipPathD !== undefined ? pathClip(group.clipPathD, tx, ty) : frameClip(tx, ty, fw, fh)) : null
+    const clip = group.clip === true ? (group.clipPathD !== undefined ? pathClip(group.clipPathD, tx, ty) : frameClipAsked(tx, ty, fw, fh, skewX, skewY)) : null
     withClip(clip, () => {
       // (a mark of a scene the engine returned holds what it held: at the same place, its entries are the ones made before, see
       // `MARK_ENTRIES`; each index takes copies, which the clips and flags below are written onto)
