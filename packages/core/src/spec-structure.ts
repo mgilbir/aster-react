@@ -206,6 +206,30 @@ export function checkScale(s: unknown, names: Names): void {
   // (vega-parser parseScale: `Unrecognized scale type`, thrown before any view exists and before the scale's own expressions are read; no
   // type -- or a falsy one -- is vega's default, linear)
   if (s.type && !SCALE_TYPES.has(s.type as string)) throw new SpecParseError(`Unrecognized scale type: ${JSON.stringify(s.type)}`)
+  checkScaleDomain(s, names)
+  checkScaleLiterals(s)
+}
+
+/**
+ * vega-parser `parseScaleInterpolate` / `parseScaleNice` read the interpolation (its type, its gamma) and the `interval` / `step` of a
+ * `nice` object with `parseLiteral(v)` and NO scope, so a `{signal}` in one of those positions fails to parse: the TypeError of the
+ * missing scope (`scope.signalRef`), before any view exists. (A `nice` that is itself a `{signal}` has a scope and is read; any other
+ * object there is `Unsupported object`, read when the scale is built.) Refused as a `SpecParseError` with vega's message, in vega's
+ * order: after the domain and the range, interpolation before `nice`.
+ */
+function checkScaleLiterals(s: Record<string, unknown>): void {
+  const signalRef = (v: unknown): boolean => isRecord(v) && !!v.signal
+  const refuse = (): never => { throw new SpecParseError("Cannot read properties of undefined (reading 'signalRef')") }
+  const interpolate = s.interpolate
+  if (interpolate != null) {
+    if (signalRef(isRecord(interpolate) && interpolate.type ? interpolate.type : interpolate)) refuse()
+    if (isRecord(interpolate) && interpolate.gamma != null && signalRef(interpolate.gamma)) refuse()
+  }
+  const nice = s.nice
+  if (nice != null && isRecord(nice) && !nice.signal && (signalRef(nice.interval) || signalRef(nice.step))) refuse()
+}
+
+function checkScaleDomain(s: Record<string, unknown>, names: Names): void {
   const domain = s.domain
   if (!domain) {
     if (s.domainMin != null || s.domainMax != null) throw new SpecParseError('No scale domain defined for domainMin/domainMax to override.')
