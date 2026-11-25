@@ -77,19 +77,26 @@ describe('the ADR index lists every record, and the records say what holds (C84,
   })
 })
 
-describe('the incremental guarantee states its one exception where the oracle makes it (C85)', () => {
-  const oracle = read('packages/core/src/incremental-oracle.test.ts')
+describe('the incremental guarantee states the exceptions where the oracle makes them (C85)', () => {
+  const oracle = read('packages/core/src/incremental-oracle.testlib.ts')
   const incremental = section(ARCH, 'Incremental evaluation')
+  const guarantee = /\*\*Guarantee\.\*\*[^\n]*/.exec(incremental)?.[0] ?? ''
 
-  it('the oracle compares a spec with an `identifier` with a reference of its own, and ARCHITECTURE says so beside the guarantee; the day the oracle does not, the sentence goes', () => {
-    const oracleSpecialCases = /includes\('"identifier"'\)/.test(oracle)
-    const docSaysSo = /a spec with an `identifier` is compared with a reference chart of its own/.test(incremental)
-    expect(docSaysSo, 'docs/ARCHITECTURE.md "Incremental evaluation" and packages/core/src/incremental-oracle.test.ts disagree about the identifier exception').toBe(oracleSpecialCases)
+  it('the oracle compares a spec with an `identifier` with a freshly compiled chart, as identities, and only the history-bound scenarios with a chart carried through the states; ARCHITECTURE says so beside the guarantee', () => {
+    // (the oracle's reference: a chart compiled afresh unless the scenario is history-bound; no blanket case for a spec that has an identifier)
+    expect(oracle).not.toMatch(/includes\('"identifier"'\)/)
+    expect(oracle).toMatch(/function historyBound\(/)
+    expect(oracle).toMatch(/const keptReference = historyBound\(g\)/)
+    expect(guarantee).toContain('compares them as identities')
+    expect(guarantee).toContain('historyBound')
   })
 
-  it('the exception is in the paragraph of the guarantee, not elsewhere', () => {
-    const guarantee = /\*\*Guarantee\.\*\*[^\n]*/.exec(incremental)?.[0] ?? ''
-    expect(guarantee).toContain('`identifier`')
+  it('the two history-bound kinds the document names are the two the oracle decides by', () => {
+    const decides = /function historyBound\([\s\S]*?\n}/.exec(oracle)?.[0] ?? ''
+    expect(decides).toContain("g.store === 'ids'")
+    expect(decides).toContain('ROW_FIELDS')
+    expect(guarantee).toContain('`_vgsid_` ids')
+    expect(guarantee).toContain('overwrites a field the rows carry')
   })
 })
 

@@ -209,7 +209,7 @@ development-only code. Set it yourself to see the checks run (`NODE_ENV=developm
 
 | Variable | Test | Default | Effect |
 |---|---|---|---|
-| `ASTER_ORACLE_SEEDS`, `ASTER_ORACLE_STEPS`, `ASTER_ORACLE_START`, `ASTER_ORACLE_SEED` | `packages/core/src/incremental-oracle.test.ts` | 40, 12, 1, unset | Seeds to run, steps per seed, first seed, and a single seed to replay (incremental evaluation equals a fresh one). |
+| `ASTER_ORACLE_SEEDS`, `ASTER_ORACLE_STEPS`, `ASTER_ORACLE_START`, `ASTER_ORACLE_SEED` | `packages/core/src/incremental-oracle.test.ts` | one per pipeline of `PIPES`, 12, 1, unset | Seeds to run per family (fewer than the pipeline list is refused; a value that is not a whole number is an error), steps per seed, first seed, and a single seed to replay (incremental evaluation equals a fresh one). |
 | `ASTER_DOM_ORACLE_SEEDS`, `_STEPS`, `_START`, `_SEED` | `packages/core/src/dom-oracle.test.ts` | 40, 10, 1, unset | Same knobs for the patched DOM against a DOM built fresh. |
 | `ASTER_CANVAS_ORACLE_SEEDS`, `_STEPS`, `_START`, `_SEED` | `packages/core/src/canvas-append-oracle.test.ts` | 60, 12, 1, unset | Same knobs for canvas append painting against a full repaint. |
 | `ASTER_REUSE_SEEDS`, `ASTER_REUSE_SEED` | `packages/core/src/dataset-reuse.test.ts` | 300, unset | Number of generated charts; replay one seed. |
