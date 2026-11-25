@@ -356,6 +356,17 @@ function genSpec(r: Rnd, pipe: Pipe): GenSpec {
     })
   }
 
+  // Items that are not one per row in data order: a mark `key` (C120), an item `zindex` (C28), a colour object (C27), at any depth
+  const reshape = (m: Record<string, unknown>): void => {
+    for (const inner of (m.marks as Array<Record<string, unknown>> | undefined) ?? []) reshape(inner)
+    const upd = (m.encode as { update?: Record<string, unknown> } | undefined)?.update
+    if (upd === undefined || m.type === 'group' || m.from === undefined) return
+    if (r() < 0.2) { m.key = pick(r, [pipe.xf, pipe.cf ?? pipe.xf]); features.push('key') }
+    if (r() < 0.25) { upd.zindex = { signal: `datum.${pipe.yf} % 3` }; features.push('zindex') }
+    if (upd.fill !== undefined && r() < 0.15) { upd.fill = { color: { h: { field: pipe.xf, mult: 20 }, c: { value: 40 }, l: { value: 60 } } }; features.push('color-object') }
+  }
+  for (const m of marks) reshape(m)
+
   const axes: Array<Record<string, unknown>> = [
     { scale: 'x', orient: 'bottom', grid: r() < 0.3 },
     { scale: 'y', orient: 'left' },
