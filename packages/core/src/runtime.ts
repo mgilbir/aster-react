@@ -5732,7 +5732,8 @@ function detachLive(value: unknown, live: { has(v: object): boolean }, seen: Map
       const held = COPIES.get(value)
       const version = versionOf(value)
       const copy = held !== undefined && held.version === version && held.length === value.length ? held.copy : value.slice()
-      if (copy !== held?.copy) { COPIES.set(value, { version, length: value.length, copy }); DETACHED.add(copy) }
+      // (a copy of a dataset's rows is keyed by its stamp as the rows are: a fingerprint does not hash a dataset's content)
+      if (copy !== held?.copy) { COPIES.set(value, { version, length: value.length, copy }); DETACHED.add(copy); publishRows(copy) }
       seen.set(value, copy)
       return copy
     }
