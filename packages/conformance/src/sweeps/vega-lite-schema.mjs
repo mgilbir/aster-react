@@ -527,6 +527,8 @@ export function generate(ctx) {
     }
     const nested = fragment.oneOf || fragment.anyOf || fragment.allOf;
     if (nested) return nested.flatMap((branch) => branchesOf(branch, depth + 1));
+    // (a branch that is one constant is an enumeration of one: `domain: "unaggregated"`, not a free string)
+    if (fragment.const !== undefined && fragment.enum === undefined) return [{ ...fragment, enum: [fragment.const] }];
     return [fragment];
   }
 
