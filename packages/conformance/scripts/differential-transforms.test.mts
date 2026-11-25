@@ -27,7 +27,8 @@ import { applyTransforms, compileExpr, type Row } from '@aster-charts/core'
 import '@aster-charts/core/transforms'
 import '@aster-charts/core/geo'
 import { CASES, SEED } from './transform-cases.mjs'
-import { expectEveryKnownDifferenceCompared, expectKnownDifference } from './known-differences.mts'
+import { enc } from './differential-util.mts'
+import { expectEveryKnownDifferenceCompared, expectKnownDifference } from '../src/known-differences.ts'
 
 /** The transforms the case list does not hold, and the suites that compare each with Vega (a name that appears in the file). */
 const COMPARED_ELSEWHERE: Record<string, string[]> = {
@@ -175,7 +176,7 @@ describe('transform differential vs real Vega (live, same engine)', { timeout: 6
               let got: unknown
               try { got = { out: runAster(c, false).rows } } catch (e) { got = { throw: e instanceof Error ? e.message : String(e) } }
               const want = 'throw' in oracle ? { throw: String(oracle.throw.message ?? oracle.throw) } : { out: oracle.out }
-              expectKnownDifference(FILE, `${c.suite}: ${c.name}`, want, got)
+              expectKnownDifference(FILE, `${c.suite}: ${c.name}`, want, got, enc)
               return
             }
             if (crashed(c, oracle)) { excluded++; return }

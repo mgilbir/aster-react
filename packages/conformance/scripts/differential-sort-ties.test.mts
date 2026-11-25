@@ -22,7 +22,8 @@ import { createChartSession } from '../../core/src/session.ts'
 import { datasetsOfScene } from '../../core/src/runtime.ts'
 import { renderSpec } from '@aster-charts/core'
 import { makeRng, scaled, type Rng } from './differential-gen.mts'
-import { expectEveryKnownDifferenceCompared, expectKnownDifference } from './known-differences.mts'
+import { enc } from './differential-util.mts'
+import { expectEveryKnownDifferenceCompared, expectKnownDifference } from '../src/known-differences.ts'
 
 type Row = Record<string, unknown>
 type Spec = Record<string, unknown>
@@ -127,7 +128,7 @@ describe('a derived dataset that opens with a sorting collect (a known differenc
     const got = paths(renderSpec(specOf(true, line) as never))
     expect(want, 'vega: the source re-ordered by k').toBe('M50,10L100,50L0,90')
     expect(got, 'Aster: the source untouched').toBe('M0,90L50,10L100,50')
-    expectKnownDifference('differential-sort-ties', 'a line over the source of a sorting derived dataset', want, got)
+    expectKnownDifference('differential-sort-ties', 'a line over the source of a sorting derived dataset', want, got, enc)
   })
 
   it('a text mark over the source: vega draws the sorted rows, Aster the rows as given', async () => {
@@ -135,7 +136,7 @@ describe('a derived dataset that opens with a sorting collect (a known differenc
     const got = labels(renderSpec(specOf(true, text) as never))
     expect(want).toBe('1,2,3')
     expect(got).toBe('3,1,2')
-    expectKnownDifference('differential-sort-ties', 'a text mark over the source of a sorting derived dataset', want, got)
+    expectKnownDifference('differential-sort-ties', 'a text mark over the source of a sorting derived dataset', want, got, enc)
   })
 
   it('the derived dataset itself is sorted alike in both', async () => {
