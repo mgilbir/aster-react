@@ -20,7 +20,7 @@ import { evaluateChart } from './evaluate.js'
 import { renderSceneToSvg } from './index.js'
 import type { SceneGroup, SceneRoot } from './types.js'
 import {
-  OFFSET, PIPES, applyStep, wholeNumberKnob, checkSeed, coverage, featuresOf, inputOf, pipeFor, scenario, scenarioCensus, scenarioContainer, scenarioRelational, scenarioScoped, scenarioSel, SHAPE_NAMES,
+  OFFSET, PIPES, applyStep, wholeNumberKnob, checkSeed, coverage, featuresOf, inputOf, pipeFor, scenario, scenarioCensus, scenarioContainer, scenarioRelational, scenarioRelationalMore, MORE_SHAPE_NAMES, scenarioScoped, scenarioSel, SHAPE_NAMES,
   type Op, type World,
 } from './incremental-oracle.testlib.js'
 
@@ -220,13 +220,24 @@ describe('the seeds that caught the audited defects still draw their shapes and 
   }
 })
 
+describe('incremental === fresh over images, time scales and parsed data', () => {
+  it('the generator takes every shape in turn', () => {
+    for (let seed = 1; seed <= MORE_SHAPE_NAMES.length; seed++) expect(scenarioRelationalMore(seed, 1).g.features.has(`shape=${MORE_SHAPE_NAMES[seed - 1]}`), `seed ${seed}`).toBe(true)
+  })
+  for (const seed of seedList(Math.max(SEEDS, 12 * MORE_SHAPE_NAMES.length))) {
+    it(`holds for seed ${seed} x ${STEPS} steps (chart reuse + session)`, () => {
+      expect(checkSeed(seed, STEPS, scenarioRelationalMore) ?? '', `seed ${seed}`).toBe('')
+    }, 600_000)
+  }
+})
+
 /** What the scenarios that ran must have contained, at least this many times (read off their built specs, see `featuresOf`). */
 const FLOORS: ReadonlyArray<readonly [string, number]> = [
   ...SHAPE_NAMES.map((n) => [`shape=${n}`, 3] as const),
   ...['symbol', 'rect', 'text', 'line', 'area', 'rule', 'arc', 'trail', 'path', 'group', 'shape'].map((m) => [`mark:${m}`, 2] as const),
   ...['linear', 'band', 'point', 'ordinal', 'pow', 'sqrt', 'symlog', 'log', 'quantize', 'quantile', 'threshold', 'sequential', 'bin-ordinal'].map((t) => [`scale:${t}`, 1] as const),
   ['mark-from-mark', 5], ['mark-from-mark@group', 2], ['nested=facet', 5], ['nested=scoped', 5], ['nested=leaf-reads-data', 5], ['enter+update', 3], ['exit', 2], ['hover', 2],
-  ['mark.key', 2], ['mark.zindex', 2], ['mark.sort', 2], ['layout', 2], ['axis:encode', 2], ['projection:fit', 5], ['signal:init', 3], ['signal:reads-data', 3],
+  ['mark:image', 3], ['scale:time', 3], ['scale:utc', 3], ['data:format.parse', 3], ['mark.key', 2], ['mark.zindex', 2], ['mark.sort', 2], ['layout', 2], ['axis:encode', 2], ['projection:fit', 5], ['signal:init', 3], ['signal:reads-data', 3],
   ['encode:per-item-signal', 5], ['encode:rules', 5], ['range=scheme', 1], ['mark.transform:label', 1], ['mark.transform:geopoint', 1], ['mark.transform:geoshape', 1], ['transform:extent', 2],
   ['op:empty', 5], ['op:odd', 10], ['op:appendU', 5], ['op:bulk', 2], ['op:bulkU', 2], ['rows:kept', 20], ['delivery:dataPulse', 20], ['delivery:inplace', 20], ['via:change', 10],
   ['sel=ids', 3], ['sel=fields/union', 3], ['scoped-signals', 3], ['container(fit)', 1], ['census', 3],
