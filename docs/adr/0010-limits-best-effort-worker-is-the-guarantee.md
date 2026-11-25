@@ -50,3 +50,14 @@ by a deadline.
   an `AsterLimitError` within a CPU-time bound.
 - `packages/core/src/limits.test.ts`, `packages/core/src/expression-limits.test.ts`.
 - The two layers, the ceilings and the enforcement table: [LIMITS.md](../LIMITS.md).
+
+## Amendments
+
+*2026-11-25, to match the code (audit C374).*
+
+- The regular-expression screen now has the mitigation the last consequence asks for: `limits.regex: 'refuse'` (0.4.2) refuses
+  a spec that makes a regular expression at all, for a host that would rather lose a safe pattern than pass a dangerous one
+  ([LIMITS.md](../LIMITS.md)); and the screen costs a run at the length of the text it is given (LIMITS.md, "Regular expressions")
+  rather than refusing by shape alone for what depends on the input. The trade-off of the default is unchanged.
+- [ROADMAP.md](../ROADMAP.md) section 4 says "bounded ... with the documented caveats", and means this record: `limits` are
+  best-effort and the worker is the guarantee.

@@ -12,7 +12,7 @@ the gates, and the results are in [Conformance results](#conformance-results).
 
 ## Install
 
-Consumers need Node 20 or newer (`engines` in each package).
+Consumers need Node 20 or newer (`engines` in each package). TypeScript needs `"moduleResolution": "bundler"`, `"node16"` or `"nodenext"`: the packages declare their types through `exports` only (no `typesVersions`), so the older `"node"` (node10) resolution cannot find a subpath such as `@aster-charts/react/vl` or `@aster-charts/core/dom`, and loses the types the root entry takes from them (`ChartSession`, `PngOptions`, `EnginePart` become `any`) without an error under `skipLibCheck`.
 
 ```bash
 npm i @aster-charts/react react react-dom   # React charts: <Chart>, useChart; react ^19 is a peer dependency
@@ -195,16 +195,16 @@ The Vega spec is the canonical intermediate representation. A Vega-Lite spec is 
 
 Everything below the spec language is owned: the expression parser and CSP-safe interpreter (no `new Function`), scales, ticks
 and colour schemes, number and time formatting, time zones, curves and symbols, geo projections, contours, DSV and TopoJSON
-readers, and the transforms. They are ports of the upstream algorithms, each checked against oracle vectors recorded from the
-pinned upstream packages ([docs/TESTING.md](docs/TESTING.md#oracle-vectors)); their licences are reproduced in
+readers, and the transforms. They are Aster's own implementations of the upstream algorithms, each checked against the pinned upstream packages, live in one process or
+against vectors recorded from them ([docs/TESTING.md](docs/TESTING.md#oracle-vectors)); their licences are reproduced in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Repo Layout
 
 | Path | Description |
 |---------|-------------|
-| `packages/core` (`@aster-charts/core`) | Compiler (spec to IR), runtime (IR to scene), SVG renderer, expression engine, limits. Entry points: `.`, `/addons` (which add-ons a spec needs, loaded on demand), `/dom` (incremental DOM, sessions), `/canvas`, `/hit` (hit testing), `/signals` (event loop), `/load` (URL datasets), `/geo`, `/transforms`. [README](packages/core/README.md). |
-| `packages/react` (`@aster-charts/react`) | `<Chart>` (SVG/canvas, incremental DOM patching, selection, pan/zoom, tooltips, accessibility tree), `useChart`, streaming and worker components and hooks, SSR helpers. Entry points: `.`, `/lite` (SVG-only `<SvgChart>`), `/interaction`, `/ssr`, `/worker`, `/worker-entry`, `/vl` (registers the Vega-Lite compiler). [README](packages/react/README.md). |
+| `packages/core` (`@aster-charts/core`) | Compiler (spec to IR), runtime (IR to scene), SVG renderer, expression engine, limits. Entry points: `.`, `/addons` (which add-ons a spec needs, loaded on demand), `/dom` (incremental DOM, sessions), `/canvas`, `/hit` (hit testing), `/signals` (event loop), `/load` (URL datasets), `/geo`, `/transforms`, `/transition` (interpolating two scenes), `/png` (a scene as a PNG); `/lean*` are internal plumbing of the React shells. [README](packages/core/README.md). |
+| `packages/react` (`@aster-charts/react`) | `<Chart>` (SVG/canvas, incremental DOM patching, selection, pan/zoom, tooltips, accessibility tree), `useChart`, streaming and worker components and hooks, SSR helpers. Entry points: `.`, `/lite` (SVG-only `<SvgChart>`), `/interaction`, `/png` (the `getPng` capability), `/ssr`, `/worker`, `/worker-entry`, `/vl` (registers the Vega-Lite compiler), `/all` (every part of the engine in the bundle). [README](packages/react/README.md). |
 | `packages/vl` (`@aster-charts/vl`) | The Vega-Lite to Vega compiler. Throws `VLCompileError` for what it does not support. [README](packages/vl/README.md). |
 | `packages/conformance` (`@aster-charts/conformance`, private) | The oracle harness: corpus, sweeps, vectors, browser gates, fuzzing, and the [official gallery runs](packages/conformance/gallery/README.md). |
 | `packages/benchmarks` (`@aster-charts/benchmarks`, private) | Runtime, memory, bundle and browser performance harness (`<Chart>` vs react-vega and vega-embed) and the bundle-size budgets: [packages/benchmarks/README.md](packages/benchmarks/README.md). |

@@ -114,3 +114,13 @@ describe('docs that derive a size from two rows', () => {
     }
   })
 })
+
+describe('docs/ANIMATION.md', () => {
+  const animation = read('docs/ANIMATION.md')
+
+  it('states the size of the transition module as the table of PERFORMANCE.md does (C733)', () => {
+    const m = /The module is ([\d.]+) kB gzip on top of `@aster-charts\/core`/.exec(animation)
+    expect(m, 'ANIMATION.md transition module sentence').not.toBeNull()
+    expect(withinBudget(Number(m[1]), '+ @aster-charts/core/transition'), `ANIMATION.md says ${m[1]} kB, the ceiling is ${fmt(ceiling('+ @aster-charts/core/transition'))}`).toBe(true)
+  })
+})

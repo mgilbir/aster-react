@@ -67,7 +67,7 @@ export interface UseChartStreamResult {
   resume: () => void
   /** Stop accepting batches and drop the queue (this stream: one rebuilt later, after a spec change, is open). */
   close: () => void
-  /** The underlying stream (stable until the spec CONTENT, `capacity`, `policy` or `maxQueuedRows` changes). */
+  /** The underlying stream (stable until the spec CONTENT, `capacity`, `policy`, `maxQueuedRows` or `initial.urlData` changes). */
   stream: ChartStream
 }
 

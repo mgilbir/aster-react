@@ -44,7 +44,7 @@ behaviour end to end, and it is the only route to rendering Vega-Lite directly.
    - **the SVG conformance corpus** — real Vega renders the same spec and the two
      outputs are diffed, as before.
 2. **The oracle stays pinned and dev-only.** `@aster-charts/conformance` declares the exact
-   oracle versions it records against, in its devDependencies. They never ship.
+   oracle versions it records against, in its package.json (`vega`, `vega-lite`, as exact versions: `scripts/lockfile-hygiene.test.mjs` holds that). The package is private, so they never ship.
 3. **The boundary is enforced by a ratchet.** `scripts/check-deps.mjs` fails on any
    banned import or dependency not listed in a package's `dep-baseline.json`, and on
    any baseline entry that no longer matches. Baselines start at the inherited state
@@ -56,10 +56,9 @@ behaviour end to end, and it is the only route to rendering Vega-Lite directly.
 - **The base bundle grows** before it shrinks: scales, expressions, geo and shape
   become ours, and the per-entry budget gates are re-baselined as phases land. The
   gap to react-vega (288 kB gzip, which includes Vega-Lite) is expected to hold for Vega specs.
-- **Ports are transcriptions, not paraphrases.** Where upstream's behaviour is
-  surprising (e.g. `toBoolean('False')` is `true`, `NaN` compares equal to everything
-  in `ascending`), the port reproduces it and the vectors pin it. Correctness against
-  the oracle outranks tidiness.
+- **Where upstream's behaviour is surprising, it is reproduced** (e.g. `toBoolean('False')` is `true`, `NaN` compares equal to everything
+  in `ascending`) and the vectors pin it. Correctness against the oracle outranks tidiness. (Amended below: the *behaviour* is
+  transcribed, the structure is not.)
 - **A port may fix a proven bug in our code** while matching upstream exactly — e.g.
   the `pluck` expression function now uses `field()` the way `vega-functions` does,
   instead of misusing `accessor` as a path factory (it could not have worked).
@@ -89,3 +88,13 @@ behaviour end to end, and it is the only route to rendering Vega-Lite directly.
 moved the scale, geo, shape, expression and transform suites to live differentials (the pinned oracle and Aster run in one process on
 the same inputs), and kept recordings for seven packages whose results do not depend on V8's numerics (`packages/core/testdata/vectors/`).
 Read "oracle vectors" in decision 1 as "oracle comparison": recorded where ADR 0009 says recorded, live everywhere else.
+
+*2026-11-25, to match the code (audit C374).*
+
+- "Ports are transcriptions, not paraphrases" described the first phases. What holds now is stated in
+  [ARCHITECTURE.md](../ARCHITECTURE.md) ("They are not line-for-line ports ... the structure is free"; the geo engine is "Aster's
+  own design"): the observable behaviour (values to the last bit, tick positions, error messages) is what the vectors and the live
+  differentials pin; the code that produces it is Aster's own. Upstream's surprising behaviour is still reproduced where it is
+  observable, and a deliberate difference is a row of the deviations table.
+- The oracle's versions are exact (`6.3.1`, `6.4.3`) in `packages/conformance/package.json`, under `dependencies` rather than
+  `devDependencies`; the package is private, so nothing of it ships either way.

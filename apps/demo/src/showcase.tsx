@@ -25,14 +25,19 @@ import datumChannels from '../../../packages/conformance/corpus/new-datum-channe
  */
 type Spec = Record<string, unknown>
 
-function sizeOf(spec: Spec): { width: number; height: number } {
+function sizeOf(spec: Spec): { width?: number; height?: number } {
   const vg = (String(spec.$schema ?? '').includes('vega-lite') ? compile(spec as never) : spec) as Spec
-  return { width: typeof vg.width === 'number' ? vg.width : 0, height: typeof vg.height === 'number' ? vg.height : 0 }
+  // (a size is passed only where the compiled spec has a number: a concat or facet view is sized by its content, and a prop of 0 is no size)
+  return { ...(typeof vg.width === 'number' ? { width: vg.width } : {}), ...(typeof vg.height === 'number' ? { height: vg.height } : {}) }
 }
 
 function AsterPane({ spec, label }: { spec: Spec; label: string }) {
   const size = React.useMemo(() => sizeOf(spec), [spec])
-  return <Chart spec={spec as never} ariaLabel={label} width={size.width} height={size.height} />
+  return (
+    <React.Suspense fallback={<div className="vega-loading" aria-busy="true">loading aster…</div>}>
+      <Chart spec={spec as never} ariaLabel={label} {...size} />
+    </React.Suspense>
+  )
 }
 
 export const SHOWCASE: Array<{ title: string; desc: string; raw: Spec; aster: React.ReactNode; wide?: string }> = [

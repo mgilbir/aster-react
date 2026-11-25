@@ -22,3 +22,4 @@ scratch/
 
 # The official Vega / Vega-Lite galleries are fetched, not committed (packages/conformance/gallery/README.md)
 /packages/conformance/.gallery/
+apps/demo/.wrangler/
