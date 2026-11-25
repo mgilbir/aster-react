@@ -47,7 +47,7 @@
 import type { HostElement, HostEvent, HostEventTarget } from './host-types.js'
 import type { CompiledChart, CompiledData, CompiledSignalDef, SceneGroup, SceneItem, SceneNode, SceneRoot, SignalOnDef } from './types.js'
 import { isEngineNode, keptInto } from './scene-registry.js'
-import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
+import { compileExpr, evalSignal, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import type { Changeset } from './modify.js'
 import { normalizeEvents, filterCode } from './stream-defs.js'
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
@@ -907,7 +907,7 @@ function bindSignalEventsDefs(
         if ((evaluatedAt.get(entry.key) ?? -1) >= (wroteAt.get(target) ?? 0)) continue
         const { key, def } = entry
         let fresh: unknown
-        try { fresh = runtimeFor(null).expr(def.update!)(undefined, params(null)) } catch { continue }
+        try { fresh = evalSignal(runtimeFor(null).expr(def.update!), params(null)) } catch { continue }
         const held = Object.hasOwn(signals, heldSignalName(key))
         const current = read(def.name, null)
         if (fresh !== current) {
@@ -1366,7 +1366,7 @@ function bindSignalEventsDefs(
         // vega Operator.evaluate: the update's value replaces the operator's when it differs (reference); else nothing pulses
         op.run = () => {
           let v: unknown
-          try { v = runtimeFor(scope).expr(code)(undefined, params(scope)) } catch (e) { fail(` (update of "${d.name}")`, e); throw new Logged() }
+          try { v = evalSignal(runtimeFor(scope).expr(code), params(scope)) } catch (e) { fail(` (update of "${d.name}")`, e); throw new Logged() }
           if (scope === null && Object.hasOwn(signals, heldSignalName(key))) { delete signals[heldSignalName(key)]; writes++ }
           evaluatedAt.set(key, writes)
           if (v !== read(d.name, scope)) markChanged(store(scope, d.name, v))
@@ -1420,7 +1420,7 @@ function bindSignalEventsDefs(
         // exist: a read of its own data set, or of one declared after it, does not make the trigger run again)
         for (const k of [...deps]) if (k.startsWith('data:') && !declaredBefore.has(k.slice(5))) deps.delete(k)
         const trigger = node(`trigger of data "${name}"`, () => {
-          try { runtimeFor(null).expr(text)(undefined, params(null)) } catch (e) { fail(` (trigger of data "${name}")`, e); throw new Logged() }
+          try { evalSignal(runtimeFor(null).expr(text), params(null)) } catch (e) { fail(` (trigger of data "${name}")`, e); throw new Logged() }
         })
         triggerOps.push(trigger)
         make(trigger, deps, true)

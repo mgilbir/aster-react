@@ -6,7 +6,7 @@
  * transform steps, scales and mark items that cannot have changed; the result is
  * the scene a fresh evaluation would produce.
  */
-import { compileExpr, engineParams, expressionRegistryEpoch, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
+import { compileExpr, engineParams, evalSignal, expressionRegistryEpoch, ExpressionParseError, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import { scaleCallFailure, scaleRangeFailure } from './missing-scale.js'
 import { ingestRows, isNotATupleError, notATuple, readData, type DataFormatSpec } from './data-format.js'
 import { followsSources, numbersSourceRows, orderOf, setOrder, setSources, sourcesAfter, sourcesOf } from './tuple-order.js'
@@ -1107,7 +1107,7 @@ function prepareChartCtx(
     const update = def?.update ?? def?.init
     let value = ctx.signalParams[dim]
     if (typeof update === 'string') {
-      try { value = ctx.runtime.expr(update)({}, ctx.signalParams) } catch { continue }
+      try { value = evalSignal(ctx.runtime.expr(update), ctx.signalParams) } catch { continue }
     }
     const v = viewSizeChange(chart, input, explicitSize, signed, ctx, dim, value, dim === 'width' ? width : height)
     if (v === undefined) continue
@@ -1284,7 +1284,7 @@ function randomFingerprint(code: unknown, rows: readonly unknown[] | Record<stri
 function inlineValues(ctx: Pick<EvalContext, 'runtime' | 'signalParams'>, values: unknown): unknown {
   const expr = values !== null && typeof values === 'object' && !Array.isArray(values) ? (values as { signal?: unknown }).signal : undefined
   if (typeof expr !== 'string') return values
-  return ctx.runtime.expr(expr)(undefined, ctx.signalParams)
+  return evalSignal(ctx.runtime.expr(expr), ctx.signalParams)
 }
 
 /** Say that the rows a `{signal}` values made hold primitive tuples (once per such dataset, only when they do). */
@@ -1339,7 +1339,7 @@ function resolveProjectionParam(ctx: EvalContext, v: unknown, strict: boolean, d
   if (v && typeof v === 'object' && typeof (v as { signal?: unknown }).signal === 'string') {
     const expr = (v as { signal: string }).signal
     try {
-      return ctx.runtime.expr(expr)({}, ctx.signalParams)
+      return evalSignal(ctx.runtime.expr(expr), ctx.signalParams)
     } catch (e) {
       // In an early pass the signal may read a dataset or scale that does not exist yet: the next pass resolves it. In the last,
       // everything it can read exists, and what it throws is an error (C153): it stops the pass at the projection, as vega's operator
@@ -1762,8 +1762,8 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false, changedNames
       if (reads !== null && ctx.signalRuns?.get(def.name) === reads) continue
       ctx.setData.caller = def.name
       const value = ctx.runtime.random === undefined || !mayDrawRandom(expr)
-        ? ctx.runtime.expr(expr)(undefined, params)
-        : atRandomSite(ctx.runtime.random, ctx.chart, `signal:${def.name}`, () => randomFingerprint(expr, [], params), () => ctx.runtime.expr(expr)(undefined, params))
+        ? evalSignal(ctx.runtime.expr(expr), params)
+        : atRandomSite(ctx.runtime.random, ctx.chart, `signal:${def.name}`, () => randomFingerprint(expr, [], params), () => evalSignal(ctx.runtime.expr(expr), params))
       // An `init` that reads a scale or a dataset is only settled once they exist: until the scales are built,
       // `domain('x')` of a scale that is not there yet is `[]`, which is not the value vega's dataflow computes.
       const readsScales = DATA_DEPENDENT_EXPR.test(lexedText(expr)) && ctx.scales.size === 0 && ctx.chart.scales.length > 0
@@ -1936,7 +1936,7 @@ function paramsFailure(ctx: EvalContext, params: readonly unknown[]): { error: u
   for (const p of params) {
     if (!isSignal(p)) continue
     try {
-      ctx.runtime.expr(p.signal)({}, ctx.signalParams)
+      evalSignal(ctx.runtime.expr(p.signal), ctx.signalParams)
     } catch (error) {
       return { error }
     }
@@ -1945,12 +1945,12 @@ function paramsFailure(ctx: EvalContext, params: readonly unknown[]): { error: u
 }
 
 /** A parameter of a guide's operator: the value, or what its signal holds (once {@link paramsFailure} has found that none throws). */
-const paramValue = (ctx: EvalContext, v: unknown): unknown => (isSignal(v) ? ctx.runtime.expr(v.signal)({}, ctx.signalParams) : v)
+const paramValue = (ctx: EvalContext, v: unknown): unknown => (isSignal(v) ? evalSignal(ctx.runtime.expr(v.signal), ctx.signalParams) : v)
 
 /** A guide number that may be a `{signal}` (undefined when absent or not a number). */
 function guideNumber(ctx: EvalContext, value: unknown): number | undefined {
   if (value && typeof value === 'object' && typeof (value as { signal?: unknown }).signal === 'string') {
-    try { value = ctx.runtime.expr((value as { signal: string }).signal)({}, ctx.signalParams) } catch { return undefined }
+    try { value = evalSignal(ctx.runtime.expr((value as { signal: string }).signal), ctx.signalParams) } catch { return undefined }
   }
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
@@ -1960,7 +1960,7 @@ function guideTitle(ctx: EvalContext, title: unknown): string | undefined {
   if (typeof title === 'string') return title
   if (title && typeof title === 'object' && typeof (title as { signal?: unknown }).signal === 'string') {
     try {
-      const value = ctx.runtime.expr(String((title as { signal: string }).signal))({}, ctx.signalParams)
+      const value = evalSignal(ctx.runtime.expr(String((title as { signal: string }).signal)), ctx.signalParams)
       return value == null ? undefined : String(value)
     } catch { return undefined }
   }
@@ -2272,7 +2272,7 @@ function resolvedLegendLayout(ctx: EvalContext): Record<string, unknown> {
   const raw = ctx.chart.legendLayout
   if (raw === undefined) return NO_LAYOUT
   const v = objectProperty(raw, (code) => {
-    try { return ctx.runtime.expr(code)({}, ctx.signalParams) } catch (e) { reportEvalError(ctx, e); return undefined }
+    try { return evalSignal(ctx.runtime.expr(code), ctx.signalParams) } catch (e) { reportEvalError(ctx, e); return undefined }
   })
   return v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : NO_LAYOUT
 }
@@ -5628,7 +5628,7 @@ function scaleContext(ctx: EvalContext, name: string): ScaleContext {
     signals: ctx.signalParams,
     configRange: ctx.chart.configRange,
     domainRaw: ctx.domainRaw?.get(name),
-    evaluate: (expr) => ctx.runtime.expr(expr)({}, ctx.signalParams),
+    evaluate: (expr) => evalSignal(ctx.runtime.expr(expr), ctx.signalParams),
     dataField: (dataName, field) => {
       const rows = ctx.datasets.get(dataName) ?? []
       const get = scaleFieldOf(field)
@@ -7125,11 +7125,11 @@ function markClipOf(mark: CompiledMark, ctx: EvalContext): { clip: boolean; clip
   if (c === null || typeof c !== 'object') return { clip: !!c }
   const o = c as { signal?: unknown; path?: unknown; sphere?: unknown }
   const param = (v: unknown): unknown =>
-    v !== null && typeof v === 'object' && typeof (v as { signal?: unknown }).signal === 'string' ? ctx.runtime.expr((v as { signal: string }).signal)({}, ctx.signalParams) : v
+    v !== null && typeof v === 'object' && typeof (v as { signal?: unknown }).signal === 'string' ? evalSignal(ctx.runtime.expr((v as { signal: string }).signal), ctx.signalParams) : v
   let shape: string | undefined
   let truthy = true
   if (o.signal) {
-    const v = ctx.runtime.expr(String(o.signal))({}, ctx.signalParams)
+    const v = evalSignal(ctx.runtime.expr(String(o.signal)), ctx.signalParams)
     // (a shape is drawn into the clip: given no context it is its path string)
     if (typeof v === 'function') shape = String((v as (context: null) => unknown)(null) ?? '')
     else truthy = !!v
@@ -7189,7 +7189,7 @@ function scopeSignalValues(mark: CompiledMark, ctx: EvalContext, id: string, bas
   const defs = (mark.signalDefs ?? []).filter((d) => d.push !== 'outer')
   // (a signal that throws stops the pass at the first operators of the instance: see AbortPoint)
   const evalIn = (code: string): unknown => {
-    try { return ctx.runtime.expr(code)({}, params) } catch (e) { failPass(ctx, { axis: -2, signals: true, path: instance }, e); return undefined }
+    try { return evalSignal(ctx.runtime.expr(code), params) } catch (e) { failPass(ctx, { axis: -2, signals: true, path: instance }, e); return undefined }
   }
   for (const d of defs) {
     if (typeof d.update === 'string') continue
@@ -7478,7 +7478,7 @@ function resolveLayoutOptions(layout: Record<string, unknown>, ctx: EvalContext)
     if (v && typeof v === 'object') {
       const o = v as Record<string, unknown>
       if (typeof o.signal === 'string') {
-        try { return ctx.runtime.expr(o.signal)({}, ctx.signalParams) } catch { return undefined }
+        try { return evalSignal(ctx.runtime.expr(o.signal), ctx.signalParams) } catch { return undefined }
       }
       return Object.fromEntries(Object.entries(o).map(([k, x]) => [k, resolve(x)]))
     }
@@ -8090,7 +8090,7 @@ function resolveLegendValues(legend: CompiledLegend, ctx: EvalContext): unknown[
   if (raw == null) return undefined
   // (vega's `objectProperty`, as for an axis: signals at any depth; an expression that throws gives no value)
   const resolved = objectProperty(raw, (code) => {
-    try { return ctx.runtime.expr(code)({}, ctx.signalParams) } catch { return undefined }
+    try { return evalSignal(ctx.runtime.expr(code), ctx.signalParams) } catch { return undefined }
   })
   return Array.isArray(resolved) ? resolved : undefined
 }
@@ -8362,7 +8362,7 @@ function makeGuideHost(ctx: EvalContext): GuideHost {
       }
       return { fn: s as (v: unknown) => unknown, call, bandwidth: () => (typeof s.bandwidth === 'function' ? s.bandwidth() : 0) }
     },
-    expr: (code) => { try { return ctx.runtime.expr(code)({}, ctx.signalParams) } catch (e) { refuseUnrecoverable(e); throw new ExpressionFailure(e) } },
+    expr: (code) => { try { return evalSignal(ctx.runtime.expr(code), ctx.signalParams) } catch (e) { refuseUnrecoverable(e); throw new ExpressionFailure(e) } },
     exprDatum: (code, datum) => { try { return ctx.runtime.expr(code)(datum, ctx.signalParams) } catch (e) { refuseUnrecoverable(e); throw new ExpressionFailure(e) } },
     viewSignal: (name) => viewSignal(ctx, name),
     scale: (name) => ctx.scales.get(name) as never,
@@ -8449,14 +8449,14 @@ function viewSignal(ctx: EvalContext, name: 'width' | 'height'): number {
 function resolveAxisOrient(axis: CompiledAxis, ctx: EvalContext): CompiledAxis {
   if (!axis.orientSignal) return axis
   let value: unknown
-  try { value = ctx.runtime.expr(axis.orientSignal.signal)({}, ctx.signalParams) } catch (e) { reportEvalError(ctx, e); value = undefined }
+  try { value = evalSignal(ctx.runtime.expr(axis.orientSignal.signal), ctx.signalParams) } catch (e) { reportEvalError(ctx, e); value = undefined }
   return { ...axis, orient: typeof value === 'string' ? value : '' }
 }
 
 /** A guide property that may be a signal, as the value the signal holds. */
 function guideScalar(ctx: EvalContext, v: unknown): unknown {
   if (!isSignal(v)) return v
-  try { return ctx.runtime.expr(v.signal)({}, ctx.signalParams) } catch (e) { reportEvalError(ctx, e); return undefined }
+  try { return evalSignal(ctx.runtime.expr(v.signal), ctx.signalParams) } catch (e) { reportEvalError(ctx, e); return undefined }
 }
 
 /** What an absent `own` / `cfg` / `encode` of a guide is: one object, so that what is kept against it is found again. */
@@ -8810,7 +8810,7 @@ function makeAxis(axis: CompiledAxis, ctx: EvalContext, index: number): SceneGro
   // extra tick pegged to the first value, for binned axes) is
   // `{index: -1, tickIndex: -1, extra: {value}, label: ''}`.
   const band = tickPlacement(propsOf(own, cfg))
-  const extra = isSignal(band.extra) ? ctx.runtime.expr(band.extra.signal)({}, ctx.signalParams) : band.extra
+  const extra = isSignal(band.extra) ? evalSignal(ctx.runtime.expr(band.extra.signal), ctx.signalParams) : band.extra
   let rows: Row[] = ticks.map((value, i) => ({ index: i / ((ticks.length - 1) || 1), tickIndex: i, value, label: labelCache[i] }))
   if (extra && ticks.length) rows.push({ index: -1, tickIndex: -1, extra: { value: ticks[0] }, label: '' })
   if (ctx.passMemory !== undefined) rows = retainGuideOrder(rows, ctx.passMemory, `a${ctx.scope.path.join('/')}:${index}`)
@@ -8943,7 +8943,7 @@ interface AxisTickPlan { values: unknown; count: unknown; ticks: unknown[] }
 
 /** An axis parameter vega reads through `objectProperty` (`values`, `tickCount`): signals at any depth resolved. */
 function axisObjectParam(v: unknown, ctx: EvalContext): unknown {
-  return objectProperty(v, (code) => ctx.runtime.expr(code)({}, ctx.signalParams))
+  return objectProperty(v, (code) => evalSignal(ctx.runtime.expr(code), ctx.signalParams))
 }
 
 /**
