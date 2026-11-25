@@ -15,6 +15,12 @@ type Obj = Record<string, any>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
 /** What the literal of a default title reads of a field written with escapes: `a\\.b` is titled `a.b` (a title the user wrote is text, not this). */
 const readEscapes = (s: string): string => s.replace(/\\(.)/gs, '$1')
+/**
+ * The channel definitions whose `title` is made of the continuous field's name as the spec wrote it (`Max of a\\.b`), not of text the user
+ * wrote: the compiler writes such a title into an expression's literal as it does a field's default title (escapes kept, which the literal reads).
+ */
+export const NAMED_TITLES = new WeakSet<object>()
+const named = <T extends object>(def: T): T => (NAMED_TITLES.add(def), def)
 const titleCase = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1)
 /** The field a row has under `name` itself (a name this module made: a statistic), as source text of an expression. */
 const datumRef = (name: string): string => `datum[${JSON.stringify(name)}]`
@@ -45,8 +51,18 @@ function statName(prefix: string, field: string): string {
   const name = `${prefix}_${path}`
   return splitAccessPath(name).join('.') === name ? name : genName(prefix, path)
 }
+/**
+ * The channel field that reads the statistic `statName` names: the same, but for a field written with escaped dots (`a\\.b`, one key that holds a dot),
+ * which keeps its escapes, `lower_box_a\\.b`, as vega-lite writes it, so that the texts that print the field (a default title, a test) read as its own do.
+ */
+function statField(prefix: string, field: string): string {
+  const pieces = splitAccessPath(field)
+  return pieces.length === 1 && field === pieces[0]!.replaceAll('.', '\\.') && field !== pieces[0] ? `${prefix}_${field}` : statName(prefix, field)
+}
 /** `datum['name']` as source text of an expression: the name is a string literal, so its backslashes and quotes are escaped. */
 export const quotedRef = (name: string): string => `datum['${name.replaceAll('\\', '\\\\').replaceAll("'", "\\'")}']`
+/** A field (as `statField` names it) read in a test: its escaped dots stay as written, which the literal reads as the dot (vega-lite's text). */
+const testRef = (name: string): string => (name.includes('\\') ? `datum['${name.replaceAll("'", "\\'")}']` : quotedRef(name))
 
 export type CompositeMark = 'boxplot' | 'errorbar' | 'errorband'
 type Orient = 'vertical' | 'horizontal'
@@ -219,9 +235,10 @@ function axisDef(a: Anatomy, field: string, raw = false): Obj {
   // (a part over a statistic is named by a title: the field's default one, whose escapes the literal of a description or tooltip reads
   // (`a\\.b` is read `a.b`), while the axis shows the name as written; the outliers draw the raw field and keep its own default title)
   const own = a.continuous.title
-  const title = own !== undefined ? own : raw ? undefined : readEscapes(a.continuous.field)
+  const title = own !== undefined ? own : raw ? undefined : a.continuous.field
   const axisOut = own === undefined && !raw && axis !== null && !(isObj(axis) && axis.title !== undefined) ? { ...(isObj(axis) ? axis : {}), title: a.continuous.field } : axis
-  return { field, type: a.continuous.type, ...(title !== undefined ? { title } : {}), ...(scale !== undefined ? { scale } : {}), ...(axisOut !== undefined ? { axis: axisOut } : {}) }
+  const def = { field, type: a.continuous.type, ...(title !== undefined ? { title } : {}), ...(scale !== undefined ? { scale } : {}), ...(axisOut !== undefined ? { axis: axisOut } : {}) }
+  return own === undefined && title !== undefined ? named(def) : def
 }
 
 /** The end of a ranged part: its field (the position channel carries the title, which names the axis). */
@@ -405,14 +422,14 @@ function readErrorMark(unit: Obj, kind: 'errorbar' | 'errorband', config: Obj): 
     if (channel !== axis && channel !== `${axis}2` && channel !== `${axis}Error` && channel !== `${axis}Error2`) others[channel] = def
   }
   const lifted = liftTransforms(others, kind)
-  const a: Anatomy = { kind, markDef, config: config[kind], axis, continuous, shared: lifted.encoding, fieldName: (prefix) => statName(prefix, continuous.field) }
+  const a: Anatomy = { kind, markDef, config: config[kind], axis, continuous, shared: lifted.encoding, fieldName: (prefix) => statField(prefix, continuous.field) }
   const ends = { [`${axis}2`]: withoutAggregate(encoding[`${axis}2`]), [`${axis}Error`]: withoutAggregate(encoding[`${axis}Error`]), [`${axis}Error2`]: withoutAggregate(encoding[`${axis}Error2`]) }
   // (an errorband reads the errorbar config's centre, as an errorbar does)
   const stats = errorStatistics(a, input, ends, config.errorbar.center)
 
   const aggregate = [...lifted.aggregate, ...stats.aggregate]
-  const name = a.continuous.title !== undefined ? a.continuous.title : readEscapes(a.continuous.field)
-  const tooltip = tooltipOf(stats.lines.map(({ field, title }) => ({ field, type: continuous.type, title: `${title}${stats.named ? ` of ${name}` : ''}` })), lifted.encoding)
+  const name = a.continuous.title !== undefined ? a.continuous.title : a.continuous.field
+  const tooltip = tooltipOf(stats.lines.map(({ field, title }) => { const def = { field, type: continuous.type, title: `${title}${stats.named ? ` of ${name}` : ''}` }; return a.continuous.title === undefined && stats.named ? named(def) : def }), lifted.encoding)
   return {
     a,
     outer,
@@ -501,10 +518,10 @@ function boxplotLayers(unit: Obj, userConfig: Obj | undefined): Obj {
   const transform: Obj[] = [...lifted.timeUnits, { aggregate: [...lifted.aggregate, ...aggregates], groupby: lifted.groupby }]
 
   const { color, size: sizeChannel, ...unsized } = shared
-  const a: Anatomy = { kind: 'boxplot', markDef, config, axis, continuous, shared, fieldName: (prefix) => statName(prefix, f) }
+  const a: Anatomy = { kind: 'boxplot', markDef, config, axis, continuous, shared, fieldName: (prefix) => statField(prefix, f) }
 
   const summary = (stats: Array<[prefix: string, label: string]>): Obj =>
-    tooltipOf(stats.map(([prefix, label]) => ({ field: statName(prefix.replace(/_$/, ''), continuous.field), type: continuous.type, title: `${label} of ${continuous.title !== undefined ? continuous.title : readEscapes(continuous.field)}` })), shared)
+    tooltipOf(stats.map(([prefix, label]) => { const def = { field: statField(prefix.replace(/_$/, ''), continuous.field), type: continuous.type, title: `${label} of ${continuous.title !== undefined ? continuous.title : continuous.field}` }; return continuous.title === undefined ? named(def) : def }), shared)
   const fiveNumbers = summary([
     [minMax ? 'upper_whisker_' : 'max_', 'Max'], ['upper_box_', 'Q3'], ['mid_box_', 'Median'], ['lower_box_', 'Q1'], [minMax ? 'lower_whisker_' : 'min_', 'Min'],
   ])
@@ -541,7 +558,7 @@ function boxplotLayers(unit: Obj, userConfig: Obj | undefined): Obj {
       encoding: {
         ...unsized,
         ...(sizeChannel ? { size: sizeChannel } : {}),
-        color: { condition: { test: `${quotedRef(stat('lower_box'))} >= ${quotedRef(stat('upper_box'))}`, ...(color || { value: boxColor }) } },
+        color: { condition: { test: `${testRef(statField('lower_box', f))} >= ${testRef(statField('upper_box', f))}`, ...(color || { value: boxColor }) } },
         ...fiveNumbers,
       },
     }),

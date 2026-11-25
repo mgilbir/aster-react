@@ -24,7 +24,7 @@ import {
   assembleFacetSignals, assembleUnitSelectionMarks, assembleUnitSelectionSignals, interactiveLegendSelections, parseUnitSelections, requiresSelectionId, selectionPredicate,
   stringValue, varName, type ParamPredicate, type Selection, type SelUnit,
 } from './selection.js'
-import { compositeMarkOf, isGiven, markGiven } from './composite-marks.js'
+import { NAMED_TITLES, compositeMarkOf, isGiven, markGiven } from './composite-marks.js'
 import { derivesFrom, isSynthesizedOrder, mergeEncoding, normalizeUnits } from './composite.js'
 import { timeScaleRange } from './animation.js'
 import { fieldsTitle, mergeGuideTitles, titleText, writtenTitle, type GuideTitle, type TitledField } from './titles.js'
@@ -4878,8 +4878,8 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     // the encoding groups the rows by the compiler's own key, which is all the groups keep)
     const pieces = splitAccessPath(f.source)
     const joined = pieces.join('.')
-    // (a name a transform of the unit produces, with a dot in it, is a column of the rows under that very name)
-    if (pieces.length > 1 && !fields.some((g) => g.aggregate) && (producedNames.has(joined) || (castDone.has(`flat:${joined}`) && !derivedKeys.has(pieces[0]!)))) JOINED_COPY.add(f.raw)
+    // (a name a transform of the unit produces, with a dot in it, is a column of the rows under that very name; so is an escaped one-piece source key, `a\\.b`, the rows' own `a.b`)
+    if (!fields.some((g) => g.aggregate) && (producedNames.has(joined) || (pieces.length === 1 ? !derivedKeys.has(joined) && f.bin === undefined && f.timeUnit === undefined && f.type !== 'temporal' : castDone.has(`flat:${joined}`) && !derivedKeys.has(pieces[0]!)))) JOINED_COPY.add(f.raw)
   }
   for (const p of referencedPaths(spec.encoding)) addFlat(p)
   // (a point selection over `fields` tests the flat copy of each nested path, which vega-lite adds whether or not an encoding reads it)
@@ -9262,7 +9262,7 @@ function applyTextualChannels(update: Record<string, unknown>, spec: VLSpec, fie
    * (a field written `a\.b` is titled `a.b`): that text is kept, with what would end or break the literal - an unescaped quote, a line
    * break, a backslash with nothing after it - escaped.
    */
-  const titleLiteral = (d: FieldDef, text: string): string => (d.title ? JSON.stringify(text).replaceAll('\u2028', '\\u2028').replaceAll('\u2029', '\\u2029') : `"${literalBody(text)}"`)
+  const titleLiteral = (d: FieldDef, text: string): string => (d.title && !NAMED_TITLES.has(d.raw) ? JSON.stringify(text).replaceAll('\u2028', '\\u2028').replaceAll('\u2029', '\\u2029') : `"${literalBody(text)}"`)
   /** tooltip.ts tooltipData: the end of a pre-binned position is shown with its start (`start – end`), not on its own. */
   const prebinnedEnd = (f: FieldDef): boolean => (f.channel === 'x2' || f.channel === 'y2') && fields.some((m) => m.channel === f.channel[0] && isPrebinned(m))
   /** vega-lite tooltipData: one `title -> text expression` per field, the first of a title wins. */
