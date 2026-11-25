@@ -4744,6 +4744,25 @@ const FACET_LEVEL_TRANSFORMS = new WeakSet<object>()
 /** The transforms of a layer's leaf declared on the root of the layer tree (or on a facet around it): above the fork into the layers. */
 const ABOVE_LAYERS_TRANSFORMS = new WeakSet<object>()
 
+/**
+ * The flat copies of nested fields (`casts`, one under the key the compiler reads and one under the joined path) next to the parses of the
+ * pipeline (`toNumber(path)` written under the joined path): the parse is what both copies hold in vega-lite, which keeps one.
+ */
+function foldJoinedParses(casts: Record<string, unknown>[], pipeline: Record<string, unknown>[]): void {
+  for (const parse of pipeline) {
+    if (parse.type !== 'formula' || typeof parse.expr !== 'string' || typeof parse.as !== 'string') continue
+    const m = /^(toNumber|toDate|toString)\((.*)\)$/s.exec(parse.expr)
+    if (m === null) continue
+    const guarded = m[2]!
+    // (only a nested path has a guarded read: `datum["o"] && datum["o"]["v"]`)
+    if (!guarded.includes(' && ')) continue
+    const own = casts.findIndex((c) => c.type === 'formula' && c.expr === guarded && c.as === parse.as)
+    if (own < 0) continue
+    casts.splice(own, 1)
+    for (const c of casts) if (c.type === 'formula' && c.expr === guarded) c.expr = parse.expr
+  }
+}
+
 function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: string, castDoneIn: Set<string> | undefined, ctx: CompileCtx): DataPipeline {
   // datum-only defs read no data
   const fields = allFields.filter((f) => !f.datumOnly)
@@ -5208,6 +5227,9 @@ function buildData(spec: VLSpec, allFields: FieldDef[], mark: string, orient: st
     invalidSplit = invalidScaleSplit(spec, fields, mark, invalid)
   }
 
+  // (a nested field vega-lite parses (a predicate over it, a time unit) is read, by everything, from the one copy it writes under the joined
+  // path after the parse: the copy the encoding reads here is that parse too, and the unparsed copy of the joined path has no reader)
+  if (castDoneIn === undefined) foldJoinedParses(casts, pipeline)
   const transforms = [...casts, ...pipeline]
   const dataName = transforms.length ? ctx.dn(0) : sourceName
   return { sourceName, transforms, casts, pipeline, dataName, seriesFields, rawLen: ctx.inNestedFacet ? userLen : rawLen, usesRawDomain: ctx.inNestedFacet === true || fields.some(usesRawDomainSort), ...(invalidSplit ? { invalidSplit } : {}) }
