@@ -17,7 +17,7 @@ import '@aster-charts/core/transforms'
 import { compileChart, datasetsOfScene, evaluateChart } from '@aster-charts/core'
 import { enc } from './differential-util.mts'
 import { makeRng, scaled, type Rng } from './differential-gen.mts'
-import { expectEveryKnownDifferenceCompared, expectKnownDifference } from './known-differences.mts'
+import { expectEveryKnownDifferenceCompared, expectKnownDifference } from '../src/known-differences.ts'
 
 type Spec = Record<string, unknown>
 
@@ -163,7 +163,7 @@ describe('nest matches vega', () => {
       // both sides, pinned: what each holds, so that a change on either side shows up here and not only as "still differs"
       expect(want).toEqual({ rows: n + 1, rootValues: n + 1, rootHoldsItself: true })
       expect(got).toEqual({ rows: n + 1, rootValues: n, rootHoldsItself: false })
-      expectKnownDifference('differential-nest', `generate with no keys over ${n} rows`, want, got)
+      expectKnownDifference('differential-nest', `generate with no keys over ${n} rows`, want, got, enc)
     }
   })
 
