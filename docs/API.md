@@ -146,6 +146,14 @@ const next = rows.map((r, i) => (i === 3 ? { ...r, v: 9 } : r))
 scene = evaluateChart(chart, { data: { table: next }, dataChanges: { table: [3] }, previousScene: scene })
 ```
 
+The spec object is treated as immutable too (a session's chart, and the React shells over it): a session that is handed the very
+object it evaluated last does not read it again -- it costs none of the spec's size -- so a spec edited in place and handed back is
+not seen; pass a new object. A development build says so once (`[aster] the spec object was changed in place since the last
+render ...`). A new object is read as before (its content decides whether it is the same chart), except that the rows of a nested
+dataset (a group mark's `data`) that are many (32 or more) are written as text once per array, by identity, like the top-level
+datasets' rows: a spec rebuilt around the same nested array does not have them read again, and one edited in place in that array
+is not seen.
+
 Signal values you give (`signals`) are compared by content, whatever their size: a value changed in place is a change. Treat
 them as immutable all the same: a value is read when the evaluation runs, not copied. If you change an array in place (edit a row,
 replace one, `push`, `splice`) and hand the same array back, only what happens to evaluate again sees the change, so the

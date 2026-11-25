@@ -191,3 +191,19 @@ export function checkChartRows(owner: object, spec: unknown, input: RowWatchInpu
   }
   if (host) for (const [name, rows] of Object.entries(host)) look(name, rows)
 }
+
+/**
+ * @internal Whether the spec object a chart is evaluated with again is still what its skeleton says: one edited in place is not seen
+ * (the session takes the skeleton it made for that object, see session.ts), and a development build says so, once per chart. Called
+ * only behind a development-build check.
+ */
+export function checkSpecInPlace(owner: object, spec: unknown, skeleton: string, input: RowWatchInput, skeletonOf: (spec: never) => string): void {
+  const w = watchOf(owner)
+  if (w.warned.has(SPEC_KEY) || skeletonOf(spec as never) === skeleton) return
+  w.warned.add(SPEC_KEY)
+  ;(input.logger ?? consoleLogger).warn(
+    '[aster] the spec object was changed in place since the last render. A chart treats the spec it is given as immutable (it is ' +
+    'compared by identity: an object it has seen is not read again), so this change is not drawn. Pass a new object instead.',
+  )
+}
+const SPEC_KEY = '\u0000spec'
