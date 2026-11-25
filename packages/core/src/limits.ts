@@ -972,7 +972,7 @@ export function checkSpecLimits(
 const MIN_PATH_CHARS_PER_POINT = 4
 
 /** Properties of a scene item that are not drawn: its data row and the engine's own bookkeeping. */
-const NOT_DRAWN: ReadonlySet<string> = new Set(['datum', 'mark', '_part', '_kind', '__tick', '__gen', '__domDesc'])
+const NOT_DRAWN: ReadonlySet<string> = new Set(['datum', 'mark', '_part', '_kind', '__tick', '__gen'])
 
 /** Post-evaluation checks for generated geometry, before SVG serialization. */
 export function checkSceneLimits(scene: { items?: unknown[] }, limits: SpecLimits): void {
