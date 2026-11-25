@@ -19,7 +19,7 @@ import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
 import { renderSpec } from '@aster-charts/core'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
-import { expectKnownDifference } from '../scripts/known-differences.mts'
+import { expectKnownDifference } from './known-differences.js'
 
 type Spec = Record<string, unknown>
 
