@@ -125,6 +125,20 @@ function compareRows(a: unknown, b: unknown): -1 | 0 | 1 {
 
 const isRow = (r: unknown): boolean => r !== null && typeof r === 'object'
 
+/**
+ * Arrays whose leading rows are known to be objects, by how many: what the engine ingested as they were (runtime.ts `ingestHostRows`)
+ * and what a diff against such an array found to be objects (`diffRows`). Rows are the host's and immutable (docs/API.md), so this
+ * holds for as long as the array lives, and the rows need not be looked at again: a session's next diff compares the rows of such an
+ * array by identity first, and the evaluation does not scan an array a diff vouched for.
+ */
+const OBJECT_ROWS = new WeakMap<readonly unknown[], number>()
+
+/** How many leading rows of `rows` are known to be objects (see `OBJECT_ROWS`). */
+export const objectRowsOf = (rows: readonly unknown[]): number => OBJECT_ROWS.get(rows) ?? 0
+
+/** Say that the first `n` rows of `rows` are objects. */
+export const noteObjectRows = (rows: readonly unknown[], n: number): void => { OBJECT_ROWS.set(rows, n) }
+
 /** The fields of two objects: the same own ones, each `equalCell`. */
 function fieldsEqual(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
   const proto = Object.getPrototypeOf(a)
@@ -173,22 +187,36 @@ export function diffRows(previous: unknown, next: unknown): RowDiff | null {
   const p: readonly unknown[] = previous
   const n: readonly unknown[] = next
   // (every row of both arrays is looked at by one of the loops below, and each looks at a row as an object: a dataset with a row
-  // that is not one is not diffed, whichever row it is: see `compareRows`)
+  // that is not one is not diffed, whichever row it is: see `compareRows`. When every row of `previous` is known to be an object
+  // (`OBJECT_ROWS`), a row of `next` that is the very same object needs no look at all -- not even the `0`/`-0` test of
+  // `compareRows`, which costs as much as the identity loop itself -- and every row of `next` is then known to be one too.)
+  const objects = OBJECT_ROWS.get(p) === p.length
   if (p.length === n.length) {
     const changed: number[] = []
-    for (let i = 0; i < n.length; i++) {
-      const a = p[i]
-      const b = n[i]
-      if (a === b && a !== 0) continue // (see compareRows: the common row of a replacement is the very object it was)
-      const same = compareRows(a, b)
-      if (same < 0) return null
-      if (same === 0) changed.push(i)
+    if (objects) {
+      for (let i = 0; i < n.length; i++) {
+        if (p[i] === n[i]) continue
+        const same = compareRows(p[i], n[i])
+        if (same < 0) return null
+        if (same === 0) changed.push(i)
+      }
+      OBJECT_ROWS.set(n, n.length)
+    } else {
+      for (let i = 0; i < n.length; i++) {
+        const a = p[i]
+        const b = n[i]
+        if (a === b && a !== 0) continue // (see compareRows: the common row of a replacement is the very object it was)
+        const same = compareRows(a, b)
+        if (same < 0) return null
+        if (same === 0) changed.push(i)
+      }
     }
     return { changed, sameLength: true, added: null, removed: null }
   }
 
   const min = Math.min(p.length, n.length)
   let prefix = 0
+  if (objects) while (prefix < min && p[prefix] === n[prefix]) prefix++
   while (prefix < min) {
     const same = compareRows(p[prefix], n[prefix])
     if (same < 0) return null
@@ -196,6 +224,7 @@ export function diffRows(previous: unknown, next: unknown): RowDiff | null {
     prefix++
   }
   let suffix = 0
+  if (objects) while (suffix < min - prefix && p[p.length - 1 - suffix] === n[n.length - 1 - suffix]) suffix++
   while (suffix < min - prefix) {
     const same = compareRows(p[p.length - 1 - suffix], n[n.length - 1 - suffix])
     if (same < 0) return null
@@ -267,6 +296,7 @@ export function diffRows(previous: unknown, next: unknown): RowDiff | null {
     }
     if (appendOnly && from.length === p.length && p.length !== n.length) appendOnly = false
   }
+  if (objects) OBJECT_ROWS.set(n, n.length)
   return { changed, sameLength: false, added, removed, from, to, addedRanges, removedRanges, ...(appendOnly ? { appendOnly, baseLength } : {}) }
 }
 
