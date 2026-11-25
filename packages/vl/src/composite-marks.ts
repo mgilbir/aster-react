@@ -13,8 +13,6 @@ import { derive, deriveWithout } from './consume.js'
 
 type Obj = Record<string, any>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
-/** What the literal of a default title reads of a field written with escapes: `a\\.b` is titled `a.b` (a title the user wrote is text, not this). */
-const readEscapes = (s: string): string => s.replace(/\\(.)/gs, '$1')
 /**
  * The channel definitions whose `title` is made of the continuous field's name as the spec wrote it (`Max of a\\.b`), not of text the user
  * wrote: the compiler writes such a title into an expression's literal as it does a field's default title (escapes kept, which the literal reads).
