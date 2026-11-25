@@ -13,6 +13,7 @@
 import { describe, it, expect } from 'vitest'
 import * as vl from 'vega-lite'
 import { compile, VLCompileError } from '@aster-charts/vl'
+import { oracleDefect } from './vl-oracle-defect.js'
 import { check, plain } from './vl-parity-check.js'
 
 const DATA = {
@@ -86,9 +87,20 @@ const HEADERS: Array<[string, Record<string, unknown>]> = [
 
 async function run(spec: Record<string, unknown>): Promise<void> {
   let refused: unknown
-  try { (vl as unknown as { compile: (s: unknown) => unknown }).compile(plain(spec)) } catch (e) { refused = e }
+  let oracle: Record<string, unknown> | undefined
+  try { oracle = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, unknown> } }).compile(plain(spec)).spec } catch (e) { refused = e }
   if (refused !== undefined) {
     expect(() => compile(plain(spec) as never), 'vega-lite refuses this spec').toThrow(VLCompileError)
+    return
+  }
+  // (DECISIONS Q9 in parity tests: where vega-lite's chart is no chart - real Vega fails on it, or draws nothing - the compiler's typed
+  // refusal is asserted on that evidence, taken from this render; a chart that renders is compared as any other, nothing is skipped)
+  const defect = await oracleDefect(oracle!)
+  let refusal2: unknown
+  try { compile(plain(spec) as never) } catch (e) { refusal2 = e }
+  if (refusal2 instanceof VLCompileError) {
+    // (the compiler refuses what vega-lite compiles: that is right only where vega-lite's output is no chart; a chart that draws is a gap)
+    expect(defect, `the compiler refuses this spec (${refusal2.message}), but real Vega draws a chart from vega-lite's output`).toBeDefined()
     return
   }
   await check(plain(spec))
