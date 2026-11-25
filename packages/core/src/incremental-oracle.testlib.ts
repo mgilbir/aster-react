@@ -228,6 +228,7 @@ export function featuresOf(spec: Spec): string[] {
   for (const d of asList(spec.data)) {
     for (const t of asList(d.transform)) out.add(`transform:${String(t.type)}`)
     if (d.format) out.add('data:format')
+    if ((d.format as Spec | undefined)?.parse) out.add('data:format.parse')
     if (Array.isArray(d.on) && d.on.length) out.add('data.on')
     if (d.source) out.add('data:derived')
   }
@@ -381,7 +382,7 @@ function genSpec(r: Rnd, pipe: Pipe): GenSpec {
 // World + steps
 // ---------------------------------------------------------------------------
 
-export interface World { t: Row[]; u: Row[]; sel: Row[]; /** the next unique row key (`k`: what a keyed join and a mark-from-mark label read) */ ctr: number; /** the store holds `_vgsid_` ids (else field tuples) */ selIds?: boolean; /** the values the events wrote to the signals of the two group scopes (see `scenarioScoped`) */ scoped?: { outer: number; inner: number }; sig: number; width: number | undefined; height: number | undefined
+export interface World { /** the URL policy the host holds (images are vetted by it: see POLICIES) */ policy?: 'open' | 'a' | 'b'; t: Row[]; u: Row[]; sel: Row[]; /** the next unique row key (`k`: what a keyed join and a mark-from-mark label read) */ ctr: number; /** the store holds `_vgsid_` ids (else field tuples) */ selIds?: boolean; /** the values the events wrote to the signals of the two group scopes (see `scenarioScoped`) */ scoped?: { outer: number; inner: number }; sig: number; width: number | undefined; height: number | undefined
   /** The host's container element size (`containerSize`, see `scenarioContainer`). */
   container?: { width: number; height: number } | undefined
   /** The container a <Chart> without size props measured (`measuredSize`). */
@@ -421,7 +422,7 @@ export type Op = 'edit' | 'grow' | 'shrink' | 'insert' | 'remove' | 'append' | '
   // the domain-census ops: values below the current minimum, the minimum row leaving the extreme, the extreme row removed, a new category
   | 'low' | 'dropMin' | 'removeExt' | 'newGroup' | 'swapCat'
   // the data a host really holds: no rows at all, values a chart has to survive (null, NaN, a missing field, a string, Infinity), a data set that gains rows
-  | 'empty' | 'odd' | 'appendU' | 'bulk' | 'bulkU'
+  | 'empty' | 'odd' | 'appendU' | 'bulk' | 'bulkU' | 'policy'
 type Delivery = 'none' | 'changedDatasets' | 'dataChanges' | 'dataPulse' | 'inplace'
 type Via = 'evaluate' | 'change'
 
@@ -684,6 +685,11 @@ export function applyStep(w: World, s: Step): World {
       for (let j = 0; j < k; j++) t.push(rowAt(j % 8))
       break
     }
+    case 'policy': {
+      next.policy = (['open', 'a', 'b'] as const)[Math.floor(s.r[0]! * 3)]
+      if (s.r[7]! < 0.5 && t.length) { const i = ix(s.r[6]!, t.length); t[i] = { ...t[i]!, ...rowAt(5), g: t[i]!.g } }
+      break
+    }
     case 'noop': break
   }
   return next
@@ -807,11 +813,19 @@ function scopedSignals(g: GenSpec, w: World): Record<string, unknown> {
   return { [scopedSignalName(g.scoped.outer, 'gs')]: w.scoped.outer, [scopedSignalName(g.scoped.inner, 'gs')]: w.scoped.inner }
 }
 
+/** The host's URL policies: one object each, as a host keeps them (a policy that is the same object is the same policy). */
+const POLICIES = {
+  open: { baseURL: 'https://a.example/' },
+  a: { baseURL: 'https://a.example/', allow: (u: { host: string }): boolean => u.host === 'a.example', onDeny: (): void => undefined },
+  b: { baseURL: 'https://a.example/', allow: (u: { host: string }): boolean => u.host === 'b.example', onDeny: (): void => undefined },
+} as const
+
 /** What the host adds for the view size: the container it measured, and the size signals the event loop wrote. */
 function sizeInputs(w: World, input: RuntimeInput): void {
   if (w.container) input.containerSize = w.container
   if (w.measured) input.measuredSize = w.measured
   if (w.sizeSig) Object.assign(input.signals!, w.sizeSig)
+  if (w.policy) input.urlPolicy = POLICIES[w.policy] as never
 }
 
 export function inputOf(g: GenSpec, w: World): RuntimeInput {
@@ -1134,7 +1148,7 @@ const CENSUS_OPS: Op[] = ['edit', 'edit-group', 'edit-group', 'edit-group', 'swa
   'removeExt', 'removeExt', 'newGroup', 'grow', 'shrink', 'append', 'truncate', 'remove', 'insert', 'shuffle', 'swap', 'noop']
 
 /** Each family draws its base scenario from seeds of its own, so the families do not re-run one another's specs (every family still takes the pipelines in turn). */
-export const OFFSET = { scenario: 0, scenarioSel: 10_007, scenarioScoped: 20_011, scenarioContainer: 30_011, scenarioRelational: 40_009 } as const
+export const OFFSET = { scenario: 0, scenarioSel: 10_007, scenarioScoped: 20_011, scenarioContainer: 30_011, scenarioRelational: 40_009, scenarioRelationalMore: 50_021 } as const
 
 export function scenarioCensus(seed: number, nSteps: number): { g: GenSpec; world: World; steps: Step[] } {
   const r = mulberry32(seed ^ 0xce45a5)
@@ -1598,21 +1612,79 @@ const SHAPES: Shape[] = [
   },
 ]
 
+/** Shapes added after the first ten (their seeds are pinned): an image mark, time and utc scales, `format.parse` on rows the host gives. */
+const MORE_SHAPES: Shape[] = [
+  {
+    name: 'image',
+    ops: ['policy', 'signal', 'edit', 'policy', 'append'],
+    add(g, r) {
+      const sp = specOf(g)
+      const { xf } = g.pipe!
+      // (absolute urls on two hosts, by the datum: the host's policy admits one, both or -- as a denied image is dropped -- neither;
+      // the item's url, and whether it has one, follow the policy the evaluation is made under)
+      sp.marks.push({
+        type: 'image', from: { data: g.ds },
+        encode: { update: { ...xy(g), width: { value: 8 }, height: { signal: '6 + sig' }, url: { signal: `'https://' + ((datum.${xf} || 0) % 2 ? 'a' : 'b') + '.example/img/' + (sig % 3) + '.png'` }, aspect: { value: r() < 0.5 }, align: { value: 'center' } } },
+      })
+    },
+  },
+  {
+    name: 'time-scales',
+    add(g, r, n) {
+      const sp = specOf(g)
+      sp.data.push({ name: 'dt', source: 't', transform: [{ type: 'formula', expr: 'datetime(2020, (datum.x || 0) % 12, 1 + ((datum.v || 0) % 27))', as: 'when' }] })
+      sp.scales.push(
+        { name: 'tm', type: 'time', domain: { data: 'dt', field: 'when' }, range: 'width', nice: n % 2 === 0 },
+        { name: 'tu', type: 'utc', domain: { data: 'dt', field: 'when' }, range: 'width' },
+      )
+      sp.marks.push(
+        { type: 'symbol', from: { data: 'dt' }, encode: { update: { x: { scale: 'tm', field: 'when' }, y: { scale: 'y', field: 'v' }, size: { value: 14 }, fill: { value: '#a55' } } } },
+        { type: 'rule', from: { data: 'dt' }, encode: { update: { x: { scale: 'tu', field: 'when' }, y: { value: 0 }, y2: { value: 6 }, stroke: { value: '#55a' } } } },
+      )
+      sp.axes.push({ scale: 'tm', orient: 'top', ...(r() < 0.5 ? { format: '%b' } : {}) }, { scale: 'tu', orient: 'bottom', formatType: 'utc', format: '%d' })
+    },
+  },
+  {
+    name: 'format-parse',
+    add(g) {
+      const sp = specOf(g)
+      // (`s` is a numeric string in every row: parsed, it is a number; a static data set parses its inline rows the same way)
+      const t = sp.data.find((d) => d.name === 't')!
+      t.format = { type: 'json', parse: { s: 'number' } }
+      sp.data.push({ name: 'fp', values: [{ n: '3', d: '2020-03-01', b: 'true' }, { n: '7', d: '2020-07-15', b: 'false' }], format: { type: 'json', parse: { n: 'number', d: 'date', b: 'boolean' } } })
+      sp.marks.push(
+        { type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { value: 20 }, size: { signal: '10 + datum.s * 2' }, fill: { value: '#c80' } } } },
+        { type: 'text', from: { data: 'fp' }, encode: { update: { x: { value: 10 }, y: { value: 60 }, dy: { signal: 'datum.n' }, text: { signal: "(datum.b ? 'y' : 'n') + (datum.d ? year(datum.d) : '')" } } } },
+      )
+    },
+  },
+]
+
 /** The relational shapes, in the order seeds take them. */
 export const SHAPE_NAMES: readonly string[] = SHAPES.map((x) => x.name)
+export const MORE_SHAPE_NAMES: readonly string[] = MORE_SHAPES.map((x) => x.name)
 
 /**
  * The base scenarios (any pipeline) with one relational shape added -- seed n takes shape n mod the list, so any run of
  * `SHAPE_NAMES.length` seeds takes every shape -- and, one time in three, a second shape on top.
  */
 export function scenarioRelational(seed: number, nSteps: number): { g: GenSpec; world: World; steps: Step[] } {
-  const shape = SHAPES[(seed - 1) % SHAPES.length]!
+  return relational(SHAPES, seed, nSteps, OFFSET.scenarioRelational)
+}
+
+/** The same over `MORE_SHAPES`, from seeds of its own. */
+export function scenarioRelationalMore(seed: number, nSteps: number): { g: GenSpec; world: World; steps: Step[] } {
+  return relational(MORE_SHAPES, seed, nSteps, OFFSET.scenarioRelationalMore)
+}
+
+function relational(list: Shape[], seed: number, nSteps: number, offset: number): { g: GenSpec; world: World; steps: Step[] } {
+  const shape = list[(seed - 1) % list.length]!
   const r = mulberry32(seed ^ 0x4e1a7)
-  const base = scenario(seed + OFFSET.scenarioRelational, nSteps)
+  const base = scenario(seed + offset, nSteps)
   // (the base scenario's spec is `onSource` for a third of the pipelines: a shape reads `g.ds`, the data set the marks read)
   const chosen = [shape]
   if (r() < 0.33) chosen.push(pick(r, SHAPES.filter((x) => x !== shape && !x.rows)))
-  const occurrence = Math.floor((seed - 1) / SHAPES.length)
+  const occurrence = Math.floor((seed - 1) / list.length)
   for (const sh of chosen) { sh.add(base.g, r, occurrence); base.g.features.add(`shape=${sh.name}`) }
   const rows = chosen.find((x) => x.rows)?.rows
   const world = rows ? genWorld(mulberry32(seed ^ 0xb16), rows) : base.world
