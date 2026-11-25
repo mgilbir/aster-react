@@ -280,27 +280,101 @@ function outline(s: Piece, half: number, cap: string, join: string, miterLimit: 
 }
 
 /**
+ * What a hairline along a polyline is made of: `lines`, the segments to draw as Skia's anti-aliased hairline (four numbers each:
+ * x0, y0, x1, y1), and `caps`, the polygons of its round caps. A hairline has no joins; a square cap goes half a pixel past the
+ * end, a round one is the half disk of a pen one pixel wide.
+ */
+export interface Hairlines { lines: number[]; caps: Pt[][] }
+
+/** The half disk of radius `r` around (cx, cy) on the side of direction `angle`, its arc made at the tolerance, closed along the diameter. */
+function halfDisk(cx: number, cy: number, r: number, angle: number): Pt[] {
+  const steps = Math.max(4, Math.ceil(Math.PI / (2 * Math.acos(1 - Math.min(0.5, TOL / Math.max(r, TOL))))))
+  meterTick('stroke join', steps + 1)
+  const p: Pt[] = []
+  // bounded: steps is at most the points of a disk of this radius, which is 1/2 here
+  for (let k = 0; k <= steps; k++) {
+    const a = angle - Math.PI / 2 + (Math.PI * k) / steps
+    p.push([cx + r * Math.cos(a), cy + r * Math.sin(a)])
+  }
+  return orient(p)
+}
+
+function hairOutline(s: Piece, cap: string, out: Hairlines, near: Box): void {
+  const pts: Pt[] = []
+  for (const p of s.pts) {
+    const q = pts[pts.length - 1]
+    if (q === undefined || q[0] !== p[0] || q[1] !== p[1]) pts.push(p)
+  }
+  const closed = s.closed && pts.length > 2
+  if (closed && pts[0]![0] === pts[pts.length - 1]![0] && pts[0]![1] === pts[pts.length - 1]![1]) pts.pop()
+  if (pts.length === 1) {
+    const [x, y] = pts[0]!
+    if (cap === 'round') out.caps.push(disk(x, y, 0.5, near))
+    else if (cap === 'square') out.caps.push(orient([[x - 0.5, y - 0.5], [x + 0.5, y - 0.5], [x + 0.5, y + 0.5], [x - 0.5, y + 0.5]]))
+    return
+  }
+  const n = pts.length
+  const segs = closed ? n : n - 1
+  // bounded: one pass over the piece's points (made by a metered flatten or dash walk)
+  for (let i = 0; i < segs; i++) {
+    let [ax, ay] = pts[i]!
+    let [bx, by] = pts[(i + 1) % n]!
+    if (!closed && cap === 'square') {
+      const len = Math.hypot(bx - ax, by - ay)
+      const ux = (bx - ax) / len
+      const uy = (by - ay) / len
+      if (i === 0) { ax -= ux * 0.5; ay -= uy * 0.5 }
+      if (i === segs - 1) { bx += ux * 0.5; by += uy * 0.5 }
+    }
+    out.lines.push(ax, ay, bx, by)
+  }
+  if (!closed && cap === 'round') {
+    // the half disk past each end, facing away from the line
+    for (const [end, other] of [[pts[0]!, pts[1]!], [pts[n - 1]!, pts[n - 2]!]] as Array<[Pt, Pt]>) {
+      const ux = end[0] - other[0]
+      const uy = end[1] - other[1]
+      out.caps.push(halfDisk(end[0], end[1], 0.5, Math.atan2(uy, ux)))
+    }
+  }
+}
+
+/**
  * Pen parameters in device units. `canvas`, the box of the pixels drawn into: a round join or cap of an immense pen is made as
  * far as it can be seen from it.
  */
 export interface Pen { half: number; cap: string; join: string; miterLimit: number; dash: number[]; dashOffset: number; canvas: Box }
 
+/** The pieces of a subpath the pen runs along: its curves flattened, cut into dashes when the pen dashes. */
+function piecesOf(s: Sub, pen: Pen): Piece[] {
+  meterTick('stroke', s.ops.length + 1)
+  const smooth: Smooth = new WeakSet()
+  const pts = flatten(s, smooth)
+  if (pts.length < 2 && !s.closed) return [] // (a lone moveTo draws nothing)
+  const piece: Piece = { pts, closed: s.closed, smooth }
+  return pen.dash.length > 0 && pen.dash.some((d) => d > 0) ? dashed(piece, pen.dash, pen.dashOffset) : [piece]
+}
+
 /** The polygons a pen covers along the subpaths (all positively oriented, so the non-zero rule unions them). */
 export function strokePolygons(subs: Sub[], pen: Pen): Pt[][] {
   const polys: Pt[][] = []
-  const dashing = pen.dash.length > 0 && pen.dash.some((d) => d > 0)
   // (a disk matters where it meets the canvas)
   const box = pen.canvas
   const disks: Box = [box[0] - 2, box[1] - 2, box[2] + 2, box[3] + 2]
   for (const s of subs) {
-    meterTick('stroke', s.ops.length + 1)
-    const smooth: Smooth = new WeakSet()
-    const pts = flatten(s, smooth)
-    if (pts.length < 2 && !s.closed) continue // (a lone moveTo draws nothing)
-    const piece: Piece = { pts, closed: s.closed, smooth }
-    const pieces = dashing ? dashed(piece, pen.dash, pen.dashOffset) : [piece]
     // bounded: the dash walk ticks for every piece it makes; outline() is one pass over a piece's points
-    for (const p of pieces) outline(p, pen.half, pen.cap, pen.join, pen.miterLimit, polys, disks)
+    for (const p of piecesOf(s, pen)) outline(p, pen.half, pen.cap, pen.join, pen.miterLimit, polys, disks)
   }
   return polys
+}
+
+/** The hairlines a pen of a pixel or less draws along the subpaths (`pen.half` is not used: a hairline is one pixel thick). */
+export function strokeHairlines(subs: Sub[], pen: Pen): Hairlines {
+  const out: Hairlines = { lines: [], caps: [] }
+  const box = pen.canvas
+  const disks: Box = [box[0] - 2, box[1] - 2, box[2] + 2, box[3] + 2]
+  for (const s of subs) {
+    // bounded: the dash walk ticks for every piece it makes; hairOutline() is one pass over a piece's points
+    for (const p of piecesOf(s, pen)) hairOutline(p, pen.cap, out, disks)
+  }
+  return out
 }
