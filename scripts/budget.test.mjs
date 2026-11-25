@@ -114,12 +114,12 @@ describe('the stale-dist check reads what the build emits', () => {
       const problems = distProblems(dir, ['p']).join('\n')
       expect(problems).toMatch(/dist\/a\.js is older than its source/)
       expect(problems).toMatch(/dist\/b\.js is missing/)
-      expect(problems).toMatch(/dist\/gone\.js has no source/)
+      expect(problems).toMatch(/dist\/gone\.js is an orphan: it has no source/)
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 
   it('the committed packages: their build inputs are what the build emits (when built)', () => {
     for (const p of ['core', 'react', 'vl']) expect(buildInputs(join(root, 'packages', p)).length, p).toBeGreaterThan(20)
-    if (existsSync(join(root, 'packages', 'core', 'dist'))) expect(distProblems(root, ['core', 'react', 'vl']).filter((x) => /has no source/.test(x))).toEqual([])
+    if (existsSync(join(root, 'packages', 'core', 'dist'))) expect(distProblems(root, ['core', 'react', 'vl']).filter((x) => /is an orphan/.test(x))).toEqual([])
   })
 })
