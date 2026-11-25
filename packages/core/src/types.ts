@@ -641,8 +641,13 @@ export interface CompiledMark {
   key?: string
   sort?: SortSpec
   encode?: Record<string, Record<string, EncodeValue | EncodeValue[]>>
-  /** The channels the spec's own `update` set writes, for a mark with encode sets a signal handler can name (`hover`, ...). */
+  /** The channels the spec's own `update` set writes, for a mark with encode sets a signal handler can name (`hover`, ...) or triggers. */
   updateChannels?: readonly string[]
+  /**
+   * The triggers of a named mark (`on: [{trigger, modify, values}]`, vega-parser parseTrigger): each is the operator
+   * `if(<trigger>, modify("<name>", null, null, null, <modify>, <values>), 0)`, run by the signal event loop on the mark's items.
+   */
+  on?: Array<Record<string, unknown>>
   transform?: CompiledTransform[]
   /** Group mark title (for axis/row titles). */
   title?: unknown

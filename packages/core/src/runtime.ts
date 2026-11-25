@@ -80,7 +80,7 @@ import { part, requestPart } from './engine-parts.js'
 import { guideReading, type GuideKind } from './guide-model.js'
 import { ExpressionFailure, isSignal, isUnencoded, itemAriaOf, propsOf, type GuideStyles, type UserEncode } from './guide-encode.js'
 import { entryReadsItem } from './expr-reads.js'
-import { encodeLogOf, hasNamedSetsIn, keptItems, namedSetsOf, stampEncodeIdent, stampEncodeSets, type EncodeLog } from './encode-handlers.js'
+import { datumText, encodeLogOf, handlesItems, hasNamedSetsIn, hasTriggers, keptItems, namedSetsOf, stampEncodeIdent, stampEncodeSets, stampItemMark, type EncodeLog } from './encode-handlers.js'
 import { defaultMergedConfig } from './config-defaults.js'
 
 // The legend builder and the grid layout are parts the React shells load on demand (engine-parts.ts): read from their slots when a
@@ -6442,7 +6442,7 @@ function markItemsOf(
     if (meter) meter.items(encodeRows.length, `mark ${mark.type} encoding`)
     // (joined primitive tuples are fewer items than rows: the per-row pulse does not apply to them)
     // (a mark a signal handler re-encodes, while the host holds requests, is encoded whole: its items before carry what was asked)
-    const reencodes = ctx.encodeLog !== undefined && namedSetsOf(mark).length > 0
+    const reencodes = ctx.encodeLog !== undefined && handlesItems(mark)
     const pulse = encodeRows !== rows || reencodes ? undefined : given !== undefined ? given.pulse : reusablePulse(mark, ctx, source, encodeRows.length, prevGroup)
     if (pulse) {
       const prevItems = given !== undefined ? given.items : prevGroup!.items as SceneItem[]
@@ -6561,7 +6561,7 @@ function markItemsOf(
   }
 
   // a signal handler's `encode: <set>`: the items it asked for, re-encoded as vega's Encode left them (encode-handlers.ts)
-  if (namedSetsOf(mark).length > 0 && !ctx.encodeAborted) items = applyEncodeRequests(mark, items, ctx)
+  if (handlesItems(mark) && !ctx.encodeAborted) items = applyEncodeRequests(mark, items, ctx)
 
   // vega-parser mark.js: a mark's `transform`s run right after the encode, on the encoded items: the items are the transforms'
   // tuples (`datum.x` is what the encode gave the item, `datum.datum` its data), and what they compute is written onto the items,
@@ -6683,9 +6683,6 @@ function encodeLogKey(mark: CompiledMark, ctx: EvalContext): string {
   return ctx.encodeLog !== undefined && hasNamedSetsIn(mark) ? `\u0006${ctx.encodeLog.rev}` : ''
 }
 
-const MARK_UIDS = new WeakMap<CompiledMark, number>()
-let markUid = 0
-
 /**
  * The items of a mark with named encode sets, named for the event loop (`<mark>|<group instance>|<row>`), with the requests of the
  * host's log applied as vega's Encode applies them (vega-functions `encode`): a request is evaluated once, at the first evaluation
@@ -6694,18 +6691,24 @@ let markUid = 0
  * item's datum changed (`print` below); a channel only named sets write stays. The items the requests touch are new objects.
  */
 function applyEncodeRequests(mark: CompiledMark, items: SceneItem[], ctx: EvalContext): SceneItem[] {
-  let uid = MARK_UIDS.get(mark)
-  if (uid === undefined) MARK_UIDS.set(mark, (uid = ++markUid))
-  const prefix = `${uid}|${ctx.scope.path.join('.')}|`
+  // (a mark is named by its place in the spec, the same in every compile of it: what a log of requests holds is read by the compile of
+  // the chart that evaluates it, and a fresh evaluation reads it as the one before did)
+  const prefix = `${markIdOf(mark)}|${ctx.scope.path.join('.')}|`
   const sets = mark.encode?.update != null ? [...namedSetsOf(mark), 'update'] : namedSetsOf(mark)
-  for (let i = 0; i < items.length; i++) { stampEncodeIdent(items[i]!, prefix + i); stampEncodeSets(items[i]!, sets) }
+  const named = hasTriggers(mark) ? mark.userName : undefined
+  for (let i = 0; i < items.length; i++) {
+    stampEncodeIdent(items[i]!, prefix + i)
+    stampEncodeSets(items[i]!, sets)
+    if (named !== undefined) stampItemMark(items[i]!, named)
+  }
   const log = ctx.encodeLog
   if (log === undefined) return items
   const kept = keptItems(log.session)
   const mine = log.requests.filter((r) => r.ident.startsWith(prefix))
+  const written = log.writes.filter((w) => w.ident.startsWith(prefix))
   let touched = false
   for (const id of kept.keys()) if (id.startsWith(prefix)) { touched = true; break }
-  if (!mine.length && !touched) return items
+  if (!mine.length && !written.length && !touched) return items
   // what a run of `update` follows: the values of the signals and scales the mark's encode sets read, and the item's datum
   const scales = markScaleNames(mark, ctx.chart).map((n) => {
     const sc = ctx.scales.get(n) as { domain?: () => unknown; range?: () => unknown } | undefined
@@ -6733,6 +6736,22 @@ function applyEncodeRequests(mark: CompiledMark, items: SceneItem[], ctx: EvalCo
     const only = r.set === 'update' ? owned : undefined
     for (const c of Object.keys(set)) if ((only === undefined || only.has(c)) && Object.hasOwn(res, c)) k.channels.set(c, { value: res[c], print: p })
   }
+  // a mark's `modify` triggers: the properties written onto the items (vega-functions modify.js: `changes.modify(tuple, key, value)`).
+  // The Encode that follows runs the mark's `update` set on the modified item again, which writes its channels anew: a write to one
+  // of those is taken back at once, and the other properties stay on the item. An item whose datum is not the one the write was
+  // made on is another tuple's: what was written is gone with the tuple.
+  const seen = new Map<string, number>()
+  for (const w of written.slice().sort((a, b) => a.seq - b.seq)) {
+    let k = kept.get(w.ident)
+    if (k === undefined) kept.set(w.ident, (k = { done: 0, channels: new Map() }))
+    let v = k.written
+    if (v === undefined || v.datum !== w.datum) k.written = v = { datum: w.datum, values: new Map(), done: 0 }
+    if (w.seq <= v.done) continue
+    v.values.set(w.field, w.value)
+    // (the properties of one call share its sequence number: the call is done once the last of them is applied)
+    seen.set(w.ident, Math.max(seen.get(w.ident) ?? 0, w.seq))
+  }
+  for (const [ident, seq] of seen) kept.get(ident)!.written!.done = seq
   for (const [id, k] of kept) {
     if (!id.startsWith(prefix)) continue
     const at = Number(id.slice(prefix.length))
@@ -6746,10 +6765,21 @@ function applyEncodeRequests(mark: CompiledMark, items: SceneItem[], ctx: EvalCo
       over[c] = v.value
       any = true
     }
+    if (k.written !== undefined) {
+      if (k.written.datum !== datumText((item as { datum?: unknown }).datum)) k.written = undefined
+      else {
+        for (const [f, value] of k.written.values) {
+          if (owned.has(f)) continue
+          over[f] = value
+          any = true
+        }
+      }
+    }
     if (!any) continue
     const next = { ...item, ...over } as SceneItem
     stampEncodeIdent(next, id)
     stampEncodeSets(next, sets)
+    if (named !== undefined) stampItemMark(next, named)
     out[at] = next
   }
   return out

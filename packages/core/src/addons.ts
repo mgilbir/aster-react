@@ -306,7 +306,8 @@ function walkSpec(spec: Json, refuseUrls: boolean, hostSignals?: Readonly<Record
     // (a dataset definition is an element of a `data` array; a refused url dataset is never read)
     const refusedUrl = refuseUrls && key === 'data' && !!node.url && !node.values
     // a dataset's triggers (`on: [{trigger, insert | remove | toggle | modify}]`) edit it as `modify()` does, in the event loop
-    if (key === 'data' && Array.isArray(node.on) && node.on.length > 0) found.parts.add('modify')
+    // (and a named mark's, which edit its items the same way)
+    if ((key === 'data' || key === 'marks') && Array.isArray(node.on) && node.on.length > 0) found.parts.add('modify')
     for (const k of Object.keys(node)) {
       // (`values` is read only when it is an expression: a `{signal}`, or the text of a data trigger's `values`, which the compiler
       // builds into the trigger's `modify(...)` call; rows and GeoJSON are data, whatever their fields are named)
