@@ -12,6 +12,7 @@ import type {
   TextMetricsProvider,
   VgSpec,
 } from '@aster-charts/core'
+import type { LoadOptions } from '@aster-charts/core/load'
 import type { EasingName } from '@aster-charts/core/transition'
 import type { PngOptions } from '@aster-charts/core/png'
 import type { SelectValue, SelectionInterval, ViewDomain } from './interaction.js'
@@ -315,6 +316,19 @@ export interface ChartProps {
    * `'allow'` (`RuntimeInput.urlData`).
    */
   urlData?: UrlDataMode
+  /**
+   * Load the spec's `url` datasets in the chart itself, as vega does (a view fetches its own urls), and again whenever a signal a
+   * `{signal}` url reads changes inside the chart (a bound input, an event handler, `setSignal`) or in the `signals` prop. The
+   * options are the loader's (`LoadOptions` of `@aster-charts/core/load`) and the loader's URL policy is required: a network url
+   * needs `allow` (`allowOrigins([...])`) or a `baseURL` it is on, else the load fails with an `AsterUrlError` through `onError`.
+   * `limits` and `signals` are the chart's own; `signal` is not taken (the chart cancels a load a newer url supersedes, and one
+   * still running when it unmounts). The chart draws the dataset empty until its first load arrives, keeps the previous rows while a
+   * newer url loads, and shows the error state if a load fails. Without this prop nothing is fetched: a url dataset that is not
+   * loaded is an error that points at `loadSpecData` / `useSpecData` (or give its rows through `data`). Values by content, the
+   * functions (`fetch`, `allow`) through a latest-ref. Not applied with `urlData="refuse"` (which refuses the dataset first),
+   * nor on the server (the server draws the empty datasets).
+   */
+  urlLoad?: Omit<LoadOptions, 'signal' | 'signals' | 'limits'>
   /**
    * The source of random numbers of this chart (`RuntimeInput.random`, the per-chart counterpart of vega's `setRandom`): expression
    * `random()`, `sampleNormal` / `sampleLogNormal` / `sampleUniform`, the `sample` transform and the bootstrap `ci0` / `ci1` draw from

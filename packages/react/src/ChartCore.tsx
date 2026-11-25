@@ -16,6 +16,7 @@ import {
 } from '@aster-charts/core/lean'
 import { isPromiseLike, normalizeSpecResult, useChartEpoch, useStableContent, useStableSpecRows } from './spec.js'
 import { useAddons } from './addons.js'
+import { useUrlData } from './urlData.js'
 import { validateDataChanges } from './dataChanges.js'
 import { SCALE_INFO_KEY, scalesFromSerialized, type SerializedScale } from './serialScales.js'
 import { SignalBinds, type SignalBindDef } from './binds.js'
@@ -314,7 +315,7 @@ function setThroughLoop(binding: { setSignal: (name: string, value: unknown) => 
 }
 
 function ChartView({
-  spec,
+  spec: specProp,
   sceneOverride,
   data: dataProp,
   dataChanges,
@@ -350,6 +351,7 @@ function ChartView({
   limits,
   urlPolicy: urlPolicyProp,
   urlData,
+  urlLoad,
   random,
   logger,
   preventDefault,
@@ -376,7 +378,7 @@ function ChartView({
   // (and the parts of the engine it needs: the legend builder, the canvas renderer for renderer="canvas"... see `useAddons`)
   // (and the signal event loop of an interactive chart that binds it: see the binding below, and `useAddons`)
   const loadLoop = interactive && interaction?.loadSignals !== undefined ? interaction.loadSignals : undefined
-  const addonError = useAddons(sceneOverride !== undefined || specError !== null ? null : spec, urlData, {
+  const addonError = useAddons(sceneOverride !== undefined || specError !== null ? null : specProp, urlData, {
     limits: limits != null, random: random != null, signals, canvas: requestedRenderer === 'canvas' ? canvasCap : undefined,
     eventLoop: loadLoop !== undefined ? { load: loadLoop, listeners: signalListeners != null || onSignal != null, always: sceneOverride !== undefined } : undefined,
   })
@@ -404,7 +406,7 @@ function ChartView({
   const propProblems = [...checkedView.problems, ...checkedBrush.problems, ...checkedSelection.problems, ...checkedSelect.problems]
   const a11y = useStableContent(a11yProp)
   // Which scales `view`/`brush`/`selection`'s `x`/`y` refer to.
-  const positional = React.useMemo(() => positionalScales(spec), [spec])
+  const positional = React.useMemo(() => positionalScales(specProp), [specProp])
   // Without the interaction capability there is no hit index, so a tooltip
   // cannot resolve its datum: it stays off (and a JS caller that asked for one is told, below).
   const tooltipEnabled = interaction != null && (tooltip || renderTooltip != null)
@@ -456,7 +458,7 @@ function ChartView({
   const fillWidth = width === 'container'
   const fillHeight = height === 'container'
   const needsMeasure = fixedWidth == null || fixedHeight == null
-  const hasBinds = ((spec.signals as SignalBindDef[] | undefined) ?? []).some((s) => s && s.bind != null)
+  const hasBinds = ((specProp.signals as SignalBindDef[] | undefined) ?? []).some((s) => s && s.bind != null)
   React.useEffect(() => {
     if (!needsMeasure) return undefined
     const el = containerRef.current
@@ -537,6 +539,12 @@ function ChartView({
   const mergedSignals = useControlledSignals(signals, eventSignals)
   const mergedSignalsRef = React.useRef(mergedSignals)
   mergedSignalsRef.current = mergedSignals
+  // The spec the chart evaluates: with `urlLoad`, the one whose url datasets the chart loaded (and loads again when a signal their
+  // urls read changes, wherever the change comes from); else the spec as given. A failed load is reported through `onError` (else the
+  // logger) and the chart carries on with the rows it has, like a rejected `dataChanges` changeset: the bound input that picks the
+  // next url must stay on the page, or one bad url would be the last.
+  const urlLoaded = useUrlData(specProp, sceneOverride !== undefined || specError !== null || urlData === 'refuse' ? undefined : urlLoad, mergedSignals, stableLimits)
+  const spec = urlLoaded.spec
   // Datasets the spec's event handlers edit with `modify(...)` (a Vega-Lite selection's `<param>_store`): the
   // event loop reports their rows, which are kept here and handed back as inputs, so a store is a dataset like any
   // other and the evaluation after an edit is the one a fresh chart with those rows computes. They belong to the
@@ -643,6 +651,14 @@ function ChartView({
     reported.error = key
     for (const problem of evaluation.problems) onErrorRef.current?.(new Error(`[aster] ${problem}`))
   }, [evaluation])
+
+  // A load that failed (the loader's own error, a policy refusal included, as it is): once per failure.
+  const urlLoadError = urlLoaded.error
+  React.useEffect(() => {
+    if (urlLoadError === null) return
+    if (onErrorRef.current) onErrorRef.current(urlLoadError)
+    else (loggerRef.current ?? console).warn(urlLoadError.message)
+  }, [urlLoadError])
 
   /** A problem the chart carries on through: to `onError`, else the logger, else the console. */
   const reportProblem = React.useCallback((problem: string): void => {

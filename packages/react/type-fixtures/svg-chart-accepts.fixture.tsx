@@ -24,7 +24,7 @@ export const plain = (
 
 // the props that take another type than the plain form above, and the light chart's own `png`
 export const other = (
-  <SvgChart spec={spec} sceneOverride={{} as SceneRoot} transition png={png} urlData="allow" dataChanges={{}} interactive />
+  <SvgChart spec={spec} sceneOverride={{} as SceneRoot} transition png={png} urlData="allow" urlLoad={{ baseURL: "https://data.example.com/", allow: (url) => url.protocol === "https:" }} dataChanges={{}} interactive />
 )
 
 // with interaction: the interaction props, typed exactly like <Chart>'s
