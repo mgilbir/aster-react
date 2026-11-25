@@ -96,6 +96,17 @@ export function genPickScene(seed: number, W = 300, H = 220): PickScene {
     if (chance(0.15)) out.opacity = V(pick([0, 0.4]))
     return out
   }
+  // (paint order by zindex -- an item's, from its row or constant, and a mark's among its siblings -- drawn from a stream of its own,
+  // so the scenes this generator made before it read zindexes are the same scenes with zindexes added: C28, C118)
+  const Z = rng(seed ^ 0x2f6b9d)
+  const zOf = (): number => [0, 1, 2, -1, 3][Math.floor(Z() * 5)]!
+  const zindexed = (mark: Spec, update: Spec, rows: Spec[] | null): void => {
+    if (Z() < 0.35) {
+      if (rows === null) update.zindex = V(zOf())
+      else { for (const r of rows) r.z = zOf(); update.zindex = Z() < 0.7 ? F('z') : { signal: '-datum.z' } }
+    }
+    if (Z() < 0.25) mark.zindex = 1 + Math.floor(Z() * 2)
+  }
   const tooltipOf = (name: string): Spec => {
     const r = R()
     if (r < 0.65) return { tooltip: { signal: `'${name}:' + datum.id` } }
@@ -125,6 +136,7 @@ export function genPickScene(seed: number, W = 300, H = 220): PickScene {
       if (update.tooltip) update.tooltip = V(`${name}:solo`)
     }
     if (chance(0.12)) mark.interactive = false
+    zindexed(mark, update, fromLess ? null : rows)
     switch (type) {
       case 'symbol':
         update.size = fromLess ? V(num(30, 1600)) : { signal: '30 + datum.s * 1500' }
@@ -202,7 +214,9 @@ export function genPickScene(seed: number, W = 300, H = 220): PickScene {
       // (a group whose box is left out of its bounds: vega picks it only as far as what it holds reaches)
       if (chance(0.3)) update.noBound = V(true)
       const inner = [leaf(`${name}i0`, true), ...(chance(0.5) ? [leaf(`${name}i1`, true)] : [])]
-      marks.push({ type: 'group', name, from: { data: `d_${name}` }, encode: { update }, marks: inner })
+      const group: Spec = { type: 'group', name, from: { data: `d_${name}` }, encode: { update }, marks: inner }
+      zindexed(group, update, rows)
+      marks.push(group)
     } else {
       marks.push(leaf(name, false))
     }
