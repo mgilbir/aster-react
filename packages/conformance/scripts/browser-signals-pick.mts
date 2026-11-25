@@ -261,6 +261,26 @@ const fixedScenes = (): PickScene[] => {
       },
       points: grid(280, 200, 5),
     },
+    // the view's own frame, the root group item (`mark-group role-frame root`): what vega's pick finds where nothing else is hit, when
+    // the frame is painted (a fill, a transparent one, or a stroke) -- and the cursor its `encode` gives it (C279). Over the data marks,
+    // on the border, in the padding and outside the view.
+    ...([
+      ['fill', { fill: V('#f0f0f0') }],
+      ['transparent', { fill: V('transparent') }],
+      ['stroke', { stroke: V('#333'), strokeWidth: V(6) }],
+      ['fill-stroke-thin', { fill: V('#eee'), stroke: V('#c00'), strokeWidth: V(1) }],
+      ['unpainted', {}],
+      ['stroke-transparent', { stroke: V('transparent'), strokeWidth: V(6) }],
+    ] as Array<[string, Spec]>).map(([name, paint]): PickScene => ({
+      name: `fixed-root-frame-${name}`,
+      spec: {
+        ...base, signals: [{ ...PICKED_SIGNAL, on: [{ events: 'pointermove', update: "item().mark ? item().mark.marktype + '|' + (item().mark.name || item().mark.role) + '|' + (item().cursor || '-') : 'none'" }] }],
+        data: [{ name: 't', values: rows }],
+        encode: { update: { cursor: V('text'), ...paint } },
+        marks: [{ type: 'symbol', name: 'dots', from: { data: 't' }, encode: { update: { x: F('x'), y: F('y'), size: V(900), fill: V('steelblue') } } }],
+      },
+      points: grid(280, 200, 4, 1),
+    })),
     {
       // facet cells (group items whose datum is the facet tuple) with a fill and a tooltip, holding marks with their own
       name: 'fixed-facet-cells',

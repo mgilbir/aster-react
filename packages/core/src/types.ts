@@ -721,6 +721,8 @@ export interface SceneRoot {
   frameY?: number
   /** The root group item's own aria channels (the view `encode`'s, or `config.group`'s): `description`, `aria`, `ariaRole`, `ariaRoleDescription`. */
   frameAria?: Pick<SceneItem, 'description' | 'aria' | 'ariaRole' | 'ariaRoleDescription'>
+  /** The root group item's `cursor` (the view `encode`'s): what the pointer shows over the view where no item takes it (vega's root item is what `pick` finds there). */
+  frameCursor?: string
   /**
    * The event loop's handles on this evaluation: the expression runtime, the compiled chart, the values the chart's signals held
    * (`signalParams`) and the `limits` it was evaluated under. `bindSceneSignals` reads them (a host that calls `bindSignalEvents` itself

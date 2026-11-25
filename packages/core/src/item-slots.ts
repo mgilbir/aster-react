@@ -30,7 +30,7 @@ export const ENGINE_ITEM_SLOTS: ReadonlySet<string> = new Set([
   'box', 'boxFg', 'scopeSignals', 'markIndex', 'markZindex', 'emptyMark', 'interactive', 'describes', 'itemAria', 'cssName', 'markRole',
   'contentClip', 'scale', 'title', 'legendType', 'madeMarks', 'legendScale', 'legendChannels',
   // SceneRoot
-  'plotWidth', 'plotHeight', 'frameX', 'frameY', 'frameAria', 'runtime', 'compiled', 'background', 'frameStroke', 'frameFill',
+  'plotWidth', 'plotHeight', 'frameX', 'frameY', 'frameAria', 'frameCursor', 'runtime', 'compiled', 'background', 'frameStroke', 'frameFill',
   'frameFillTransparent', 'frameStrokeWidth', 'frameFillOpacity', 'frameOpacity', 'frameStrokeDash', 'frameCornerRadius',
   'frameClip', 'frameStrokeOpacity', 'frameStrokeMiterLimit', 'frameStrokeDashOffset', 'frameStrokeCap', 'frameStrokeJoin',
   'defs', 'signalParams',

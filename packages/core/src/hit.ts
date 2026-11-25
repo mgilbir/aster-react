@@ -37,14 +37,14 @@
  * every cell.
  */
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
-import { derivedCounts, isEngineNode, keptInto } from './scene-registry.js'
+import { derivedCounts, isEngineNode, keptInto, rootItemOf } from './scene-registry.js'
 import { Bounds, boundLeaf, boundTypedMark, boundText, groupLayoutBounds, itemBounds, multiMarkBounds, sameGroupMark } from './bounds.js'
 import { getTextMetricsProvider, textAnchor } from './text-metrics.js'
 import { withSceneOutput } from './scene-output.js'
 import { imageBox } from './image-box.js'
 import { FLATTEN_TOLERANCE, insidePolys, type Poly } from './path-flatten.js'
 import { SYMBOL_DEFAULT_SIZE, drawnOffset, frameSize } from './util.js'
-import { frameClipDef, isInert, itemArcGeometry, lineStrokeWidth } from './render.js'
+import { frameClipDef, frameItem, isInert, itemArcGeometry, lineStrokeWidth } from './render.js'
 import { areaGeometry, lineGeometry, rectData, symbolGeometry, trailGeometry } from './geometry.js'
 import { arcExactSegs, arcPolys, canvasHolds, curvePolys, flattenSegs, pathMarkPolys, pathMarkPolysAt, pathPolys, segsOf, symbolOutline, transformPolys } from './geometry-read.js'
 import { paintOrder, scopeInPaintOrder } from './paint-order.js'
@@ -910,6 +910,18 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
   const measurer = getTextMetricsProvider()
   // (the view's clip as the renderers draw it, rounded when the view has a corner radius: render.ts `frameClipDef`)
   const viewClip = scene.frameClip ? frameClipDef(scene, plotW, plotH) : null
+  // The view's frame: the root group item, a group item with a fill (a transparent one too) or a stroke, which vega's pick finds where
+  // nothing else is hit -- as a nested group item's box is. First, as it is painted under everything; found by `pick` only.
+  {
+    // (vega's pick reads the group item's own paint: a `transparent` fill or stroke is one, though nothing is drawn for it)
+    const painted = { ...frameItem(scene), fill: scene.frameFill || (scene.frameFillTransparent === true ? 'transparent' : undefined), stroke: scene.frameStroke || undefined } as SceneItem & Record<string, unknown>
+    const w = Number(plotW)
+    const h = Number(plotH)
+    if (w > 0 && h > 0) {
+      const face = geomEntry(rootItemOf(scene), 'group', () => transformPolys(pathPolys(`M0,0h${w}v${h}h${-w}Z`), (x, y) => [padX + x, padY + y]), painted)
+      if (face) { face.groupBox = true; face.pickOnly = true; entries.push(face) }
+    }
+  }
   withClip(viewClip === null ? null : 'd' in viewClip ? pathClip(viewClip.d, padX, padY) : rectClip(padX + viewClip.x, padY + viewClip.y, viewClip.w, viewClip.h), () => {
     const rootNodes = scopeInPaintOrder(scene.items)
     const rootClips = canvas ? groupMarkClips(rootNodes, plotW, plotH, padX, padY) : undefined
