@@ -82,7 +82,7 @@ export interface FlattenState { sizes: number[]; offsets: number[] }
 
 export function flattenSize(row: Row, fields: string[]): number {
   // vega's output length for one tuple; `fields` may be access paths (`a.b`, `a[0]`)
-  const maxlen = flattenLength(fieldsOf(fields).map((f) => f(row)))
+  const maxlen = flattenLength(fieldsOf(fields).map((f) => f(row)), fields)
   return maxlen > 0 ? maxlen : 0
 }
 
