@@ -66,6 +66,28 @@ export function unitIndexedIn(code: string): string[] {
   return out
 }
 
+/**
+ * The data sets an expression tests with `vlSelectionTest` on a name it spells out. Testing is what rewrites a Date of a stored tuple
+ * to a number, in the tuple itself (vega-selections `selectionTest`), so these are the stores whose tuples vega holds as numbers once a
+ * dataset's filter has run.
+ */
+export function testedStoresIn(code: string): string[] {
+  const out: string[] = []
+  const visit = (n: unknown): void => {
+    if (n == null || typeof n !== 'object') return
+    if (Array.isArray(n)) { n.forEach(visit); return }
+    const node = n as AstNode
+    if (node.type === 'CallExpression') {
+      const callee = node.callee as AstNode | undefined
+      const args = node.arguments as AstNode[]
+      if (callee?.type === 'Identifier' && callee.name === 'vlSelectionTest' && args[0]?.type === 'Literal' && typeof args[0].value === 'string') out.push(args[0].value)
+    }
+    for (const k of Object.keys(node)) if (k !== 'type') visit(node[k])
+  }
+  visit(parseExpressionCached(code))
+  return out
+}
+
 /** The identifiers an expression reads (signal references among them), and `data:NAME` for every dataset it reads by name. */
 export function expressionReads(code: string): ReadonlySet<string> {
   let have = READS.get(code)

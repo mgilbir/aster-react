@@ -51,8 +51,8 @@ import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expres
 import type { Changeset } from './modify.js'
 import { normalizeEvents, filterCode } from './stream-defs.js'
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
-import { array, dict, heldSignalName, ownGet, setOwn, markTupleAlways, MARK_NODE, ROOT_MARK_NODE, scopedSignalName } from './util.js'
-import { dataKey, expressionReads } from './expr-reads.js'
+import { array, dict, heldSignalName, isArray, isDate, toNumber, ownGet, setOwn, markTupleAlways, MARK_NODE, ROOT_MARK_NODE, scopedSignalName } from './util.js'
+import { dataKey, expressionReads, testedStoresIn } from './expr-reads.js'
 import { follow, node, Propagation, type SignalNode } from './signal-propagation.js'
 import { consoleLogger, type Logger } from './logger.js'
 import { activeMeter, AsterLimitError, checkRowCount, withLimits, type SpecLimits } from './limits.js'
@@ -267,6 +267,17 @@ interface StreamState {
   evt: ExtEvent | null
   /** Delivers a debounced event into the CURRENT binding (null while unbound). */
   deliver: ((e: ExtEvent) => void) | null
+}
+
+/** vega-selections' rewrite of a tested tuple: a Date value (or a list starting with one) becomes a number, in the tuple itself. */
+function numericTuple(t: unknown): void {
+  const values = t !== null && typeof t === 'object' ? (t as { values?: unknown }).values : undefined
+  if (!Array.isArray(values)) return
+  for (let i = 0; i < values.length; i++) {
+    const v: unknown = values[i]
+    if (isDate(v)) values[i] = toNumber(v)
+    else if (isArray(v) && isDate(v[0])) values[i] = v.map(toNumber)
+  }
 }
 
 /** A timer stream of one owner: it outlives the bindings (a host re-binds after every render) until `release`. */
@@ -658,6 +669,15 @@ function bindSignalEventsDefs(
   // A dataset an event handler modifies lives here, as its input rows; the rest of the datasets are the
   // scene's. The transformed rows are what `data()` shows the handlers meanwhile.
   const datasets = new Map(dataDefs.map((d) => [d.name, d]))
+  /** the stores a dataset's filter or formula tests with `vlSelectionTest`, known from the compiled spec, and the datasets that test each */
+  const testedStores = new Map<string, string[]>()
+  for (const d of dataDefs) {
+    for (const t of d.transform) {
+      const code = (t.type === 'filter' || t.type === 'formula') ? t.expr : undefined
+      if (typeof code !== 'string') continue
+      try { for (const store of testedStoresIn(code)) testedStores.set(store, [...(testedStores.get(store) ?? []), d.name]) } catch { /* refused when the spec was compiled */ }
+    }
+  }
   const inputRows = new Map<string, Array<Record<string, unknown>>>()
   const liveRows = new Map<string, unknown[]>()
   // The rows a dataset starts from are the spec's or the host's: a modified tuple is written to a copy the loop owns, and a
@@ -675,6 +695,12 @@ function bindSignalEventsDefs(
   const currentAll = (v: unknown): unknown => (Array.isArray(v) ? v.map(current) : current(v))
   const rawOf = (name: string): Array<Record<string, unknown>> =>
     inputRows.get(name) ?? (opts.data?.[name] as Array<Record<string, unknown>> | undefined) ?? (datasets.get(name)?.values as Array<Record<string, unknown>> | undefined) ?? []
+  /** whether the dataset has rows its filter is called on: its own, or those of the datasets it draws from */
+  const testsAgainstRows = (name: string): boolean => {
+    const d = datasets.get(name)
+    const from = d?.source === undefined ? [] : Array.isArray(d.source) ? d.source : [d.source]
+    return from.length ? from.some((src) => (dataOf(src)?.length ?? 0) > 0) : (dataOf(name)?.length ?? 0) > 0
+  }
   const dataOf = (name: string): unknown[] | undefined => {
     const raw = inputRows.get(name)
     if (!raw) return sceneRuntime.data(name)
@@ -1369,6 +1395,11 @@ function bindSignalEventsDefs(
         if (!cs) return
         pulsed.delete(name)
         const rows = part('modify').applyChangeset(rawOf(name), cs, writable)
+        // vega's dataflow runs a dataset whose filter tests this store as soon as the store changes, and testing a tuple turns its Date
+        // values into numbers in the tuple itself, which a signal holding it then shows: done here at the write, for a store some dataset
+        // tests (the loop does not run the filters; the host's next evaluation does, on its own rows)
+        // (a filter tests a tuple only against a row: a dataset with none to test leaves the Dates)
+        if (testedStores.get(name)?.some(testsAgainstRows)) for (const t of cs.add) numericTuple(t)
         // (under limits a dataset an event edits stays within `maxRows`, as any dataset does)
         checkRowCount(rows.length, `dataset "${name}" edited by an event`)
         inputRows.set(name, rows)
