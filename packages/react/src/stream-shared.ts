@@ -2,7 +2,7 @@
  * What the two stream shells (`ChartStream.tsx`, `ChartWorkerStream.tsx`) share: the props they take from `<Chart>`, the handle,
  * and the hooks that forward size, view and signals into the stream. It imports nothing of the worker: the worker shell is its
  * own module so that `import { ChartStream }` does not reach `useChartWorkerStream` (and, through it, the whole synchronous
- * engine); `bundle-shaking.test.ts` pins that.
+ * engine); `scripts/check-bundle-shaking.mjs` (pattern `react-chartstream`) pins that.
  */
 import * as React from 'react'
 import type { DataPulse, SceneRoot, StreamBatch, StreamFlush, StreamStats, VgSpec } from '@aster-charts/core'
