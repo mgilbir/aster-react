@@ -19,6 +19,7 @@
  * (checked once per object, remembered) cannot change, so evaluating it again reads none of it; any other spec is compared as before.
  */
 import { compileChart } from './compiler.js'
+import { assertSpecObject } from './spec-guards.js'
 import { dict, ownGet } from './util.js'
 import { dataInputOf, valuesSignal } from './spec-structure.js'
 import { checkHintShapes, evaluateChartPending, type DataStability, type IncrementalEngine } from './runtime.js'
@@ -537,7 +538,7 @@ export function createChartSession(): ChartSession {
   }
 
   const session: ChartSession = {
-    evaluate: (spec, input = {}) => withLimits(input.limits, () => evaluateOnce(spec, input)),
+    evaluate: (spec, input = {}) => { assertSpecObject(spec, 'ChartSession.evaluate'); return withLimits(input.limits, () => evaluateOnce(spec, input)) },
     change: (given = {}) => {
       // (the limits too: a change after an evaluation under limits runs under them, unless it gives its own)
       const input = withSettings(lastSettings, given)

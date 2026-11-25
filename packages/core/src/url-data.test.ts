@@ -165,10 +165,12 @@ describe('the engine refuses a url dataset under urlData: refuse', () => {
     // allowed, it is not refused: the engine says the group's url dataset was never loaded (input.data does not reach a group's data),
     // an error of its own, which is not the policy's AsterUrlError
     let allowed: unknown
-    try { evaluateChart(chart, { data: { inner: [] } }) } catch (e) { allowed = e }
+    try { evaluateChart(chart, {}) } catch (e) { allowed = e }
     expect(allowed).toBeInstanceOf(Error)
     expect(allowed).not.toBeInstanceOf(AsterUrlError)
     expect((allowed as Error).message).toMatch(/dataset "inner" has a url but no data was loaded for it/)
+    // (rows under that name are no way in either: a group's dataset is no dataset of the chart's top level, C306)
+    expect(() => evaluateChart(chart, { data: { inner: [] } })).toThrow(/dataset "inner", which the chart does not declare/)
     expect(() => getChartInfo(URL_SPEC, { data: ROWS, urlData: 'refuse' })).toThrow(AsterUrlError)
     expect(getChartInfo(URL_SPEC, { data: ROWS })).not.toBeNull()
   })

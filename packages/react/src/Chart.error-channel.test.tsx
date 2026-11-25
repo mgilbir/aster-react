@@ -41,6 +41,7 @@ const FAILURES: Array<[string, () => Record<string, unknown>, RegExp]> = [
   ['a dataset that is a string', () => ({ spec: good, data: { t: 'abc' } }), /data\["t"\] must be an array of rows; got "abc"/],
   ['a dataset that is an object', () => ({ spec: good, data: { t: {} } }), /data\["t"\] must be an array of rows; got an object/],
   ['a dataset that is a number', () => ({ spec: good, data: { t: 5 } }), /data\["t"\] must be an array of rows; got 5/],
+  ['a dataset name the spec does not declare', () => ({ spec: good, data: { tt: [{ a: 1, b: 1 }] } }), /dataset "tt", which the chart does not declare \(it declares: t;/],
   ['width={NaN}', () => ({ spec: good, width: NaN }), /width must be a finite number/],
   ['width={Infinity}', () => ({ spec: good, width: Infinity }), /width must be a finite number/],
   ['width={-50}', () => ({ spec: good, width: -50 }), /width must be a finite number/],

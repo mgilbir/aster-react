@@ -19,6 +19,7 @@ import { markShareable } from './guide-encode.js'
 import { ENTER_COPY, setSpatialProgram, spatialProgramOf } from './spatial.js'
 import { defaultMergedConfig, mergeVegaConfig, vegaDefaultConfig } from './config-defaults.js'
 import { isSignalRef, paddingOf, staticAutosize, viewProperty, viewSignals } from './view-props.js'
+import { assertSpecObject } from './spec-guards.js'
 import type {
   CompiledAxis,
   CompiledChart,
@@ -38,9 +39,7 @@ import type {
 
 
 export function compileChart(givenSpec: VgSpec): CompiledChart {
-  if (!givenSpec || typeof givenSpec !== 'object') {
-    throw new Error('[aster] compileChart expects a Vega spec object')
-  }
+  assertSpecObject(givenSpec, 'compileChart')
   // a spec nested past the ceiling (or cyclic) is a typed error here, not a RangeError from the recursion below
   assertSpecDepth(givenSpec)
   // vega-parser reads every scope list through vega-util `array()` and refuses a spec that uses a data

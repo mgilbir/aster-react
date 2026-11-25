@@ -17,3 +17,17 @@ export const consoleLogger: Logger = {
   error: (...args) => { console.error(...args) },
   warn: (...args) => { console.warn(...args) },
 }
+
+/**
+ * The logger an evaluation reports to: the host's, with any of `error` / `warn` it did not give (a JavaScript caller's `{ error }`,
+ * `{}`) answered by the console, so a partial logger never turns the report of an error into a TypeError of its own.
+ */
+export function loggerOf(logger: Logger | undefined): Logger {
+  if (logger === undefined) return consoleLogger
+  if (typeof logger.error === 'function' && typeof logger.warn === 'function') return logger
+  return {
+    ...logger,
+    error: typeof logger.error === 'function' ? logger.error.bind(logger) : consoleLogger.error,
+    warn: typeof logger.warn === 'function' ? logger.warn.bind(logger) : consoleLogger.warn,
+  }
+}

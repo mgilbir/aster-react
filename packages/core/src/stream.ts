@@ -25,6 +25,7 @@ import { createChartSession, type ChartSession } from './session.js'
 import { installPart, partLoaded } from './engine-parts.js'
 import { applyPipelineWithPulse } from './incremental-engine.js'
 import { dict } from './util.js'
+import { assertSpecObject } from './spec-guards.js'
 import { dataInputOf } from './spec-structure.js'
 import { diffRows, pulseChangeOf, type DataPulse, type DatasetPulse, type PulseChangeInput, type PulseRange, type RowDiff } from './pulse.js'
 import { AsterLimitError, type SpecLimits } from './limits.js'
@@ -316,11 +317,26 @@ const has = (o: object | undefined, k: string): boolean => !!o && Object.prototy
 function streamBound(v: unknown, name: string): number | undefined {
   if (v === undefined) return undefined
   if (typeof v !== 'number' || v !== v) throw new TypeError(`[aster] stream ${name} must be a number, got ${typeof v === 'number' ? 'NaN' : JSON.stringify(v) ?? typeof v}`)
+  // (a bound below one batch / one row would be read as one, with no word; `Infinity` is no bound)
+  if (v < 1) throw new TypeError(`[aster] stream ${name} must be at least 1 (or Infinity for no bound), got ${v}`)
   return v
 }
 
+const STREAM_POLICIES: readonly StreamPolicy[] = ['coalesce', 'drop-oldest', 'drop-newest', 'error']
+
+/**
+ * The keys of a batch. A key this list lacks is a typo (`push({ rows })`, `push({ appends })`) and is refused: a batch that says
+ * nothing the stream reads would be delivered as an empty flush, with `push` answering `true`. `satisfies` ties the list to the type.
+ */
+const BATCH_KEYS = new Set(Object.keys({
+  data: 0, append: 0, pulse: 0, signals: 0, width: 0, height: 0, containerSize: 0, measuredSize: 0, domainRaw: 0, limits: 0, textMetrics: 0,
+} satisfies Record<keyof StreamBatch, 0>))
+
 function checkBatch(batch: StreamBatch): void {
   if (batch == null || typeof batch !== 'object') throw new TypeError('[aster] stream batch must be an object')
+  for (const key of Object.keys(batch)) {
+    if (!BATCH_KEYS.has(key)) throw new TypeError(`[aster] stream batch.${key} is not a batch field (known: ${[...BATCH_KEYS].join(', ')})`)
+  }
   for (const [field, rec] of [['data', batch.data], ['append', batch.append]] as const) {
     if (rec == null) continue
     for (const [name, list] of Object.entries(rec)) {
@@ -440,11 +456,13 @@ function foldBatch(fold: Fold, batch: StreamBatch, baseLenOf: (name: string) => 
 }
 
 export function createChartStream(spec: VgSpec, options: StreamOptions = {}): ChartStream {
+  assertSpecObject(spec, 'createChartStream')
   // a stream is a chart whose data changes: its session takes every batch as a pulse, so it carries the pulse path (engine-parts.ts)
   if (!partLoaded('pulse')) installPart('pulse', { applyPipelineWithPulse })
   const policy: StreamPolicy = options.policy ?? 'coalesce'
-  const batchCapacity = Math.max(1, streamBound(options.capacity, 'capacity') ?? DEFAULT_CAPACITY)
-  const maxQueuedRows = Math.max(1, streamBound(options.maxQueuedRows, 'maxQueuedRows') ?? DEFAULT_MAX_QUEUED_ROWS)
+  if (!STREAM_POLICIES.includes(policy)) throw new TypeError(`[aster] stream policy must be one of ${STREAM_POLICIES.join(', ')}, got ${JSON.stringify(policy) ?? typeof policy}`)
+  const batchCapacity = streamBound(options.capacity, 'capacity') ?? DEFAULT_CAPACITY
+  const maxQueuedRows = streamBound(options.maxQueuedRows, 'maxQueuedRows') ?? DEFAULT_MAX_QUEUED_ROWS
   // Under coalesce the whole queue is one folded batch: that is its real bound.
   const capacity = policy === 'coalesce' ? 1 : batchCapacity
   let session: ChartSession | null = createChartSession()
