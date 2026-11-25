@@ -66,7 +66,7 @@ import { checkChartUrlData } from './url-data.js'
 import { publishRows, valueKey, valuesEqual } from './fingerprint.js'
 import { beginWrite, endWrite, historical, idOf, keepHistory, pin, pinAll, samePin, samePins, stampKey, wrote, type History, type Pin } from './content-stamp.js'
 import { dataWithoutRows, valuesSignal } from './spec-structure.js'
-import { diffRows, equalCell, pulseChangeOf, rowsEqual, sourceNames, type PulseChange } from './pulse.js'
+import { diffRows, equalCell, noteObjectRows, objectRowsOf, pulseChangeOf, rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import type { aggregateGroups } from './transform-agg.js'
 import type { GridPlace } from './trellis.js'
 import { boundAxisGroup, boundGroupItem, boundTypedMark, Bounds, groupLayoutBounds, layoutBounds, eachMarkBounds, hasClippedMark } from './bounds.js'
@@ -365,6 +365,13 @@ interface GroupMarkRecord {
   /** whether the tuples it made were registered (`isTuple`) */
   tuples: boolean
 }
+
+/**
+ * The histories of the rows an evaluation's scene keeps, which its expression runtime reads once the scene is made (see `rowsOf` where
+ * it is made). Held by the runtime's closures and the evaluation's context, never by a weak table: V8's minor collector takes the values
+ * of an old weak table as live, so a table holding these would keep every array a scene published through every scavenge.
+ */
+interface SceneRows { histories?: ReadonlyMap<string, History> }
 
 /** Committed state per compiled chart. Never stored on the IR itself. */
 const STATES = new WeakMap<CompiledChart, IncrementalState>()
@@ -764,6 +771,8 @@ interface EvalContext {
   unchanged?: DataStability
   /** The arrays the caller's pulses are relative to (see `hostPulse`). */
   pulseBases?: ReadonlyMap<string, unknown>
+  /** Where the scene's runtime finds the histories of the rows the scene keeps, once it is made (see `rowsOf`). */
+  sceneRows: SceneRows
   /** The state the pass before this one left (see `EvalTxn.lastPass`). */
   earlier?: IncrementalState
   /** The state this evaluation builds; committed by the caller on success. */
@@ -963,13 +972,20 @@ function prepareChartCtx(
   // cache per runtime (per evaluateChart) is sound and bounded by the number
   // of distinct expression strings in the spec.
   const exprCache = new Map<string, CompiledExpr>()
+  // (once the scene is made, its runtime reads each dataset as the scene has it -- a later pulse advances the arrays in place: Q14,
+  // C30 -- through the histories the scene keeps; see `keepSceneRows`)
+  const kept: SceneRows = {}
+  const rowsOf = (name: string): Row[] | undefined => {
+    const h = kept.histories?.get(name)
+    return h !== undefined ? historical(h) as Row[] : datasets.get(name)
+  }
   const runtime: ExpressionRuntime = {
     scale: (name) => scales.get(name),
-    data: (name) => datasets.get(name),
+    data: rowsOf,
     projection: (name) => transformProjections.get(name),
     tree: (name) => {
       const root = transformHierarchies.get(name)
-      return root === undefined ? undefined : { root, rows: datasets.get(name) ?? [] }
+      return root === undefined ? undefined : { root, rows: rowsOf(name) ?? [] }
     },
     ...(input.random ? { random: input.random } : {}),
     // (the chart's own locale, `config.locale`, for `format`, `timeFormat`, `timeParse` ...)
@@ -998,7 +1014,7 @@ function prepareChartCtx(
   // and what a text is measured by: the provider in force for this evaluation, `input.textMetrics` or the one set for every chart)
   const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${valueKey(getTextMetricsProvider())}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}\u0002${input.measuredSize ? `${input.measuredSize.width}x${input.measuredSize.height}` : ''}\u0002${formatEnvironmentKey()}`
   const ctx: EvalContext = {
-    chart, scope: rootScope(chart), abort: { failures: [] }, ...(passMemory !== undefined ? { passMemory } : {}), signalParams, width, height, datasets, setData, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
+    sceneRows: kept, chart, scope: rootScope(chart), abort: { failures: [] }, ...(passMemory !== undefined ? { passMemory } : {}), signalParams, width, height, datasets, setData, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
     layoutState: { failed: false, warnings: [] }, initDone: new Set(), hostSignals: new Set([
       ...Object.keys(input.signals ?? {}),
       // an explicit view size (the host's, or the fit loop's resize) wins over an `init`
@@ -4179,6 +4195,7 @@ function evaluateViewPass(chart: CompiledChart, hostInput: RuntimeInput, txn: Ev
   // (each dataset's rows as this scene has them: a later pulse that advances an array in place leaves this scene its copy, Q14)
   const histories = new Map<string, History>()
   for (const [name, rows] of ctx.datasets) histories.set(name, keepHistory(rows))
+  ctx.sceneRows.histories = histories
   Object.defineProperty(scene, '__datasets', { value: { rows: histories, failed: ctx.failedDatasets }, enumerable: false, configurable: true })
   if (ctx._defs.length) scene.defs = ctx._defs
   // The state the next incremental evaluation starts from; committed by the
@@ -4936,19 +4953,19 @@ function passesThroughRead(format: DataFormatSpec | undefined, rows: readonly un
   return (!format?.type || format.type === 'json') && !format?.parse && !Object.hasOwn(rows, 'columns')
 }
 
-/** The host's arrays whose leading rows are known to be objects, by how many (see `ingestHostRows`). */
-const objectRowPrefix = new WeakMap<readonly unknown[], number>()
-
 /**
  * `ingestRows` on the rows the host gave a dataset. An append-only pulse leaves the rows before its `baseLength` as they were but
  * for the ones it lists as changed (a stream appends to the array it already gave): when those were already all objects, only
  * the appended and the changed rows are looked at, not the whole dataset on every append.
  */
 function ingestHostRows(given: readonly Row[], pulse: StepPulse | null, dataset: string, source: 'values' | 'data' = 'data'): Row[] {
-  const known = objectRowPrefix.get(given) ?? 0
-  const base = pulse?.appendOnly && pulse.baseLength !== undefined && pulse.baseLength <= known && pulse.baseLength <= given.length ? pulse.baseLength : 0
+  const known = objectRowsOf(given)
+  // (every row known to be an object -- an array ingested before, or one a session's diff vouched for: pulse.ts `OBJECT_ROWS` -- is
+  // ingested as it is, without a look at any row)
+  const base = known >= given.length ? given.length
+    : pulse?.appendOnly && pulse.baseLength !== undefined && pulse.baseLength <= known && pulse.baseLength <= given.length ? pulse.baseLength : 0
   const rows = ingestRows(given, base, pulse?.changed, { dataset, source, ...(pulse?.changed ? { dataChanges: pulse.changed } : {}) })
-  if (rows === given) objectRowPrefix.set(given, given.length)
+  if (rows === given) noteObjectRows(given, given.length)
   return rows
 }
 
