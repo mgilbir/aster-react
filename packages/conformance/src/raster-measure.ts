@@ -15,7 +15,7 @@ import type { RasterShape } from './raster-shapes.js'
 export function drawShape(s: RasterShape): Uint8Array {
   const c = new AlphaCanvas(s.w, s.h) as unknown as Record<string, unknown> & { alpha: Uint8Array }
   for (const cmd of s.cmds) {
-    if (Array.isArray(cmd)) (c[cmd[0]] as (...a: unknown[]) => void).apply(c, cmd.slice(1))
+    if (Array.isArray(cmd)) Reflect.apply(c[cmd[0]] as (x: unknown) => void, c, cmd.slice(1))
     else c[cmd.set] = cmd.value
   }
   return c.alpha
