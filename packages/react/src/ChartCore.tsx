@@ -458,9 +458,9 @@ function ChartView({
   const needsMeasure = fixedWidth == null || fixedHeight == null
   const hasBinds = ((spec.signals as SignalBindDef[] | undefined) ?? []).some((s) => s && s.bind != null)
   React.useEffect(() => {
-    if (!needsMeasure) return
+    if (!needsMeasure) return undefined
     const el = containerRef.current
-    if (!el) return
+    if (!el) return undefined
     if (typeof ResizeObserver !== 'undefined') {
       // The chart's share of the element: its content box less the bound inputs under the chart, which are inside the
       // element but not the chart, so a container the chart fills does not count them again on every measurement.
@@ -478,6 +478,7 @@ function ChartView({
       if (binds) observer.observe(binds)
       return () => observer.disconnect()
     }
+    return undefined
   }, [needsMeasure, hasBinds])
 
   // The size props FIX the view. The container the spec is sized to (`containerSize()`) is the props where given and the
@@ -1018,9 +1019,9 @@ function ChartView({
   // Canvas backend: size the backing store for devicePixelRatio and paint the scene whenever it changes: the appended marks of an
   // append-only scene, nothing for a scene that paints the same pixels, else all of it.
   React.useLayoutEffect(() => {
-    if (renderer !== 'canvas' || !displayScene || canvasCap == null) return
+    if (renderer !== 'canvas' || !displayScene || canvasCap == null) return undefined
     const canvas = canvasRef.current
-    if (!canvas) return
+    if (!canvas) return undefined
     if (canvasElRef.current !== canvas) {
       // A new <canvas> (first mount, or back from the SVG renderer) is blank.
       canvasElRef.current = canvas
@@ -1064,9 +1065,9 @@ function ChartView({
     }
     // Identical scene, with the images it had: the canvas already shows it. Re-encoding/painting would
     // be a full repaint for zero visual change (the common no-op re-render).
-    if (!resized && canvasSceneRef.current === displayScene && canvasImagesPaintedRef.current === canvasImagesEpoch) return
+    if (!resized && canvasSceneRef.current === displayScene && canvasImagesPaintedRef.current === canvasImagesEpoch) return undefined
     const ctx = canvas.getContext('2d')
-    if (!ctx) return
+    if (!ctx) return undefined
     // Append-only frames draw immediately: a handful of new items is cheaper
     // than a frame of latency, and drawing synchronously prevents a later
     // stream mutation from racing a coalesced rAF repaint. Full repaints still
@@ -1077,14 +1078,14 @@ function ChartView({
       canvasSnapshotRef.current = canvasCap.snapshotCanvasScene(displayScene)
       canvasSceneRef.current = displayScene
       canvasImagesPaintedRef.current = canvasImagesEpoch
-      return
+      return undefined
     }
     // A scene that paints exactly the pixels on the canvas (a signal that changed only a tooltip) paints nothing. (Not for image
     // marks: their bitmaps are the chart's, not the scene's.)
     if (prev != null && urls.length === 0 && canvasImagesPaintedRef.current === canvasImagesEpoch && canvasCap.paintsSameAs(prev, displayScene)) {
       canvasSnapshotRef.current = canvasCap.snapshotCanvasScene(displayScene)
       canvasSceneRef.current = displayScene
-      return
+      return undefined
     }
     const draw = (): void => {
       ctx.clearRect(0, 0, canvas.width, canvas.height)
@@ -1102,6 +1103,7 @@ function ChartView({
       return () => cancelAnimationFrame(id)
     }
     draw()
+    return undefined
   }, [renderer, displayScene, canvasCap, canvasImagesEpoch, pixelRatio])
 
   const hasSelection = onSelect != null || brush != null || onPointSelect != null

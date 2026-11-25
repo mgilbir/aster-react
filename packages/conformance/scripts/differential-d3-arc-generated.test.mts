@@ -183,9 +183,9 @@ describe('generated arc corpus coverage', () => {
     expect(has((c) => arcs(c) >= 6)).toBeGreaterThan(300) // rounded on both radii
     expect(has((c, s) => s.pad > 0.001 && s.pad < 3 && arcs(c) >= 2)).toBeGreaterThan(1000) // padded
     expect(has((c, s) => s.corner > 0 && s.corner > Math.abs(s.outer - s.inner) && arcs(c) >= 2)).toBeGreaterThan(80) // corner larger than the band
-    expect(has((c, s) => s.end < s.start)).toBeGreaterThan(1500) // reversed
-    expect(has((c, s) => Math.abs(s.end - s.start) > TAU && Number.isFinite(s.end))).toBeGreaterThan(500) // more than a turn
-    expect(has((c, s) => Math.abs(s.end - s.start) < 1e-11)).toBeGreaterThan(200) // a tiny span
+    expect(has((_c, s) => s.end < s.start)).toBeGreaterThan(1500) // reversed
+    expect(has((_c, s) => Math.abs(s.end - s.start) > TAU && Number.isFinite(s.end))).toBeGreaterThan(500) // more than a turn
+    expect(has((_c, s) => Math.abs(s.end - s.start) < 1e-11)).toBeGreaterThan(200) // a tiny span
     expect(has((c) => c.some((x) => x.some((v) => typeof v === 'number' && !Number.isFinite(v))))).toBeGreaterThan(300) // non-finite output
   })
 })

@@ -306,7 +306,7 @@ export function createChartSession(): ChartSession {
     return out ?? new Map()
   }
 
-  const withAutoPulse = (spec: VgSpec, input: RuntimeInput, currentRaw: Map<string, unknown>): { input: RuntimeInput; pulse: DataPulse } => {
+  const withAutoPulse = (input: RuntimeInput, currentRaw: Map<string, unknown>): { input: RuntimeInput; pulse: DataPulse } => {
     // (a hint that cannot be what it says is refused before it is read, as the evaluation refuses it)
     checkHintShapes(input)
     if (input.dataPulse) {
@@ -402,7 +402,7 @@ export function createChartSession(): ChartSession {
     const metaKey = metaKeyOf(skeleton, input)
     const key = fingerprint(spec, input, skeleton)
     const currentRaw = rawDatasets(spec, input)
-    const { input: effectiveInput, pulse } = withAutoPulse(spec, input, currentRaw)
+    const { input: effectiveInput, pulse } = withAutoPulse(input, currentRaw)
     // An explicit change description (per-datum changeset, pulse, or a named
     // changed dataset) means the data values changed — often in place, so the
     // array identity and thus the fingerprint is unchanged — so the no-op
@@ -469,7 +469,7 @@ export function createChartSession(): ChartSession {
     }
     const currentRaw = new Map(lastRaw)
     for (const [name, rows] of Object.entries(input.data ?? {})) currentRaw.set(name, rows)
-    const { input: effectiveInput, pulse } = withAutoPulse(lastSpec, input, currentRaw)
+    const { input: effectiveInput, pulse } = withAutoPulse(input, currentRaw)
     const pending = evaluateChartPending(sessionEngine(), lastChart, { ...effectiveInput, data: dataInput(currentRaw) }, stableData(input, currentRaw, pulse), engineRaw ?? undefined)
     clock.check('change')
     if (input.limits) checkSceneLimits(pending.scene, input.limits)

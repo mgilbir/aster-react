@@ -249,7 +249,7 @@ function batchableSymbol(it: SceneItem): boolean {
  * array of a scene group, so a streamed append rebuilds a single ~256-item path string instead
  * of every descriptor in the mark.
  */
-function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: number): DomDesc[] {
+function denseSymbolItems(items: SceneItem[], chunkSize: number): DomDesc[] {
   const prev = DENSE.get(items)
   const cachedChunks = prev && prev.items === items && prev.chunkSize === chunkSize ? prev.chunks : null
   const chunks = new Map<number, DenseChunk>()
@@ -366,7 +366,7 @@ function freshSymbolDesc(it: SceneItem, i: number, dirty: number[]): DomDesc {
   return symbolItemDesc(it)
 }
 
-function symbolItems(group: SceneGroup, items: SceneItem[]): { descs: DomDesc[]; appendFrom?: { prev: DomDesc[]; count: number } } {
+function symbolItems(items: SceneItem[]): { descs: DomDesc[]; appendFrom?: { prev: DomDesc[]; count: number } } {
   const prev = SYMBOL_ITEMS.get(items)
   const reuse = prev && prev.items === items ? prev : null
   // An append to an array the engine advances in place, nothing re-encoded since the last build (the dense chunks' proof,
@@ -589,8 +589,8 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
     case 'symbol': {
       // a hyperlinked mark keeps one element (and <a>) per symbol
       const chunkSize = group.hasLinks === true ? 0 : denseSymbolsEnabled(options, items)
-      if (chunkSize > 0) return denseSymbolItems(group, items, chunkSize)
-      const { descs, appendFrom } = symbolItems(group, items)
+      if (chunkSize > 0) return denseSymbolItems(items, chunkSize)
+      const { descs, appendFrom } = symbolItems(items)
       if (appendFrom) APPEND_OF.set(descs, appendFrom)
       return descs
     }

@@ -236,7 +236,7 @@ function symbolAttrs(it: SceneItem): Array<[string, string]> {
  * array of a scene group, so a streamed append rebuilds a single ~256-item path string instead
  * of every descriptor in the mark.
  */
-function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: number): DomDesc[] {
+function denseSymbolItems(items: SceneItem[], chunkSize: number): DomDesc[] {
   const prev = DENSE.get(items)
   const cachedChunks = prev && prev.items === items && prev.chunkSize === chunkSize ? prev.chunks : null
   const chunks = new Map<number, DenseChunk>()
@@ -339,7 +339,7 @@ interface SymbolItemsCache { items: SceneItem[]; keys: SceneItem[]; descs: DomDe
 // 100k-entry array on every append.
 const SYMBOL_ITEMS = new WeakMap<SceneItem[], SymbolItemsCache>()
 
-function symbolItems(group: SceneGroup, items: SceneItem[]): DomDesc[] {
+function symbolItems(items: SceneItem[]): DomDesc[] {
   const prev = SYMBOL_ITEMS.get(items)
   const reuse = prev && prev.items === items ? prev : null
   const keys = reuse ? reuse.keys : []
@@ -538,8 +538,8 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
     case 'symbol': {
       // a hyperlinked mark keeps one element (and <a>) per symbol
       const chunkSize = group.hasLinks === true ? 0 : denseSymbolsEnabled(options, items)
-      if (chunkSize > 0) return denseSymbolItems(group, items, chunkSize)
-      return symbolItems(group, items)
+      if (chunkSize > 0) return denseSymbolItems(items, chunkSize)
+      return symbolItems(items)
     }
     case 'rect': {
       // vega paints a rect only when it has a fill or stroke, in item order.

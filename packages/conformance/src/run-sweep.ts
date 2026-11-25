@@ -230,7 +230,7 @@ let vegaCheck = false
  * `serial`: the case runs alone (nothing else draws random numbers meanwhile), so the --vega-check renders of a bootstrap case
  * can each draw from the same seeded stream and be compared exactly (see the pool in `main`).
  */
-async function runOneCase(c: SweepCase, nodeModules: string, serial = false): Promise<'ok' | 'retained' | 'both-refused' | 'node-error' | 'engine-error' | 'differ' | 'nondeterministic' | 'vega-differ'> {
+async function runOneCase(c: SweepCase, serial = false): Promise<'ok' | 'retained' | 'both-refused' | 'node-error' | 'engine-error' | 'differ' | 'nondeterministic' | 'vega-differ'> {
   // Each engine is handed a copy of its own, taken before either runs (engines.ts): vega writes its transforms' answers onto
   // the rows it ingests, and an Aster handed those rows would agree with the oracle without running a transform at all.
   // `vgSpec` is the oracle's source, never rendered itself (renderOracle copies it for every render).
@@ -448,13 +448,13 @@ async function main(): Promise<void> {
           while (true) {
             const i = idx++
             if (i >= pooled.length) break
-            tally(pooled[i]!, await runOneCase(pooled[i]!, nodeModules))
+            tally(pooled[i]!, await runOneCase(pooled[i]!))
           }
         })(),
       )
     }
     await Promise.all(workers)
-    for (const c of deferred) tally(c, await runOneCase(c, nodeModules, true))
+    for (const c of deferred) tally(c, await runOneCase(c, true))
 
     const total = all.length
     console.log(`[${sweepName}] results: ${status.ok} ok, ${status.retained} retained, ${status.bothRefused} both-refused, ${status.nodeError} node-error, ${status.engineError} engine-error, ${status.differ} differ, ${status.nondeterministic} nondeterministic${vegaCheck ? `, ${status.vegaDiffer} vega-differ` : ''} / ${total}`)

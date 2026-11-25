@@ -281,7 +281,7 @@ describe('hit index finds what is painted, and only that', () => {
     const items = (markGroups(scene)[0]!.items ?? []) as SceneItem[]
     expect(items).toHaveLength(2)
     // left-aligned at x 20: [20, 60] x [30, 60]; centred at x 130: [110, 150] x [30, 60]; the view's padding (7) moves them
-    const box = (it: SceneItem, i: number): [number, number, number, number] => (i === 0 ? [27, 37, 67, 67] : [117, 37, 157, 67])
+    const box = (_it: SceneItem, i: number): [number, number, number, number] => (i === 0 ? [27, 37, 67, 67] : [117, 37, 157, 67])
     items.forEach((it, i) => {
       const [x1, y1, x2, y2] = box(it, i)
       expect(index.query((x1 + x2) / 2, (y1 + y2) / 2)?.item, `centre ${i}`).toBe(it)

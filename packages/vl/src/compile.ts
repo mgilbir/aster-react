@@ -1136,7 +1136,7 @@ function compileLayered(spec: VLSpec, ctx: CompileCtx): VLSpec {
       unitName: childModelName(ctx.modelName, path?.length ? path.map((n) => `layer_${n}`).join('_') : `layer_${i}`),
       scaleName: (c) => leafScaleName(i, c),
     })
-    collectDomainParams(p.l, p.fields, ctx)
+    collectDomainParams(p.l, p.fields)
     if (sel?.pointer && !(isObject(p.markRaw) && p.markRaw.cursor !== undefined)) {
       p.l.mark = { ...(isObject(p.markRaw) ? p.markRaw : { type: p.markRaw }), cursor: 'pointer' }
     }
@@ -4219,10 +4219,9 @@ function pathGroupingKeys(spec: VLSpec, fields: FieldDef[], mark: string): strin
       case 'detail': case 'key':
         for (const d of defs) if (!d.aggregate && !d.fromCondition) add(aggFieldName(d))
         break
-      case 'size':
-        if (mark === 'trail') break
-      // falls through
-      case 'color': case 'fill': case 'stroke': case 'opacity': case 'fillOpacity': case 'strokeOpacity': case 'strokeDash': case 'strokeWidth': {
+      // (a trail's size is its width along the path, not a group)
+      case 'size': case 'color': case 'fill': case 'stroke': case 'opacity': case 'fillOpacity': case 'strokeOpacity': case 'strokeDash': case 'strokeWidth': {
+        if (ch === 'size' && mark === 'trail') break
         const d = defs[0]
         if (d && !d.aggregate) add(aggFieldName(d))
         break
@@ -9923,7 +9922,7 @@ function compileUnitView(spec: VLSpec, ctx: CompileCtx): VLSpec {
   // selections: parsed first, since the data pipeline, the mark encodings and the scales all depend on them
   SPEC_CTX.set(spec, ctx)
   const unitSel = prepareUnitSelections(spec, fields, mark, ctx, { unitName: ctx.modelName || (typeof spec.name === 'string' ? spec.name : ''), scaleName: (c) => c })
-  const domainSel = collectDomainParams(spec, fields, ctx)
+  const domainSel = collectDomainParams(spec, fields)
   if (unitSel?.pointer && !(isObject(markRaw) && markRaw.cursor !== undefined)) {
     spec.mark = { ...(isObject(markRaw) ? markRaw : { type: markRaw }), cursor: 'pointer' }
   }
@@ -10315,7 +10314,7 @@ function prepareUnitSelections(
 }
 
 /** The unit-level pieces `domain: {param}` and `bin.extent: {param}` add, recorded on the unit for the scale pass. */
-function collectDomainParams(spec: VLSpec, fields: FieldDef[], ctx: CompileCtx): UnitSel | undefined {
+function collectDomainParams(spec: VLSpec, fields: FieldDef[]): UnitSel | undefined {
   let sel = UNIT_SEL.get(spec)
   for (const f of fields) {
     // scale/domain.ts parseSelectionDomain: a `domain: {param}`, else the `{param}` extent of a binned field

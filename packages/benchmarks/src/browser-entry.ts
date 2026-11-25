@@ -44,7 +44,7 @@ function teardown(): void {
   session = null
 }
 
-function prepareSession(embed: EmbedName, responsive = false): Session {
+function prepareSession(responsive = false): Session {
   // (session.responsive is recorded below; mismatched callers remount)
   teardown()
   const host = document.createElement('div')
@@ -79,14 +79,14 @@ function renderSession(s: Session, embed: EmbedName, spec: Record<string, unknow
 }
 
 function mountSession(embed: EmbedName, spec: Record<string, unknown>, responsive = false): Session {
-  const s = prepareSession(embed, responsive)
+  const s = prepareSession(responsive)
   renderSession(s, embed, spec)
   return s
 }
 
 /** Time from render() to a painted chart svg: one rAF past quiescence. */
 async function firstRenderMs(embed: EmbedName, kind: ChartKind, points: number): Promise<number> {
-  const s = prepareSession(embed, false)
+  const s = prepareSession(false)
   const spec = buildSpec(kind, genValues(kind, points, 1), 600, 400)
   // work = time of the last DOM mutation; paint follows on the next frame.
   // Trigger-based: the observer must attach before the render commits (t0 is

@@ -1302,7 +1302,7 @@ export class StringAttrSink implements AttrSink {
 }
 
 /** The value `attr(name, value)` would write, or null when it writes nothing. */
-function attrValue(name: string, value: unknown): string | null {
+function attrValue(value: unknown): string | null {
   if (value == null || value === 'transparent') return null
   if (Array.isArray(value)) return value.map((x) => (typeof x === 'number' ? num(x) : String(x))).join(',')
   if (typeof value === 'number') return num(value)
@@ -1312,7 +1312,7 @@ function attrValue(name: string, value: unknown): string | null {
 /** Sink collecting `[name, value]` pairs for the DOM descriptor builder. */
 export class PairAttrSink implements AttrSink {
   out: Array<[string, string]> = []
-  a(name: string, value: unknown): void { const x = attrValue(name, value); if (x !== null) this.out.push([name, x]) }
+  a(name: string, value: unknown): void { const x = attrValue(value); if (x !== null) this.out.push([name, x]) }
   v(name: string, value: unknown): void { if (value != null) this.out.push([name, String(value)]) }
   t(name: string, value: string): void { this.out.push([name, value]) }
   n(name: string, value: number | null | undefined): void { if (value != null) this.out.push([name, num(value)]) }

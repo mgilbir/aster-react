@@ -363,7 +363,7 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       // A generating transform appends its tuples to the pulse it is given, as `sequence` above does.
       return rows.length ? [...rows, ...graticuleRows(t as Record<string, unknown>)] : graticuleRows(t as Record<string, unknown>)
     case 'contour':
-      return contourRows(rows, t as Record<string, unknown>, ctx)
+      return contourRows(rows, t as Record<string, unknown>)
     case 'kde2d':
       return requireTransform('kde2d')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'isocontour':
@@ -638,7 +638,7 @@ export function contourQuantize(levels: number, nice: boolean, zero: boolean): (
   }
 }
 
-function contourRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
+function contourRows(rows: Row[], t: Record<string, unknown>): Row[] {
   const values = t.values as ArrayLike<unknown> | undefined
   // The thresholds: given, or `count` levels spanning the values (from zero when the values are given, not estimated).
   allot('items', (t.count as number) || 10, 'contour levels')

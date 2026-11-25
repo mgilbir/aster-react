@@ -6,7 +6,7 @@ import { forEachVariant } from './testing/variants'
 
 // The matrix runs every test below on <Chart>, <SvgChart> and <SvgChart interaction={interaction}>;
 // `Chart` is the variant's component (see testing/variants.tsx).
-forEachVariant(['svg'], (Chart, variant) => {
+forEachVariant(['svg'], (Chart) => {
   function makeSpec(): Record<string, unknown> {
     return {
       $schema: 'https://vega.github.io/schema/vega/v6.json',
