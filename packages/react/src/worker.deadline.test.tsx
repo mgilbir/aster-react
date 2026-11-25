@@ -14,7 +14,7 @@
 import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { VgSpec } from '@aster-charts/core'
 import {
   AsterWorkerTimeoutError, handleChartWorkerRequest, handleChartWorkerStreamRequest, useChartWorker,
@@ -54,7 +54,10 @@ class Worker2 {
   terminate(): void { this.terminated = true }
 }
 
-const wait = (ms: number): Promise<void> => act(async () => { await new Promise((r) => setTimeout(r, ms)) })
+// The deadlines are on a fake clock: a wait advances it by exactly `ms`, so no machine load can let a deadline (or a worker's
+// answer) fall on the other side of a wait.
+beforeEach(() => { vi.useFakeTimers() })
+const wait = (ms: number): Promise<void> => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
 
 function mount(node: React.ReactElement): { root: ReturnType<typeof createRoot>; render: (n: React.ReactElement) => void } {
   const host = document.createElement('div')
@@ -64,7 +67,7 @@ function mount(node: React.ReactElement): { root: ReturnType<typeof createRoot>;
   return { root, render: (n) => act(() => { root.render(n) }) }
 }
 
-afterEach(() => { document.body.innerHTML = ''; Worker2.made = [] })
+afterEach(() => { vi.useRealTimers(); document.body.innerHTML = ''; Worker2.made = [] })
 
 describe('useChartWorker: the deadline', () => {
   it('workerFactory: terminate, typed error, a new worker; the runaway request is not sent again; the next input uses the new worker', async () => {
