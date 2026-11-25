@@ -243,11 +243,10 @@ describe('<SvgChart> renders what <Chart renderer="svg"> renders, over the whole
         const server = at([1, 2, 3]); const client = at([9, 8, 7])
         expect(clientMount(v, client, { a11y }).html, 'the two pictures must differ for this to test anything').not.toBe(clientMount(v, server, { a11y }).html)
         const h = hydrate(v, client, server, { a11y })
-        // The chart's own markup is the chart's to correct and says nothing (its host suppresses React's report). The accessible
-        // tree is React's own elements: React says the server's attributes differ, once, and the chart remounts them (C45).
-        // That report is the only one allowed, and only there; the picture left behind is the client's either way.
-        if (!a11y) expect(h.logged).toEqual([])
-        else for (const l of h.logged) expect(l).toMatch(/^A tree hydrated but some attributes of the server rendered HTML didn't match/)
+        // The chart's own markup is the chart's to correct and says nothing (its host suppresses React's report), and neither does
+        // the accessible overlay, whose elements the chart makes anew from the client's scene once hydration is over: React makes no
+        // `console.error` with `a11y` on or off, and the picture left behind is the client's either way.
+        expect(h.logged).toEqual([])
         expect(withCssomStyles(h.html)).toBe(withCssomStyles(clientMount(v, client, { a11y }).html))
       })
     }
