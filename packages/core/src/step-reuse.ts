@@ -21,6 +21,7 @@ import type { CompiledTransform } from './types.js'
 const READS_ROWS_AND_SIGNALS = new Set([
   'formula', 'filter', 'bin', 'timeunit', 'extent', 'crossfilter', 'resolvefilter', 'aggregate', 'joinaggregate', 'window',
   'collect', 'identifier', 'project', 'fold', 'flatten', 'stack', 'impute', 'pivot', 'sample', 'sequence',
+  'pie', 'dotbin', 'linkpath', 'voronoi',
 ])
 
 /** Expression functions that compute from their arguments alone (the clock, the locale, scales, datasets and the host are not among them). */

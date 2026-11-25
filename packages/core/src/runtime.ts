@@ -11,7 +11,7 @@ import { scaleCallFailure, scaleRangeFailure } from './missing-scale.js'
 import { ingestRows, isNotATupleError, notATuple, readData, type DataFormatSpec } from './data-format.js'
 import { followsSources, numbersSourceRows, orderOf, setOrder, setSources, sourcesAfter, sourcesOf } from './tuple-order.js'
 import { alignIndices, carryByAlignment, carryBySources, sourceNumbersOf, type IdCounter, type SourceNumbers } from './identifier-ids.js'
-import { historyPlan } from './tuple-history.js'
+import { historyPlan, rerunsOf, vegaPlan } from './tuple-history.js'
 import { applyTransforms, applyTransformsToSharedRows, copiesRows, rowUseOf, sortOrder, getField, type Row, type TransformContext } from './transform.js'
 import { fieldOf, flatKeyFn, groupKeyFn } from './row-keys.js'
 import { atRandomSite, contentKey, mayDrawRandom, normalPairs, replayable } from './random-tape.js'
@@ -60,7 +60,7 @@ import type {
 import { gradientDefOf, hash53, isGradientPaint } from './svg-defs.js'
 import { tickFormat, scaleGradient, scaleGradientStops, tickCount, validTicks } from './scale.js'
 import { compileChart } from './compiler.js'
-import { sameTuple, tupleOrigin, copyTuple, withTupleOrigins, dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, isTuple, markTuple, markTuples, markTupleAlways, withTuples, tuplesRegistering, PRIMITIVE_TUPLE, tupleDatum } from './util.js'
+import { sameTuple, standFor, tupleOrigin, copyTuple, copyTupleWith, withTupleOrigins, dict, ownGet, pushAll, sortData, lerp, scopedSignalName, heldSignalName, isTuple, markTuple, markTuples, markTupleAlways, withTuples, tuplesRegistering, PRIMITIVE_TUPLE, tupleDatum } from './util.js'
 import { applyImageUrlPolicy, applyLinkUrlPolicy, bindSceneUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { checkChartUrlData } from './url-data.js'
 import { publishRows, valueKey, valuesEqual } from './fingerprint.js'
@@ -156,7 +156,10 @@ export interface DatasetState {
 }
 
 interface TupleHistory {
+  /** The host's or the spec's arrays the rows were made from (for a dataset derived by `source`: none, see `origins`). */
   readonly inputs: readonly Pin[]
+  /** For a dataset derived by `source`: the tuples its rows stand for (their origins: util.ts `tupleOrigin`). */
+  readonly origins?: ReadonlySet<object>
   /** The values of the signals each step read (vega reruns an operator whose parameter was SET to another value: see `sameParam`). */
   readonly params: ReadonlyArray<readonly unknown[]>
   readonly rows: Row[]
@@ -780,6 +783,11 @@ interface EvalContext {
   pulseBases?: ReadonlyMap<string, unknown>
   /** The mark being made took something of the evaluation before (a pulse, channels): it is not made in full (see `charges`). */
   partialMake?: boolean
+  /**
+   * The fields each dataset's pipeline modified in this evaluation, as vega's dataflow marks them on the pulse (see `historyRun`): what
+   * a dataset derived from it by `source` receives. Absent or null: not known (its tuples are new, or its steps are not followed).
+   */
+  modifiedFields?: Map<string, ReadonlySet<string> | null>
   /** Where the scene's runtime finds the histories of the rows the scene keeps, once it is made (see `rowsOf`). */
   sceneRows: SceneRows
   /** The state the pass before this one left (see `EvalTxn.lastPass`). */
@@ -1023,6 +1031,7 @@ function prepareChartCtx(
   // and what a text is measured by: the provider in force for this evaluation, `input.textMetrics` or the one set for every chart)
   const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${valueKey(getTextMetricsProvider())}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}\u0002${input.measuredSize ? `${input.measuredSize.width}x${input.measuredSize.height}` : ''}\u0002${formatEnvironmentKey()}`
   const ctx: EvalContext = {
+    ...(keepsTupleHistory(chart) ? { modifiedFields: new Map<string, ReadonlySet<string> | null>() } : {}),
     sceneRows: kept, chart, scope: rootScope(chart), abort: { failures: [] }, ...(passMemory !== undefined ? { passMemory } : {}), signalParams, width, height, datasets, setData, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
     layoutState: { failed: false, warnings: [] }, initDone: new Set(), hostSignals: new Set([
       ...Object.keys(input.signals ?? {}),
@@ -1185,10 +1194,18 @@ function prepareChartCtx(
  * source's to describe); a change list that is not an array, or an index that is not a whole number (`1.5`, `NaN`, `'2'`); a
  * `dataPulse` that says nothing (no `changed`, `from` or `appendOnly`). An index past the rows is no row and is left alone, as before.
  */
+/** The chart's top-level datasets by name (made once per compiled chart: every evaluation's checks read it). */
+const DATA_DEFS = new WeakMap<CompiledChart, ReadonlyMap<string, CompiledChart['data'][number]>>()
+function dataDefsOf(chart: CompiledChart): ReadonlyMap<string, CompiledChart['data'][number]> {
+  let defs = DATA_DEFS.get(chart)
+  if (defs === undefined) DATA_DEFS.set(chart, (defs = new Map(chart.data.map((d) => [d.name, d] as const))))
+  return defs
+}
+
 function checkHints(chart: CompiledChart, input: RuntimeInput): void {
   if (input.changedDatasets === undefined && input.dataChanges === undefined && input.dataPulse === undefined) return
   checkHintShapes(input)
-  const defs = new Map(chart.data.map((d) => [d.name, d] as const))
+  const defs = dataDefsOf(chart)
   const known = (name: string): boolean => defs.has(name) || (input.data !== undefined && Object.hasOwn(input.data, name))
   for (const name of input.changedDatasets ?? []) if (!known(name)) refuseHint('changedDatasets', name, 'which is no dataset of the chart and none the host gives')
   for (const [what, hints] of [['dataChanges', input.dataChanges], ['dataPulse', input.dataPulse]] as const) {
@@ -1210,9 +1227,9 @@ function checkHostData(chart: CompiledChart, input: RuntimeInput): void {
   const data = input.data as unknown
   if (data === undefined || data === null) return
   if (typeof data !== 'object' || Array.isArray(data)) throw new TypeError(`[aster] input.data must be an object of rows by dataset name ({ ${chart.data[0]?.name ?? 'table'}: rows }), got ${Array.isArray(data) ? 'a list' : typeof data}`)
-  const names = new Set(chart.data.map((d) => d.name))
+  const names = dataDefsOf(chart)
   for (const name of Object.keys(data)) {
-    if (!names.has(name)) throw new TypeError(`[aster] input.data names dataset "${name}", which the chart does not declare (it declares: ${[...names].join(', ') || 'no datasets'}; Vega refuses it too: Unrecognized data set)`)
+    if (!names.has(name)) throw new TypeError(`[aster] input.data names dataset "${name}", which the chart does not declare (it declares: ${[...names.keys()].join(', ') || 'no datasets'}; Vega refuses it too: Unrecognized data set)`)
   }
 }
 
@@ -4781,6 +4798,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
     } else if (d.values != null) {
       const given = ownGet(inputData, name)
       inPulse = hostPulse(ctx, name, given)
+      sameHostTuples(ctx, name, given)
       if (given) {
         // (rows that readData would pass through as they are -- an array of JSON rows, nothing to parse -- are only ingested)
         // (a session hands a dataset its spec's own inline rows this way too: those are named as inline values)
@@ -4802,6 +4820,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
         throw unloadedUrlError(name, true)
       }
       inPulse = hostPulse(ctx, name, given)
+      sameHostTuples(ctx, name, given)
       rows = ingestHostRows(given ?? [], inPulse, name)
       shared = true
       if (given != null) { inputs = [given]; raw = true }
@@ -4819,6 +4838,8 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       rows = []
       outPulse = null
     } else if (!d.transform.length) {
+      // (no step modifies anything: what its source modified, or nothing, over the same tuples -- a dataset derived from it checks that)
+      if (ctx.modifiedFields !== undefined) ctx.modifiedFields.set(name, srcNames.length === 1 ? ctx.modifiedFields.get(srcNames[0]!) ?? null : srcNames.length === 0 ? NO_FIELDS : null)
       if (shared) {
         // (the copy the evaluation before made of the same rows, when there is one: see keptCopy)
         rows = keptCopy(ctx, name, inputs, raw) ?? copyRows(rows)
@@ -4848,12 +4869,12 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
       // the same, if any.
       // (a view whose datasets may draw from a random source the host injected takes a pulse where it always did: the engine's pulse
       // path draws without a tape, so which build takes a pulse decides which numbers the source hands out; see `drawsInDatasets`)
-      // (what the pipeline's tuples are made from, for the history vega's tuples carry: the host's array or the spec's own rows. A
-      // dataset derived by `source` writes onto copies of its source's rows where vega writes onto the source's tuples themselves --
-      // the input-mutation deviation, ARCHITECTURE.md -- and whether those are the same tuples as before is not told by an array)
-      const tupleInputs = setRows !== undefined || srcNames.length > 0 ? undefined
+      // (what the pipeline's tuples are made from, for the history vega's tuples carry: the host's array or the spec's own rows, or for
+      // a dataset derived by `source` its source's tuples, told by the tuples they stand for)
+      const tupleInputs = setRows !== undefined || srcNames.length > 1 ? undefined : srcNames.length === 1 ? []
         : raw ? inputs : d.values != null && ownGet(inputData, name) == null && valuesSignal(d.values) === undefined ? [d.values] : undefined
-      const fed = historyRun(ctx, name, d.transform, tctx, tupleInputs, raw, prevDS, passFp)
+      const tupleSource = srcNames.length === 1 ? srcNames[0] : undefined
+      const fed = historyRun(ctx, name, d.transform, tctx, tupleInputs, tupleSource, rows, raw, prevDS, passFp)
       const key = ctx.runtime.random !== undefined && datasetsMayDraw(ctx.chart) ? null : pipelineKey(ctx, d.transform)
       const before = fed === undefined && reuse.on ? keptBuild(ctx, name, inputs, key) : undefined
       if (fed !== undefined) {
@@ -4906,7 +4927,7 @@ function buildDatasetsOf(ctx: EvalContext, inputData: Record<string, unknown[]>)
           rows = runPipeline(ctx, name, d.transform, tctx, rows, shared, inputs, raw, prevDS, earlierDS, state)
           outPulse = null
         }
-        if (tupleInputs !== undefined) recordHistory(ctx, d.transform, tupleInputs, pipelineInput, rows, state)
+        if (tupleInputs !== undefined) recordHistory(ctx, name, d.transform, tupleInputs, tupleSource, pipelineInput, rows, state, prevDS)
         if (key !== null) {
           state.key = key
           if (inputs !== undefined && !forceLinkDatasets(ctx.chart).has(name)) {
@@ -5220,36 +5241,83 @@ function pipelineKey(ctx: EvalContext, transforms: readonly CompiledTransform[])
   return key
 }
 
+const NO_FIELDS: ReadonlySet<string> = new Set()
+
+/**
+ * A chart whose tuples carry history (`ctx.modifiedFields`): the rows of a host array the session found equal to the one the evaluation
+ * before was given (`ctx.unchanged`) stand for the tuples of that one, row by row, so a dataset derived from them keeps its tuples too.
+ */
+function sameHostTuples(ctx: EvalContext, name: string, given: unknown): void {
+  if (ctx.modifiedFields === undefined || !Array.isArray(given) || ctx.unchanged?.has(name) !== true) return
+  const before = ctx.unchanged.get(name)
+  if (!Array.isArray(before) || before === given || before.length !== given.length) return
+  for (let i = 0; i < given.length; i++) {
+    const r = given[i] as unknown, t = before[i] as unknown
+    if (r !== null && typeof r === 'object' && t !== null && typeof t === 'object') standFor(r, t)
+  }
+}
+
 /**
  * A dataset whose pipeline reads, at some step, a field that step or a later one writes (tuple-history.ts), evaluated as vega's next
  * run of the dataflow evaluates it: its tuples are the ones the evaluation before left -- the same input, so the same tuples -- and a
- * step runs again only when a signal it reads changed, or a field it reads (a formula: or writes) was written by a step that ran
- * before it in this run; a step that does not run leaves the tuples as they are, holding what it and the steps after it wrote then.
- * Undefined when the pipeline is not such a one, or there is no evaluation before over the same input (a fresh evaluation, new or
- * changed rows: vega's tuples are new too), or no step runs again over rows the input alone made (they are those rows).
+ * step runs again only when vega's would (`rerunsOf`: a signal it reads was set; a field it reads, or anything, modified before it in
+ * this run); a step that does not run leaves the tuples as they are, holding what it and the steps after it wrote then.
+ *
+ * A dataset derived by `source` whose steps write onto tuples has tuples of its own, derived from its source's (vega-parser puts a
+ * `Relay` with `derive` before such a pipeline): the same tuples when the rows it is given now stand for the tuples its rows of the
+ * evaluation before stand for. When its source modified anything in this run, the relay copies every field of each source tuple onto
+ * the derived one and marks them all modified (vega-transforms Relay); otherwise the derived tuples hold what this pipeline left.
+ *
+ * Undefined when the pipeline is not such a one, or there is no evaluation before over the same tuples (a fresh evaluation, new or
+ * changed rows: vega's tuples are new too), or no step runs again over rows the input alone made (they are those rows). Either way the
+ * fields the pipeline modified are noted for the datasets derived from this one.
  */
 function historyRun(
-  ctx: EvalContext, name: string, transforms: CompiledTransform[], tctx: StepTransformContext, inputs: readonly unknown[] | undefined, raw: boolean,
-  prevDS: DatasetState | undefined, fp: string,
+  ctx: EvalContext, name: string, transforms: CompiledTransform[], tctx: StepTransformContext, inputs: readonly unknown[] | undefined,
+  source: string | undefined, given: readonly Row[], raw: boolean, prevDS: DatasetState | undefined, fp: string,
 ): { rows: Row[]; state: DatasetState } | undefined {
-  const plan = historyPlan(transforms)
+  if (ctx.modifiedFields === undefined) return undefined
+  ctx.modifiedFields.set(name, null)
+  const plan = vegaPlan(transforms)
   const was = prevDS?.history
   if (plan === null || was === undefined || inputs === undefined || ctx.affected.has(name)) return undefined
-  // (the same tuples: the very input arrays, or rows the host's session found equal to the ones the evaluation before was given)
-  const vouched = raw && inputs.length === 1 && ctx.unchanged?.has(name) === true && samePin(was.inputs[0], ctx.unchanged.get(name))
-  if (!vouched && !samePins(was.inputs, inputs)) return undefined
+  const fromSource = source === undefined ? NO_FIELDS : ctx.modifiedFields.get(source) ?? null
+  if (fromSource === null) return undefined
+  const upstream = relayed(plan, fromSource, given)
+  if (source === undefined) {
+    // (the same tuples: the very input arrays, or rows the host's session found equal to the ones the evaluation before was given)
+    const vouched = raw && inputs.length === 1 && ctx.unchanged?.has(name) === true && samePin(was.inputs[0], ctx.unchanged.get(name))
+    if (!vouched && !samePins(was.inputs, inputs)) return undefined
+  } else if (!sameTuples(was.origins, given)) return undefined
   const params = historyParams(ctx, transforms)
   if (params === null || params.length !== was.params.length) return undefined
-  const modified = new Set<string>()
-  const steps: Row[][] = []
+  const changed = params.map((p, k) => p.length !== was.params[k]!.length || p.some((v, i) => !sameParam(v, was.params[k]![i])))
+  const { runs, modified } = rerunsOf(plan, changed, upstream)
+  ctx.modifiedFields.set(name, modified)
+  // (only a pipeline that reads what a later step writes shows what its tuples carry; any other is the function of its input it was)
+  if (historyPlan(transforms) === null) return undefined
+  // (the tuples as this run finds them: what this pipeline left on them, and what its source modified since)
   let rows = was.rows
+  if (upstream.size > 0) {
+    const now = new Map<object, Row>()
+    for (const r of given) now.set(tupleOrigin(r), r)
+    rows = rows.map((r) => {
+      const cur = now.get(tupleOrigin(r))!
+      const fresh: Record<string, unknown> = {}
+      for (const f of upstream) if (Object.hasOwn(cur, f)) fresh[f] = cur[f]
+      return copyTupleWith(r, fresh)
+    })
+  }
+  if (!runs.includes(true) && upstream.size === 0) {
+    if (prevDS!.historic !== true) return undefined
+    checkRowCount(rows.length, `dataset "${name}"`)
+    // (the state of the evaluation before, now made from the arrays given now: a later evaluation compares its input with these)
+    return { rows, state: { ...prevDS!, history: { ...was, inputs: pinAll(inputs) } } }
+  }
+  const steps: Row[][] = []
   let order = was.order
-  let ran = false
   for (let k = 0; k < transforms.length; k++) {
-    const step = plan[k]!
-    const changed = params[k]!.length !== was.params[k]!.length || params[k]!.some((v, i) => !sameParam(v, was.params[k]![i]))
-    const runs = !step.once && (changed || step.inputs.some((f) => modified.has(f)) || (step.rerunsOnWrites && step.writes.some((f) => modified.has(f))))
-    if (runs) {
+    if (runs[k]) {
       ctx.checkDeadline?.('dataset build')
       // (the rows the run before left are its own: the step writes onto copies of them, which stand for the same tuples; a sort breaks
       // its ties by the order the tuples were made in, as vega's by their ids: see tuple-order.ts)
@@ -5259,32 +5327,55 @@ function historyRun(
       order = order === null ? null : reorder(own, order, out)
       rows = out
       markTuples(rows)
-      for (const f of step.writes) modified.add(f)
-      ran = true
     }
     steps.push(rows)
   }
-  if (!ran) {
-    if (prevDS!.historic !== true) return undefined
-    checkRowCount(rows.length, `dataset "${name}"`)
-    return { rows, state: prevDS! }
-  }
-  const state: DatasetState = { fp, inputLength: inputs.length === 1 && Array.isArray(inputs[0]) ? inputs[0].length : rows.length, steps, stepState: new Map(), historic: true }
-  state.history = { inputs: pinAll(inputs), params, rows, order }
+  const state: DatasetState = { fp, inputLength: given.length, steps, stepState: new Map(), historic: true }
+  state.history = { inputs: pinAll(inputs), ...(source !== undefined ? { origins: originsOf(rows) } : {}), params, rows, order }
   stepCounts.ran += transforms.length
   return { rows, state }
+}
+
+/**
+ * The fields a derived pipeline receives as modified: none when its source modified nothing; when it did, and the pipeline writes onto
+ * tuples, every field of the source's tuples (vega-transforms Relay with `derive` re-copies them all and marks them all modified); a
+ * pipeline that writes nothing shares its source's tuples and receives what the source modified.
+ */
+function relayed(plan: ReturnType<typeof vegaPlan> & object, fromSource: ReadonlySet<string>, given: readonly Row[]): ReadonlySet<string> {
+  if (fromSource.size === 0 || !plan.some((s) => s.writes.length > 0)) return fromSource
+  const all = new Set<string>()
+  for (const r of given) for (const k in r) all.add(k)
+  return all
+}
+
+/** The tuples rows stand for. */
+const originsOf = (rows: readonly Row[]): ReadonlySet<object> => new Set(rows.map((r) => tupleOrigin(r)))
+
+/** Whether `rows` stand for exactly the tuples `origins` holds. */
+function sameTuples(origins: ReadonlySet<object> | undefined, rows: readonly Row[]): boolean {
+  if (origins === undefined || origins.size !== rows.length) return false
+  for (const r of rows) if (!origins.has(tupleOrigin(r))) return false
+  return true
 }
 
 /** The values of the signals each step of a pipeline that `historyRun` evaluates reads now (`null`: a step's reads are not known, or it reads a dataset). */
 function historyParams(ctx: EvalContext, transforms: readonly CompiledTransform[]): unknown[][] | null {
   const params: unknown[][] = []
   for (const t of transforms) {
-    const reads = stepReadsOf(t)
-    if (reads === null || reads.draws || reads.publishes !== undefined || reads.datasets.length > 0) return null
-    params.push(reads.signals.map((n) => ctx.signalParams[n]))
+    // (a lookup reads the rows of the dataset it names, `from`: its index, below; a lookup with a signal among its parameters is not followed)
+    const reads = t.type === 'lookup' && typeof (t as { from?: unknown }).from === 'string' && !JSON.stringify(t).includes('"signal"')
+      ? { signals: [] as string[], datasets: [(t as { from: string }).from], draws: false, publishes: undefined }
+      : stepReadsOf(t)
+    // (a published signal is the extent's own: it writes no tuple; a dataset read is the lookup's index, see below)
+    if (reads === null || reads.draws || (reads.publishes !== undefined && t.type !== 'extent') || (reads.datasets.length > 0 && t.type !== 'lookup')) return null
+    const values: unknown[] = reads.signals.map((n) => ctx.signalParams[n])
+    // (vega's index of the looked-up dataset is modified whenever that dataset's pulse changed anything: new tuples, or a modification)
+    for (const n of reads.datasets) values.push(ctx.modifiedFields?.get(n)?.size === 0 ? UNCHANGED_INDEX : {})
+    params.push(values)
   }
   return params
 }
+const UNCHANGED_INDEX = {}
 
 /**
  * Whether a signal holds the value it held: vega's dataflow reruns an operator whose parameter was set to another value, by identity
@@ -5294,22 +5385,43 @@ function historyParams(ctx: EvalContext, transforms: readonly CompiledTransform[
 const sameParam = (a: unknown, b: unknown): boolean => Object.is(a, b) || (a !== null && b !== null && typeof a === 'object' && typeof b === 'object' && sameTuple(a, b))
 
 /**
- * Leave in `state` the history a later evaluation of a pipeline `historyRun` evaluates starts from: the rows this run made from its
- * input (`given`: the rows the pipeline was given, whose order is the order the tuples were made in).
+ * Leave in `state` the history a later evaluation starts from (see `historyRun`): what the steps read and, for a pipeline that reads what a
+ * later step writes, the rows this run made from its input (`given`: the rows the pipeline was given, whose order is the order the
+ * tuples were made in). A pipeline that took no history run notes what it modified for the datasets derived from it: everything its
+ * steps write when its tuples are new (they are vega's added tuples), else what vega's run modifies.
  */
-function recordHistory(ctx: EvalContext, transforms: readonly CompiledTransform[], inputs: readonly unknown[], given: readonly Row[], rows: Row[], state: DatasetState): void {
-  if (historyPlan(transforms) === null) return
-  const params = historyParams(ctx, transforms)
-  if (params === null) return
+function recordHistory(
+  ctx: EvalContext, name: string, transforms: readonly CompiledTransform[], inputs: readonly unknown[], source: string | undefined, given: readonly Row[],
+  rows: Row[], state: DatasetState, prevDS: DatasetState | undefined,
+): void {
+  if (ctx.modifiedFields === undefined) return
+  const plan = vegaPlan(transforms)
+  const params = plan === null ? null : historyParams(ctx, transforms)
+  if (plan === null || params === null) return
+  state.history = { inputs: pinAll(inputs), ...(source !== undefined ? { origins: originsOf(rows) } : {}), params, rows, order: historyPlan(transforms) === null ? null : creationOrder(given, rows) }
+  // (what this run modified, when its tuples are the ones before: a derived dataset may carry its own history over them)
+  const was = prevDS?.history
+  const fromSource = source === undefined ? NO_FIELDS : ctx.modifiedFields.get(source) ?? null
+  const upstream = fromSource === null ? null : relayed(plan, fromSource, given)
+  if (ctx.modifiedFields.get(name) != null) return
+  const same = was !== undefined && upstream !== null && !ctx.affected.has(name)
+    && (source === undefined ? samePins(was.inputs, inputs) : sameTuples(was.origins, given)) && was.params.length === params.length
+  if (!same) return
+  const changed = params.map((p, k) => p.length !== was!.params[k]!.length || p.some((v, i) => !sameParam(v, was!.params[k]![i])))
+  ctx.modifiedFields.set(name, rerunsOf(plan, changed, upstream!).modified)
+}
+
+/** The order the tuples of `rows` were made in (their index among `given`, by the tuple they stand for); null when one is not among them. */
+function creationOrder(given: readonly Row[], rows: readonly Row[]): Float64Array | null {
   const made = new Map<object, number>()
   for (let i = 0; i < given.length; i++) made.set(tupleOrigin(given[i]!), i)
   const order = new Float64Array(rows.length)
   for (let i = 0; i < rows.length; i++) {
     const at = made.get(tupleOrigin(rows[i]!))
-    if (at === undefined) { state.history = { inputs: pinAll(inputs), params, rows, order: null }; return }
+    if (at === undefined) return null
     order[i] = at
   }
-  state.history = { inputs: pinAll(inputs), params, rows, order }
+  return order
 }
 
 /** The order the tuples of `out` were made in, `out` being the rows a step made of `rows` (whose order is `order`): by the tuple each stands for. */

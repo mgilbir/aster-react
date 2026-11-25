@@ -269,7 +269,9 @@ a dataset, `dataPulse` wins for it).
 
 `createChartStream(spec, options)` wraps a session with a push-based, bounded queue (the rows you `push` are treated as
 immutable, see [Rows are treated as immutable](#rows-are-treated-as-immutable); `initial.logger` receives the dataflow
-errors and development warnings of every flush):
+errors and development warnings of every flush). The stream reads `spec` once, when it is created: it evaluates a private,
+deep-frozen copy of it (its plain objects and arrays), so a change you make to your object afterwards does not reach the running
+stream -- create a new stream for a new spec, as a JSON input is read by its content:
 
 ```ts
 import { createChartStream, type VgSpec } from '@aster-charts/core'
