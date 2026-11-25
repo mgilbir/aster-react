@@ -918,7 +918,12 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
     const w = Number(plotW)
     const h = Number(plotH)
     if (w > 0 && h > 0) {
-      const face = geomEntry(rootItemOf(scene), 'group', () => transformPolys(pathPolys(`M0,0h${w}v${h}h${-w}Z`), (x, y) => [padX + x, padY + y]), painted)
+      // (a rounded frame is its own outline, so the corners outside it are not hits; the rest is the box)
+      const rounded = scene.frameCornerRadius ? { x: 0, y: 0, width: w, height: h, cornerRadius: scene.frameCornerRadius } as SceneItem : null
+      const outline = (): Poly[] => rounded !== null
+        ? flattenSegs(segsOf(rectData(rounded)), (x, y) => [padX + x, padY + y])
+        : [{ pts: [padX, padY, padX + w, padY, padX + w, padY + h, padX, padY + h], closed: true }]
+      const face = geomEntry(rootItemOf(scene), 'group', outline, painted)
       if (face) { face.groupBox = true; face.pickOnly = true; entries.push(face) }
     }
   }
