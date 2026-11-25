@@ -79,7 +79,11 @@ describe('add-ons: TRANSFORMS_ADDON_TYPES and LOAD_ADDON_FORMATS are the lists',
       if (HISTORY.has(file) || file === 'docs/LIMITS.md' || file === 'docs/PERFORMANCE.md') continue // their lists are per-transform cost, not the add-on
       for (const p of paragraphs(text)) {
         if (file === 'docs/ARCHITECTURE.md' && p.startsWith('| Add-on | Registers |')) continue // the canonical sample
-        if (countIn(p, types).length >= 4) copies.push(`${file}: ${p.slice(0, 70).replace(/\n/g, ' ')}...`)
+        // (a table is read row by row: its rows are separate statements, and the deviations table has a row per transform that differs;
+        // a row, or any other paragraph, that lists four or more is still a copy of the list)
+        for (const unit of p.startsWith('|') ? p.split('\n') : [p]) {
+          if (countIn(unit, types).length >= 4) copies.push(`${file}: ${unit.slice(0, 70).replace(/\n/g, ' ')}...`)
+        }
       }
     }
     expect(copies, 'a paragraph names four or more add-on transforms: point at TRANSFORMS_ADDON_TYPES instead of listing them').toEqual([])

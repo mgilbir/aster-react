@@ -40,8 +40,8 @@ function typesTarget(entry) {
 
 /**
  * `paths` for every public entry of the three packages, from each manifest's own `exports` map: what a reader's `import` resolves to, so
- * the test cannot keep a second, drifting copy of the map (it mapped `@aster-charts/core/dom` to `dom.d.ts`, which is not what `exports`
- * says, and had no `@aster-charts/react/lite`).
+ * the test cannot keep a second, drifting copy of the map (an earlier one pointed `@aster-charts/core/dom` at a declaration file that
+ * is not what `exports` says, and had no `@aster-charts/react/lite`).
  */
 export function pathsFromExports() {
   const paths = {}
