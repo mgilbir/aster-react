@@ -766,7 +766,7 @@ function identifierPulse(
  */
 function applyStepWithPulse(
   rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
-  input: StepPulse, prev: Row[] | undefined, prevStepState: unknown, published: boolean, aliased?: ReadonlySet<string>, carry?: readonly unknown[],
+  input: StepPulse, prev: Row[] | undefined, prevStepState: unknown, aliased?: ReadonlySet<string>, carry?: readonly unknown[],
 ): { rows: Row[]; pulse: StepPulse | null; state?: unknown } {
   const type = String(t.type)
   // (the steps that keep state key or order rows by the raw `groupby` / `fields` / `sort`: a field written as a signal or an
@@ -784,9 +784,11 @@ function applyStepWithPulse(
   }
   if (input.appendOnly) {
     // Fast paths that never need the full mapping. Those below write the rows the step made last time in place (an O(appended)
-    // update); the rows of a step that are a dataset's are the rows the last scene publishes (`datasetsOfScene`, its runtime's
-    // `data()`), and a scene is never changed once returned, nor by an evaluation that is then rejected: such a step updates a copy.
-    const writable = published && prev !== undefined ? prev.slice() : prev
+    // update), after the claim that opened a journalled write of them (runtime.ts `claim`, content-stamp.ts `beginWrite`): the rows
+    // of a step that are a dataset's are the rows an earlier scene publishes (`datasetsOfScene`, its runtime's `data()`), which read
+    // them through their history -- the slots a write overwrites are journalled (`beforeWrite`) and the length they had is kept --,
+    // so a scene is never changed once returned, nor by an evaluation that is then rejected, and no step copies its rows (C30, Q14).
+    const writable = prev
     const appendLocal = rowLocal(t, tctx)
     if (appendLocal) {
       const fast = rowLocalAppendPulse(rows, t, tctx, sourceName, input, writable)
@@ -946,7 +948,7 @@ export function applyPipelineWithPulse(
       state.steps.push(cur)
       if (res.state !== undefined) state.stepState.set(key, res.state)
     } else {
-      const res = applyStepWithPulse(cur, t, tctx, sourceName, pulse, prevDS.steps[k], prevDS.stepState.get(key), k === transforms.length - 1, prevDS.aliased?.[k], bySource?.carry)
+      const res = applyStepWithPulse(cur, t, tctx, sourceName, pulse, prevDS.steps[k], prevDS.stepState.get(key), prevDS.aliased?.[k], bySource?.carry)
       if (prevDS.aliased?.[k] !== undefined) (state.aliased ??= [])[k] = prevDS.aliased[k]
       cur = res.rows
       // (each step's rows are tuples to the next step, as in runPipeline)
