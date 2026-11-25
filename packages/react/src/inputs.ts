@@ -216,6 +216,8 @@ export function useControlledSignals(signals: Readonly<Record<string, unknown>> 
     for (const [name, value] of Object.entries(events.values)) {
       if (isLoopKey(name) || !Object.hasOwn(since, name) || eventWins(name)) out[name] = value
     }
+    // (the loop's own entries under a symbol key -- the items it asked to be encoded again, `encode` -- are no signal: always its)
+    for (const key of Object.getOwnPropertySymbols(events.values)) (out as Record<symbol, unknown>)[key] = (events.values as Record<symbol, unknown>)[key]
     if (controlled) {
       for (const [name, value] of Object.entries(controlled)) {
         if (!eventWins(name)) out[name] = value

@@ -59,7 +59,7 @@ import { activeMeter, AsterLimitError, checkRowCount, withLimits, type SpecLimit
 import type { Timer } from './timer.js'
 import { part } from './engine-parts.js'
 import { clientToSvg } from './pointer.js'
-import { ENCODE_LOG, encodeIdentOf, encodeLogOf, withRequest } from './encode-handlers.js'
+import { ENCODE_LOG, encodeIdentOf, encodeLogOf, encodeSetsOf, hasSetIn, withRequest } from './encode-handlers.js'
 
 /** What `pick` / the DOM fallback resolve an event position to: a scene item and where it sits. */
 export interface PickedItem {
@@ -117,6 +117,13 @@ export interface ViewEventConnection {
 export interface SignalEventHooks {
   /** Called once per signal that changed while an event (or `setSignal`) was processed. */
   onSignal?: (name: string, value: unknown, all: Record<string, unknown>) => void
+  /**
+   * Called once after an event asked for an item to be encoded again with a set of its mark (a handler's `encode: <set>`, or the
+   * view's hover: see `SignalBindOptions.hover`), with the signal set that now holds the request (under a symbol key, carried by
+   * every copy of it). The host evaluates again from that set, as it does on `onSignal`, also when no signal changed (vega's
+   * `encode` pulses the mark whatever the signal it writes).
+   */
+  onEncode?: (all: Record<string, unknown>) => void
   /**
    * Called once per dataset that `modify(...)` edited while an event (or `setSignal`) was processed, with the
    * dataset's input rows afterwards. The host keeps them and hands them back as `data[name]` to the next
@@ -186,6 +193,13 @@ export interface SignalBindOptions {
    * `permit`); a host that renders trusted specs only may widen it.
    */
   eventSources?: EventSourcePolicy
+  /**
+   * vega's `view.hover()` (default on, as vega-embed turns it on for a Vega spec; a Vega-Lite spec has no `hover` set, so it is the
+   * same there): a pointer that enters an item of a mark with a `hover` encode set encodes the item with that set, and leaving it
+   * encodes it with the mark's `update` set (the channels the spec's update writes; what only `hover` writes stays). `false` turns
+   * it off; `{hoverSet, updateSet}` names other sets, as vega's `hover(hoverSet, leaveSet)` does.
+   */
+  hover?: boolean | { hoverSet?: string; updateSet?: string }
   /**
    * `containerSize()` for the handlers' expressions, read when an event fires (vega: the view container's live
    * `clientWidth` / `clientHeight`). Without it they read the size the scene was evaluated with, which a
@@ -788,6 +802,7 @@ function bindSignalEventsDefs(
       const ident = encodeIdentOf(item)
       if (ident === undefined) return
       ;(signals as Record<symbol, unknown>)[ENCODE_LOG] = withRequest(encodeLogOf(signals), state, ident, set)
+      encodeAsked = true
     },
   }
   myShell.current.set('', bindRuntime)
@@ -948,6 +963,8 @@ function bindSignalEventsDefs(
   // What the runs of one DOM event changed is told to the host once the event has been delivered to every scope that listens:
   // the host re-renders (and binds again) on being told, which must not happen between two scopes' runs of the same event.
   const notified = { changed: new Set<string>(), edited: new Set<string>() }
+  /** An item was asked to be encoded again during the delivery (`encode`): the host is told once, after the signals. */
+  let encodeAsked = false
   let batching = 0
   /** A `timer` stream's tick is being delivered (what it edits is told to the host as the timer's). */
   let timerTick = false
@@ -958,6 +975,10 @@ function bindSignalEventsDefs(
     notified.changed.clear()
     for (const name of edited) hooks.onData?.(name, inputRows.get(name)!, timerTick)
     for (const key of changed) hooks.onSignal?.(key, readKey(key), signals)
+    if (encodeAsked) {
+      encodeAsked = false
+      hooks.onEncode?.(signals)
+    }
   }
 
   // ---- event extension (vega-view events-extend.js) ----------------------------
@@ -1339,6 +1360,25 @@ function bindSignalEventsDefs(
         }
       })
     })
+  }
+
+  // ---- vega's view.hover() (vega-view hover.js) -----------------------------------------------------------------------
+  // pointerover / pointerout of the view with an item: `encode(item, [hoverSet])`, and `encode(item, [updateSet, hoverSet])` on the way
+  // out -- vega's Encode runs the first set only when the item's mark has every set named, so a mark without a hover set is left alone
+  const hover = opts.hover === false ? null : typeof opts.hover === 'object' ? opts.hover : {}
+  const hoverSet = hover?.hoverSet || 'hover'
+  const leaveSet = hover?.updateSet || 'update'
+  if (hover !== null && hasSetIn((chart as { marks?: Parameters<typeof hasSetIn>[0] }).marks, hoverSet)) {
+    const itemOf = runtimeFor(null).expr('item()')
+    for (const [type, sets] of [['pointerover', [hoverSet]], ['pointerout', [leaveSet, hoverSet]]] as const) {
+      const sink = new Stream()
+      sink.recv = (e) => {
+        const item = itemOf(undefined, params(null), facadeOf(e))
+        const has = encodeSetsOf(item)
+        if (item && has !== undefined && sets.every((set) => has.includes(set))) bindRuntime.encode?.(item, sets[0])
+      }
+      rootFor(null, 'view', type).targets.push(sink)
+    }
   }
 
   // ---- the graph (vega-parser's operators, vega-runtime's connections, in the order the dataflow ranks them) ----------
@@ -2044,7 +2084,7 @@ export function bindSceneSignals(
   scene: SceneRoot,
   signals: Record<string, unknown>,
   hooks: SignalEventHooks = {},
-  opts: Pick<SignalBindOptions, 'pick' | 'data' | 'owner' | 'containerSize' | 'events' | 'eventSources'> = {},
+  opts: Pick<SignalBindOptions, 'pick' | 'data' | 'owner' | 'containerSize' | 'events' | 'eventSources' | 'hover'> = {},
 ): SignalBinding {
   const chart = scene.compiled
   const runtime = scene.runtime

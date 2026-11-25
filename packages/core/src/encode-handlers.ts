@@ -37,6 +37,29 @@ export function stampEncodeIdent(item: object, ident: string): void {
   IDENT.set(item, ident)
 }
 
+/** The encode sets a mark of an item has, besides `enter` and `exit` (written with its ident: see `stampEncodeSets`). */
+const SETS = new WeakMap<object, readonly string[]>()
+
+/** Record the encode sets of an item's mark (its named sets, and `update` when it has one), for `view.hover()` (signals.ts). */
+export function stampEncodeSets(item: object, sets: readonly string[]): void {
+  SETS.set(item, sets)
+}
+
+/** The encode sets of the mark of a scene item, or of the item an event facade is made over, else undefined. */
+export function encodeSetsOf(item: unknown): readonly string[] | undefined {
+  for (let o = item; o !== null && typeof o === 'object'; o = Object.getPrototypeOf(o)) {
+    const sets = SETS.get(o as object)
+    if (sets !== undefined) return sets
+  }
+  return undefined
+}
+
+/** Whether a mark of a chart, at any depth, has the encode set `name`. */
+export function hasSetIn(marks: readonly MarkLike[] | undefined, name: string): boolean {
+  for (const m of marks ?? []) if ((m.encode?.[name] != null) || hasSetIn(m.marks, name)) return true
+  return false
+}
+
 /** The name of a scene item, or of the item an event facade is made over (its prototype chain), else undefined. */
 export function encodeIdentOf(item: unknown): string | undefined {
   for (let o = item; o !== null && typeof o === 'object'; o = Object.getPrototypeOf(o)) {

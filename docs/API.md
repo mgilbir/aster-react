@@ -613,6 +613,13 @@ binding but leaves timer streams and pending debounces running (a host re-binds 
 to the view); call `release()` when the host is done with the svg, which detaches and stops its timer streams and
 pending debounces (vega's `view.finalize()`). `setTimerClock(clock | null)` ([Maps and animation](#maps-and-animation)) swaps the clock the timer streams run on.
 - `hooks.onSignal(name, value, all)` — once per signal that changed while an event was processed.
+- `hooks.onEncode(all)` — once after an event asked for an item to be encoded again with a set of its mark (a handler's
+  `encode: <set>`, or the view's hover), with the signal set holding the request (under a symbol key every copy of it carries):
+  evaluate again from it, as on `onSignal`; it fires also when no signal changed (vega's `encode` pulses the mark regardless).
+- `opts.hover` — vega's `view.hover()`, on by default as vega-embed has it for a Vega spec (a Vega-Lite spec has no `hover` set):
+  a pointer entering an item of a mark with a `hover` encode set encodes the item with it, leaving it runs the mark's `update`
+  set (what `update` writes goes back; what only `hover` writes stays, as in vega). `false` turns it off, `{hoverSet, updateSet}`
+  names other sets.
 - `hooks.onData(name, rows, fromTimer)` — once per dataset that `modify(...)` edited (`fromTimer`: a `timer` stream's tick made the edit) (a Vega-Lite selection's `<name>_store`), with
   its input rows. The host passes them back as `data[name]` to the next evaluation and as `{ data }` to the next
   `bindSceneSignals`, so the dataset is an input like any other (`<Chart>` does this itself). The expression functions
