@@ -246,9 +246,19 @@ export function numberRange(start: number, stop: number, step: number): number[]
   return out
 }
 
-/** The number of rows `flatten` makes of one row: the length of the longest of its arrays. */
-export function flattenLength(arrays: unknown[]): number {
-  return arrays.reduce<number>((longest, a) => Math.max(longest, (a as { length: number }).length), 0)
+/**
+ * The number of rows `flatten` makes of one row: the length of the longest of its arrays. A field that holds nothing (`null` or
+ * `undefined`) has no length: vega's flatten fails on it with the engine's TypeError (`Cannot read properties of undefined
+ * (reading 'length')`), and so does this, with a message that says which field of which row (`names`, when the caller has them).
+ */
+export function flattenLength(arrays: unknown[], names?: readonly string[]): number {
+  let longest = 0
+  for (let i = 0; i < arrays.length; i++) {
+    const a = arrays[i]
+    if (a == null) throw new TypeError(`[aster] flatten: a row holds ${a === null ? 'null' : 'undefined'} in the field ${names?.[i] === undefined ? `#${i + 1}` : JSON.stringify(names[i])}, not an array to flatten (vega's flatten fails on it with a TypeError too)`)
+    longest = Math.max(longest, (a as { length: number }).length)
+  }
+  return longest
 }
 
 type Get = (d: unknown) => unknown

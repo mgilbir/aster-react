@@ -96,6 +96,7 @@ export function flattenRows(rows: Row[], p: Params): Row[] {
   const fields = fieldsOf(p.fields)
   const given = array(p.as) as Array<string | null | undefined>
   const names = fields.map((f, i) => (given[i] || accessorName(f)) as string)
+  const sources = fields.map((f) => accessorName(f) as string)
   const indexName = (p.index as string | undefined) || null
   const out: Row[] = []
   const record = recordingFor(rows)
@@ -104,7 +105,7 @@ export function flattenRows(rows: Row[], p: Params): Row[] {
     const row = rows[r]!
     // bounded: the spec's fields
     const arrays = fields.map((f) => f(row)) as ArrayLike<unknown>[]
-    const length = flattenLength(arrays)
+    const length = flattenLength(arrays, sources)
     if (sizes !== undefined) sizes[r] = length > 0 ? length : 0
     // the length comes from the data: bound the rows made so far and this row's before the loop (the rows given are not
     // amplification: only what the arrays add beyond them is under the ceiling)
