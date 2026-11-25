@@ -1130,6 +1130,7 @@ function prepareChartCtx(
   const threw = abortAtThrowingSignal(ctx)
   if (threw === 'width') { width = 0; ctx.width = 0 }
   if (threw === 'height') { height = 0; ctx.height = 0 }
+  if (threw === undefined) abortAtThrowingViewLayout(ctx)
   abortAtThrowingProjection(ctx)
 
   // The final context fingerprint: the next evaluation compares its own
@@ -1669,6 +1670,25 @@ function abortAtThrowingSignal(ctx: EvalContext): string | undefined {
 }
 
 /**
+ * The view's `layout` holds a signal that throws (C398): vega-parser makes the layout's parameter, an expression operator, right after
+ * the view's signals, so the throw stops the pass before every dataset, scale, mark and guide of the view, as a signal's does (the
+ * view keeps its size: the root's own encode ran). A group mark's layout is its own operator, ranked after its content: a throw there
+ * is the layout's failure (see `LayoutFailure`).
+ */
+function abortAtThrowingViewLayout(ctx: EvalContext): void {
+  if (ctx.chart.layout == null || ctx.datasetAborted) return
+  const failure = paramsFailure(ctx, [ctx.chart.layout])
+  if (failure === undefined) return
+  reportEvalError(ctx, failure.error)
+  for (const d of ctx.chart.data) {
+    ;(ctx.failedDatasets ??= new Set()).add(d.name)
+    ctx.datasets.set(d.name, [])
+    ctx.datasetPulses.set(d.name, null)
+  }
+  ctx.encodeAborted = ctx.datasetAborted = true
+}
+
+/**
  * The signals in the order vega's dataflow runs them: an operator after the operators it reads (vega-dataflow ranks by dependency),
  * the others in the order they were declared. A signal that reads one declared after it (`shiftArray` reading `leftRightCount`)
  * would otherwise see the other's value from the pass before, and a chain of them lags a pass per link.
@@ -1963,10 +1983,17 @@ function initReady(ctx: EvalContext, name: string): boolean {
  * operator of its own, ranked just before that one), or undefined when none throws.
  */
 function paramsFailure(ctx: EvalContext, params: readonly unknown[]): { error: unknown } | undefined {
-  for (const p of params) {
-    if (!isSignal(p)) continue
+  // (a parameter that is a list or an object holding signals is one expression too, vega's `objectProperty`: a signal in it that
+  // throws fails it, C398)
+  const signals: string[] = []
+  const visit = (v: unknown, depth: number): void => {
+    if (isSignal(v)) signals.push(v.signal)
+    else if (v !== null && typeof v === 'object' && depth < 64) for (const x of Array.isArray(v) ? v : Object.values(v)) visit(x, depth + 1)
+  }
+  for (const p of params) visit(p, 0)
+  for (const code of signals) {
     try {
-      evalSignal(ctx.runtime.expr(p.signal), ctx.signalParams)
+      evalSignal(ctx.runtime.expr(code), ctx.signalParams)
     } catch (error) {
       return { error }
     }
@@ -6208,6 +6235,16 @@ function markItemsOf(
 ): SceneGroup | SceneGroup[] | null {
   // a scale or an encode that threw stopped vega's run: the marks after it were never joined, so they are not in the scenegraph
   if (ctx.encodeAborted) return null
+  // (a `clip` given as an expression is a parameter of the mark's operator: one that throws is logged and stops the run before the
+  // mark is made -- C121)
+  const clip = (mark as { clip?: unknown }).clip
+  if (clip !== null && typeof clip === 'object') {
+    try { markClipOf(mark, ctx) } catch (e) {
+      reportEvalError(ctx, e)
+      ctx.encodeAborted = true
+      return null
+    }
+  }
   if (mark.type === 'group') {
     return buildGroupMark(mark, ctx)
   }
@@ -6829,6 +6866,10 @@ interface GroupSource {
   facetName?: string
   /** Names this item among its mark's (the facet partition's key, a datum's index): the identity of its signal scope. */
   key?: string
+  /** The mark's PreFacet threw making the items' content (see groupSources): the items are made empty and the pass stops after them. */
+  failure?: { error: unknown }
+  /** The item's content never ran (its mark's PreFacet or `layout` parameter threw): it is the empty group. */
+  hollow?: boolean
 }
 
 interface FacetDef {
@@ -6876,12 +6917,29 @@ function groupSources(mark: CompiledMark, ctx: EvalContext): GroupSource[] | nul
     // vega-transforms PreFacet: one group item per datum (the datum is the item's datum), its rows the array the
     // datum holds in `field`
     const get = fieldOf(facet.field)
-    return (ctx.datasets.get(facet.data) ?? []).map((row, i) => ({
-      datum: row,
-      rows: ingestRows((get(row) as Row[]).map((x) => x)),
-      facetName: facet.name,
-      key: String(i),
-    }))
+    // (vega's PreFacet walks each datum's array with `forEach`: a datum whose field holds none throws there, which the dataflow logs,
+    // stopping the pass at this mark -- C121)
+    const rowsOf = (row: Row): Row[] => {
+      const held = get(row) as unknown
+      if (held == null) throw new TypeError(`Cannot read properties of ${held === null ? 'null' : 'undefined'} (reading 'forEach')`)
+      if (typeof (held as { forEach?: unknown }).forEach !== 'function') throw new TypeError('field(...).forEach is not a function')
+      const out: Row[] = []
+      ;(held as { forEach(f: (x: Row) => void): void }).forEach((x) => { out.push(x) })
+      return out
+    }
+    const data = ctx.datasets.get(facet.data) ?? []
+    try {
+      return data.map((row, i) => ({
+        datum: row,
+        rows: ingestRows(rowsOf(row)),
+        facetName: facet.name,
+        key: String(i),
+      }))
+    } catch (e) {
+      // (PreFacet runs after the group items are joined and encoded, and makes their subflows: the items are there, empty -- none of
+      // their content ran -- and the pass stops after them)
+      return data.map((row, i) => ({ datum: row, rows: [], facetName: facet.name, key: String(i), ...(i === 0 ? { failure: { error: e } } : {}) }))
+    }
   }
   if (facet) {
     const keys = ([] as string[]).concat(facet.groupby ?? [])
@@ -7043,10 +7101,19 @@ function buildGroupMark(mark: CompiledMark, ctx: EvalContext): SceneGroup[] | nu
       ctx.encodeAborted = true
     }
   }
+  // (the PreFacet that makes the items' content threw, or the mark's `layout` parameter -- an expression operator of the mark, made
+  // with it in its enclosing scope -- threw: logged, the pass stops after the items, which hold nothing, C121, C398)
+  const failure = sources[0]?.failure ?? (mark.layout != null && !ctx.encodeAborted ? paramsFailure(ctx, [mark.layout]) : undefined)
+  let hollow = false
+  if (failure !== undefined && !ctx.encodeAborted) {
+    failPass(ctx, { axis: Infinity, mark: ctx.scope.mark ?? 0, afterEncode: true }, failure.error)
+    ctx.encodeAborted = true
+    hollow = true
+  }
   // (an encode or a transform that threw stopped the pass before the sort)
   const sorts = mark.sort !== undefined && !ctx.encodeAborted && transformed && sortRuns(mark, ctx)
   const settled: GroupOutcome[] = sources.map(() => ({ unsettled: false }))
-  const groups = entered.map((g, i) => buildGroupItem(mark, ctx, g, settled[i]!))
+  const groups = entered.map((g, i) => buildGroupItem(mark, ctx, hollow ? { ...g, src: { ...g.src, hollow: true } } : g, settled[i]!))
   const failing = layoutFailed(ctx, entered, settled)
   markLayoutWarnings(mark, ctx, settled)
   // The layout of a group mark is one operator for all its items, ranked after every instance below any of them: one item
@@ -7364,7 +7431,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
   const savedFacet = src.facetName !== undefined ? ctx.datasets.get(src.facetName) : undefined
   // a cell of the full cross-product with no rows of its own (`cross` on a facet aggregate): vega's facet subflow never starts for
   // it, so the item is the empty group - none of its marks, axes, legends or title exist
-  const hollow = src.facetName !== undefined && (src.rows?.length ?? 0) === 0
+  const hollow = src.hollow === true || (src.facetName !== undefined && (src.rows?.length ?? 0) === 0)
   if (src.facetName !== undefined) { publishRows(src.rows!); ctx.datasets.set(src.facetName, src.rows!) }
   // the group's own datasets (vega: a group's `data`), derived in this item's scope
   const savedData: Array<[string, Row[] | undefined]> = []
@@ -7606,9 +7673,9 @@ function resolveLayoutOptions(layout: Record<string, unknown>, ctx: EvalContext)
     if (Array.isArray(v)) return v.map(resolve)
     if (v && typeof v === 'object') {
       const o = v as Record<string, unknown>
-      if (typeof o.signal === 'string') {
-        try { return evalSignal(ctx.runtime.expr(o.signal), ctx.signalParams) } catch { return undefined }
-      }
+      // (a signal that throws fails the layout's operator before it lays anything out: the caller reports it as the layout's
+      // failure, as vega's dataflow logs it there, C398)
+      if (typeof o.signal === 'string') return evalSignal(ctx.runtime.expr(o.signal), ctx.signalParams)
       return Object.fromEntries(Object.entries(o).map(([k, x]) => [k, resolve(x)]))
     }
     return v
