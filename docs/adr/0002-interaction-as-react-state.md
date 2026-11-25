@@ -58,3 +58,9 @@ carries signal values. Those are the only two mutation points interaction needs.
   without `interaction` apply `setSignal` as an override.
 - The store holds only what events wrote; the `signals` prop is merged with it when read, controlled by content (the
   latest writer wins, a removed key is released). See the identity rule in [ARCHITECTURE.md](../ARCHITECTURE.md).
+
+*2026-11-25, to match the code (audit C374).*
+
+- "A spec's `signal.on` handlers only fire on SVG" (above) no longer holds: the event loop is bound on the canvas renderer too, through
+  `createCanvasEvents` (vega's canvas handler; [ARCHITECTURE.md](../ARCHITECTURE.md), the render lifecycle). What canvas lacks is
+  DOM-level event targets other than the canvas element itself, which the spec language does not name.

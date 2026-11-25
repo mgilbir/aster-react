@@ -15,6 +15,10 @@ import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, expect, it, afterEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { runInNewContext } from 'node:vm'
 import { renderSpec } from '@aster-charts/core'
 import { compile } from '@aster-charts/vl'
 import { ChartStream, type ChartStreamHandle } from './ChartStream'
@@ -118,6 +122,28 @@ forEachVariant(['svg'], (Chart, variant) => {
       expect(Number(svg.getAttribute('width'))).toBeLessThan(500)
       expect(Number(svg.getAttribute('height'))).toBeLessThan(400)
       expect(ref.current!.getSvg()).toBe(renderSpec({ ...body, width: 400, height: 300 } as never, {}))
+    })
+
+    // The README's first chart, read from the README itself (C274: it said nothing of size, and a reader who knows vega-embed expects
+    // 400 x 300 plus padding): in a 900 x 600 element it draws at its own size, as the README now says.
+    variant.it(['svg'], 'the spec of the README\'s first chart, as the README is written today', async () => {
+      const readme = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'README.md'), 'utf8')
+      const literal = /const spec = (\{[\s\S]*?\n\})\n/.exec(readme)?.[1]
+      expect(literal, 'the first code block of README.md declares `const spec = { ... }`').toBeDefined()
+      // (the literal is evaluated in a context of its own: its objects are copied into this realm, where the chart checks them)
+      const spec = JSON.parse(JSON.stringify(runInNewContext(`(${literal})`))) as Record<string, unknown>
+      expect(spec.width).toBe(400)
+      expect(spec.height).toBe(300)
+      expect(readme).toMatch(/`width: 400, height: 300` draws at 400 x 300 plus padding in any\s+element/)
+      const el = host()
+      const root = createRoot(el)
+      cleanup.push(() => root.unmount())
+      const ref = React.createRef<ChartHandle>()
+      // (a band scale and axes may need parts of the engine a browser build loads on demand: wait for them)
+      await act(async () => { root.render(<Chart ref={ref} spec={spec as never} a11y={false} />) })
+      for (let i = 0; i < 20 && !el.querySelector('svg'); i++) await act(async () => { await new Promise((r) => setTimeout(r, 10)) })
+      expect(ref.current!.getSvg()).toBe(renderSpec(spec as never, {}))
+      expect(Number(el.querySelector('svg')!.getAttribute('width'))).toBeLessThan(500)
     })
   })
 })

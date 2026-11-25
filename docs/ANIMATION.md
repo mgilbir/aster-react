@@ -11,8 +11,17 @@ Transitions are opt-in. Without the prop nothing changes: no frame is scheduled 
 before, which is what the conformance gates compare against Vega.
 
 ```tsx
-<Chart spec={spec} data={{ table: rows }} transition />
-<Chart spec={spec} data={{ table: rows }} transition={{ duration: 500, easing: 'cubic-out', reducedMotion: 'user' }} />
+import { Chart } from '@aster-charts/react'
+
+declare const spec: Record<string, unknown>
+declare const rows: Array<Record<string, unknown>>
+
+export const Animated = () => (
+  <>
+    <Chart spec={spec} data={{ table: rows }} transition />
+    <Chart spec={spec} data={{ table: rows }} transition={{ duration: 500, easing: 'cubic-out', reducedMotion: 'user' }} />
+  </>
+)
 ```
 
 | option | default | |
@@ -138,8 +147,13 @@ latest data a `duration` after it stops changing. For a fast stream, a short `du
 `@aster-charts/core/transition` works on scenes and has no clock; a non-React host drives it from its own frame loop:
 
 ```ts
+import type { SceneRoot } from '@aster-charts/core'
 import { patchSceneDom } from '@aster-charts/core/dom'
 import { createSceneTransition } from '@aster-charts/core/transition'
+
+declare const svg: SVGSVGElement
+declare const shownScene: SceneRoot // what is on screen
+declare const nextScene: SceneRoot
 
 const tr = createSceneTransition(shownScene, nextScene, { easing: 'cubic-in-out' })
 const start = performance.now()

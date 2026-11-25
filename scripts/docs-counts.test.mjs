@@ -130,9 +130,14 @@ describe('docs/INTERACTION.md quotes the signals sweep as it is', () => {
 })
 
 describe('no other doc keeps its own corpus size', () => {
+  it('the pattern finds "of the 1060 specs" (it did not, C378)', () => {
+    expect('of the 1060 specs'.match(/\b(?:all |the |of the )?(\d{3,4}) (?:corpus )?specs\b/)?.[1]).toBe('1060')
+  })
+
   it('ARCHITECTURE.md and TESTING.md name no corpus count in prose', () => {
     for (const doc of ['docs/ARCHITECTURE.md', 'docs/TESTING.md']) {
-      for (const m of read(doc).matchAll(/\b(?:all |the )?(\d{3,4}) corpus specs\b/g)) {
+      // ("the 1060 specs" and "of the 1060 specs" are corpus counts too: the old pattern needed the word "corpus" and missed them, C378)
+      for (const m of read(doc).matchAll(/\b(?:all |the |of the )?(\d{3,4}) (?:corpus )?specs\b/g)) {
         expect([total, lite, vega].includes(Number(m[1])), `${doc} says "${m[0]}"`).toBe(true)
       }
     }

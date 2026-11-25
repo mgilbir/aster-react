@@ -272,7 +272,8 @@ export interface ChartProps {
    * detached overlay: the portal keeps it in the tree, so context reaches it).
    * It goes in the same placed box as the default content (see `tooltip`).
    * Providing this enables tooltips without `tooltip`. It is
-   * called for every hovered item that has a datum or a `tooltip` value, with
+   * called for the hovered item when it has a `tooltip` value or is an item of a mark that reads a dataset (its datum is the row;
+   * an item whose only datum is vega's generated `{}` gets a call only with a `tooltip` value), with
    * the datum (`{}` when the item has none) and `info`: the item's `tooltip`
    * value and the scene item itself. Return `null` to show nothing.
    */

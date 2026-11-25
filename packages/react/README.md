@@ -4,8 +4,7 @@ React bindings for Aster Charts: `<Chart>` (SVG or canvas; Vega, or Vega-Lite th
 `useSpecData`, `useChartWorker`, streaming components and hooks, SSR/hydration helpers, declarative selection and
 pan/zoom, and an accessible scene tree.
 
-Install. Node 20 or newer;
-`react` ^19 is a peer dependency, and a browser app mounts with `react-dom`. `@aster-charts/core` and `@aster-charts/vl` are installed with it as
+Install. Node 20 or newer; TypeScript needs `"moduleResolution": "bundler"`, `"node16"` or `"nodenext"`: the packages declare their types through `exports` only (no `typesVersions`), so the older `"node"` (node10) resolution cannot find a subpath such as `@aster-charts/react/vl` or `@aster-charts/core/dom`, and loses the types the root entry takes from them (`ChartSession`, `PngOptions`, `EnginePart` become `any`) without an error under `skipLibCheck`. `react` ^19 is a peer dependency, and a browser app mounts with `react-dom`. `@aster-charts/core` and `@aster-charts/vl` are installed with it as
 dependencies; add `@aster-charts/core` yourself only if your code imports it (for example `@aster-charts/core/dom`).
 
 ```bash
@@ -27,7 +26,7 @@ a spec needs them: the chart suspends meanwhile (wrap it in `<Suspense>` for a f
 imported ([how add-ons load themselves](https://github.com/mgilbir/aster-react/blob/main/docs/ARCHITECTURE.md#geo-projections--the-add-on-boundary)). Without `@aster-charts/react/vl`, a Vega-Lite spec shows the chart's error state and calls `onError` with an error
 naming the missing import; if you compile Vega-Lite specs in a worker, import the add-on in the worker entry too.
 
-The engine loads the same way. In a browser build the families most charts never run (the aggregating, window and reshaping
+The engine loads the same way. In a browser build (a resolver that applies the `browser` export condition, bundled or not: Node run with `--conditions=browser` and test runners that default to it count; there `import '@aster-charts/react/all'` before the first render is the remedy) the families most charts never run (the aggregating, window and reshaping
 transforms, time scales and date formats, the curves besides `linear`, colour ramps and blending, the rarer scale types, legends,
 grid layouts, selections, the signal loop and the canvas renderer) are chunks fetched the first time a chart on the page needs one:
 that chart suspends once, then renders, and a chart that needs none fetches nothing. The trade-off is one round trip on the first
@@ -50,7 +49,7 @@ import { interaction } from '@aster-charts/react/interaction'
 
 declare const spec: Record<string, unknown> // a Vega spec
 
-export const Small = () => <SvgChart spec={spec as never} interaction={interaction} tooltip />
+export const Small = () => <SvgChart spec={spec} interaction={interaction} tooltip />
 ```
 
 `react` (^19) is a peer dependency. See the [API reference](https://github.com/mgilbir/aster-react/blob/main/docs/API.md) and [INTERACTION](https://github.com/mgilbir/aster-react/blob/main/docs/INTERACTION.md) in the repository.

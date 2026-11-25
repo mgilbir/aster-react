@@ -6,7 +6,7 @@ project work. The package is private (`"private": true`) and is not published to
 ## What it shows
 
 Every comparison card feeds the same spec to both engines: the official `vega-embed` on the left (loaded lazily, so the Aster
-column paints first), `<Chart>` from `@aster-charts/react` on the right. Vega-Lite specs are compiled by `@aster-charts/vl` for both columns.
+column paints first), `<Chart>` from `@aster-charts/react` on the right. A Vega-Lite spec is compiled by `@aster-charts/vl` for the Aster column (`<Chart>` with `@aster-charts/react/vl`) and by the official `vega-lite` inside `vega-embed` for the oracle column: the two compilers are what the cards compare.
 
 The page (`src/App.tsx`) has these sections:
 
@@ -17,9 +17,13 @@ The page (`src/App.tsx`) has these sections:
   specs from `packages/conformance/corpus` (imported from there, all fourteen: each is a corpus spec, compared with real vega / vega-lite by
   the gates), the gallery from `src/specs.ts`.
 
-The numbers in the page header (conformance counts, bundle size, frame time) are literal text in `src/App.tsx`. They are not
-computed from a run and are not checked by any gate, so treat the repository docs ([README](../../README.md),
-[docs/TESTING.md](../../docs/TESTING.md), [docs/PERFORMANCE.md](../../docs/PERFORMANCE.md)) as the source for current figures.
+The page header states no measured figure (a number written into a page goes stale: it had 1,055 conformance specs, 205 kB and a corpus of "400+" when the corpus had 1,063 and `<Chart>` was 190 kB); `scripts/docs-claims.test.mjs` fails if one comes back. The repository docs ([README](../../README.md),
+[docs/TESTING.md](../../docs/TESTING.md), [docs/PERFORMANCE.md](../../docs/PERFORMANCE.md)) are the source for current figures.
+
+The cards are written as an app should write them: every `<Chart>` sits under a `<Suspense>` boundary (`AsterSuspense` in `src/App.tsx`),
+because a chart that needs a part of the engine suspends once in a browser build ([ADR 0011](../../docs/adr/0011-engine-parts-load-on-demand-in-browser-builds.md)); `dataChanges` is made where the rows are
+(`LiveDataChanges`); a size prop is passed only where the spec has a number (a concat or facet view is sized by its content); and the brush of
+the brush card is the spec's own interval parameter, not the older `brush` / `onSelect` props.
 
 ## Run it
 
