@@ -6801,46 +6801,9 @@ function markItemsOf(
   // (the marks after it are never made)
   if (stoppedAfterEncode) ctx.encodeAborted = true
 
-  // Vega's mark defaults (vega.js defaults()): line {strokeWidth: 2},
-  // area {fill: '#4c78a8'}, text {fill: '#000'} — applied when the encode
-  // leaves the property unspecified.
-  // (the config blocks they come from are read for a mark of role `mark` only: a mark with a role of its own has none of them)
-  if ((mark.type === 'line' || mark.type === 'area' || mark.type === 'text') && (mark.role === undefined || mark.role === 'mark')) {
-    // vega-parser's applyDefaults skips the fill/stroke defaults when the ENCODE defines either channel
-    const defines = (channel: string): boolean => !!(mark.encode?.enter?.[channel] || mark.encode?.update?.[channel])
-    const paintDefined = defines('fill') || defines('stroke')
-    const fill = paintDefined ? undefined : mark.type === 'text' ? '#000' : mark.type === 'area' ? '#4c78a8' : undefined
-    // (a channel the encode defines has no default, whether or not it came out: a line whose width failed is drawn at the
-    // scenegraph's 1, which the renderers would otherwise replace by a line's 2)
-    const line = mark.type === 'line'
-    const defaultWidth = line && !defines('strokeWidth')
-    for (const it of items) {
-      const rec = it as unknown as Record<string, unknown>
-      if (fill !== undefined && rec.fill === undefined) rec.fill = fill
-      if (line && rec.strokeWidth === undefined) {
-        if (defaultWidth) rec.strokeWidth = 2
-        else if (rec.stroke != null) rec.strokeWidth = 1
-      }
-    }
-  } else if (mark.type === 'line') {
-    // (a line with a role of its own has no default width: it is drawn at the scenegraph's 1, which the renderers would
-    // otherwise replace by a line's 2)
-    for (const it of items) {
-      const rec = it as unknown as Record<string, unknown>
-      if (rec.stroke != null && rec.strokeWidth === undefined) rec.strokeWidth = 1
-    }
-  }
-
-  // The vega-lite point/circle/square styles default stroked symbols to
-  // strokeWidth=2 (vega config `style.point` etc.). A raw vega symbol mark
-  // without those styles carries no default width.
-  applySymbolStyleDefaults(mark, items)
-
-  // vega's built-in 'trail' style (vega-parser defaults): size defaults to
-  // the default stroke width (2) — the trail generator halves it per point.
-  if (Array.isArray((mark as any).style) ? (mark as any).style.includes('trail') : (mark as any).style === 'trail') {
-    for (const it of items) { if ((it as Record<string, unknown>).size == null) (it as Record<string, unknown>).size = 2 }
-  }
+  // (vega's mark defaults -- the `line`, `area`, `text` config blocks, the `point`, `circle`, `square` and `trail` styles -- are the
+  // compiled encode's own, as vega-parser's applyDefaults writes them: a channel the encode defines, an explicit null included, has
+  // none, C396)
 
   // A shape mark draws the shape its items hold (`shape`: a mark geoshape transform's, or the encode's), as vega's does; an item
   // with none is vega's renderer failing on it, reported once. (Neither the datum's `shape` / `path` nor a `geoshape` mark type is a
@@ -8002,26 +7965,6 @@ function resolveLayoutOptions(layout: Record<string, unknown>, ctx: EvalContext)
 }
 
 
-
-// ===========================================================================
-// Concat support (horizontal, vertical, and 2D repeat grids)
-// ===========================================================================
-
-/**
- * Bake the style-level symbol defaults vega applies at parse time: the
- * vega-lite `point`/`circle`/`square` styles set strokeWidth=2 for symbols
- * (applied even when the symbol has no stroke — the SVG renderer emits the
- * width regardless). Raw vega symbol marks (no style) keep vega's mark
- * default (no stroke width).
- */
-function applySymbolStyleDefaults(mark: CompiledMark, items: SceneItem[]): void {
-  if (mark.type !== 'symbol') return
-  const styles = Array.isArray(mark.style) ? mark.style : [mark.style]
-  if (!styles.some((s) => s === 'point' || s === 'circle' || s === 'square')) return
-  for (const it of items) {
-    if (it.strokeWidth == null) it.strokeWidth = 2
-  }
-}
 
 interface EncodePlan {
   /** Non-signal keys, in spec order. */
