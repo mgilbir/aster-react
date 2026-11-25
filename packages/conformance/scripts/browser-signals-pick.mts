@@ -271,6 +271,8 @@ const fixedScenes = (): PickScene[] => {
       ['fill-stroke-thin', { fill: V('#eee'), stroke: V('#c00'), strokeWidth: V(1) }],
       ['unpainted', {}],
       ['stroke-transparent', { stroke: V('transparent'), strokeWidth: V(6) }],
+      ['rounded', { fill: V('#eee'), cornerRadius: V(40) }],
+      ['rounded-stroke', { stroke: V('#333'), strokeWidth: V(5), cornerRadius: V(30) }],
     ] as Array<[string, Spec]>).map(([name, paint]): PickScene => ({
       name: `fixed-root-frame-${name}`,
       spec: {
