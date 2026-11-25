@@ -214,10 +214,37 @@ describe('a mark encode that throws where a scale is ranked late', () => {
 })
 
 // A dataset that vega re-ranked past the scales and marks (it reads a signal a later dataset writes) throws after the marks that
-// read nothing late ran, and vega draws them. The render is compared like every other case of this file: Aster stops all of them
-// (see datasetRanksOf), so the render assertion FAILS today (C211, REVEALED to the lane that owns the runtime's pass order); it is
-// not dropped, and it is not a probe, because the gap is Aster's, not the oracle's.
+// read nothing late ran, and vega draws them (C211): vega-runtime makes every operator before it connects any, so a re-ranked
+// operator is ranked after all of them, and so is what reads it -- a mark drawn from a re-ranked dataset is never joined, a mark whose
+// encode reads a scale over data (a scale vega re-ranks too, see scaleIsLate) is joined and not encoded.
 describe('a throw in a dataset re-ranked past the scales and marks', () => {
+  const frame = { $schema: 'https://vega.github.io/schema/vega/v5.json', width: 300, height: 120, padding: 5 }
+  const seq = { name: 'seq', transform: [{ type: 'sequence', start: { signal: 'ext[0]' }, stop: { signal: 'ext[1] + 1' }, as: 'v' }, { type: 'filter', expr: 'datum["o"]["v"]>0' }] }
+  const base = { name: 'base', values: [{ x: 3 }, { x: 9 }], transform: [{ type: 'extent', field: 'x', signal: 'ext' }] }
+  const plain = { name: 'plain', values: [{ v: 2 }, { v: 6 }] }
+  const rect = (data: string, x: unknown = { value: 1 }): unknown => ({ type: 'rect', from: { data }, encode: { update: { x, width: { value: 4 }, y: { value: 10 }, height: { value: 8 }, fill: { value: 'firebrick' } } } })
+  const dataX = { name: 'x', type: 'linear', domain: { data: 'plain', field: 'v' }, range: 'width' }
+  const fixedX = { name: 'x', type: 'linear', domain: [0, 10], range: 'width' }
+  const CASES3: Record<string, Record<string, unknown>> = {
+    'a mark over a scale of data is joined and not encoded': { ...frame, data: [seq, plain, base], scales: [dataX], marks: [rect('plain', { scale: 'x', field: 'v' })] },
+    'a mark over a scale of literals is drawn': { ...frame, data: [seq, plain, base], scales: [fixedX], marks: [rect('plain', { scale: 'x', field: 'v' })] },
+    'an axis over a scale of literals is drawn': { ...frame, data: [seq, plain, base], scales: [fixedX], axes: [{ scale: 'x', orient: 'bottom' }], marks: [rect('plain')] },
+    'the title is drawn': { ...frame, title: 'T', data: [seq, plain, base], marks: [rect('plain')] },
+    'an expression that reads the re-ranked dataset': { ...frame, data: [seq, plain, base], marks: [rect('plain', { signal: "length(data('seq'))" })] },
+    'a group mark and a facet over data that is not re-ranked': { ...frame, data: [seq, plain, base], marks: [{ type: 'group', encode: { update: { width: { value: 50 }, height: { value: 50 } } }, marks: [rect('plain')] }, { type: 'group', from: { facet: { data: 'plain', name: 'f', groupby: 'v' } }, marks: [rect('f')] }] },
+    'the view is laid out, and its post-run resize is lost': { ...frame, autosize: 'pad', data: [seq, plain, base], marks: [rect('plain', { value: 290 })] },
+  }
+  for (const [name, spec] of Object.entries(CASES3)) {
+    it(name, async () => {
+      const vega = await renderWithVegaChecked(JSON.parse(JSON.stringify(spec)))
+      expect(vega.errors.length).toBeGreaterThan(0)
+      expect(asterDatasets(spec)).toEqual(vega.datasets)
+      const errors: unknown[] = []
+      const mine = renderSpec(JSON.parse(JSON.stringify(spec)), { logger: { error: (e: unknown) => { errors.push(e) }, warn: () => {} } } as never) as string
+      expect(errors.length, 'the engine logs the failure, once').toBe(1)
+      expect(diffCanonical(canonicalizeSvg(vega.svg), canonicalizeSvg(mine)).slice(0, 3)).toEqual([])
+    }, 30_000)
+  }
   it('the marks that read nothing re-ranked are drawn, and the datasets declared before it, after it and the writer it waits for', async () => {
     const spec = {
       $schema: 'https://vega.github.io/schema/vega/v5.json', width: 300, height: 120,
