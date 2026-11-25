@@ -3427,7 +3427,8 @@ function recordOverMarkItems(mark: CompiledMark, ctx: EvalContext, items: readon
 function paintOrderOf(items: SceneGroup[]): SceneGroup[] {
   const orderRank = (g: SceneGroup): number =>
     g.role === 'axis' ? 0 : g.role === 'legend' ? 2 : g.role === 'title' ? 3 : 1
-  const zOf = (g: SceneGroup): number => (g as unknown as { zindex?: number }).zindex || 0
+  // (a group item stands for its mark here: its mark's zindex orders it; its own orders it among its mark's items, paint-order.ts)
+  const zOf = (g: SceneGroup): number => (g.markIndex !== undefined ? g.markZindex : g.zindex) || 0
   return items.length > 1
     ? sortData(items.map((g, i) => ({ g, i })), (a, b) => {
         const za = zOf(a.g), zb = zOf(b.g)
@@ -3561,10 +3562,7 @@ function buildContentPass(
       if (kept !== null) { pushAll(items, kept); continue }
       const made = recordGroupMark(mark, ctx, key, () => evaluateMark(mark, ctx, prevGroup))
       if (made) {
-        for (const g of Array.isArray(made) ? made : [made]) {
-          if (mark.zindex) (g as unknown as { zindex?: number }).zindex = mark.zindex
-          items.push(g)
-        }
+        for (const g of Array.isArray(made) ? made : [made]) items.push(g)
       }
       continue
     }
@@ -3600,10 +3598,7 @@ function buildContentPass(
     const result = evaluateMark(mark, ctx, prevGroup)
     if (overItems !== undefined && result && !Array.isArray(result)) recordOverMarkItems(mark, ctx, overItems)
     if (result) {
-      for (const g of Array.isArray(result) ? result : [result]) {
-        if (mark.zindex) (g as unknown as { zindex?: number }).zindex = mark.zindex
-        items.push(g)
-      }
+      for (const g of Array.isArray(result) ? result : [result]) items.push(g)
       if (!Array.isArray(result)) ctx.draft.groups.set(mark, result)
     }
   }
@@ -6919,6 +6914,12 @@ function markContainerInfo(mark: CompiledMark): Partial<SceneGroup> {
   if (encodesDescription(mark)) out.describes = true
   if (mark.aria === false) out.aria = false
   if (mark.interactive === false) out.interactive = false
+  // (the mark's own zindex orders it among the marks of its scope, `paintOrderOf`: a leaf mark holds it as vega's mark does; a group
+  // mark has no node of its own, so each of its items holds it beside its own, paint-order.ts)
+  if (mark.zindex) {
+    if (mark.type === 'group') out.markZindex = mark.zindex
+    else out.zindex = mark.zindex
+  }
   return out
 }
 
@@ -7448,6 +7449,8 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
       ...markContainerInfo(mark),
       ...(itemAria !== undefined ? { itemAria } : {}),
       ...(cursorOf(geo) !== undefined ? { cursor: cursorOf(geo) } : {}),
+      // (the item's own zindex: where it is painted among the items of its mark, paint-order.ts)
+      ...((geo as Record<string, unknown>).zindex !== undefined ? { zindex: (geo as Record<string, unknown>).zindex as number } : {}),
       // (what vega's tooltip handler shows for the group item where no mark inside it is hit)
       ...((geo as Record<string, unknown>).tooltip !== undefined ? { tooltip: (geo as Record<string, unknown>).tooltip } : {}),
       // (vega leaves the box of a group item that says `noBound` out of its bounds: the view's autosize, and its pick, see only

@@ -6,11 +6,13 @@
  *   - the root scales, and every group item's own scales (by name, on both sides: a scale only one side has is a difference);
  *   - in every scope (the root group, each group item), the marks in PAINT order: vega's scenegraph keeps definition order and
  *     its renderers paint by `zindex` (stable: the items without one first, then by zindex), so the oracle's list is put in that
- *     order; Aster's scene is in paint order already. The marks are compared as a sequence of role|marktype (a mark one side
+ *     order; Aster's scene holds a scope's marks in paint order already (a group mark's items stand for it there, and carry its
+ *     zindex as `markZindex`). The marks are compared as a sequence of role|marktype (a mark one side
  *     has and the other lacks, or two marks of different types painted in the other order, is a difference);
  *   - each mark's items: a multiset of item records (every encode channel the pinned Vega schema declares, `encodeEntry`, that
  *     either side's item carries), and the paint order of items whose painted extents overlap (the only place it changes what a
- *     viewer sees), with item `zindex` applied on the oracle's side as its renderers apply it;
+ *     viewer sees), with item `zindex` applied on both sides as their renderers apply it (both scenes keep a mark's items in
+ *     data order, as vega's does);
  *   - a group mark's items are compared one by one, each with its own scales and marks, recursively (facets, nested groups).
  * Axes, legends and titles (role axis / legend / title) are left out on both sides: their scenegraphs are built differently
  * (vega: group marks of parts; Aster: one node per guide), and their output is compared by the SVG gates and the guide
@@ -284,7 +286,7 @@ function asterMarks(nodes: readonly SceneNode[]): CMark[] {
       }
       out.push({
         key: keyOf(n as unknown as Record<string, unknown>),
-        items: run.filter((g) => !flag(g, 'emptyMark')).map((g) => ({
+        items: zorder(run.filter((g) => !flag(g, 'emptyMark'))).map((g) => ({
           item: g as unknown as SceneItem, ...itemRecord(g as unknown as SceneItem, 'group', asterGroupItem(g)),
           scales: g.__scales ? fromOurScales(g.__scales) : [],
           marks: asterMarks((g.items ?? []) as SceneNode[]),
@@ -293,7 +295,7 @@ function asterMarks(nodes: readonly SceneNode[]): CMark[] {
       continue
     }
     if (n.marktype != null) {
-      out.push({ key: keyOf(n as unknown as Record<string, unknown>), items: ((n.items ?? []) as SceneItem[]).map((it) => ({ item: it, ...itemRecord(it, String(n.marktype)) })) })
+      out.push({ key: keyOf(n as unknown as Record<string, unknown>), items: zorder((n.items ?? []) as SceneItem[]).map((it) => ({ item: it, ...itemRecord(it, String(n.marktype)) })) })
       continue
     }
     if (Array.isArray(n.items)) for (const m of asterMarks(n.items as SceneNode[])) out.push(m)

@@ -1,7 +1,7 @@
 /**
  * Test-only (excluded from the published build): a refactor baseline -- the `legacy-*.testlib.ts` copies of the renderers as they
- * were on stack/3-expr, amended since to follow fixes (their headers say which) -- against the current renderers, consumer by
- * consumer, over one scene:
+ * were on stack/3-expr, amended since to follow fixes (their headers say which; and they are handed the scene in vega's paint
+ * order, `inVegaPaintOrder`) -- against the current renderers, consumer by consumer, over one scene:
  *  - the SVG string (`renderSceneToSvg`), byte for byte;
  *  - the DOM descriptor tree (`sceneToDomDesc`, per item and dense-batched);
  *  - the canvas: every call and every property write on the context, numbers compared with `Object.is` (so -0 and NaN count),
@@ -134,8 +134,55 @@ export function probePoints(scene: SceneRoot, r: Rnd, random = 40, max = 160): A
 }
 
 /** Compares the SVG, DOM and canvas renderers, old vs new, on `scene`; returns the differences (empty: identical). */
+/**
+ * The scene with every mark's items in the order vega paints them (vega-scenegraph util/visit.js: the items without a truthy
+ * `zindex` first, in order, then the others by zindex, ties in order; a group mark's items too, which the scene holds as a run of
+ * consecutive group items). The baseline renderers paint a mark's items in array order, as vega did before zindex was honoured
+ * (C28): they are handed the scene in this order. Nodes not reordered are the scene's own (their cached geometry included).
+ */
+function inVegaPaintOrder(scene: SceneRoot): SceneRoot {
+  const z = (n: unknown): unknown => (n as { zindex?: unknown }).zindex
+  const ordered = <T,>(xs: readonly T[]): T[] | null => {
+    if (!xs.some((x) => z(x))) return null
+    const raised = xs.map((x, i) => ({ x, i })).filter((e) => z(e.x)).sort((a, b) => (z(a.x) as number) - (z(b.x) as number) || a.i - b.i).map((e) => e.x)
+    return [...xs.filter((x) => !z(x)), ...raised]
+  }
+  const groupItem = (n: SceneGroup): boolean => n.markIndex !== undefined && (n.marktype === 'group' || n.marktype === undefined)
+  const nodes = (list: readonly SceneGroup[]): SceneGroup[] => {
+    const out: SceneGroup[] = []
+    for (let i = 0; i < list.length;) {
+      const n = list[i]!
+      if (groupItem(n)) {
+        let j = i + 1
+        while (j < list.length && groupItem(list[j]!) && list[j]!.markIndex === n.markIndex) j++
+        const run = list.slice(i, j).map(node)
+        out.push(...(ordered(run) ?? run))
+        i = j
+        continue
+      }
+      out.push(node(n))
+      i++
+    }
+    return out
+  }
+  const node = (n: SceneGroup): SceneGroup => {
+    const items = n.items as unknown as SceneGroup[] | undefined
+    if (!Array.isArray(items)) return n
+    if (n.marktype !== undefined && n.marktype !== 'group') {
+      if (n.marktype === 'line' || n.marktype === 'area' || n.marktype === 'trail') return n
+      const o = ordered(items)
+      return o === null ? n : { ...n, items: o as unknown as SceneItem[] }
+    }
+    const next = nodes(items)
+    return next.every((x, i) => x === items[i]) ? n : { ...n, items: next as unknown as SceneItem[] }
+  }
+  const items = nodes(scene.items)
+  return items.every((x, i) => x === scene.items[i]) ? scene : { ...scene, items }
+}
+
 export function diffScene(scene: SceneRoot, opts: { dom?: boolean; canvas?: boolean } = {}): Diff[] {
   const diffs: Diff[] = []
+  const painted = inVegaPaintOrder(scene)
   const tryBoth = <T,>(consumer: string, oldFn: () => T, newFn: () => T, eq: (a: T, b: T) => string | null): void => {
     let a: T | Error
     let b: T | Error
@@ -150,15 +197,15 @@ export function diffScene(scene: SceneRoot, opts: { dom?: boolean; canvas?: bool
     const d = eq(a, b)
     if (d !== null) diffs.push({ consumer, detail: d })
   }
-  tryBoth('svg', () => legacySvg(scene), () => renderSceneToSvg(scene), (a, b) => (a === b ? null : firstDiff([a], [b])))
+  tryBoth('svg', () => legacySvg(painted), () => renderSceneToSvg(scene), (a, b) => (a === b ? null : firstDiff([a], [b])))
   if (opts.dom !== false) {
     for (const o of [{}, { denseMarks: true, denseChunkSize: 40 }] as DomRenderOptions[]) {
-      tryBoth(`dom${o.denseMarks ? '-dense' : ''}`, () => JSON.stringify(legacyDomDesc(scene, o)), () => JSON.stringify(sceneToDomDesc(scene, o)), (a, b) => (a === b ? null : firstDiff([a], [b])))
+      tryBoth(`dom${o.denseMarks ? '-dense' : ''}`, () => JSON.stringify(legacyDomDesc(painted, o)), () => JSON.stringify(sceneToDomDesc(scene, o)), (a, b) => (a === b ? null : firstDiff([a], [b])))
     }
   }
   if (opts.canvas !== false) {
     for (const o of [{}, { batchSymbols: false }, { dpr: 2 }] as RenderCanvasOptions[]) {
-      tryBoth(`canvas${JSON.stringify(o)}`, () => canvasLog((c) => legacyCanvas(scene, c, o)), () => canvasLog((c) => renderSceneToCanvas(scene, c, o)), firstDiff)
+      tryBoth(`canvas${JSON.stringify(o)}`, () => canvasLog((c) => legacyCanvas(painted, c, o)), () => canvasLog((c) => renderSceneToCanvas(scene, c, o)), firstDiff)
     }
   }
   return diffs

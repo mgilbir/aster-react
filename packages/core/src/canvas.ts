@@ -40,6 +40,7 @@ import {
   scenePlotSize,
 } from './render.js'
 import { withSceneOutput } from './scene-output.js'
+import { paintOrder, scopeInPaintOrder } from './paint-order.js'
 import { areaGeometry, lineGeometry, rectData, symbolGeometry, trailGeometry } from './geometry.js'
 import { arcSegs, curveExactSegs, drawCurveExact, segsOf, symbolExactSegs } from './geometry-read.js'
 
@@ -139,7 +140,8 @@ export function renderSceneToCanvas(scene: SceneRoot, ctx: CanvasLike, opts: Ren
     ctx.save()
     try {
       enterView(scene, ctx, opts, plotW, plotH, true)
-      for (const node of scene.items) {
+      // (a group mark's items in the order vega paints them: paint-order.ts)
+      for (const node of scopeInPaintOrder(scene.items)) {
         renderGroup(node, ctx, scene, plotW, plotH, opts)
       }
     } finally {
@@ -262,6 +264,21 @@ function editedSince(items: SceneItem[], gen: number): boolean {
 }
 
 const APPEND_SAFE = new Set(['symbol', 'text', 'rule', 'tick'])
+
+/**
+ * How far an engine items array was found to hold no item with a (truthy) `zindex`, and the generation it was found at: an append
+ * reads only the items after it (O(appended)), as long as nothing in the array was edited since (`editedSince`).
+ */
+const UNRAISED = new WeakMap<SceneItem[], { len: number; gen: number }>()
+
+/** Whether an item of `items` has a truthy `zindex` (paint-order.ts: it is then painted after the items without one). */
+function holdsRaised(items: SceneItem[], gen: number | undefined): boolean {
+  const known = UNRAISED.get(items)
+  let i = known !== undefined && !editedSince(items, known.gen) ? Math.min(known.len, items.length) : 0
+  for (; i < items.length; i++) if ((items[i] as { zindex?: unknown }).zindex) return true
+  if (gen !== undefined) UNRAISED.set(items, { len: items.length, gen })
+  return false
+}
 
 interface Box { x1: number; y1: number; x2: number; y2: number }
 
@@ -415,6 +432,8 @@ function appendPaint(prev: CanvasSceneSnapshot, next: SceneRoot, ctx: CanvasLike
       if (editedSince(nItems, prev.gen)) return false
       if (nItems.length > oldLen) {
         if (appendIndex >= 0 || !APPEND_SAFE.has(String(ng.marktype)) || ng.clip === true) return false
+        // (an item with a zindex paints after the items without one: the appended items are not then the last painted)
+        if (holdsRaised(nItems, (next as unknown as { __itemGen?: number }).__itemGen)) return false
         appendIndex = i
         appendFrom = oldLen
       }
@@ -616,7 +635,7 @@ function renderGroup(group: SceneGroup, ctx: CanvasLike, scene: SceneRoot, plotW
       const clipBox = (group as unknown as { contentClipBox?: { x?: number; y?: number; w: number; h: number } }).contentClipBox
       let clipped = false
       try {
-        for (const item of group.items ?? []) {
+        for (const item of scopeInPaintOrder(group.items ?? [])) {
           const isBg = (item as { _bg?: boolean })._bg === true
           if (clipBox !== undefined && !isBg && !clipped) {
             ctx.save(); clipped = true; ctx.beginPath(); ctx.rect(clipBox.x ?? 0, clipBox.y ?? 0, clipBox.w, clipBox.h); ctx.clip()
@@ -1260,7 +1279,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
       return
     }
     case 'symbol': {
-      const items = group.items ?? []
+      const items = paintOrder(group.items ?? []) as SceneItem[]
       if (opts.batchSymbols !== false && items.length >= 256) {
         renderSymbolRuns(items, ctx, defs)
       } else {
@@ -1278,7 +1297,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
       return
     }
     case 'circle': {
-      for (const it of group.items ?? []) {
+      for (const it of paintOrder(group.items ?? [])) {
         if (it.x == null || it.y == null) continue
         const r = it.radius != null ? it.radius : Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
         ctx.beginPath()
@@ -1288,8 +1307,8 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
       return
     }
     case 'rect': {
-      // vega paints rects in item (data) order and skips unpainted items
-      for (const it of group.items ?? []) {
+      // vega paints rects in its paint order (paint-order.ts) and skips unpainted items
+      for (const it of paintOrder(group.items ?? [])) {
         if (it.fill == null && it.stroke == null) continue
         ctx.beginPath()
         const segs = segsOf(rectData(it))
@@ -1299,7 +1318,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
       return
     }
     case 'rule': {
-      for (const it of group.items ?? []) {
+      for (const it of paintOrder(group.items ?? [])) {
         if (it.stroke == null) continue
         const x = it.x ?? 0
         const y = it.y ?? 0
@@ -1314,7 +1333,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
       return
     }
     case 'text': {
-      for (const it of group.items ?? []) {
+      for (const it of paintOrder(group.items ?? [])) {
         renderTextItem(it, ctx, defs)
       }
       return
@@ -1336,7 +1355,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
     case 'path': {
       // a path mark's text, as far as it reads, drawn as vega draws it (path-data.ts `renderSvgPath`): scaled by (scaleX||1,
       // scaleY||1) and moved to the item in the replay's numbers, or, turned, at the origin of the item's turned frame
-      for (const it of group.items ?? []) {
+      for (const it of paintOrder(group.items ?? [])) {
         if (!it.path) continue
         const rec = it as Record<string, unknown>
         const angle = (rec.angle as number) || 0
@@ -1355,7 +1374,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
     }
     case 'shape': {
       // (a shape's geo path, the engine's own text, goes to the context as it is, its arcs as arcs)
-      for (const it of group.items ?? []) {
+      for (const it of paintOrder(group.items ?? [])) {
         if (!it.path) continue
         const rec = it as Record<string, unknown>
         const angle = (rec.angle as number) || 0
@@ -1368,7 +1387,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
       return
     }
     case 'arc': {
-      for (const it of group.items ?? []) {
+      for (const it of paintOrder(group.items ?? [])) {
         // The SVG renderer emits the arc path around (0,0) translated by the
         // item position; trace the same local path with the item offset.
         // vega's markItemPath draw: translate/rotate to the item, build the path
@@ -1396,7 +1415,7 @@ function renderMark(type: string, group: SceneGroup, ctx: CanvasLike, scene: Sce
       // bitmap is absent or incomplete paints nothing, like vega before the
       // image loads. The box is offset by align/baseline; with `aspect` on (the
       // default) the bitmap is letterboxed to its own aspect ratio.
-      for (const it of group.items ?? []) {
+      for (const it of paintOrder(group.items ?? [])) {
         const img = itemImage(it)
         if (img == null || img.complete === false) continue
         const opacity = it.opacity == null ? 1 : (it.opacity as number)

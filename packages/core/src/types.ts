@@ -825,6 +825,11 @@ export interface SceneGroup extends SceneItem {
   noBound?: boolean
   /** Group items of one mark carry the mark's index in its parent, so consecutive items of a mark share one container. */
   markIndex?: number
+  /**
+   * A group item's mark's own `zindex` (vega's `mark.zindex`), which orders its mark among the marks of its scope; the item's own
+   * `zindex` (its encode's) orders it among the items of its mark (paint-order.ts).
+   */
+  markZindex?: number
   /** A group mark with no items: this node only stands for its (empty) container in the scene; it is no group item. */
   emptyMark?: boolean
   /** The mark's `interactive: false` (its SVG container then has `pointer-events="none"`). */
