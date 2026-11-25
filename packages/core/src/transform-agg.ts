@@ -130,14 +130,16 @@ export class RowBag {
     if (this.droppedCount === 0) return this.held
     const held = this.held
     meterTick('aggregate', held.length)
-    // (a frame that ends outside its partition drops rows it never held: more drops than rows, and a row dropped that is not
-    // held is no row of the bag, so the length is not `held - dropped` and the bag is filled as the rows are met)
-    const kept: Row[] = []
+    // (a frame that ends outside its partition drops rows it never held: a row dropped that is not held is no row of the bag, so
+    // `held - dropped` is a lower bound of what is kept -- possibly below zero -- and the array grows past it as the rows are met)
+    const kept = new Array<Row>(Math.max(0, held.length - this.droppedCount))
+    let at = 0
     for (let i = 0; i < held.length; ++i) {
       const row = held[i]!
       if (this.dropped.delete(row)) continue
-      kept.push(row)
+      kept[at++] = row
     }
+    kept.length = at
     this.dropped = new Set()
     this.droppedCount = 0
     return (this.held = kept)
