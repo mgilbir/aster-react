@@ -95,6 +95,8 @@ function markFromMark(r: Rnd): Scenario {
     { type: 'rule', from: { data: 'pts' }, encode: { update: { x: { field: 'x' }, x2: { field: 'x' }, y: { field: 'y' }, y2: { value: 120 }, stroke: { signal: "datum.datum.k === 'a' ? 'red' : 'blue'" } } } },
     { type: 'path', from: { data: 'pts' }, encode: { update: { stroke: { value: '#ccc' } } }, transform: [{ type: 'voronoi', x: 'datum.x', y: 'datum.y', size: [{ signal: 'width' }, { signal: 'height' }] }] },
     { type: 'text', from: { data: 'pts' }, encode: { update: { text: { field: 'datum.g' }, fontSize: { value: 9 } } }, transform: [{ type: 'label', size: [{ signal: 'width' }, { signal: 'height' }], anchor: ['top', 'bottom'], offset: [1, 1] }] },
+    // (the items read by name in an expression, `data('<mark>')`: C74)
+    { type: 'text', encode: { update: { x: { value: 4 }, y: { value: 12 }, text: { signal: "join(pluck(pluck(data('pts'), 'datum'), 'g'), ',') + ':' + length(data('pts'))" } } } },
   ])
   const scales = [
     { name: 'x', type: 'linear', domain: [0, 20], range: 'width' },
