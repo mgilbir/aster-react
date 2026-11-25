@@ -118,19 +118,26 @@ interface Entry {
   inert?: true
   /** A guide part the other queries never saw (an interactive legend entry, symbol path, gradient, tick...): only `pick` finds it. */
   pickOnly?: true
-  /**
-   * (canvas index) What vega measured the entry's bounds from, in the frame at (ox, oy): its item as a mark of `bk`'s type (a
-   * mark item; `leaf` for a guide's part), or its mark (`multi`: a line, an area or a trail); the box, once measured.
-   */
-  bk?: string
-  ox?: number
-  oy?: number
-  bmark?: SceneGroup
-  /** (canvas index) a typed mark's item: its mark and the frame it clips to, for the mark's bounds vega asks first */
-  tmark?: SceneGroup
-  tfw?: number
-  tfh?: number
+  /** (canvas index) The box vega measured for the entry (see `Measure`), once asked. */
   vb?: Float64Array
+}
+
+/**
+ * (canvas index) What vega measured the bounds of the entries `from` to `to` from, in the frame at (ox, oy): their items as a mark of
+ * type `kind` (a mark item; `leaf` for a guide's part), or their mark (`bmark`: a line, an area or a trail). A typed mark's item also
+ * has its mark and the frame it clips to (`tmark`, `tfw`, `tfh`), for the mark's bounds vega asks first. Kept in runs beside the
+ * entries, in the order they were made (a field on every entry costs more than the measuring: the entries change shape).
+ */
+interface Measure {
+  from: number
+  to: number
+  kind: string
+  ox: number
+  oy: number
+  bmark: SceneGroup | undefined
+  tmark: SceneGroup | undefined
+  tfw: number
+  tfh: number
 }
 
 /** The outline of a group item's box as the pointer meets it (the canvas's, where a box stroked in front differs: see `_canvasPath`). */
@@ -607,7 +614,7 @@ function nearestOf(items: SceneItem[], tx: number, ty: number, x: number, y: num
  * kept the mark (`keptInto`).
  */
 const MARK_ENTRIES = { svg: new WeakMap<SceneGroup, KeptEntries>(), canvas: new WeakMap<SceneGroup, KeptEntries>() }
-interface KeptEntries { gx: number; gy: number; skewX: number; skewY: number; entries: Entry[]; root: object }
+interface KeptEntries { gx: number; gy: number; skewX: number; skewY: number; entries: Entry[]; measures: Measure[]; root: object }
 
 /**
  * The entries one of the view's own guides (an axis, a legend, a title: a group of the scene's top level) made, flags and clips
@@ -618,7 +625,7 @@ interface KeptEntries { gx: number; gy: number; skewX: number; skewY: number; en
  * later scene that kept the group (`keptInto`); an index takes copies.
  */
 const GUIDE_ENTRIES = { svg: new WeakMap<SceneGroup, KeptGuide>(), canvas: new WeakMap<SceneGroup, KeptGuide>() }
-interface KeptGuide { frame: string; measurer: unknown; entries: Entry[]; runs: number[]; root: object }
+interface KeptGuide { frame: string; measurer: unknown; entries: Entry[]; runs: number[]; root: object; measures: Measure[] }
 const TOP_GUIDE_ROLES: ReadonlySet<string> = new Set(['axis', 'legend', 'title'])
 
 export function buildHitIndex(scene: SceneRoot, cell = DEFAULT_CELL, options: HitIndexOptions = {}): HitIndex {
@@ -631,6 +638,8 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
   const strategy = options.strategy ?? 'auto'
   const keptEntries = canvas ? MARK_ENTRIES.canvas : MARK_ENTRIES.svg
   const entries: Entry[] = []
+  /** (canvas index) How the entries' bounds were measured, in the order of the entries. */
+  const measures: Measure[] = []
   /** The runs of entries `[from, to)` made for a mark that reads a dataset (their items' datums are rows), in order. */
   const dataRuns: number[] = []
   /** The clips around what is being indexed (outermost first). */
@@ -848,11 +857,14 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
       // `MARK_ENTRIES`; each index takes copies, which the clips and flags below are written onto)
       const kept = type !== 'text' && isEngineNode(group) ? keptEntries.get(group) : undefined
       if (kept !== undefined && keptInto(kept.root, scene) && Object.is(kept.gx, gx) && Object.is(kept.gy, gy) && Object.is(kept.skewX, skewX) && Object.is(kept.skewY, skewY)) {
+        const base = entries.length
         for (const t of kept.entries) entries.push({ ...t })
+        for (const m of kept.measures) measures.push({ ...m, from: base + m.from, to: base + m.to })
       } else {
+        const m0 = measures.length
         addMark(group, type, gx, gy)
         if (canvas) measuredBy(e0, type, gx + skewX, gy + skewY, type === 'line' || type === 'area' || type === 'trail' ? group : undefined, group, fw, fh)
-        if (type !== 'text' && isEngineNode(group)) keptEntries.set(group, { gx, gy, skewX, skewY, entries: entries.slice(e0).map((e) => ({ ...e })), root: scene })
+        if (type !== 'text' && isEngineNode(group)) keptEntries.set(group, { gx, gy, skewX, skewY, entries: entries.slice(e0).map((e) => ({ ...e })), measures: measuresSince(m0, e0), root: scene })
       }
       clipFrom(e0)
     })
@@ -864,18 +876,11 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
   }
   /** (canvas index) The entries made since `from` are measured as vega's bounds pass measures `kind`, in the frame at (ox, oy). */
   const measuredBy = (from: number, kind: string, ox: number, oy: number, mark?: SceneGroup, typed?: SceneGroup, fw?: number, fh?: number): void => {
-    for (let i = from; i < entries.length; i++) {
-      const e = entries[i]!
-      // (a group item's box -- a guide's, a legend entry's, its stroke in front too -- lies within the group item's bounds, which
-      // vega's pick tests and the clips around the entry already hold: it is not measured as a leaf)
-      if (e.groupBox || isGroup(e.item) || e.item._part === 'entry') continue
-      e.bk = kind
-      e.ox = ox
-      e.oy = oy
-      if (mark) e.bmark = mark
-      else if (typed) { e.tmark = typed; e.tfw = fw!; e.tfh = fh! }
-    }
+    if (entries.length === from) return
+    measures.push({ from, to: entries.length, kind, ox, oy, bmark: mark, tmark: mark ? undefined : typed, tfw: mark ? 0 : typed ? fw! : 0, tfh: mark ? 0 : typed ? fh! : 0 })
   }
+  /** The runs of `measures` made since the one at `from`, relative to the entry at `base`, to be made again somewhere else. */
+  const measuresSince = (from: number, base: number): Measure[] => measures.slice(from).map((m) => ({ ...m, from: m.from - base, to: m.to - base }))
   const addMark = (group: SceneGroup, type: string, gx: number, gy: number): void => {
     // (the items a pass that stopped in their mark's bounds never measured have no bounds, where vega looks for an item first: they
     // take no pointer, see `SceneGroup.unmeasuredFrom`)
@@ -907,13 +912,15 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
         const base = entries.length
         for (const e of kept.entries) entries.push({ ...e })
         for (const r of kept.runs) dataRuns.push(base + r)
+        for (const m of kept.measures) measures.push({ ...m, from: base + m.from, to: base + m.to })
         continue
       }
       const e0 = entries.length
       const r0 = dataRuns.length
+      const m0 = measures.length
       derivedCounts.guideEntries++
       walk(node, padX, padY, plotW, plotH)
-      keptGuides.set(node, { frame, measurer, entries: entries.slice(e0).map((e) => ({ ...e })), runs: dataRuns.slice(r0).map((r) => r - e0), root: scene })
+      keptGuides.set(node, { frame, measurer, entries: entries.slice(e0).map((e) => ({ ...e })), runs: dataRuns.slice(r0).map((r) => r - e0), measures: measuresSince(m0, e0), root: scene })
     }
   })
   // the view's surface: vega's SVG clips what overflows it, its canvas ends there (a scene that gives no size is not bounded)
@@ -1124,7 +1131,12 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
   function addSymbol(item: SceneItem, marktype: string, tx: number, ty: number, radius?: number): void {
     // (vega draws a symbol at `translate(x || 0, y || 0)`: a missing or NaN position is the origin, one that is not two finite
     // numbers leaves the symbol at the origin too -- see `drawnOffset`)
-    const [ix, iy] = drawnOffset(item)
+    // (the per-item path: `drawnOffset` without the pair it makes)
+    const px = +((item.x || 0) as number)
+    const py = +((item.y || 0) as number)
+    const finite = Number.isFinite(px) && Number.isFinite(py)
+    const ix = finite ? px : 0
+    const iy = finite ? py : 0
     const fill = !!item.fill
     const stroke = item.stroke ? pickStroke(strokeOf(item), marktype) : null
     if (!fill && !stroke) return
@@ -1208,7 +1220,12 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
         // that is given a number it cannot hold, which it ignores before it looks at the radius)
         if (!canvas || canvasHolds(geometry)) arcExactSegs(geometry)
         // (vega draws an arc at `translate(x || 0, y || 0) rotate(angle)`, as it draws a symbol or a path)
-        const [ix, iy] = drawnOffset(item)
+        // (the per-item path: `drawnOffset` without the pair it makes)
+    const px = +((item.x || 0) as number)
+    const py = +((item.y || 0) as number)
+    const finite = Number.isFinite(px) && Number.isFinite(py)
+    const ix = finite ? px : 0
+    const iy = finite ? py : 0
         const ox = tx + ix
         const oy = ty + iy
         const angle = +((rec(item).angle as number | undefined) || 0)
@@ -1382,7 +1399,29 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
     const o = 4 * i
     if (!(x >= b[o]! && x <= b[o + 2]! && y >= b[o + 1]! && y <= b[o + 3]!)) return false
     const e = entries[i]!
-    return onGeometry(e, x, y) && (e.clips === undefined || inClips(e.clips, x, y)) && (e.bk === undefined || inMeasured(e, x, y))
+    return onGeometry(e, x, y) && (e.clips === undefined || inClips(e.clips, x, y)) && inMeasured(e, measureOf(i), x, y)
+  }
+
+  /**
+   * (canvas index) How vega measured the bounds of entry `i`: the run that holds it (the runs are in the order of the entries), if
+   * any, and the entry is none that is not measured as a leaf -- a group item's box (a guide's, a legend entry's, its stroke in front
+   * too), which lies within the group item's bounds, which vega's pick tests and the clips around the entry already hold.
+   */
+  const measureOf = (i: number): Measure | undefined => {
+    if (measures.length === 0) return undefined
+    let lo = 0
+    let hi = measures.length - 1
+    while (lo <= hi) {
+      const mid = (lo + hi) >>> 1
+      const m = measures[mid]!
+      if (i < m.from) hi = mid - 1
+      else if (i >= m.to) lo = mid + 1
+      else {
+        const e = entries[i]!
+        return e.groupBox || isGroup(e.item) || e.item._part === 'entry' ? undefined : m
+      }
+    }
+    return undefined
   }
 
   /**
@@ -1390,21 +1429,22 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
    * vega's pick asks it: `contains` in the entry's frame, "not outside" -- so an edge that is not a number (a NaN, a string that does
    * not read as one) excludes nothing, as it excludes nothing there, and an empty box holds no point.
    */
-  function inMeasured(e: Entry, x: number, y: number): boolean {
+  function inMeasured(e: Entry, m: Measure | undefined, x: number, y: number): boolean {
+    if (m === undefined) return true
     let vb = e.vb
     if (vb === undefined) {
-      const m = e.bmark !== undefined ? multiMarkBounds(e.bmark) : measureItem(e.item, e.bk!)
+      const bounds = m.bmark !== undefined ? multiMarkBounds(m.bmark) : measureItem(e.item, m.kind)
       // (the numbers vega's comparisons read: a string edge as `Number` reads it, null as 0)
-      vb = e.vb = Float64Array.of(+m.x1, +m.y1, +m.x2, +m.y2)
+      vb = e.vb = Float64Array.of(+bounds.x1, +bounds.y1, +bounds.x2, +bounds.y2)
     }
-    const lx = x - e.ox!
-    const ly = y - e.oy!
+    const lx = x - m.ox
+    const ly = y - m.oy
     if (lx < vb[0]! || lx > vb[2]! || ly < vb[1]! || ly > vb[3]!) return false
     // (the mark's bounds are asked before the item's, and leave an edge that is not a number out of their union: an item with one
     // holds a point its mark's bounds do not)
-    if (e.tmark !== undefined && !(Number.isFinite(vb[0]!) && Number.isFinite(vb[1]!) && Number.isFinite(vb[2]!) && Number.isFinite(vb[3]!))) {
-      const m = typedMarkBox(e.tmark, e.tfw!, e.tfh!)
-      if (lx < m[0]! || lx > m[2]! || ly < m[1]! || ly > m[3]!) return false
+    if (m.tmark !== undefined && !(Number.isFinite(vb[0]!) && Number.isFinite(vb[1]!) && Number.isFinite(vb[2]!) && Number.isFinite(vb[3]!))) {
+      const box = typedMarkBox(m.tmark, m.tfw, m.tfh)
+      if (lx < box[0]! || lx > box[2]! || ly < box[1]! || ly > box[3]!) return false
     }
     return true
   }
