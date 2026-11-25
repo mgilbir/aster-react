@@ -19,7 +19,7 @@
  */
 import { transformParams, type TransformParam } from './transform-params.js'
 import type { CompiledTransform } from './types.js'
-import type { ExpressionRuntime } from './expression.js'
+import { evalSignal, type ExpressionRuntime } from './expression.js'
 import { accessor, array, dict, field, splitAccessPath, type Accessor } from './util.js'
 import { parseExpressionCached, type AstNode } from './expr-parser.js'
 
@@ -125,7 +125,7 @@ const mapOne = (v: unknown, f: (x: unknown) => unknown): unknown => (Array.isArr
 
 /** vega-parser `Scope.signalRef`: the name of a declared signal is that signal, anything else an expression of the signals. */
 function signalValue(text: string, ctx: ParamContext): unknown {
-  return Object.hasOwn(ctx.signals, text) ? ctx.signals[text] : ctx.runtime.expr(text)({}, ctx.signals)
+  return Object.hasOwn(ctx.signals, text) ? ctx.signals[text] : evalSignal(ctx.runtime.expr(text), ctx.signals)
 }
 
 /**

@@ -64,8 +64,11 @@ const IDENTIFIER = /^[A-Za-z_$][\w$]*$/
 function isFreeName(reference: string): boolean {
   if (!IDENTIFIER.test(reference)) return false
   const tree = parseExpressionCached(reference)
-  return tree.type === 'Identifier' && !Object.hasOwn(ExpressionConstants, tree.name)
+  // (`datum`, `event` and `item` are names vega's code generator lets through: an expression that is evaluated, and fails there as
+  // a signal's does, `datum is not defined`; any other name must be a signal)
+  return tree.type === 'Identifier' && !Object.hasOwn(ExpressionConstants, tree.name) && !EXPRESSION_VARIABLES.has(tree.name)
 }
+const EXPRESSION_VARIABLES: ReadonlySet<string> = new Set(['datum', 'event', 'item'])
 
 /** The value a `signal` reference stands for: a named signal's value, or the value of an expression. */
 export function signalValue(reference: string, ctx: ScaleContext): unknown {

@@ -17,7 +17,7 @@ import { part } from './engine-parts.js'
 import { parseExpressionCached } from './expr-parser.js'
 import { PRIMITIVE_TUPLE, tupleDatum } from './util.js'
 import { ADDON_FUNCTIONS } from './addon-functions.js'
-import { compileExpression, DefaultFunctions, ExpressionConstants, EventFunctions, FIRST_ARGUMENT_ONLY, markBuiltinTable, markInspectors } from './expr-interpreter.js'
+import { compileExpression, DefaultFunctions, ExpressionConstants, EventFunctions, FIRST_ARGUMENT_ONLY, markBuiltinTable, markInspectors, SIGNAL_CONTEXT } from './expr-interpreter.js'
 
 /**
  * `sequence(...)`: the arithmetic sequence [start, stop) by step, as vega's (d3-array's `range`) reads its arguments: by how many
@@ -120,6 +120,16 @@ export interface ExpressionRuntime {
    * selection test combine per unit; absent, every data set is (the Vega-Lite case: its specs always name the op literally).
    */
   unitIndexed?: (name: string) => boolean
+}
+
+/**
+ * The value of an expression as a signal's: the signals alone are in scope, as in vega's parameter and operator expressions (a
+ * signal's `init` / `update`, a `{signal}` of a scale, an axis, a transform parameter, a view size). `datum`, `event` and `item`
+ * are not defined there: reading one throws `ReferenceError: datum is not defined` when it is evaluated, as vega's generated code
+ * does. (A row's expression, an encode and an event handler call the expression with their row, item or event.)
+ */
+export function evalSignal(fn: CompiledExpr, params: Record<string, unknown> | undefined): unknown {
+  return fn(SIGNAL_CONTEXT, params)
 }
 
 /** An expression bound to a runtime. `item` is the scenegraph item an encode is evaluated for (vega binds it there). */
