@@ -4207,6 +4207,8 @@ function markSort(spec: VLSpec, fields: FieldDef[], mark: string, orient: string
   const md = isObject(spec.mark) ? (spec.mark as Record<string, unknown>) : {}
   const orderRaw = enc.order
   if (isObject(orderRaw) && orderRaw.value !== undefined && (orderRaw.value === null || orderRaw.value === false)) return undefined
+  // (mark.ts getSort: the mark def's `order` decides only where the encoding has no order channel, which sorts by its own fields)
+  if (orderRaw !== undefined && isObject(spec.mark)) ignore(md, 'order', 'an order channel in the encoding sorts the marks; the mark def\'s `order` is read where there is none')
   if (orderRaw === undefined && (md.order === false || md.order === null)) return undefined
   const orderDefs = fields.filter((f) => f.channel === 'order' && f.field && !f.datumOnly && !f.fromCondition)
   // (a stack, cartesian or polar, is what an order field orders)
@@ -7178,7 +7180,7 @@ function rectAlignment(markDef: Record<string, unknown> | undefined, cfgType: Re
 /**
  * position-rect.ts rectPosition: a rect-like position over a bin (or a time unit with no second channel) spans the bin unless the mark
  * has a size of its own there - its own width / height, or a rect's size - which takes it off the bin (a bar that wide centred on the
- * bin's middle; a size of 0 draws nothing of the bin). @aster-charts/vl draws the bin either way, so the size is refused rather than
+ * bin's middle; a size of 0 is none). @aster-charts/vl draws the bin either way, so the size is refused rather than
  * dropped. (A relative band size, `{band}`, stays on the bin, and is read.)
  */
 function refuseOwnSizeOnBinnedPosition(spec: VLSpec, mark: string, orient: string, fields: FieldDef[]): void {
@@ -7191,6 +7193,9 @@ function refuseOwnSizeOnBinnedPosition(spec: VLSpec, mark: string, orient: strin
     const vg = ch === 'x' ? 'width' : 'height'
     const own = peek(() => (md[vg] !== undefined ? md[vg] : mark === 'rect' ? md.size : undefined))
     if (own === undefined || (isObject(own) && 'band' in own)) continue
+    // (position-rect.ts rectPosition: a size is read by its truth - a size of 0 is none, and the rect spans its bin)
+    // (a rect's `size` only: a bar's width of 0 is read as a bar of the least width)
+    if (own === 0 && mark === 'rect' && md[vg] === undefined) { ignore(md, 'size', 'a size of 0 is no size: the rect spans its bin (position-rect.ts rectPosition)'); continue }
     const def = fields.find((f) => f.channel === ch && f.field && !f.fromCondition)
     if (def === undefined || peek(() => enc[`${ch}Offset`] !== undefined || enc.size !== undefined)) continue
     const binnedPosition = (def.bin && !binDiscrete(def)) || (def.tu !== undefined && def.tu !== null && enc[`${ch}2`] === undefined && positionalScaleType(mark, def) !== 'band' && positionalScaleType(mark, def) !== 'point')
@@ -7293,6 +7298,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     // (init.ts initMarkdef: only a bar with an orientation has an end to round - a bar over no measure has none, and drops it - and a
     // bar ranged along its orientation (x2 of a horizontal one, y2 of a vertical one) rounds every corner by it)
     const barOrient = cornerRadiusEnd != null && mark === 'bar' ? markOrient(spec, mark, spec.mark, fields) : undefined
+    // (a bar with no orientation has no end to round)
+    if (cornerRadiusEnd != null && mark === 'bar' && barOrient === undefined && isObject(cornerRadiusEnd)) ignoreUnread(cornerRadiusEnd as Record<string, unknown>, 'a bar with no orientation rounds no end')
     if (barOrient !== undefined) {
       const enc = isObject(spec.encoding) ? (spec.encoding as Record<string, unknown>) : {}
       if ((barOrient === 'horizontal' && enc.x2 != null) || (barOrient === 'vertical' && enc.y2 != null)) {
@@ -7909,6 +7916,8 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     // (position-point.ts pointPositionDefaultRef: the mark def's `outerRadius`, its `radius`, then a style's and the config's)
     const textOuterRadius = getMarkPropOrConfig(spec, mark, 'radius', 'outerRadius')
     if (textOuterRadius != null && !radiusDefT) update.radius = valueRefOf(textOuterRadius)
+    // (a text placed by a radius channel is placed by that: the mark def's outer radius is forwarded, and a text draws nothing of it)
+    else if (textOuterRadius != null && isObject(textOuterRadius)) consumeAll(textOuterRadius)
     // (text.ts: the size is the font size: the mark def's own `fontSize`, then its `size`, then a style's and the config's, read under
     // the Vega name - config.mark.size is the point's size, not the text's)
     const textSize = getMarkPropOrConfig(spec, mark, 'size', 'fontSize')
@@ -8270,6 +8279,15 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     if (enc2 && typeof enc2 === 'object' && enc2.offset === undefined && typeof enc2.value === 'number' && enc2.value > 0) enc2.offset = radiusOff
   }
 
+  // (each offset of the mark def moves what it names - a position, its second, a polar angle or radius - where the chart has it; an
+  // expression of one that moves nothing here is read by nothing, as vega-lite reads it by nothing)
+  if (isObject(spec.mark)) {
+    for (const k of ['xOffset', 'yOffset', 'x2Offset', 'y2Offset', 'thetaOffset', 'radiusOffset', 'theta2Offset', 'radius2Offset']) {
+      const v = peek(() => (spec.mark as Record<string, unknown>)[k])
+      if (isObject(v)) ignoreUnread(v, 'vega-lite reads an offset where the chart has the position it moves')
+    }
+  }
+
   // maps: longitude / latitude positions are the geopoint transform's output fields (no scale, no offset)
   const geo = GEO_UNITS.get(spec)
   applyGeoPositions(update, spec, mark, ruleOrientOut)
@@ -8279,6 +8297,12 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     // (what was encoded of the mark def is dropped with it, as vega-lite drops it)
     consumeAll(update)
     for (const k of Object.keys(update)) delete update[k]
+    // (the role description of the mark it draws not: vega-lite writes it on the mark it makes of the encoding, and there is none)
+    if (isObject(spec.mark)) {
+      const md = spec.mark as Record<string, unknown>
+      const v = peek(() => md.ariaRoleDescription)
+      if (isObject(v)) consumeAll(v)
+    }
   }
   // (what vega-lite reads of a rect-like mark def only where the chart asks for it - the bin spacing of a binned position, the alignment
   // of a sized band - and nothing else: the reads above are where it asks, so what is still unread here it ignores)
@@ -8287,6 +8311,13 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     ignoreUnread(md, 'vega-lite reads it only where the chart bins or sizes a band (ignored-probe.mjs contexts)', ['binSpacing', 'align', 'baseline'])
     // (an expression there is not read at all)
     for (const k of ['binSpacing', 'align', 'baseline']) { const v = peek(() => md[k]); if (isObject(v)) consumeAll(v) }
+  }
+  // (position-range.ts position2orSize: the size of a rect or a rule is read as the extent of a range that has no second position of its
+  // own; where the chart gives both ends, or none, vega-lite reads no size)
+  if ((mark === 'rect' || mark === 'rule') && isObject(spec.mark)) {
+    const md = spec.mark as Record<string, unknown>
+    ignoreUnread(md, 'vega-lite reads the size of a range only where the range has no second position (ignored-probe.mjs contexts)', ['width', 'height'])
+    for (const k of ['width', 'height']) { const v = peek(() => md[k]); if (isObject(v)) consumeAll(v) }
   }
   const markSpec: Record<string, unknown> = {
     name: 'marks',
@@ -8359,8 +8390,12 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
   // rounded stacked bars: vega-lite clips the whole stack in a group that carries the
   // corner radii, so only the outer ends of a stack are rounded (not every segment)
   if (mark === 'bar' && !xOffsetPresent && !yOffsetPresent) {
-    const measureDef = orient === 'vertical' ? yDef : xDef
-    const dimDef = orient === 'vertical' ? xDef : yDef
+    // (mark.ts getStackGroup: the group is the stack's, whatever channel stack.ts took for it - which is not the orientation's where both
+    // positions are fields, a bar that spans a time unit on x and stacks the measure on y)
+    const stackChannel = potentialStackChannel(mark, orient, fields)
+    const stackOnY = stackChannel !== undefined ? stackChannel === 'y' : orient === 'vertical'
+    const measureDef = stackOnY ? yDef : xDef
+    const dimDef = stackOnY ? xDef : yDef
     // (mark.ts parseMarkGroups: the radius is any of the five corner properties, from the mark def, a style or the config)
     const cornerKeys = ['cornerRadius', 'cornerRadiusBottomLeft', 'cornerRadiusBottomRight', 'cornerRadiusTopLeft', 'cornerRadiusTopRight']
     // (a signal is truthy as it is; a size channel disables the group)
@@ -8370,7 +8405,7 @@ function buildMarks(spec: VLSpec, fields: FieldDef[], mark: string, orient: stri
     })
     // (mark.ts getStackGroup: a stacked bar with no dimension channel - a single stack - is one group, grouped by nothing)
     if (hasRadius && !fields.some((f) => f.channel === 'size') && measureDef && isStacked(measureDef, mark, orient, fields)) {
-      const v = orient === 'vertical'
+      const v = stackOnY
       const mc = v ? 'y' : 'x'
       const start = `${aggFieldName(measureDef)}_start`
       const end = `${aggFieldName(measureDef)}_end`
