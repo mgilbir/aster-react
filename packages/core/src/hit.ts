@@ -47,6 +47,7 @@ import { SYMBOL_DEFAULT_SIZE, drawnOffset, frameSize } from './util.js'
 import { frameClipDef, isInert, itemArcGeometry, lineStrokeWidth } from './render.js'
 import { areaGeometry, lineGeometry, rectData, symbolGeometry, trailGeometry } from './geometry.js'
 import { arcExactSegs, arcPolys, canvasHolds, curvePolys, flattenSegs, pathMarkPolys, pathMarkPolysAt, pathPolys, segsOf, symbolOutline, transformPolys } from './geometry-read.js'
+import { paintOrder, scopeInPaintOrder } from './paint-order.js'
 
 export interface HitTarget {
   item: SceneItem
@@ -827,7 +828,8 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
         withClip(content, () => {
           // (a legend entry's front stroke belongs to the entry box before it)
           let entryBox: SceneItem | undefined
-          const nodes = group.items ?? []
+          // (a group mark's items in the order vega paints them, the order its pick looks from the top of: paint-order.ts)
+          const nodes = scopeInPaintOrder(group.items ?? [])
           const markClips = canvas ? groupMarkClips(nodes, w, h, gx + skewX, gy + skewY) : undefined
           for (let k = 0; k < nodes.length; k++) {
             const item = nodes[k]!
@@ -893,7 +895,7 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
     const from = group.unmeasuredFrom
     if (from !== undefined) group = { ...group, items: (group.items ?? []).slice(0, from) } as SceneGroup
     if (type === 'line' || type === 'area' || type === 'trail') { if (group.items?.length) addMulti(group, type, gx, gy); return }
-    for (const item of group.items ?? []) addMarkItem(item, type, gx, gy)
+    for (const item of paintOrder(group.items ?? [])) addMarkItem(item, type, gx, gy)
   }
   // Scene items live in plot coordinates; pointer queries arrive in viewport
   // coordinates, so include the root padding translation (as the renderer does
@@ -909,9 +911,10 @@ function hitIndexOf(scene: SceneRoot, cell: number, options: HitIndexOptions): H
   // (the view's clip as the renderers draw it, rounded when the view has a corner radius: render.ts `frameClipDef`)
   const viewClip = scene.frameClip ? frameClipDef(scene, plotW, plotH) : null
   withClip(viewClip === null ? null : 'd' in viewClip ? pathClip(viewClip.d, padX, padY) : rectClip(padX + viewClip.x, padY + viewClip.y, viewClip.w, viewClip.h), () => {
-    const rootClips = canvas ? groupMarkClips(scene.items, plotW, plotH, padX, padY) : undefined
-    for (let k = 0; k < scene.items.length; k++) {
-      const node = scene.items[k]!
+    const rootNodes = scopeInPaintOrder(scene.items)
+    const rootClips = canvas ? groupMarkClips(rootNodes, plotW, plotH, padX, padY) : undefined
+    for (let k = 0; k < rootNodes.length; k++) {
+      const node = rootNodes[k]!
       if (!TOP_GUIDE_ROLES.has(node.role as string) || rec(node)._scope === true || !isEngineNode(node)) { withClip(rootClips?.[k] ?? null, () => walk(node, padX, padY, plotW, plotH)); continue }
       const kept = keptGuides.get(node)
       if (kept !== undefined && keptInto(kept.root, scene) && kept.frame === frame && kept.measurer === measurer) {

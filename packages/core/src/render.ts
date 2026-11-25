@@ -18,6 +18,7 @@ import { imageBox, imageHref, itemImage } from './image-box.js'
 import type { ScaleSnapshots } from './guide-caption.js'
 export { ClipCollector, type ClipDef }
 import { ArcPathWriter } from './shape.js'
+import { paintOrder, scopeInPaintOrder } from './paint-order.js'
 import { areaGeometry, arcGeometry, DIGITS3, EXACT, lineGeometry, PathData, rectData, symbolGeometry, trailGeometry } from './geometry.js'
 
 /**
@@ -364,7 +365,7 @@ function renderSymbols(group: SceneGroup, open: string): string {
   const links = group.hasLinks === true
   let out = open
   const w = new StringAttrSink()
-  for (const it of itemsOf(group)) {
+  for (const it of paintOrder(itemsOf(group))) {
     // A null position (a geopoint the projection refused) renders at the
     // origin: vega emits `translate(null,null)`, which SVG treats as (0,0).
     // Vega-Lite: point marks default fill="transparent", stroke from scale or
@@ -392,7 +393,7 @@ function renderCircles(group: SceneGroup, open: string): string {
   const links = group.hasLinks === true
   let out = open
   const w = new StringAttrSink()
-  for (const it of itemsOf(group)) {
+  for (const it of paintOrder(itemsOf(group))) {
     if (it.x == null || it.y == null) continue
     w.s = ''
     circleAttrs(it, w)
@@ -428,14 +429,13 @@ export type RoundedRectEntry =
   | { kind: 'scope'; item: SceneItem; g: { x: number; y: number; w: number; h: number }; round: GeneratedPath; plain: GeneratedPath }
 
 /**
- * vega-scenegraph's clipped rounded-rect scopes for bar corner radii, in item
- * order (vega's scene keeps data order and every renderer paints front to back). A 'scope' entry wraps one bar in its own clipped
+ * vega-scenegraph's clipped rounded-rect scopes for bar corner radii, in the order vega paints the items (paint-order.ts). A 'scope' entry wraps one bar in its own clipped
  * scope (the consumer registers its clip when it emits it); a 'plain'
  * entry is a bar without corners.
  */
 export function clippedRoundedRectEntries(group: SceneGroup): RoundedRectEntry[] {
   const out: RoundedRectEntry[] = []
-  for (const it of itemsOf(group)) {
+  for (const it of paintOrder(itemsOf(group))) {
     if (it.fill == null && it.stroke == null) continue
     const g = rectGeometry(it)
     if (!g) continue
@@ -537,7 +537,7 @@ function renderRects(group: SceneGroup, open: string): string {
   const links = group.hasLinks === true
   let out = open
   const w = new StringAttrSink()
-  for (const it of itemsOf(group)) {
+  for (const it of paintOrder(itemsOf(group))) {
     if (!rectIsPainted(it)) continue
     const d = rectItemPath(it)
     if (d == null) continue
@@ -560,7 +560,7 @@ function renderRules(group: SceneGroup, open: string): string {
   const links = group.hasLinks === true
   let out = open
   const w = new StringAttrSink()
-  for (const it of itemsOf(group)) {
+  for (const it of paintOrder(itemsOf(group))) {
     // Vega defaults undefined x/y to 0 (scenegraph item defaults), so even
     // degenerate rules with unresolved fields render as zero-length lines at
     // the origin rather than being skipped.
@@ -577,7 +577,7 @@ function renderRules(group: SceneGroup, open: string): string {
 function renderTexts(group: SceneGroup, open: string): string {
   const links = group.hasLinks === true
   let out = open
-  for (const it of itemsOf(group)) {
+  for (const it of paintOrder(itemsOf(group))) {
     const el = textElement(it)
     out += links ? withLink(it, el) : el
   }
@@ -683,7 +683,7 @@ function renderPaths(group: SceneGroup, open: string): string {
   const links = group.hasLinks === true
   let out = open
   const w = new StringAttrSink()
-  for (const it of itemsOf(group)) {
+  for (const it of paintOrder(itemsOf(group))) {
     // (an item whose path is empty is still a `<path>`, with no `d`: vega draws one element per item)
     // Position the path at its item x/y (vega renders path marks with a
     // translate transform; items whose path already encodes absolute
@@ -729,7 +729,7 @@ function renderImages(group: SceneGroup, open: string): string {
   const links = group.hasLinks === true
   let out = open
   const w = new StringAttrSink()
-  for (const it of itemsOf(group)) {
+  for (const it of paintOrder(itemsOf(group))) {
     if ((it as { urlDenied?: boolean }).urlDenied) continue
     w.s = ''
     imageAttrs(it, w)
@@ -754,7 +754,7 @@ function renderArcs(group: SceneGroup, open: string): string {
   const links = group.hasLinks === true
   let out = open
   const w = new StringAttrSink()
-  for (const it of itemsOf(group)) {
+  for (const it of paintOrder(itemsOf(group))) {
     w.s = ''
     arcItemAttrs(it, w)
     out += links ? withLink(it, `<path${w.s}/>`) : `<path${w.s}/>`
@@ -1889,9 +1889,11 @@ const flag = (it: SceneItem, key: string): boolean => (it as Record<string, unkn
  * share one container `<g>`; a data mark is its own container; a bare leaf is a leaf. `frameW`/`frameH` is the frame
  * of the group that holds them.
  */
-export function childNodes(items: readonly SceneItem[] | undefined, frameW: number, frameH: number, scope: GuideScope, clips: ClipCollector): SvgNode[] {
+export function childNodes(nodes: readonly SceneItem[] | undefined, frameW: number, frameH: number, scope: GuideScope, clips: ClipCollector): SvgNode[] {
   const out: SvgNode[] = []
-  if (!items) return out
+  if (!nodes) return out
+  // (a group mark's items in the order vega paints them: see paint-order.ts)
+  const items = scopeInPaintOrder(nodes)
   for (let i = 0; i < items.length; i++) {
     const it = items[i]!
     if (!isGroup(it)) { out.push({ leaf: it, wrapClip: true }); continue }

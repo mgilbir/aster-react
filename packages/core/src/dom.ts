@@ -21,6 +21,7 @@ import { getTextMetricsProvider } from './text-metrics.js'
 import { formatEnvironmentKey } from './locale.js'
 import { drawnPathCommands } from './path-data.js'
 import { symbolGeometry, type PathData, type SymbolGeometry } from './geometry.js'
+import { paintOrder } from './paint-order.js'
 import {
   PairAttrSink,
   areaMarkAttrs,
@@ -568,7 +569,10 @@ function linkedFirst(items: SceneItem[], desc: DomDesc): DomDesc {
 }
 
 function markItems(group: SceneGroup, type: string, options?: DomRenderOptions): DomDesc[] {
-  const items = group.items ?? []
+  // (a line, an area and a trail are one element drawn through the items in their order; the items of the other marks are one
+  // element each, in the order vega paints them: paint-order.ts -- a reordered copy, which the caches keyed by the engine's array
+  // never take for it)
+  const items = type === 'line' || type === 'area' || type === 'trail' ? group.items ?? [] : paintOrder(group.items ?? []) as SceneItem[]
   switch (type) {
     case 'line': {
       const info = computeLinePath(group)
