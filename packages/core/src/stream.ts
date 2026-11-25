@@ -30,6 +30,7 @@ import { dataInputOf } from './spec-structure.js'
 import { diffRows, pulseChangeOf, type DataPulse, type DatasetPulse, type PulseChangeInput, type PulseRange, type RowDiff } from './pulse.js'
 import { AsterLimitError, type SpecLimits } from './limits.js'
 import { notATuple } from './data-format.js'
+import { checkChartRows } from './row-watch.js'
 import type { TextMetricsProvider } from './text-metrics.js'
 import type { RuntimeInput, SceneRoot, VgSpec } from './types.js'
 
@@ -497,6 +498,9 @@ function frozenSnapshot(spec: VgSpec): VgSpec {
 export function createChartStream(given: VgSpec, options: StreamOptions = {}): ChartStream {
   assertSpecObject(given, 'createChartStream')
   const spec = frozenSnapshot(given)
+  // (the stream evaluates its own copy: a row of the host's spec changed in place afterwards reaches nothing, which the development
+  // row watch tells the host at the next flush, as it tells a session's host -- see row-watch.ts)
+  const hostWatch = {}
   // a stream is a chart whose data changes: its session takes every batch as a pulse, so it carries the pulse path (engine-parts.ts)
   if (!partLoaded('pulse')) installPart('pulse', { applyPipelineWithPulse })
   const policy: StreamPolicy = options.policy ?? 'coalesce'
@@ -803,6 +807,11 @@ export function createChartStream(given: VgSpec, options: StreamOptions = {}): C
         ...(Object.keys(dataPulse).length ? { dataPulse } : {}),
         ...(Object.keys(dataChanges).length ? { dataChanges } : {}),
         ...(changedDatasets.length ? { changedDatasets } : {}),
+      }
+      try {
+        if (process.env.NODE_ENV !== 'production') checkChartRows(hostWatch, given, { ...(options.initial?.logger ? { logger: options.initial.logger } : {}) })
+      } catch (e) {
+        if (typeof process !== 'undefined') throw e
       }
       scene = session!.evaluate(spec, input)
     } catch (err) {
