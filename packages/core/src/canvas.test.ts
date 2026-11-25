@@ -260,18 +260,33 @@ function svgRecords(svgIn: string, { images = true }: { images?: boolean } = {})
       const op = Number(attrOf(attrs, 'opacity') ?? 1)
       if (op === 0) continue // vega's canvas paints nothing at opacity 0 (draw.js)
       if (inner === '') continue // vega's canvas skips empty text (marks/text.js draw)
-      // multi-line text is not compared: the SVG's tspans restart at x=0 and the canvas continues at the anchor (see MULTI_LINE)
-      if (inner.includes('<tspan')) continue
       // (the serializer escapes the text of the element; the canvas draws the characters)
-      const content = inner.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, '&')
+      const unescape = (t: string): string => t.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, '&')
+      // Multi-line text: each line is a <tspan>, the first with no attribute and every next one `x="0" dy="<line height>"`. The x of 0
+      // is the element's own origin -- the anchor, after the transform above -- so each line starts there, as the canvas draws every
+      // line at the anchor x; each dy is relative to the line before. The canvas fills and strokes line by line.
+      const lines: Array<{ text: string; y: number }> = []
+      if (inner.includes('<tspan')) {
+        let line = 0
+        let ly = y
+        for (const ts of inner.matchAll(/<tspan\b([^>]*)>([\s\S]*?)<\/tspan>/g)) {
+          const tsAttrs = ts[1]!
+          if (line > 0 && attrOf(tsAttrs, 'x') !== '0') throw new Error(`a tspan that does not restart at the anchor: ${tsAttrs}`)
+          ly += line > 0 ? Number(attrOf(tsAttrs, 'dy') ?? 0) : 0
+          lines.push({ text: unescape(ts[2]!), y: ly })
+          line++
+        }
+      } else lines.push({ text: unescape(inner), y })
       const fam = attrOf(attrs, 'font-family') ?? 'sans-serif'
-      const head = `t=${content};x=${fmtN(x)};y=${fmtN(y)};align=${align};font=${[fst, fw, `${fsNum}px`, fam].filter(Boolean).join(' ')}${rot}`
       const blend = tailOf(attrs, 0)
-      records.push({ kind: 'text', path: '', paint: `${head};style=style=${fill};alpha=${fmtN(op)}${blend}` })
-      // vega's canvas strokes text when it has a stroke and a width > 0 (marks/text.js draw: stroke is not skipped for fill: none)
       const so = Number(attrOf(attrs, 'stroke-opacity') ?? 1)
-      if (stroke && stroke !== 'none' && Number(attrOf(attrs, 'stroke-width') ?? 1) > 0 && op * so > 0) {
-        records.push({ kind: 'strokeText', path: '', paint: `${head};style=style=${stroke};alpha=${fmtN(op * so)}${lineOf(attrs, attrOf(attrs, 'stroke-dasharray'))}${blend}` })
+      for (const l of lines) {
+        const head = `t=${l.text};x=${fmtN(x)};y=${fmtN(l.y)};align=${align};font=${[fst, fw, `${fsNum}px`, fam].filter(Boolean).join(' ')}${rot}`
+        records.push({ kind: 'text', path: '', paint: `${head};style=style=${fill};alpha=${fmtN(op)}${blend}` })
+        // vega's canvas strokes text when it has a stroke and a width > 0 (marks/text.js draw: stroke is not skipped for fill: none)
+        if (stroke && stroke !== 'none' && Number(attrOf(attrs, 'stroke-width') ?? 1) > 0 && op * so > 0) {
+          records.push({ kind: 'strokeText', path: '', paint: `${head};style=style=${stroke};alpha=${fmtN(op * so)}${lineOf(attrs, attrOf(attrs, 'stroke-dasharray'))}${blend}` })
+        }
       }
       continue
     }
@@ -763,12 +778,6 @@ function only(scene: SceneRoot, symbols: boolean): SceneRoot {
 }
 
 /**
- * Scenes with multi-line text are not compared: vega's own backends disagree (the SVG's tspans restart at x=0, the canvas continues
- * at the anchor x), and the browser canvas gate covers the single-line case. Each is checked to still hold what excuses it, so an
- * exclusion cannot outlive its reason.
- */
-const MULTI_LINE = ['text-linebreak.vg.json', 'axis-label-list-value.vg.json']
-/**
  * vega's SVG backend serialises a non-colour paint as fill="false" (which rasterises black); its canvas backend skips it. The SVG
  * conformance gate follows the SVG oracle; the browser canvas gate follows the canvas one.
  */
@@ -787,7 +796,7 @@ describe('canvas/svg corpus parity (the vega corpus; the Vega-Lite corpus is com
     const compared: string[] = []
     const failures: Array<[string, string[]]> = []
     const unloadable: string[] = []
-    const excluded = new Set([...MULTI_LINE, ...NON_COLOUR_PAINT, ...ARC_PATH])
+    const excluded = new Set([...NON_COLOUR_PAINT, ...ARC_PATH])
     for (const name of names) {
       const doc = JSON.parse(readFileSync(join(CORPUS_DIR, name), 'utf8'))
       const spec = doc.spec ?? doc
@@ -801,7 +810,6 @@ describe('canvas/svg corpus parity (the vega corpus; the Vega-Lite corpus is com
         continue
       }
       const svg = renderSceneToSvg(scene)
-      if (MULTI_LINE.includes(name) && !svg.includes('<tspan')) failures.push([name, ['excluded for multi-line text, and has none']])
       if (NON_COLOUR_PAINT.includes(name) && !svg.includes('fill="false"')) failures.push([name, ['excluded for a non-colour paint, and has none']])
       if (ARC_PATH.includes(name) && !/ d="[^"]*A[\d.]/.test(svg)) failures.push([name, ['excluded for an arc command, and has none']])
       if (excluded.has(name)) continue
