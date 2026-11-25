@@ -234,6 +234,30 @@ for (const [name, shape] of CUSTOM_SHAPES) {
     },
   })
 }
+// Images a spec names on the NETWORK (the gate serves them below, the same bytes to both engines; the corpus's image spec carries
+// data: URLs, which are no request at all, so the `images-served` floor needs these): a url from the data, with sizes taken from the
+// URL by the served picture (`<w>x<h>`), and one fixed url with the aspect kept, aligned and based by the mark's own anchors.
+{
+  const base = { $schema: 'https://vega.github.io/schema/vega/v6.json', width: 200, height: 120, padding: 5, autosize: 'none', background: 'white' }
+  synthetic.push({
+    name: 'canvas-network-image-data-urls',
+    spec: {
+      ...base,
+      data: [{ name: 't', values: [{ x: 10, y: 10, url: 'https://gallery.invalid/images/tile-40x30.svg', w: 40, h: 30 }, { x: 80, y: 40, url: 'https://gallery.invalid/images/tile-64x48.svg', w: 64, h: 48 }] }],
+      marks: [{ type: 'image', from: { data: 't' }, encode: { update: { x: { field: 'x' }, y: { field: 'y' }, url: { field: 'url' }, width: { field: 'w' }, height: { field: 'h' } } } }],
+    },
+  })
+  synthetic.push({
+    name: 'canvas-network-image-aspect-anchors',
+    spec: {
+      ...base,
+      marks: [{ type: 'image', encode: { update: {
+        x: { value: 100 }, y: { value: 60 }, url: { value: 'https://gallery.invalid/images/tile-80x40.svg' }, width: { value: 60 }, height: { value: 60 },
+        align: { value: 'center' }, baseline: { value: 'middle' }, aspect: { value: true }, opacity: { value: 0.8 },
+      } } }],
+    },
+  })
+}
 // The gradient of a scale (`{gradient: <scale>, start, stop, count}`, `gradient(scale, ...)`), generated over the kinds of scale, the
 // options and the marks that paint (gradient-gen.mts; the SVG side is differential-gradient.test.mts). Their CanvasGradients are
 // compared in pixels with vega's; the specs that vega itself refuses at parse (a hole in the call), and the scales whose stops are no
@@ -482,11 +506,11 @@ await runGate({
     'gradient-refusals': { floor: 46, what: 'generated gradients vega refuses, refused by Aster with the same message' },
     'append-frames': { floor: 309, what: 'frames painted by the append path and compared with a full repaint' },
     'untouched-frames': { floor: 414, what: 'frames <Chart> painted nothing for, compared with a full repaint' },
-    'symbol-ink': { floor: 528, what: 'symbol-run cases with ink compared with the plain path' },
+    'symbol-ink': { floor: 876, what: 'symbol-run cases with ink compared with the plain path' },
     path2d: { floor: 432, what: 'symbol-run cases the real context painted through Path2D' },
-    'images-served': { floor: 2, what: 'network images served to both engines (image marks compared offline)' },
+    'images-served': { floor: 3, what: 'network images served to both engines (image marks compared offline)' },
     'append-scenarios': { floor: 120, what: 'append scenarios run' },
-    'symbol-cases': { floor: 548, what: 'symbol-run cases compared with the plain path' },
+    'symbol-cases': { floor: 908, what: 'symbol-run cases compared with the plain path' },
     'dirty-scenarios': { floor: 160, what: 'signal-move scenarios run' },
     blank: { floor: 0, what: 'entries blank on both sides (compared, proving nothing)' },
   },
