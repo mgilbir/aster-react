@@ -7332,8 +7332,14 @@ interface EnteredGroup {
  * Encode one group item, in the scope its mark is in: the item's own signals, data sets and projections are its content's, which
  * the encode cannot read. Its instance takes the next place among the instances of the enclosing scope.
  */
-function enterGroupItem(mark: CompiledMark, ctx: EvalContext, src: GroupSource): EnteredGroup {
+function enterGroupItem(mark: CompiledMark, ctx: EvalContext, given: GroupSource): EnteredGroup {
   const path = [...ctx.scope.path, ctx.scope.nextChild.n++]
+  // (the item's datum is a copy of the row it is made from, as a leaf item's is: a scene hands out no row of the spec or of the
+  // data, so a host that writes into a scene it was given writes into that scene alone, C87; nested objects stay shared, as a
+  // leaf's do)
+  const datum = copyTuple(given.datum)
+  if (isTuple(given.datum)) markTupleAlways(datum)
+  const src = { ...given, datum }
   // (`parent` is the enclosing group's datum here, as for any mark of the scope; a failing encode stops the run: see failEncode)
   const item = resolveEncodeSet((mark.encode?.update ?? {}) as Record<string, EncodeValue | EncodeValue[]>, src.datum, ctx, 'group', mark)
   return { src, path, item: Object.assign(item, { datum: src.datum }) }
