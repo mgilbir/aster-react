@@ -25,6 +25,9 @@ const proj = { projection: { type: 'mercator' } }
 
 /** [the words the README uses, a spec that exercises it, what the refusal says (not a refusal for another reason)] */
 const REFUSED: Array<[string, Record<string, unknown>, RegExp]> = [
+  ['A variable parameter inside a view of a composition', { data, hconcat: [{ params: [{ name: 'cut', value: 2 }], transform: [{ filter: 'datum.b > cut' }], mark: 'point', encoding: { x: q('b') } }, unit('point', { x: q('c') })] }, /a variable parameter \("cut"\) inside a view of a composition/],
+  ['A datum given as an expression', unit('point', { x: q('b'), y: { datum: { expr: 'p' }, type: 'quantitative' } }, { params: [{ name: 'p', value: 1 }] }), /a datum given as an expression on the y channel of a point is refused/],
+  ['A tick whose `baseline` is not top, middle or bottom', unit({ type: 'tick', baseline: 'alphabetic' }, { x: q('b'), y: n('a') }), /"alphabetic" places no vertical position of a sized mark/],
   ['on a layer spec itself', { data, params: [sel], layer: [unit('point', { x: q('b') }), unit('line', { x: q('b') })].map(({ data: _d, ...u }) => u) }, /on a layer spec itself/],
   ['on a composition whose units have params of their own', { data, params: [sel], hconcat: [{ params: [{ name: 'q', select: 'point' }], mark: 'point', encoding: { x: q('b') } }] }, /replaces the parameters of a uni/],
   ['`views`', { data, params: [{ ...sel, views: ['a'] }], hconcat: [{ name: 'a', mark: 'point', encoding: { x: q('b') } }] }, /`views`/],

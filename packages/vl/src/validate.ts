@@ -230,6 +230,8 @@ interface ValidationState {
   /** every parameter name must be unique across the whole spec */
   paramNamesSeen: Set<string>
   selectionNamesSeen: Set<string>
+  /** the channels some view of the spec gives a field: its scale is made of that field's values besides a datum's */
+  fieldChannels: ReadonlySet<string>
 }
 let state: ValidationState | undefined
 function st(): ValidationState {
@@ -271,12 +273,27 @@ function checkParamRef(name: unknown, at: string): void {
   if (!st().declaredParams.has(name)) fail(at, `parameter ${JSON.stringify(name)} is not declared in \`params\``)
 }
 
+/** The channels some view of the spec (a unit, a layer's child, a cell, a repeated view) gives a field. */
+function fieldChannelsOf(root: Obj): ReadonlySet<string> {
+  const out = new Set<string>()
+  const seen = new Set<object>()
+  const walk = (node: unknown, depth: number): void => {
+    if (!isObj(node) || seen.has(node) || depth > MAX_VIEW_DEPTH) return
+    seen.add(node)
+    if (isObj(node.encoding)) for (const [ch, def] of Object.entries(node.encoding)) if (([] as unknown[]).concat(def).some((d) => isObj(d) && (d.field !== undefined || d.aggregate !== undefined))) out.add(ch)
+    for (const k of ['layer', 'hconcat', 'vconcat', 'concat']) if (Array.isArray(node[k])) for (const c of node[k] as unknown[]) walk(c, depth + 1)
+    walk(node.spec, depth + 1)
+  }
+  walk(root, 0)
+  return out
+}
+
 export function validateSpec(spec: unknown): void {
   if (!isObj(spec)) fail('', 'a Vega-Lite spec must be a JSON object')
   const saved = state
   state = {
     timerParams: new Set(), timerNames: new Set(), animatable: false, layerChain: true, facetDepth: 0, repeatVars: new Set(),
-    declaredParams: new Map(), paramNamesSeen: new Set(), selectionNamesSeen: new Set(),
+    declaredParams: new Map(), paramNamesSeen: new Set(), selectionNamesSeen: new Set(), fieldChannels: fieldChannelsOf(spec),
   }
   try {
     collectParams(spec, state.declaredParams, state.timerNames)
@@ -1162,6 +1179,15 @@ const DATUM_EXPRESSION_MARKS: Record<string, ReadonlySet<string>> = {
 }
 /** The channels that print their datum: vega-lite's chart of an expression there prints the object literal. */
 const TEXT_CHANNELS_OF_DATUM = set('tooltip text href description')
+/**
+ * Whether the scale of a datum given as an expression is not made of it: a scale given its domain reads no domain from the datum, and
+ * a channel with `scale: null` has none (vega-lite runs those; a channel that prints its datum has no scale to give).
+ */
+function datumOutsideItsScale(channel: string, def: Obj): boolean {
+  if (TEXT_CHANNELS_OF_DATUM.has(channel)) return false
+  if (def.scale === null) return channel !== 'shape'
+  return isObj(def.scale) && def.scale.domain !== undefined
+}
 function datumExpressionRefused(channel: string, mark: string): boolean {
   return DATUM_EXPRESSION_ALL_MARKS.has(channel) || DATUM_EXPRESSION_MARKS[channel]?.has(mark) === true
 }
@@ -1179,7 +1205,7 @@ function validateEncoding(enc: unknown, path: string, where: 'unit' | 'layer', m
     // a scale on a channel for is vega-lite's own, measured in vl-datum-expression.test.ts; elsewhere the datum draws, and compiles here.)
     if (mark !== undefined) {
       for (const d of ([] as unknown[]).concat(def)) {
-        if (isObj(d) && isObj(d.datum) && d.datum.expr !== undefined && datumExpressionRefused(ch, mark)) {
+        if (isObj(d) && isObj(d.datum) && d.datum.expr !== undefined && datumExpressionRefused(ch, mark) && !datumOutsideItsScale(ch, d) && !(!TEXT_CHANNELS_OF_DATUM.has(ch) && st().fieldChannels.has(ch))) {
           fail(`${at}.datum`, `a datum given as an expression on the ${ch} channel of a ${mark} is refused: vega-lite 6.4.3 ${TEXT_CHANNELS_OF_DATUM.has(ch) ? 'writes the expression\'s object literal into the text' : 'refuses it without a type and compiles a chart Vega cannot run with one ("Unsupported object")'}; give a \`value\` ({"expr": ...}), or compute a field with a calculate`)
         }
       }

@@ -170,6 +170,17 @@ The list below is the features refused by name, each checked by `test/readme-ref
   parameters with the inherited ones), and with `views` (restricting a composition's selection to some of its views).
   Also: `bin.extent` as anything but a `[min, max]` pair or a `{param}` reference; a lookup from a selection of the same
   unit or of a later layer; `scale.domain.unionWith` in a layered spec; a parameter's `push`.
+- A variable parameter inside a view of a composition (a layer, a concat, a facet's `spec`): vega-lite declares the signal of a variable
+  parameter at the top of the spec only, so its chart reads a signal it never declares and Vega refuses it ("Unrecognized signal
+  name"); declare the parameter in the top-level `params`.
+- A datum given as an expression (`{"datum": {"expr": "p"}}`) on a channel a scale reads (a position, a colour, a size, an
+  opacity ...), on a tooltip, a href, a description or a text: vega-lite 6.4.3 refuses it without a `type` ("Invalid field type
+  undefined"), writes the expression object into the scale's domain with one (Vega: "Unsupported object"), and prints its object literal
+  in a text; a secondary position, a detail or an order draws, and compiles. Which marks vega-lite builds a scale of a channel for is its
+  own, measured in `vl-datum-expression.test.ts` (conformance). (A scale given its `domain`, or `null`, or one that another view
+  of the spec gives a field, is not made of the datum: those draw.)
+- A tick whose `baseline` is not top, middle or bottom (`alphabetic`, `line-top`, `line-bottom`): vega-lite 6.4.3 writes the tick's
+  position under a channel named `undefined`, so the mark is placed by nothing.
 - Maps: a geoshape without a GeoJSON `shape` field inside a facet (vega-lite 6.4.3 fits the projection to
   `data("child_main")`, a dataset it never defines, so there is no output to match). Longitude / latitude
   positions on marks other than point, circle, square, text, line, trail and rule. What vega cannot run of vega-lite
