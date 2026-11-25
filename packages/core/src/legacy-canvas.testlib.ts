@@ -117,6 +117,8 @@ export function canonicalPath(segs: PathSeg[]): string {
       case 'T': return `T${num(s.x)},${num(s.y)}`
       case 'A': return `A${num(s.rx)},${num(s.ry)},${num(s.rot)},${s.large},${s.sweep},${num(s.x)},${num(s.y)}`
       case 'Z': return 'Z'
+      // parsePathData answers absolute commands only: a relative one has no canonical form to compare
+      default: throw new TypeError(`canonicalPath: relative command "${s.cmd}" (parsePathData yields absolute commands)`)
     }
   }).join('')
 }

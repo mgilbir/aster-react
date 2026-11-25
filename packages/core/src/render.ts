@@ -1142,7 +1142,7 @@ export class StringAttrSink implements AttrSink {
 }
 
 /** The value `attr(name, value)` would write, or null when it writes nothing (before the sink's vetting). */
-function attrValue(name: string, value: unknown): string | null {
+function attrValue(value: unknown): string | null {
   if (value == null || value === 'transparent') return null
   if (Array.isArray(value)) return listText(value)
   if (typeof value === 'number') return num(value)
@@ -1260,7 +1260,7 @@ function paintOf(v: unknown): unknown {
 function checkedPaint(v: unknown): unknown {
   if (typeof v === 'string') return paintText(v)
   if (typeof v !== 'object' || v === null) return v
-  const text = attrValue('fill', v)
+  const text = attrValue(v)
   if (text === null) return null
   const out = paintText(text)
   return out === text ? v : out

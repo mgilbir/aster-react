@@ -1371,6 +1371,7 @@ function bindSignalEventsDefs(
           evaluatedAt.set(key, writes)
           if (v !== read(d.name, scope)) markChanged(store(scope, d.name, v))
           else if (!op.forced) return false
+          return true
         }
         if (scope === null && !d.on?.length) {
           for (const dep of deps) {
@@ -1457,6 +1458,7 @@ function bindSignalEventsDefs(
           try { v = f(undefined, params(scope)) } catch (e) { fail(spec.where, e); throw new Logged() }
           if (v !== value) value = v
           else if (!lambda.forced) return false
+          return true
         }
         made = { op: lambda, first: value }
         lambdas.set(lambdaKey, made)
@@ -1513,6 +1515,7 @@ function bindSignalEventsDefs(
         }
         if (value !== hs.value) hs.value = value
         else if (!h.forced) return false
+        return true
       }
       h.order = source.order // immediately follows its source
       follow(source, h)

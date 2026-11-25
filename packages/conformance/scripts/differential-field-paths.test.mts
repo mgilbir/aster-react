@@ -144,7 +144,7 @@ const TEMPLATES: Array<[string, (p: Pick) => Spec[]]> = [
   ['pie sorted', (p) => [{ type: 'pie', field: p.num(), sort: true }]],
   ['countpattern', (p) => [{ type: 'countpattern', field: p.key(), pattern: '[a-d]' }]],
   ['dotbin', (p) => [{ type: 'dotbin', field: p.num(), step: 3 }]],
-  ['timeunit', (p) => [{ type: 'timeunit', field: 't', units: ['year', 'month'] }]],
+  ['timeunit', () => [{ type: 'timeunit', field: 't', units: ['year', 'month'] }]],
   ['geojson', (p) => [{ type: 'geojson', fields: [p.num(), p.num()] }]],
   ['voronoi', (p) => [{ type: 'voronoi', x: p.num(), y: p.num(), size: [50, 50] }]],
   ['cross filter chain', (p) => [{ type: 'aggregate', groupby: [p.key()], fields: [p.num()], ops: ['sum'], as: ['s'] }, { type: 'collect', sort: { field: 's' } }]],
@@ -157,7 +157,7 @@ const TEMPLATES: Array<[string, (p: Pick) => Spec[]]> = [
   ['stratify and partition', (p) => [{ type: 'stratify', key: 'id', parentKey: 'pid' }, { type: 'partition', field: p.num(), size: [100, 50], sort: { field: 'value' } }]],
   ['stratify and a tree', (p) => [{ type: 'stratify', key: 'id', parentKey: 'pid' }, { type: 'tree', field: p.num(), method: 'tidy', size: [100, 50] }]],
   ['label-free crossfilter', (p) => [{ type: 'crossfilter', fields: [p.num(), p.num()], query: [[0, 20], [5, 30]] }]],
-  ['sample-free filter and formula', (p) => [{ type: 'filter', expr: 'datum.n > 0' }, { type: 'formula', expr: `datum["n"] * 2`, as: 'twice' }]],
+  ['sample-free filter and formula', () => [{ type: 'filter', expr: 'datum.n > 0' }, { type: 'formula', expr: `datum["n"] * 2`, as: 'twice' }]],
 ]
 
 function rowsAreEqual(a: unknown, b: unknown): boolean {

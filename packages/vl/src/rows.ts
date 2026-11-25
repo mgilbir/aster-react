@@ -67,17 +67,17 @@ export function cloneSpecStructure(input: unknown, payloads: RowPayloads, arming
       if (open.has(v)) throw new VLCompileError('a Vega-Lite spec cannot contain itself (it holds a cycle)')
       if (depth >= MAX_SPEC_DEPTH) throw new VLCompileError(`a Vega-Lite spec nested deeper than ${MAX_SPEC_DEPTH} is not supported`)
     }
-    if (v === null || typeof v !== 'object' || (plain ? memoPlain : memoArmed).has(v)) return copyValue(v, parentKey, key)
+    if (v === null || typeof v !== 'object' || (plain ? memoPlain : memoArmed).has(v)) return copyValue(v, key)
     open.add(v)
     depth++
     try {
-      return copyValue(v, parentKey, key)
+      return copyValue(v, key)
     } finally {
       depth--
       open.delete(v)
     }
   }
-  const copyValue = (v: unknown, parentKey: string, key: string): unknown => {
+  const copyValue = (v: unknown, key: string): unknown => {
     if (v === null || typeof v !== 'object') {
       // (structuredClone refuses functions and symbols wherever they are)
       if (typeof v === 'function' || typeof v === 'symbol') return structured(v)

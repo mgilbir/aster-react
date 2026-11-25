@@ -461,7 +461,7 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
   if (spec.transform !== undefined) validateTransforms(spec.transform, at('transform'))
   // (`"container"`: a top-level view's, or a facet's cells' - vega-lite sizes each cell by the container, child_width / child_height)
   validateSize(spec, at, (top || parent === 'facet') && (kind === 'unit' || kind === 'layer'))
-  if (spec.params !== undefined) validateParams(spec.params, at('params'), kind !== 'layer' && selOk, kind, spec, at('params'))
+  if (spec.params !== undefined) validateParams(spec.params, at('params'), kind !== 'layer' && selOk, kind, spec)
   if (spec.resolve !== undefined) validateResolve(spec.resolve, at('resolve'), kind, isObj(spec.encoding) && (spec.encoding.row != null || spec.encoding.column != null || spec.encoding.facet != null))
   if (spec.projection !== undefined) validateProjection(spec.projection, at('projection'))
   if (spec.view !== undefined) validateViewBackground(spec.view, kind, at('view'))
@@ -487,7 +487,7 @@ function validateView(spec: Obj, path: string, top: boolean, parent: Kind | unde
 
   switch (kind) {
     case 'unit':
-      validateUnit(spec, at, top)
+      validateUnit(spec, at)
       break
     case 'layer': {
       if (!Array.isArray(spec.layer) || spec.layer.length === 0) mustBe(at('layer'), 'a non-empty array of specs')
@@ -781,7 +781,7 @@ function pushdownProblem(node: unknown): string | undefined {
   return isObj(node.spec) ? pushdownProblem(node.spec) : undefined
 }
 
-function validateParams(params: unknown, path: string, selectionOk: boolean, kind: Kind, view?: Obj, viewPath?: string): void {
+function validateParams(params: unknown, path: string, selectionOk: boolean, kind: Kind, view?: Obj): void {
   if (!Array.isArray(params)) mustBe(path, 'an array of parameter definitions')
   params.forEach((p, i) => {
     const at = `${path}[${i}]`
@@ -1060,7 +1060,7 @@ function validateMark(mark: unknown, at: string): string {
   return type
 }
 
-function validateUnit(spec: Obj, at: (k: string) => string, top = true): void {
+function validateUnit(spec: Obj, at: (k: string) => string): void {
   const mark = validateMark(spec.mark, at('mark'))
   const enc = spec.encoding === undefined ? {} : spec.encoding
   // (a line that spans a channel is drawn as a rule: the channels a rule draws are the ones it keeps)

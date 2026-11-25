@@ -53,7 +53,7 @@ type Side = 'vega' | 'aster'
 type Mode = 'param' | 'handler' | 'operator' | 'event'
 const MODES: readonly Mode[] = ['param', 'handler', 'operator', 'event']
 const PROBE_MODES: readonly Mode[] = ['param', 'handler']
-function evaluate(side: Side, code: string, ast: unknown, mode: Mode): { r: unknown; logs: string[] } {
+function evaluate(side: Side, ast: unknown, mode: Mode): { r: unknown; logs: string[] } {
   const logs: string[] = []
   const spy = vitest.spyOn(console, 'error').mockImplementation((...a: unknown[]) => { logs.push(a.map(String).join(' ')) })
   try {
@@ -99,8 +99,8 @@ describe('generated: vega-interpreter vs Aster expr-interpreter', () => {
         if (!wantAst) continue
         const gotAst = parseExpression(code)
         for (const mode of MODES) {
-          const want = evaluate('vega', code, wantAst, mode)
-          const got = evaluate('aster', code, gotAst, mode)
+          const want = evaluate('vega', wantAst, mode)
+          const got = evaluate('aster', gotAst, mode)
           evaluated++
           if ((want.r as any)?.$ === 'throw') errored++
           if (isHardening(got.r) && !isHardening(want.r)) { refused++; continue }
@@ -125,8 +125,8 @@ describe('generated: vega-interpreter vs Aster expr-interpreter', () => {
       const bad: string[] = []
       const check = (code: string): void => {
         const ast = ve.parseExpression(code)
-        const want = evaluate('vega', code, ast, 'param')
-        const got = evaluate('aster', code, parseExpression(code), 'param')
+        const want = evaluate('vega', ast, 'param')
+        const got = evaluate('aster', parseExpression(code), 'param')
         if (JSON.stringify(got) !== JSON.stringify(want) && bad.length < 8) bad.push(`${code}  vega ${JSON.stringify(want)}  aster ${JSON.stringify(got)}`)
       }
       for (const a of vals) {
@@ -358,8 +358,8 @@ describe('generated: adversarial sandbox probes (vega-interpreter vs Aster)', ()
       for (const { code, v, a } of rows) {
         if (v.ast === undefined || a.ast === undefined) continue
         for (const mode of PROBE_MODES) {
-          const want = JSON.stringify(evaluate('vega', code, v.ast, mode))
-          const got = JSON.stringify(evaluate('aster', code, a.ast, mode))
+          const want = JSON.stringify(evaluate('vega', v.ast, mode))
+          const got = JSON.stringify(evaluate('aster', a.ast, mode))
           const key = `${mode} ${code}`
           const pin = pinned.get(key)
           if (pin) {
@@ -440,7 +440,7 @@ describe('generated: adversarial sandbox probes (vega-interpreter vs Aster)', ()
       for (const { code, v } of rows) {
         if (!('ast' in v)) continue
         parsed++
-        if (evaluate('vega', code, v.ast, 'param').logs.length > 0) logged++
+        if (evaluate('vega', v.ast, 'param').logs.length > 0) logged++
       }
       expect(parsed).toBeGreaterThan(PROBES.length * 0.6)
       expect(logged).toBeGreaterThanOrEqual(3)

@@ -9,7 +9,7 @@ import { fieldOf } from './transform-agg.js'
 import { contourQuantize } from './transform.js'
 import { densityGrid, placeContours, type RasterGrid } from './raster-grid.js'
 import { densitySettings, type DensitySettings, type Get } from './raster-params.js'
-import type { Row, TransformContext } from './transform.js'
+import type { Row } from './transform.js'
 import { allot, meterTick } from './limits.js'
 import { geoRegistry, requireGeo } from './registry.js'
 import { rgbConvert, type Rgb } from './color.js'
@@ -34,7 +34,7 @@ function densityOf(data: Row[], x: Get, y: Get, weight: Get | null, settings: De
 }
 
 /** A density grid for each group of the points (all of them when there is no `groupby`). */
-export function kde2dRows(rows: Row[], t: Params, ctx: TransformContext): Row[] {
+export function kde2dRows(rows: Row[], t: Params): Row[] {
   const settings = densitySettings(t)
   const x = fieldOf(t.x) as Get
   const y = fieldOf(t.y) as Get
@@ -75,7 +75,7 @@ const max = (values: ArrayLike<number>): number | undefined => {
 }
 
 /** The level sets of each input grid, one tuple per level (the source's fields copied on). */
-export function isocontourRows(rows: Row[], t: Params, ctx: TransformContext): Row[] {
+export function isocontourRows(rows: Row[], t: Params): Row[] {
   const field: Get = t.field == null ? (r) => r : (fieldOf(t.field) as Get)
   const smooth = t.smooth !== false
   const contourRun = geoRegistry.contourRun
@@ -182,7 +182,7 @@ function paintGrid(grid: RasterGrid, pixel: Pixel, color: PixelParam<Rgb>, opaci
 }
 
 /** Each tuple's raster grid drawn as an image: colour from `color`, alpha from `opacity`, `resolve` choosing the maximum they see. */
-export function heatmapRows(rows: Row[], t: Params, ctx: TransformContext): Row[] {
+export function heatmapRows(rows: Row[], t: Params): Row[] {
   const shared = t.resolve === 'shared'
   const field: Get = t.field == null ? (r) => r : (fieldOf(t.field) as Get)
   const as = (t.as as string | undefined) || 'image'

@@ -7,7 +7,7 @@ import { forEachVariant } from './testing/variants'
 
 // The matrix runs every test below on <Chart>, <SvgChart> and <SvgChart interaction={interaction}>;
 // `Chart` is the variant's component (see testing/variants.tsx).
-forEachVariant(['svg', 'signals'], (Chart, variant) => {
+forEachVariant(['svg', 'signals'], (Chart) => {
   /**
    * `<Chart logger>` is the observable channel for recovered errors: an expression that throws is reported
    * there, from evaluation and from `signal.on` events, instead of being swallowed or escaping the DOM listener.
