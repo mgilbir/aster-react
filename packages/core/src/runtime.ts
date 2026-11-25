@@ -20,7 +20,7 @@ import { lexedText } from './expr-text.js'
 import { isEngineNode, noteEngineScene } from './scene-registry.js'
 import { parseExpressionCached, type Expr } from './expr-parser.js'
 import { datasetsReadIn, identifiersIn, scalesReadIn, dependencyKey, fieldsWritten, namesIn, pipelineReadsOf, reuse, runsOf, stepCounts, stepReadsOf, type StepReads, type StepRecord } from './step-reuse.js'
-import { activeMeter, withLimits, allot, copiedRows, checkItemCount, checkRowCount, checkChartRegex, meterTick, AsterLimitError } from './limits.js'
+import { activeMeter, chargeKept, chargesNow, chargesSince, keepableUnderLimits, type Charges, withLimits, allot, copiedRows, checkItemCount, checkRowCount, checkChartRegex, meterTick, AsterLimitError } from './limits.js'
 import { collectMeasureFailures, getTextMetricsProvider, withTextMetricsProvider } from './text-metrics.js'
 import { bindSceneTextMetrics } from './scene-output.js'
 import { AsterUrlError } from './url-policy.js'
@@ -226,6 +226,8 @@ interface ScaleEntry {
    * scale (see `buildScales`). Absent when the scale was not made from settings this evaluation can compare.
    */
   settings?: Settings
+  /** What making it charged the cumulative budgets of `limits`, when it was made under them (see `IncrementalState.charges`). */
+  charges?: Charges
 }
 
 /**
@@ -302,6 +304,11 @@ interface IncrementalState {
   markSources: Map<CompiledMark, { key: string; items: readonly SceneItem[]; tuples: boolean }>
   /** The view's own axes and legends as a clean pass made them, by definition, with what they were made under (see `keptGuide`). */
   guides: Map<object, Map<string, GuideRecord>>
+  /**
+   * What each top-level leaf mark made in full under `limits` charged their cumulative budgets (limits.ts `Charges`): under the same
+   * limits a later evaluation keeps it and charges it the same (audit C277); one without a record is made again under `limits`.
+   */
+  charges: Map<CompiledMark, Charges>
   /** The snapshots of the view's scales the scene carries, and the scales they were taken of (see `sceneSnapshots`). */
   snapshots?: { scales: ReadonlyArray<readonly [string, unknown]>; snaps: ReturnType<typeof snapshotScales> }
   /** The content of the view this state's pass made (its root items, laid out): a later pass shares what it makes the same (see `shareScene`). */
@@ -330,7 +337,7 @@ interface ScopedRun {
 }
 
 function newState(gen: number): IncrementalState {
-  return { gen, fp: '', scales: new Map(), scaleEntries: new Map(), datasets: new Map(), groups: new Map(), markKeys: new Map(), rows: new Map(), hostRows: new Map(), token: {}, stale: false, idCounter: 0, scoped: new Map(), numbered: new Map(), copies: new Map(), instances: new Map(), groupMarks: new Map(), channels: new Map(), markSources: new Map(), guides: new Map() }
+  return { gen, fp: '', scales: new Map(), scaleEntries: new Map(), datasets: new Map(), groups: new Map(), markKeys: new Map(), rows: new Map(), hostRows: new Map(), token: {}, stale: false, idCounter: 0, scoped: new Map(), numbered: new Map(), copies: new Map(), instances: new Map(), groupMarks: new Map(), channels: new Map(), markSources: new Map(), guides: new Map(), charges: new Map() }
 }
 
 /** A top-level leaf mark's items as an encode made them: the encode, the rows, the items in row order and each channel's key. */
@@ -771,6 +778,8 @@ interface EvalContext {
   unchanged?: DataStability
   /** The arrays the caller's pulses are relative to (see `hostPulse`). */
   pulseBases?: ReadonlyMap<string, unknown>
+  /** The mark being made took something of the evaluation before (a pulse, channels): it is not made in full (see `charges`). */
+  partialMake?: boolean
   /** Where the scene's runtime finds the histories of the rows the scene keeps, once it is made (see `rowsOf`). */
   sceneRows: SceneRows
   /** The state the pass before this one left (see `EvalTxn.lastPass`). */
@@ -2975,7 +2984,8 @@ function datasetsNamed(def: object, chart: CompiledChart): readonly string[] {
  * pass of a view that fits its viewport is made again: what it leaves for the next pass (see `ScaleContext.pass`) is the pass's own.
  */
 function keyedScale(s: CompiledScale, ctx: EvalContext, prevEntry: ScaleEntry, key: string): boolean {
-  if (!followsChanges(ctx) || !cleanPass(ctx) || prevEntry.key !== key || scaleReadsOf(s, ctx.chart) === null) return false
+  // (under `limits`, a scale made under the same limits, whose charges are known: see `IncrementalState.charges`, C277)
+  if (!tellsChanges(ctx) || !keepableUnderLimits(prevEntry.charges) || !cleanPass(ctx) || prevEntry.key !== key || scaleReadsOf(s, ctx.chart) === null) return false
   return !(ctx.passMemory !== undefined && (prevEntry.scale as { bins?: unknown }).bins)
 }
 
@@ -3033,7 +3043,9 @@ const scaleKeyOf = (s: CompiledScale, ctx: EvalContext): string => readsKey(ctx,
  * before still holds the rows it held. Not under `limits`: a result that is kept is not counted against them again (as it is when
  * nothing changed).
  */
-const followsChanges = (ctx: EvalContext): boolean => (ctx.incremental || ctx.unchanged !== undefined) && activeMeter() === null
+const followsChanges = (ctx: EvalContext): boolean => tellsChanges(ctx) && activeMeter() === null
+/** `followsChanges` whatever the limits: for the results that are charged what they charged when kept under them (C277). */
+const tellsChanges = (ctx: EvalContext): boolean => ctx.incremental || ctx.unchanged !== undefined
 
 /**
  * Nothing of this pass failed so far: a pass that stopped somewhere (a signal, a dataset, a scale or an encode threw) makes what
@@ -3098,12 +3110,14 @@ function canReuseMarkGroup(mark: CompiledMark, ctx: EvalContext, prevGroup: Scen
   // (`key` is `markKeyOf(mark, ctx)`, recorded for the next evaluation by the caller)
   const prev = ctx.prev
   if (!prev || mark.type === 'group' || !cleanPass(ctx) || forceBound(mark, ctx.chart)) return false
+  // (under `limits`, only a mark made in full under the same limits, whose charges are known: see `IncrementalState.charges`)
+  if (!keepableUnderLimits(prev.charges.get(mark))) return false
   const deps = markDepsOf(mark, ctx.chart)
   if (prev.markKeys.get(mark) !== key) return false
   if (ctx.incremental && prev.fp === ctx.draft.fp) {
     if (deps.allData ? ctx.affected.size > 0 : [...deps.names].some((n) => ctx.affected.has(n))) return false
   } else {
-    if (!followsChanges(ctx) || markReadsOf(mark, ctx.chart) === null) return false
+    if (!tellsChanges(ctx) || markReadsOf(mark, ctx.chart) === null) return false
     const source = mark.from?.data
     for (const n of deps.names) if (n !== source && !sameRows(ctx, n)) return false
     if (source !== undefined && !sameRows(ctx, source)) {
@@ -3609,6 +3623,12 @@ function buildContentPass(
     const reused = prevGroup !== null && canReuseMarkGroup(mark, ctx, prevGroup, markKey)
     const keptOver = prevGroup !== null && !reused && overItems !== undefined ? keptOverMarkItems(mark, ctx, prevGroup) : null
     if (prevGroup !== null && (reused || keptOver !== null)) {
+      // (a mark kept under `limits` is charged what making it charged: C277)
+      const charged = ctx.prev!.charges.get(mark)
+      if (charged !== undefined && activeMeter() !== null) {
+        chargeKept(charged, `mark ${mark.name ?? mark.type}`)
+        ctx.draft.charges.set(mark, charged)
+      }
       if (overItems !== undefined) recordOverMarkItems(mark, ctx, overItems)
       const group = keptOver === 'datums' ? withNewDatums(ctx, prevGroup, overItems!, ctx.prev!.markSources.get(mark)!.items) : prevGroup
       items.push(group)
@@ -3630,7 +3650,15 @@ function buildContentPass(
       if (kept !== undefined) ctx.draft.numbered.set(key, kept)
       continue
     }
+    // (under `limits`: what making the mark in full charges, for a later evaluation that keeps it; a mark that took a pulse -- items
+    // spliced from the evaluation before -- charged only what it re-made, and is not a record)
+    const before = chargesNow()
+    ctx.partialMake = false
     const result = evaluateMark(mark, ctx, prevGroup)
+    if (before !== null && result && !Array.isArray(result) && !ctx.partialMake && cleanPass(ctx)) {
+      const charged = chargesSince(before)
+      if (charged !== null) ctx.draft.charges.set(mark, charged)
+    }
     if (overItems !== undefined && result && !Array.isArray(result)) recordOverMarkItems(mark, ctx, overItems)
     if (result) {
       for (const g of Array.isArray(result) ? result : [result]) {
@@ -5888,7 +5916,7 @@ function buildScales(ctx: EvalContext): void {
       // rows are appended inside the current domain).
       // (a scale of one dataset's domain reads that dataset's rows alone, see scale-domain.ts, when it names no other dataset and
       // reads none from an expression: a census proves the domain, and nothing else of it)
-      if (!reuse && dom && !readsAll && named.every((n) => n === dom.data)) {
+      if (!reuse && dom && !readsAll && named.every((n) => n === dom.data) && activeMeter() === null) {
         const pulse = ctx.datasetPulses.get(dom.data)
         const rows = ctx.datasets.get(dom.data) ?? []
         if (pulse && !pulse.full) {
@@ -5906,6 +5934,13 @@ function buildScales(ctx: EvalContext): void {
               if (next) { reuse = true; entry = { ...entry, disc: next } }
             }
           }
+        }
+      }
+      if (reuse) {
+        // (a scale kept under `limits` is charged what making it charged: C277)
+        if (activeMeter() !== null) {
+          if (!keepableUnderLimits(entry.charges)) reuse = false
+          else chargeKept(entry.charges, `scale ${s.name}`)
         }
       }
       if (reuse) {
@@ -5927,6 +5962,7 @@ function buildScales(ctx: EvalContext): void {
     // (which holds the pass's size, the viewport and the signals it reads) and the same data, that pass had the same settings in
     // both evaluations, so what it left is the same too.
     let kept = false
+    const before = chargesNow()
     try {
       const sctx = scaleContext(ctx, def.name)
       settings = scaleSettings(def, sctx)
@@ -5947,7 +5983,8 @@ function buildScales(ctx: EvalContext): void {
     }
     ctx.scales.set(s.name, scale)
     ctx.scaleTypes.set(s.name, s.type)
-    const entry: ScaleEntry = { scale, multi, key, settings }
+    const charged = chargesSince(before)
+    const entry: ScaleEntry = { scale, multi, key, settings, ...(charged !== null ? { charges: charged } : {}) }
     // Track the domain census for a single-data-domain scale so a later update
     // can prove the domain unchanged instead of rescanning.
     if (dom) {
@@ -6350,6 +6387,7 @@ function markItemsOf(
     // (a mark a signal handler re-encodes, while the host holds requests, is encoded whole: its items before carry what was asked)
     const reencodes = ctx.encodeLog !== undefined && namedSetsOf(mark).length > 0
     const pulse = encodeRows !== rows || reencodes ? undefined : given !== undefined ? given.pulse : reusablePulse(mark, ctx, source, encodeRows.length, prevGroup)
+    if (pulse || reencodes) ctx.partialMake = true
     if (pulse) {
       const prevItems = given !== undefined ? given.items : prevGroup!.items as SceneItem[]
       const gen = ctx.gen

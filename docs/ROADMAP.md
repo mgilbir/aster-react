@@ -102,10 +102,10 @@ Each item is something the code or the gates show today; none is a plan that has
   carried through the same states, which shares engine state with the path under test
   ([ARCHITECTURE.md](ARCHITECTURE.md#incremental-evaluation)). A reference that shares nothing (a fresh compile per step with ids
   compared modulo a renumbering, or real Vega as `identifier-order-vs-vega` does) is open.
-- **`limits` and reuse.** An evaluation under `limits` does not keep results from the one before (a kept result is not counted
-  against the budgets again), so an interactive chart under `limits` re-encodes what an unlimited one keeps by identity: on a 20k-point
-  scatter a write to a signal only a rule reads costs about 10 ms under `maxTimeMs` and about 0.3 ms without ([LIMITS.md](LIMITS.md#what-limits-cost)).
-  Charging a kept result its recorded counts would keep the reuse.
+- **`limits` and partial reuse.** Under `limits` a scale and a top-level mark made whole are kept and charged what making them charged
+  ([LIMITS.md](LIMITS.md#kept-results-under-limits)); the results taken partly from the evaluation before (spliced items, a mark's
+  channels, a census advanced in place, a dataset build, a guide, the marks inside group items) are still made again under `limits`.
+  Charging those their part would keep that reuse too.
 - **Worker shells carry the whole engine.** `<ChartWorkerStream>`, `useChartWorkerStream` and `@aster-charts/react/worker` run the
   synchronous engine in the worker and in their in-realm fallback, so they do not load parts on demand
   ([ADR 0011](adr/0011-engine-parts-load-on-demand-in-browser-builds.md)); `<ChartStream>` does.
