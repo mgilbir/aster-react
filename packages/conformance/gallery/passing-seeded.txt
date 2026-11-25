@@ -53,6 +53,7 @@ vl/selection_filter
 vl/selection_filter_composition
 vl/selection_filter_false
 vl/selection_filter_true
+vl/selection_heatmap
 vl/selection_insert
 vl/selection_layer_bar_month
 vl/selection_multi_condition
@@ -82,6 +83,7 @@ vl/selection_translate_scatterplot_shift-drag
 vl/selection_type_interval
 vl/selection_type_interval_invert
 vl/selection_type_point
+vl/selection_type_point_zorder
 vl/selection_type_single_dblclick
 vl/selection_type_single_pointerover
 vl/selection_zoom_brush_shift-wheel
