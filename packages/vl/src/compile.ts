@@ -289,7 +289,8 @@ function compileValidated(spec: VLSpec, forward?: ReadonlyMap<string, Selection>
     // vega-lite's order: layout signals, the selections' top-level signals, the variable params, then the units' own
     out.signals = [...layoutSignals, ...selParts.top([]), ...signals, ...selParts.unit]
   } else if (signals.length) {
-    out.signals = [...signals, ...layoutSignals]
+    // (vega-lite's order: layout signals, then the variable params)
+    out.signals = [...layoutSignals, ...signals]
   }
   if (typeof normalized.name === 'string' && normalized.name !== '') nameViewParts(out, `${varName(normalized.name)}_`, ctx.namedPrefixes, normalized.name)
   assertNoGeoSignalClash(out)
