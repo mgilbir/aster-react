@@ -93,7 +93,9 @@ console.log(svg.startsWith('<svg'))
 #### Sessions and per-datum updates
 
 `createChartSession()` (from `@aster-charts/core/dom`, also re-exported by `@aster-charts/react`) caches the IR and the scene across
-updates. An evaluation with the same spec content, data array identities, size, signals and limits returns the *same*
+updates. `createChartSession({ runningView: true })` (`ChartSessionOptions`) makes it a running view, as `<Chart>`'s is: every
+evaluation of the same chart at the same host size continues the last scene (`RuntimeInput.retainFrom`: axis tick order, `pad`
+autosize, implicit ordinal domains, as vega's view keeps them; see INTERACTION.md "A running view"). An evaluation with the same spec content, data array identities, size, signals and limits returns the *same*
 `SceneRoot`. Replaced immutable source arrays are diffed automatically (`autoChanges`, default on; set it to `false`
 to force a full re-encode), explicit per-datum `dataChanges` are supported, and the source/transform pulse of the last
 evaluation is `session.pulse()`. `session.change(input)` re-evaluates the chart compiled by the last `evaluate`
