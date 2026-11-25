@@ -6603,8 +6603,6 @@ function markItemsOf(
     // transforms run on the encoded items, below)
     const rows: Row[] = rawRows
 
-    // Keep dataset order for rect items: vega's scene keeps data order and
-    // every renderer paints the array front to back (later datum on top).
     // (vega's DataJoin reads each tuple's id: a `null` or `undefined` tuple a `{signal}` values gave throws there, before any item is
     // made -- the pass stops at this mark, which is not made)
     if (ctx.primitiveTuples) {
@@ -7484,7 +7482,8 @@ function enterGroupItem(mark: CompiledMark, ctx: EvalContext, given: GroupSource
   if (isTuple(given.datum)) markTupleAlways(datum)
   const src = { ...given, datum }
   // (`parent` is the enclosing group's datum here, as for any mark of the scope; a failing encode stops the run: see failEncode)
-  const item = resolveEncodeSet((mark.encode?.update ?? {}) as Record<string, EncodeValue | EncodeValue[]>, src.datum, ctx, 'group', mark)
+  // (as for a leaf mark: a compiled mark's `update` holds its `enter` channels, and a hand-built one with `enter` alone is encoded with it, C542)
+  const item = resolveEncodeSet((mark.encode?.update ?? mark.encode?.enter ?? {}) as Record<string, EncodeValue | EncodeValue[]>, src.datum, ctx, 'group', mark)
   return { src, path, item: Object.assign(item, { datum: src.datum }) }
 }
 
@@ -7764,7 +7763,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
     // facet's partition key, a row of `from.data`, or the `{}` of a group mark without `from` (in vega, a plain group nested in a
     // facet cell gives what it holds its own `{}`, not the cell's datum)
     const outerParams = { ...ctx.signalParams, parent: src.parent ?? src.datum }
-    const scopeId = mark.signalDefs?.length ? `${ctx.scopeId ? ctx.scopeId + '/' : ''}${mark.userName ?? ''}@${markIdOf(mark)}${src.key !== undefined && src.key !== '' ? `[${src.key}]` : ''}` : undefined
+    const scopeId = mark.signalDefs?.length ? `${ctx.scopeId ? ctx.scopeId + '/' : ''}${mark.userName ?? ''}@${markIdOf(mark)}${src.key !== undefined && src.key !== '' ? `[${scopeKey(src.key)}]` : ''}` : undefined
     // vega builds the instances of nested scopes level by level: what an aborted pass did not reach is not made
     const scoped = scopeId !== undefined ? scopeSignalValues(mark, ctx, scopeId, outerParams, path) : undefined
     const scopeParams = scoped ? scoped.params : outerParams
@@ -7855,7 +7854,7 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
     const scope: GuideScope = {
       parent: ctx.scope, path, nextChild: { n: 0 }, unsettled: late || unsettled || (itemAt >= 0 && itemAt > failing!.at) || holdsFailedLayout(path, failing),
       scales: mark.scales ?? NO_DECLARED, data: mark.data ?? NO_DECLARED, facet: src.facetName,
-      keyPath: `${ctx.scope.keyPath ?? ''}/${markIdOf(mark)}[${src.key ?? ''}]`,
+      keyPath: `${ctx.scope.keyPath ?? ''}/${markIdOf(mark)}[${scopeKey(src.key ?? '')}]`,
     }
     if (hasContent && !hollow) noteInstance(scope, path)
     const childCtx: EvalContext = {
@@ -7984,6 +7983,15 @@ function buildGroupItem(mark: CompiledMark, ctx: EvalContext, entered: EnteredGr
   }
 }
 
+/**
+ * A group item's key (a facet partition's, data-controlled) as it is written into a scope id or a key path: the characters those
+ * use to join their parts (`[`, `]`, `/`, `@`, `:`) and the escape itself are percent-escaped, so no two items of different keys
+ * share a path, whatever their keys hold (`a]/7[b` + `c` against `a` + `b]/7[c`: C383). A key without them is written as it is.
+ */
+function scopeKey(key: string): string {
+  return /[[\]/@:%]/.test(key) ? key.replace(/[[\]/@:%]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`) : key
+}
+
 /** A group item's own `cursor` channel (vega: `item.cursor`, what the pointer shows over the group), when it is a name. */
 function cursorOf(item: object): string | undefined {
   const c = (item as { cursor?: unknown }).cursor
@@ -8013,7 +8021,7 @@ interface EncodePlan {
   plainKeys: string[]
   /** Signal-valued keys (excluding `defined`), in spec order. */
   signalKeys: string[]
-  /** The `defined` signal spec, resolved before datum mutation. */
+  /** The `defined` signal spec, resolved against the data row before the other channels. */
   definedSpec: EncodeValue | EncodeValue[] | undefined
   /** Each plain key's spec and its shape (EK_*), so the per-row loop does no shape tests. */
   plainSpecs: Array<EncodeValue | EncodeValue[]>
@@ -8074,10 +8082,6 @@ function encodeBindingFor(encode: Record<string, EncodeValue | EncodeValue[]>, c
 // across the rows of a mark; hoisting it removes an Object.keys allocation and
 // an array partition per row (10k rows -> 1 scan).
 const encodePlanCache = new WeakMap<object, EncodePlan>()
-
-/** Cached rect paint order (see evaluateMark): sort keys, the stable-sort
- * permutation, and its inverse, so an eval with unchanged keys can replay the
- * order in O(n) and prove differential item reuse safe. */
 
 function encodePlan(encode: Record<string, EncodeValue | EncodeValue[]>): EncodePlan {
   let plan = encodePlanCache.get(encode)
