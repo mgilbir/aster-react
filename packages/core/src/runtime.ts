@@ -65,7 +65,7 @@ import { splitAccessPath, sameTuple, standFor, tupleOrigin, copyTuple, copyTuple
 import { applyImageUrlPolicy, applyLinkUrlPolicy, bindSceneUrlPolicy, resolveImageUrl, type ImageUrlPolicy } from './url-policy.js'
 import { checkChartUrlData } from './url-data.js'
 import { publishRows, valueKey, valuesEqual } from './fingerprint.js'
-import { beginWrite, endWrite, historical, idOf, keepHistory, pin, pinAll, samePin, samePins, stampKey, wrote, type History, type Pin } from './content-stamp.js'
+import { beginWrite, endWrite, historical, idOf, keepHistory, pin, pinAll, samePin, samePins, stampKey, versionOf, wrote, type History, type Pin } from './content-stamp.js'
 import { dataWithoutRows, valuesSignal } from './spec-structure.js'
 import { diffRows, equalCell, noteObjectRows, objectRowsOf, pulseChangeOf, rowsEqual, sourceNames, type PulseChange } from './pulse.js'
 import type { aggregateGroups } from './transform-agg.js'
@@ -1013,10 +1013,16 @@ function prepareChartCtx(
   }
   // (the items of the named marks made so far: what `data('<mark>')` reads, as vega's DataScope of a mark is its items)
   const markItems = new Map<string, SceneItem[]>()
+  // (the arrays `data()` gave an expression: what a value an expression made may hold of the engine's own arrays, see `detachLive`)
+  const handedOut = new WeakSet<object>()
   const runtime: ExpressionRuntime = {
     scale: (name) => scales.get(name),
     // (vega-functions `data`: the values of the data scope of that name; a named mark's scope is its items, in the order it draws them)
-    data: (name) => rowsOf(name) ?? (markNamesOf(chart).has(name) ? markItems.get(name) : undefined),
+    data: (name) => {
+      const rows = rowsOf(name) ?? (markNamesOf(chart).has(name) ? markItems.get(name) : undefined)
+      if (rows !== undefined) handedOut.add(rows)
+      return rows
+    },
     projection: (name) => transformProjections.get(name),
     tree: (name) => {
       const root = transformHierarchies.get(name)
@@ -1034,7 +1040,15 @@ function prepareChartCtx(
     expr: (expr) => {
       let compiled = exprCache.get(expr)
       if (!compiled) {
-        compiled = compileExpr(expr, runtime)
+        const made = compileExpr(expr, runtime)
+        // (a value that holds rows `data()` gave is made of what a later pulse advances in place, and it outlives the pulse in the scene --
+        // a signal's, an item's property -- so it is made of copies where it is made: C30, Q14, the immutability of a returned scene)
+        compiled = DATA_CALL.test(expr)
+          ? (datum, params, event, item) => {
+              const v = made(datum, params, event, item)
+              return v !== null && typeof v === 'object' ? detachLive(v, handedOut) : v
+            }
+          : made
         exprCache.set(expr, compiled)
       }
       return compiled
@@ -4427,11 +4441,9 @@ function evaluateViewPass(chart: CompiledChart, hostInput: RuntimeInput, txn: Ev
   }
   // Event-loop wiring (non-serialized internals)
   ;(scene as unknown as { runtime?: unknown }).runtime = ctx.runtime
-  // (a signal whose value is a dataset's own rows -- `update: "data('t')"` -- holds the array the evaluation reads, which a later pulse
-  // advances in place: the scene keeps the rows it was made with as its dataset does, through a copy made here, at the one place
-  // the scene takes its signals; C30, Q14)
-  const liveRows = new Set<unknown>(ctx.datasets.values())
-  for (const [name, value] of Object.entries(ctx.signalParams)) if (Array.isArray(value) && liveRows.has(value)) ctx.signalParams[name] = value.slice()
+  // (a signal whose value IS or CONTAINS a dataset's own rows -- `update: "data('t')"`, `{rows: data('t')}`, a list or a record of them, at any
+  // depth -- holds the array the evaluation reads, which a later pulse advances in place: the scene keeps the rows it was made with as its
+  // dataset does, through a copy made here, at the one place the scene takes its signals; C30, Q14)
   ;(scene as unknown as { signalParams?: Record<string, unknown> }).signalParams = ctx.signalParams
   ;(scene as unknown as { compiled?: unknown }).compiled = ctx.chart
   // the limits the scene was evaluated under: the event loop runs the scene's handlers under them (signals.ts `bindSceneSignals`)
@@ -5692,6 +5704,65 @@ function keptBuild(ctx: EvalContext, name: string, inputs: readonly unknown[] | 
     if (samePins(built.inputs, inputs)) return state
   }
   return undefined
+}
+
+/** Code that may ask a dataset's rows (`data(...)`, as vega-functions names it). */
+const DATA_CALL = /\bdata\s*\(/
+
+/**
+ * Values `detachLive` walked: the ones that hold no array the engine advances in place, and the copies it made. A signal's value is
+ * never edited once the expression made it, so a value in here need not be walked again (a persistent signal, or a large one the scene
+ * carries from one evaluation to the next, is walked once).
+ */
+const DETACHED = new WeakSet<object>()
+/** The copy `detachLive` made of an array, and the array's version and length it was made at. */
+const COPIES = new WeakMap<object, { version: number; length: number; copy: unknown[] }>()
+
+/**
+ * `value` with every array the engine advances in place (`live`: a dataset's rows, a mark's items) replaced by a copy of it, at any
+ * depth of the plain objects and lists it sits in; the containers on the way to one are copied, everything else is shared (a value
+ * that holds none is returned as it is). `seen` makes one array one copy within an evaluation, whatever holds it.
+ */
+function detachLive(value: unknown, live: { has(v: object): boolean }, seen: Map<object, unknown> = new Map()): unknown {
+  if (value === null || typeof value !== 'object' || DETACHED.has(value)) return value
+  if (seen.has(value)) return seen.get(value)
+  if (Array.isArray(value)) {
+    if (live.has(value)) {
+      // (one copy per array and version: an array not written since the last copy is the same copy, whoever asks)
+      const held = COPIES.get(value)
+      const version = versionOf(value)
+      const copy = held !== undefined && held.version === version && held.length === value.length ? held.copy : value.slice()
+      if (copy !== held?.copy) { COPIES.set(value, { version, length: value.length, copy }); DETACHED.add(copy) }
+      seen.set(value, copy)
+      return copy
+    }
+    seen.set(value, value)
+    let out: unknown[] | undefined
+    for (let i = 0; i < value.length; i++) {
+      const v = value[i]
+      if (v === null || typeof v !== 'object') continue
+      const d = detachLive(v, live, seen)
+      if (d !== v) { out ??= value.slice(); out[i] = d }
+    }
+    if (out === undefined) { DETACHED.add(value); return value }
+    DETACHED.add(out)
+    seen.set(value, out)
+    return out
+  }
+  const proto = Object.getPrototypeOf(value) as unknown
+  if (proto !== Object.prototype && proto !== null) return value
+  seen.set(value, value)
+  let out: Record<string, unknown> | undefined
+  for (const k of Object.keys(value)) {
+    const v = (value as Record<string, unknown>)[k]
+    if (v === null || typeof v !== 'object') continue
+    const d = detachLive(v, live, seen)
+    if (d !== v) { out ??= Object.assign(Object.create(proto) as Record<string, unknown>, value); out[k] = d }
+  }
+  if (out === undefined) { DETACHED.add(value); return value }
+  DETACHED.add(out)
+  seen.set(value, out)
+  return out
 }
 
 /** The signals the steps publish, as they stand after the steps ran (one a step left unwritten is absent). */
