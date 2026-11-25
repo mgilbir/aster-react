@@ -22,7 +22,7 @@ const MAX_STEPS = 1024
 const steps = (n: number): number => (n >= 1 ? Math.min(MAX_STEPS, Math.ceil(n)) : 1)
 
 /** The least magnitude a single-precision float of a canvas's path cannot hold (a double of 2^128 - 2^103 or more). */
-const FLOAT32_OVERFLOW = 3.4028235677973366e38
+export const FLOAT32_OVERFLOW = 3.4028235677973366e38
 /** A number a canvas path command takes: finite, and within single precision. */
 export const held = (v: number): boolean => Math.abs(v) < FLOAT32_OVERFLOW
 
