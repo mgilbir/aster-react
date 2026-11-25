@@ -8869,7 +8869,7 @@ function makeLegend(legend: CompiledLegend, ctx: EvalContext, index: number): Sc
     && !(cut.labels === true && cut.legend !== undefined && index <= cut.legend) ? 'none' : undefined
   // (the pass stopped in the encode of a mark that reads a late scale, in this very scope: a legend over a late scale is ranked after
   // that encode, and only what the legend's group and its title read of nothing late was made)
-  let entriesFailed = cut?.lateScale === true && compareInstances(ctx.scope.path, cut.path) === 0 && scaleNamedIsLate(ctx.scope, channels[0]![1], ctx.chart)
+  let entriesFailed = cut?.lateScale === true && compareInstances(ctx.scope.path, cut.path) === 0 && (cut.legend === undefined || index > cut.legend) && scaleNamedIsLate(ctx.scope, channels[0]![1], ctx.chart)
   const refusal = entriesFailed ? undefined : entriesRefusal({ type: legendType(spec, scaleType), scale: scale as never, count: tickCountRaw, minstep, values, formatSpecifier, formatType, locale: chartLocale(ctx.chart.locale) })
   if (refusal !== undefined) {
     if (lateLabels) {
@@ -8938,7 +8938,9 @@ function makeLegend(legend: CompiledLegend, ctx: EvalContext, index: number): Sc
   // (an encode of the entries threw in the instance that made them: the pass stopped there, and not in this scope)
   const stopped = stoppedOf(host)
   const inEntries = stopped?.at !== undefined && stopped.at !== 'labels' && slot !== undefined
-  failGuide(ctx, host, { axis: Infinity, legend: index, inside: true, ...(stopped?.at === 'labels' ? { labels: true as const } : {}), ...(inEntries ? { path: [...ctx.scope.path, slot!, ...(stopped!.at === 'entry' ? [] : [stopped!.entryIndex ?? 0])] } : {}) })
+  // (a strip that threw reading a late scale: the failing operator is ranked with the late ones, so what reads no late scale was made)
+  const stripFailed = lateStrip && stopped?.at === undefined && built.madeMarks?.includes('strip') === true
+  failGuide(ctx, host, { axis: Infinity, legend: index, inside: true, ...(stripFailed ? { lateScale: true as const } : {}), ...(stopped?.at === 'labels' ? { labels: true as const } : {}), ...(inEntries ? { path: [...ctx.scope.path, slot!, ...(stopped!.at === 'entry' ? [] : [stopped!.entryIndex ?? 0])] } : {}) })
   const g = built.group
   const group = {
     marktype: 'group',

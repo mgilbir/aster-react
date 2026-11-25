@@ -41,15 +41,21 @@ const FILLS: Record<string, unknown> = {
 }
 const TYPES = ['gradient', 'discrete', undefined] as const
 
-function build(scale: Spec, type: string | undefined, fill: unknown, title: boolean, orient: string, second: boolean): Spec {
+function build(scale: Spec, type: string | undefined, fill: unknown, title: boolean, orient: string, second: boolean, rich: boolean): Spec {
   const legend: Spec = { fill: 'g', orient, ...(title ? { title: 'region' } : {}), ...(type ? { type } : {}) }
   if (fill !== undefined) legend.encode = { gradient: { update: { fill } } }
   return {
     width: 160, height: 100, padding: 5, autosize: 'none',
+    ...(rich ? { title: { text: 'Totals' } } : {}),
     data: [{ name: 't', values: ROWS }],
-    scales: [{ name: 'g', ...scale }, ...(second ? [{ name: 'h', type: 'ordinal', domain: { data: 't', field: 'k' }, range: 'category' }] : [])],
+    scales: [
+      { name: 'g', ...scale },
+      ...(rich ? [{ name: 'x', type: 'band', domain: { data: 't', field: 'k' }, range: 'width' }] : []),
+      ...(second ? [{ name: 'h', type: 'ordinal', domain: { data: 't', field: 'k' }, range: 'category' }] : []),
+    ],
+    ...(rich ? { axes: [{ orient: 'bottom', scale: 'x' }] } : {}),
     legends: second ? [legend, { fill: 'h', title: 'other' }] : [legend],
-    marks: [{ type: 'rect', from: { data: 't' }, encode: { enter: { x: { value: 1 }, y: { value: 1 }, width: { value: 9 }, height: { value: 9 }, fill: { value: '#888' } } } }],
+    marks: [{ type: 'rect', from: { data: 't' }, encode: { enter: { x: rich ? { scale: 'x', field: 'k' } : { value: 1 }, y: { value: 1 }, width: { value: 9 }, height: { value: 9 }, fill: rich ? { scale: 'g', field: 'v' } : { value: '#888' } } } }],
   }
 }
 
@@ -75,10 +81,13 @@ describe('a legend strip that throws, over scales ranked early and late (vega)',
     for (const [sName, scale] of Object.entries(SCALES)) {
       for (const type of TYPES) {
         for (const [fName, fill] of Object.entries(FILLS)) {
-          for (const [title, orient, second] of [[true, 'right', false], [false, 'right', false], [true, 'bottom', false]] as const) {
+          for (const [title, orient, second] of [[true, 'right', false], [false, 'right', false], [true, 'bottom', true]] as const) {
+            // (a view with a title, an axis and marks over the scale: what vega made before the pass stopped. Over a scale vega ranks early, the
+            // pass stops before the marks and the document has holes vega's own serialiser cannot walk, so those get the bare view)
+            const rich = /over/.test(sName)
             n++
-            const spec = build(scale, type, fill, title, orient, second)
-            const label = `${sName} / ${type ?? 'default'} / ${fName} / ${title ? 'titled' : 'untitled'} ${orient}${second ? ' + second legend' : ''}`
+            const spec = build(scale, type, fill, title, orient, second, rich)
+            const label = `${sName} / ${type ?? 'default'} / ${fName} / ${title ? 'titled' : 'untitled'} ${orient}${second ? ' + second legend' : ''}${rich ? ' in a view with a title, an axis and marks' : ''}`
             let oracle: string
             try { oracle = await vegaSvg(spec) } catch (e) { bad.push(`${label}: vega refused: ${(e as Error).message}`); continue }
             const log = console.error
