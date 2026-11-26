@@ -45,6 +45,29 @@ type Rec = Record<string, unknown>
 const isRecord = (v: unknown): v is Rec => v !== null && typeof v === 'object' && !Array.isArray(v)
 const isObject = (v: unknown): v is Rec => v !== null && typeof v === 'object'
 
+
+/**
+ * A group mark whose `role` is a guide's is read by vega as that guide, not as a group (vega-parser `parseMark`: a role that starts with
+ * `axis`, `legend` or `title` is no `scope`, so unless the mark has a `layout` or a facet it is no scope either): what it holds is
+ * parsed once, in the scope around it, and its marks are attached to the scenegraph by their place among the marks of their container
+ * -- the one group item the mark has when it has exactly one, else the root frame, over whatever mark held that place before. What is
+ * drawn then depends on how many rows the mark's data has and on the marks around it, and a role of exactly `axis`, `legend` or `title`
+ * is also laid out by the view as the guide it names (a half pixel, the legend grid, the title's anchor). Aster does not follow that:
+ * the mark is refused when the spec is compiled (ERRORS.md, ROADMAP.md "Authored marks with a guide's role").
+ */
+const GUIDE_ROLE_GROUP_CONTENT = ['marks', 'signals', 'data', 'scales', 'projections', 'axes', 'legends', 'title'] as const
+function refuseGuideRoleGroup(m: Rec, facet: boolean): void {
+  const role = m.role
+  if (typeof role !== 'string' || !(role.startsWith('axis') || role.startsWith('legend') || role.startsWith('title'))) return
+  const holds = GUIDE_ROLE_GROUP_CONTENT.filter((k) => { const v = m[k]; return Array.isArray(v) ? v.length > 0 : v != null && v !== false && v !== '' })
+  if (role === 'axis' || role === 'legend' || role === 'title') {
+    throw new SpecParseError(`[aster] a group mark with the role "${role}" is not supported: vega lays a mark of that role out as the guide it names, and Aster draws a group mark as a group mark`)
+  }
+  if (!m.layout && !facet && holds.length > 0) {
+    throw new SpecParseError(`[aster] a group mark with the role "${role}" that holds ${holds.join(', ')} is not supported: vega parses what it holds in the scope around it and attaches its marks over the marks of the root frame, or of its one group item, so what it draws depends on how many rows its data has`)
+  }
+}
+
 /**
  * What a scope of vega-parser knows by name when its expressions are read: its signals and scales (projections are scales) and
  * those of the scopes around it. A group's scope has the signal `parent` as well.
@@ -700,6 +723,7 @@ class Check {
     if (this.owner !== null && isRecord(m.from) && typeof m.from.data === 'string') this.edge(dataKey(m.from.data), this.owner)
     const group = m.type === 'group'
     const facet = isRecord(m.from) && isRecord(m.from.facet) ? m.from.facet : undefined
+    if (group) refuseGuideRoleGroup(m, facet !== undefined)
     checkFrom(m.from, group, this.names)
     // vega-parser parseData: a facet with no data of its own aggregates its data set by its groupby, the facet's `aggregate` being
     // that transform's parameters (`fields`, `ops`, `as`, `cross`: any of them a signal); then its keys (C126)
@@ -728,11 +752,8 @@ class Check {
         if (!facet.data) throw new SpecParseError('Facet must reference a data set: ' + stringValue(facet))
         if (!facet.field && !facet.groupby) throw new SpecParseError('Facet must specify groupby or field: ' + stringValue(facet))
       }
-      // a group is a scope of data sets of its own, unless its role is a guide's and it has no layout and no facet: then it is parsed in
-      // its parent's (a facet's name is a data set of the group's scope)
-      const role = typeof m.role === 'string' ? m.role : ''
-      const guideRole = role.startsWith('axis') || role.startsWith('legend') || role.startsWith('title')
-      const names = !guideRole || !!m.layout || facet !== undefined ? new Names(this.names) : this.names
+      // a group is a scope of data sets of its own (a facet's name is a data set of the group's scope)
+      const names = new Names(this.names)
       if (facet !== undefined) names.declare(facet.name)
       const inner: string[] = []
       const scope = new Scope(this.scope)
