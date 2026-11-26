@@ -9,6 +9,12 @@
  */
 import { spawn } from 'node:child_process'
 
+/**
+ * @param {string} command
+ * @param {readonly string[]} [args]
+ * @param {import('node:child_process').SpawnOptions & { timeout?: number, encoding?: BufferEncoding }} [options]
+ * @returns {Promise<{ status: number | null, signal: NodeJS.Signals | null, stdout: string, stderr: string, error: Error | undefined }>}
+ */
 export function spawnAsync(command, args = [], { timeout, encoding = 'utf8', ...options } = {}) {
   return new Promise((resolve) => {
     const child = spawn(command, args, options)

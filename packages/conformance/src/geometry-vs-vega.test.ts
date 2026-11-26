@@ -7,6 +7,7 @@ import type { SceneItem } from '../../core/src/types.js'
 import { genItem, rng } from './geometry-specs.js'
 import { boxText, sameBox } from './geometry-keys.js'
 import { V, compareSpec, type Counts } from './geometry-oracle.js'
+import { turn } from '../../../scripts/lib/turn.mjs'
 
 type Box = { x1: number; y1: number; x2: number; y2: number }
 
@@ -41,7 +42,7 @@ describe('generated specs: bounds, the view, intersect() against vega', () => {
     it(`seeds ${lo}-${hi}`, async () => {
       const counts: Counts = { specs: 0, crashes: 0, items: 0, marks: 0, groups: 0, boxes: 0, hits: 0, refused: 0 }
       const diffs: string[] = []
-      for (let seed = lo; seed <= hi; seed++) await compareSpec(seed, counts, diffs)
+      for (let seed = lo; seed <= hi; seed++) { await turn(); await compareSpec(seed, counts, diffs) }
       expect(diffs.slice(0, 30)).toEqual([])
       // what was compared: most specs run in vega; their items, marks, group items and boxes; and the boxes find something
       expect(counts.specs).toBeGreaterThan(0.9 * (hi - lo + 1))

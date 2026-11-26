@@ -22,6 +22,7 @@ import { buildA11yTree, compileChart, evaluateChart, renderSceneToSvg, SpecParse
 import { sceneToDomDesc } from '@aster-charts/core/dom'
 import { renderSceneToCanvas, sceneImageUrls, type CanvasLike } from '@aster-charts/core/canvas'
 import { buildHitIndex } from '@aster-charts/core/hit'
+import { turn } from '../../../scripts/lib/turn.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const CORE_SRC = join(here, '../../core/src')
@@ -127,7 +128,7 @@ describe('the engine\'s own item state cannot be encoded', () => {
     for (const f of [...SCHEMA_CHANNELS, 'href', 'fontVariant', 'image', 'aCustomChannel']) expect(refused(markSpec(f, 1)), f).toBe(false)
   })
 
-  it('every name the engine reads, as a channel: refused, inert in every output, or a channel vega has', () => {
+  it('every name the engine reads, as a channel: refused, inert in every output, or a channel vega has', async () => {
     const evil = { tag: 'a', attrs: [['onclick', 'x']], items: [{ marktype: 'image', items: [{ url: 'https://evil.test/i.png' }] }], src: 'https://evil.test/s', x: 1, marktype: 'image', role: 'mark' }
     const spec = (channel: string | null): Spec => {
       const ch = (v: unknown): Record<string, unknown> => (channel === null ? {} : { [channel]: { value: v } })
@@ -169,6 +170,7 @@ describe('the engine\'s own item state cannot be encoded', () => {
     let inert = 0
     let refusedN = 0
     for (const name of sourceNames()) {
+      await turn()
       if (SCHEMA_CHANNELS.has(name) || VEGA_ITEM_READS.has(name)) continue
       if (refused(spec(name))) { refusedN++; continue }
       let got: Record<string, string>

@@ -11,14 +11,14 @@
  *    is), or draws vega-lite's SVG through real Vega, or - for a property vega-lite uses there, and the table does not list - is
  *    refused with a VLCompileError. A property vega-lite uses that Aster reads wrongly, or drops, fails here.
  */
-import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { compile, VLCompileError } from '@aster-charts/vl'
 import { renderWithVegaChecked } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 import { MARKS, effectOf, probe, vlCompile } from '../../vl/scripts/ignored-probe.mjs'
-import { OUT, render } from '../../vl/scripts/ignored-table.mjs'
-import { ignoredTable } from '../../vl/scripts/ignored-probe.mjs'
+import { turn } from '../../../scripts/lib/turn.mjs'
+import { spawnAsync } from '../../../scripts/lib/spawn-async.mjs'
 import { MARKS as TABLE_MARKS, IGNORED, FORWARDED } from '../../vl/src/ignored-table.js'
 
 /** (mark, prop) pairs the committed table lists, ignored or forwarded. */
@@ -55,8 +55,12 @@ function drawDiff(a: ReturnType<typeof canonicalizeSvg> | string, b: ReturnType<
 }
 
 describe('the mark-definition table is generated from vega-lite', () => {
-  it('the committed ignored-table.ts is what the generator makes of the pinned vega-lite', () => {
-    expect(readFileSync(OUT, 'utf8')).toBe(render(ignoredTable()))
+  // (the generator's own `--check`, in a child: the table takes half a minute to make, and a worker that long in one synchronous call
+  // cannot read the host's replies)
+  it('the committed ignored-table.ts is what the generator makes of the pinned vega-lite', async () => {
+    const run = await spawnAsync(process.execPath, [fileURLToPath(new URL('../../vl/scripts/ignored-table.mjs', import.meta.url)), '--check'], { timeout: 540_000 })
+    expect(run.error, String(run.error)).toBeUndefined()
+    expect(run.status, run.stderr.slice(-2000)).toBe(0)
   }, 600_000)
 })
 
@@ -67,6 +71,7 @@ describe('@aster-charts/vl does with each mark-definition property what vega-lit
       const bases = new Map<string, Out>()
       let cases = 0
       for (const c of probe({ marks: [mark] }) as Iterable<{ mark: string; context: string; prop: string; value: unknown; spec: Record<string, unknown>; effect: string }>) {
+        await turn()
         if (c.effect === 'refused') continue
         cases++
         const where = `${c.mark} / ${c.context} / ${c.prop}: ${JSON.stringify(c.value)} (vega-lite: ${c.effect})`

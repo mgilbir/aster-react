@@ -17,6 +17,7 @@ import * as vl from 'vega-lite'
 import { compile } from '@aster-charts/vl'
 import { silent } from './vl-time-helpers.js'
 import { scenegraphRoot } from '../src/scenegraph-root.js'
+import { turn } from '../../../scripts/lib/turn.mjs'
 
 type Obj = Record<string, unknown>
 
@@ -169,6 +170,7 @@ export async function collectAll(cases: Iterable<[string, Obj]>, minShare = 0.5)
   let total = 0
   let compared = 0
   for (const [name, spec] of cases) {
+    await turn()
     const out = await differences(spec)
     total++
     if (out.compared) compared++

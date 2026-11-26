@@ -9,7 +9,7 @@
  *   search cannot see (a spec key that reaches `Function` by name, as C18 did) fails here too.
  * The static search is shown to find each shape it looks for on planted code, so a search that finds nothing has looked.
  */
-import { spawnSync } from 'node:child_process'
+import { spawnAsync } from '../../../scripts/lib/spawn-async.mjs'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -94,11 +94,11 @@ describe('no code from strings in what ships (CSP without unsafe-eval)', () => {
     expect(sites).toEqual([])
   })
 
-  it('the whole corpus renders with code generation from strings refused', () => {
-    const run = spawnSync(process.execPath, ['--disallow-code-generation-from-strings', join(here, 'csp-corpus-run.mjs')], {
+  it('the whole corpus renders with code generation from strings refused', async () => {
+    // (a child that runs long must not park the worker in spawnSync: its event loop could not read the host's replies)
+    const run = await spawnAsync(process.execPath, ['--disallow-code-generation-from-strings', join(here, 'csp-corpus-run.mjs')], {
       encoding: 'utf8',
       timeout: 240_000,
-      maxBuffer: 1 << 26,
     })
     expect(run.status, run.stderr.slice(-2000)).toBe(0)
     const result = JSON.parse(run.stdout.trim().split('\n').pop()!) as { specs: number; rendered: number; evalErrors: string[] }
@@ -106,5 +106,5 @@ describe('no code from strings in what ships (CSP without unsafe-eval)', () => {
     // the corpus was there, and (nearly) all of it rendered: a run that rendered nothing proves nothing
     expect(result.specs).toBeGreaterThan(1000)
     expect(result.rendered).toBe(result.specs)
-  })
+  }, 300_000)
 })

@@ -22,6 +22,7 @@ import * as vega from 'vega'
 import { compileChart, evaluateChart, renderSceneToSvg, renderSpec } from '@aster-charts/core'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 import { makeRng, scaled, type Rng } from './differential-gen.mts'
+import { turn } from '../../../scripts/lib/turn.mjs'
 
 type Spec = Record<string, unknown>
 
@@ -151,6 +152,7 @@ describe('a layout vega cannot take is logged and stops the pass where vega stop
     const errors = new Map<string, number>()
     let warned = 0
     for (let c = 0; c < scaled(500); c++) {
+      await turn()
       const spec = specOf(r)
       const tag = `#${c} ${JSON.stringify(spec).slice(0, 900)}`
       const want = await onVega(spec)
@@ -199,6 +201,7 @@ describe('a grid moves the bounds of what it lays out with it', () => {
       }
     }
     for (let c = 0; c < scaled(200); c++) {
+      await turn()
       const cells: Spec = {
         type: 'group', from: { data: `d${r.between(1, 4)}` },
                 // (a stroke or a mark sticking out moves the box by other amounts: only some cells have them)
