@@ -107,6 +107,20 @@ describe("an expression runtime's view of the marks' items", () => {
     const quiet = evaluateChart(compileChart(spec(false)))
     expect((quiet as unknown as { runtime: { data: (name: string) => unknown } }).runtime.data('pts')).toBeUndefined()
   })
+
+  it('stays for the other ways to name a mark: the trigger of a named mark and `modify`', () => {
+    const named = (extra: Record<string, unknown>, signals: unknown[] = []): VgSpec => ({
+      width: 100, height: 60, padding: 0, autosize: 'none',
+      signals,
+      data: [{ name: 't', values: [{ x: 1 }, { x: 2 }, { x: 3 }] }],
+      scales: [{ name: 'x', type: 'linear', domain: [0, 4], range: 'width' }],
+      marks: [{ type: 'symbol', name: 'pts', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { value: 5 } } }, ...extra }],
+    } as unknown as VgSpec)
+    const itemsAfter = (spec: VgSpec): number | undefined => ((evaluateChart(compileChart(spec)) as unknown as { runtime: { data: (name: string) => unknown[] | undefined } }).runtime.data('pts')?.length)
+    expect(itemsAfter(named({ on: [{ trigger: 'go', modify: 'who', values: '{x: 9}' }] }, [{ name: 'go', value: false }, { name: 'who', value: null }]))).toBe(3)
+    expect(itemsAfter(named({}, [{ name: 'k', value: 0, on: [{ events: 'click', update: "modify('pts', null, null, null, null)" }] }]))).toBe(3)
+    expect(itemsAfter(named({}, [{ name: 'k', value: 0, on: [{ events: 'click', update: 'k + 1' }] }]))).toBeUndefined()
+  })
 })
 
 describe('paintOrder over the items array the engine appends to', () => {
