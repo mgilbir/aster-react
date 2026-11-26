@@ -1057,16 +1057,16 @@ function prepareChartCtx(
   // and what a text is measured by: the provider in force for this evaluation, `input.textMetrics` or the one set for every chart)
   const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${valueKey(getTextMetricsProvider())}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}\u0002${input.measuredSize ? `${input.measuredSize.width}x${input.measuredSize.height}` : ''}\u0002${formatEnvironmentKey()}`
   const ctx: EvalContext = {
-    ...(keepsTupleHistory(chart) ? { modifiedFields: new Map<string, ReadonlySet<string> | null>() } : {}),
-    sceneRows: kept, chart, scope: rootScope(chart), abort: { failures: [] }, ...(passMemory !== undefined ? { passMemory } : {}), ...(retainFrom !== undefined ? { retainFrom } : {}), signalParams, width, height, datasets, setData, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
+    modifiedFields: keepsTupleHistory(chart) ? new Map<string, ReadonlySet<string> | null>() : undefined,
+    sceneRows: kept, chart, scope: rootScope(chart), abort: { failures: [] }, passMemory, retainFrom, signalParams, width, height, datasets, setData, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
     layoutState: { failed: false, warnings: [] }, initDone: new Set(), hostSignals: new Set([
       ...Object.keys(input.signals ?? {}),
       // an explicit view size (the host's, or the fit loop's resize) wins over an `init`
       ...(explicitSize.width ? ['width'] : []), ...(explicitSize.height ? ['height'] : []),
     ]),
-    hierarchies: transformHierarchies, affected: new Set(), incremental: false, ...(txn.engine ? { engine: txn.engine } : {}), deadline, checkDeadline, markItems, markScope, markContainers: new Map(),
+    hierarchies: transformHierarchies, affected: new Set(), incremental: false, engine: txn.engine || undefined, deadline, checkDeadline, markItems, markScope, markContainers: new Map(),
     datasetPulses: new Map(),
-    prev, committed: txn.prev, ...(txn.unchanged ? { unchanged: txn.unchanged } : {}), ...(txn.pulseBases ? { pulseBases: txn.pulseBases } : {}), ...(txn.lastPass ? { earlier: txn.lastPass } : {}), draft: newState(txn.gen), ids: { value: txn.prev?.idCounter ?? 0 }, idStart: txn.prev?.idCounter ?? 0, gen: txn.gen, claimed: txn.claimed, extraFp, ...encodeLogEntry(input.signals), dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(), defsAsked: { n: 0 },
+    prev, committed: txn.prev, unchanged: txn.unchanged || undefined, pulseBases: txn.pulseBases || undefined, earlier: txn.lastPass || undefined, draft: newState(txn.gen), ids: { value: txn.prev?.idCounter ?? 0 }, idStart: txn.prev?.idCounter ?? 0, gen: txn.gen, claimed: txn.claimed, extraFp, encodeLog: encodeLogOf(input.signals), dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(), defsAsked: { n: 0 },
     domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
     // Image urls are vetted when the host passes a policy, and with the default
     // policy whenever it passes `limits` (limits mean "this spec is untrusted").
@@ -7111,12 +7111,6 @@ function markItemsOf(
   }
   if (rowOrder !== items) ROW_ITEMS.set(group, rowOrder)
   return group
-}
-
-/** `ctx.encodeLog` from the host's signal store (a symbol key: see encode-handlers.ts). */
-function encodeLogEntry(signals: unknown): { encodeLog?: EncodeLog } {
-  const log = encodeLogOf(signals)
-  return log !== undefined ? { encodeLog: log } : {}
 }
 
 /** A mark (or group subtree) with encode sets a handler can name is made again whenever the requests change. */

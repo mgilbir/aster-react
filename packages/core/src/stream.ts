@@ -669,18 +669,14 @@ export function createChartStream(given: VgSpec, options: StreamOptions = {}): C
         || (addedRanges.length > 0 && (pulse.baseLength ?? t.baseLen) !== t.len)
       if (!changed.length && !addedRanges.length && !lengthChanging) continue
       if (lengthChanging) structural.add(name)
-      datasets.set(name, {
-        name,
-        changed,
-        sameLength: !lengthChanging,
-        added: pulse.added?.[0] ?? null,
-        removed: pulse.removed?.[0] ?? null,
-        ...(pulse.from ? { from: pulse.from } : {}),
-        ...(pulse.to ? { to: pulse.to } : {}),
-        ...(pulse.added?.length ? { addedRanges: pulse.added } : {}),
-        ...(pulse.removed?.length ? { removedRanges: pulse.removed } : {}),
-        ...(pulse.appendOnly ? { appendOnly: true, baseLength: pulse.baseLength } : {}),
-      })
+      // (assigned, not spread: this runs for every dataset of every flush)
+      const entry: DatasetPulse = { name, changed, sameLength: !lengthChanging, added: pulse.added?.[0] ?? null, removed: pulse.removed?.[0] ?? null }
+      if (pulse.from) entry.from = pulse.from
+      if (pulse.to) entry.to = pulse.to
+      if (pulse.added?.length) entry.addedRanges = pulse.added
+      if (pulse.removed?.length) entry.removedRanges = pulse.removed
+      if (pulse.appendOnly) { entry.appendOnly = true; entry.baseLength = pulse.baseLength }
+      datasets.set(name, entry)
     }
     return { pulse: { datasets, structural }, lengths }
   }
@@ -734,14 +730,13 @@ export function createChartStream(given: VgSpec, options: StreamOptions = {}): C
     for (const [name, p] of pulse.datasets) {
       if (p.sameLength) dataChanges[name] = p.changed
       else {
-        dataPulse[name] = {
-          changed: p.changed,
-          ...(p.from ? { from: p.from } : {}),
-          ...(p.to ? { to: p.to } : {}),
-          ...(p.addedRanges ? { added: p.addedRanges } : {}),
-          ...(p.removedRanges ? { removed: p.removedRanges } : {}),
-          ...(p.appendOnly ? { appendOnly: true, baseLength: p.baseLength } : {}),
-        }
+        const out: NonNullable<RuntimeInput['dataPulse']>[string] = { changed: p.changed }
+        if (p.from) out.from = p.from
+        if (p.to) out.to = p.to
+        if (p.addedRanges) out.added = p.addedRanges
+        if (p.removedRanges) out.removed = p.removedRanges
+        if (p.appendOnly) { out.appendOnly = true; out.baseLength = p.baseLength }
+        dataPulse[name] = out
       }
     }
     // Stage every scalar: nothing is committed until the evaluation succeeds.
@@ -798,25 +793,24 @@ export function createChartStream(given: VgSpec, options: StreamOptions = {}): C
       // datasets that need a re-derive), so the session must not second-guess
       // it by diffing row identity: a row object edited in place compares
       // equal to itself and its change would be lost.
-      const input: RuntimeInput = {
-        data: Object.fromEntries(base),
-        autoChanges: false,
-        ...(Object.keys(nextSignals).length ? { signals: nextSignals } : {}),
-        ...(nextWidth != null ? { width: nextWidth } : {}),
-        ...(nextHeight != null ? { height: nextHeight } : {}),
-        ...(nextContainerSize != null ? { containerSize: nextContainerSize } : {}),
-        ...(nextMeasuredSize != null ? { measuredSize: nextMeasuredSize } : {}),
-        ...(nextDomainRaw ? { domainRaw: nextDomainRaw } : {}),
-        ...(nextLimits ? { limits: nextLimits } : {}),
-        ...(nextTextMetrics ? { textMetrics: nextTextMetrics } : {}),
-        ...(options.initial?.urlPolicy ? { urlPolicy: options.initial.urlPolicy } : {}),
-        ...(options.initial?.urlData !== undefined ? { urlData: options.initial.urlData } : {}),
-        ...(options.initial?.logger ? { logger: options.initial.logger } : {}),
-        ...(options.initial?.random ? { random: options.initial.random } : {}),
-        ...(Object.keys(dataPulse).length ? { dataPulse } : {}),
-        ...(Object.keys(dataChanges).length ? { dataChanges } : {}),
-        ...(changedDatasets.length ? { changedDatasets } : {}),
-      }
+      // (assigned, not spread: this is built for every flush)
+      const input: RuntimeInput = { data: Object.fromEntries(base), autoChanges: false }
+      if (nextSignals !== undefined && Object.keys(nextSignals).length) input.signals = nextSignals
+      if (nextWidth != null) input.width = nextWidth
+      if (nextHeight != null) input.height = nextHeight
+      if (nextContainerSize != null) input.containerSize = nextContainerSize
+      if (nextMeasuredSize != null) input.measuredSize = nextMeasuredSize
+      if (nextDomainRaw) input.domainRaw = nextDomainRaw
+      if (nextLimits) input.limits = nextLimits
+      if (nextTextMetrics) input.textMetrics = nextTextMetrics
+      const initial = options.initial
+      if (initial?.urlPolicy) input.urlPolicy = initial.urlPolicy
+      if (initial?.urlData !== undefined) input.urlData = initial.urlData
+      if (initial?.logger) input.logger = initial.logger
+      if (initial?.random) input.random = initial.random
+      if (Object.keys(dataPulse).length) input.dataPulse = dataPulse
+      if (Object.keys(dataChanges).length) input.dataChanges = dataChanges
+      if (changedDatasets.length) input.changedDatasets = changedDatasets
       try {
         if (process.env.NODE_ENV !== 'production') checkChartRows(hostWatch, given, { ...(options.initial?.logger ? { logger: options.initial.logger } : {}) })
       } catch (e) {
