@@ -941,9 +941,10 @@ function typedMarkBounds(mark: SceneGroup): Bounds {
  * Does a child of a group add to the group's bounds? Its background box never does (the group's own width and height cover it); nor does
  * a header or footer a grid layout left where it was for want of a column to put it in (`unbounded`).
  */
-const countsInBounds = (child: SceneNode): boolean => {
+const countsInBounds = (child: SceneNode, parent: SceneGroup): boolean => {
   const c = child as Record<string, unknown>
-  return c._bg !== true && c.unbounded !== true
+  // (an authored mark of role `title` is left out of the layout's bounds, not of the bounds of the group item that holds it)
+  return c._bg !== true && (c.unbounded !== true || (c.titleRole === true && (parent as Record<string, unknown>)._scope === true))
 }
 
 /**
@@ -986,7 +987,7 @@ export function groupLayoutBounds(g: SceneGroup, fresh = false): Bounds {
       if (c.marktype !== undefined && c.marktype !== 'group' && Array.isArray(c.items)) return fresh ? boundTypedMark(new Bounds(), c) : typedMarkBounds(c)
       return c.marktype === 'group' || (c.marktype === undefined && Array.isArray(c.items)) ? groupLayoutBounds(c, fresh) : boundLeaf(new Bounds(), child as SceneItem)
     }
-    eachMarkBounds(g.items.filter((c) => countsInBounds(c)), g.width as number, g.height as number, measure, (mb) => { b.union(mb) })
+    eachMarkBounds(g.items.filter((c) => countsInBounds(c, g)), g.width as number, g.height as number, measure, (mb) => { b.union(mb) })
   }
   if ((clipped || g.width || g.height) && !(g as Record<string, unknown>).noBound) b.add(0, 0).add(g.width || 0, g.height || 0)
   boundStroke(b, g as unknown as SceneItem)
@@ -1019,7 +1020,7 @@ export function boundGroupItem(bounds: Bounds, group: SceneGroup): Bounds {
   if (!clipped && group.items) {
     // the background is the group's own box (below), not an item: its rect and stroke are covered by the group's width/height and
     // boundStroke. Its marks are bounded mark by mark (`eachMarkBounds`): a group mark's items into the mark's box first.
-    eachMarkBounds(group.items.filter((child) => countsInBounds(child)), group.width as number, group.height as number, (child) => rawBoundsOf(child as SceneItem), (mb) => { bounds.union(mb) })
+    eachMarkBounds(group.items.filter((child) => countsInBounds(child, group)), group.width as number, group.height as number, (child) => rawBoundsOf(child as SceneItem), (mb) => { bounds.union(mb) })
   }
   if ((clipped || group.width || group.height) && !(group as Record<string, unknown>).noBound) {
     bounds.add(0, 0).add(group.width || 0, group.height || 0)

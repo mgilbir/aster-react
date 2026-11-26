@@ -26,7 +26,7 @@ export const ENGINE_ITEM_SLOTS: ReadonlySet<string> = new Set([
   // SceneItem
   'mark', 'datum',
   // SceneGroup
-  'marktype', 'name', 'role', 'items', 'hasLinks', 'markClip', 'markClipPathD', 'unbounded', 'clipPathD', 'parts', 'partMeta', 'unmeasuredFrom',
+  'marktype', 'name', 'role', 'items', 'hasLinks', 'markClip', 'markClipPathD', 'unbounded', 'titleRole', 'clipPathD', 'parts', 'partMeta', 'unmeasuredFrom',
   'box', 'boxFg', 'scopeSignals', 'markIndex', 'markZindex', 'emptyMark', 'interactive', 'describes', 'itemAria', 'cssName', 'markRole',
   'contentClip', 'scale', 'title', 'legendType', 'madeMarks', 'legendScale', 'legendChannels',
   // SceneRoot
