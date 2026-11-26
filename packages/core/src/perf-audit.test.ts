@@ -147,3 +147,34 @@ describe('paintOrder over the items array the engine appends to', () => {
     }
   })
 })
+
+describe('a running view does not keep the scenes it continued', () => {
+  it('collects every scene but the last ones after any number of evaluations (a leak of one scene per update on the stack tip)', async () => {
+    const { setFlagsFromString } = await import('node:v8')
+    const { runInNewContext } = await import('node:vm')
+    setFlagsFromString('--expose-gc')
+    const gc = runInNewContext('gc') as (o?: { type: 'minor' | 'major' }) => void
+    const { createChartSession } = await import('./session.js')
+    const rows = (seed: number): Array<{ x: number; y: number }> => Array.from({ length: 200 }, (_, k) => ({ x: (k * 7 + seed) % 90, y: (k * 13 + seed) % 60 }))
+    const spec = {
+      width: 200, height: 100, padding: 5, autosize: 'pad',
+      data: [{ name: 't', values: [] }],
+      scales: [{ name: 'x', type: 'linear', domain: [0, 90], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 60], range: 'height' }],
+      axes: [{ orient: 'bottom', scale: 'x' }, { orient: 'left', scale: 'y' }],
+      marks: [{ type: 'line', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' } } } }],
+    } as never
+    const session = createChartSession({ runningView: true })
+    let scene = session.evaluate(spec, { data: { t: rows(0) } })
+    const seen: Array<WeakRef<object>> = []
+    for (let i = 1; i <= 8; i++) {
+      const next = session.evaluate(spec, { data: { t: rows(i) } })
+      seen.push(new WeakRef(scene))
+      scene = next
+      await new Promise((r) => setImmediate(r))
+    }
+    gc({ type: 'major' })
+    await new Promise((r) => setImmediate(r))
+    gc({ type: 'major' })
+    expect(seen.filter((r) => r.deref() !== undefined).length).toBeLessThanOrEqual(1)
+  })
+})
