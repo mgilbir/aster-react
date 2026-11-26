@@ -46,7 +46,7 @@ describe('a session over a pipeline of casts gives the rows the history gives', 
     scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }],
     marks: [{ type: 'symbol', from: { data: 'd' }, encode: { update: { x: { value: 5 }, y: { value: 5 } } } }],
   } as unknown as VgSpec)
-  const cells = (scene: unknown): string => JSON.stringify((datasetsOfScene(scene as never).d ?? []).map((r) => Object.keys(r as object).sort().map((k) => {
+  const cells = (scene: unknown): string => JSON.stringify((datasetsOfScene(scene as never).get('d') ?? []).map((r) => Object.keys(r as object).sort().map((k) => {
     const v = (r as Record<string, unknown>)[k]
     return [k, v instanceof Date ? `date:${+v}` : typeof v === 'number' && Number.isNaN(v) ? 'NaN' : v]
   })))
