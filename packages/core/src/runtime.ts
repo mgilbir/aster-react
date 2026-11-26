@@ -3264,22 +3264,36 @@ function sealMarkScope(scope: MarkScope, chart: CompiledChart): void {
   if (scope.items !== null && !readsMarkItemsByName(chart)) scope.items = null
 }
 
-/** Whether an expression of the chart may read a named mark's items: names one in `data(...)`, or a dataset by a name it computes. */
+/** The expression functions that take the name of a dataset, or of a mark, as their first argument. */
+const NAME_TAKING_CALL = /\b(?:data|indata|modify|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve|treePath|treeAncestors)\s*\(\s*(['"]?)/g
+
+/**
+ * Whether anything in the chart may read a named mark's items after the evaluation: a string of the chart (an expression, a trigger's
+ * `modify`, an event handler's update) that holds a mark's name, or an expression that calls a function taking the name of a dataset
+ * (`data`, `indata`, `modify`, the selection tests...) with a first argument that is not a literal, which could be any mark's. Reading too
+ * much is safe (the runtime then keeps what it kept before); reading too little would take a mark's items from a handler that asks for them.
+ */
 const READS_MARK_ITEMS = new WeakMap<CompiledChart, boolean>()
 function readsMarkItemsByName(chart: CompiledChart): boolean {
   let out = READS_MARK_ITEMS.get(chart)
   if (out !== undefined) return out
-  const names = markNamesOf(chart)
+  const names = [...markNamesOf(chart)]
   let reads = false
-  if (names.size > 0) {
+  if (names.length > 0) {
     const seen = new Set<object>()
-    const visit = (str: string): void => {
+    const visit = (str: string, owner: Record<string, unknown> | null): void => {
       if (reads) return
-      const read = datasetsReadIn(str)
-      if (read === null || read.some((n) => names.has(n))) reads = true
+      // (a mark's own `name` is its declaration, not a read of it)
+      if (owner !== null && (owner.name === str || owner.userName === str)) return
+      if (names.some((n) => str.includes(n))) { reads = true; return }
+      for (const m of str.matchAll(NAME_TAKING_CALL)) if (m[1] === '') { reads = true; return }
+    }
+    // (a named mark's triggers, `on: [{trigger, modify, values}]`, are `modify("<its name>", ...)` the loop runs on its items)
+    const hasTriggers = (o: Record<string, unknown>): void => {
+      if (typeof o.userName === 'string' && Array.isArray(o.on) && o.on.length > 0) reads = true
     }
     for (const part of [chart.signalDefs, chart.data.map(dataWithoutRows), chart.scales, chart.axes, chart.legends, chart.marks, chart.projections, chart.layout, chart.frameEncode, chart.title, chart.style]) {
-      walkStrings(part, visit, seen)
+      walkStrings(part, visit, seen, null, hasTriggers)
       if (reads) break
     }
   }
@@ -4498,8 +4512,6 @@ function evaluateViewPass(chart: CompiledChart, hostInput: RuntimeInput, txn: Ev
   // Event-loop wiring (non-serialized internals)
   ;(scene as unknown as { runtime?: unknown }).runtime = ctx.runtime
   sealMarkScope(ctx.markScope, ctx.chart)
-  // (the scene this evaluation continued has been read: the context the scene's runtime keeps must not keep it, or each scene keeps the one before it)
-  ctx.retainFrom = undefined
   // (a signal whose value is a dataset's own rows -- `update: "data('t')"` -- holds the array the evaluation reads, which a later pulse
   // advances in place: the scene keeps the rows it was made with as its dataset does, through a copy made here, at the one place
   // the scene takes its signals; C30, Q14)
