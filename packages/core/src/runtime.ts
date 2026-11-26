@@ -968,6 +968,11 @@ function prepareChartCtx(
   /** Stop once the signals that read no data or scale are resolved: what they hold is all the caller reads (see `evaluateChartPass`). */
   signalsOnly = false,
 ): { ctx: EvalContext; width: number; height: number } {
+  // The scene this evaluation continues is read here, once. The closures made below (the scene's expression runtime among them) share a
+  // context that holds `input`, and the scene holds that runtime: an `input` that named the scene before would make every scene keep the
+  // one before it, and with it every scene since the session began (a leak of one scene per update).
+  const retainFrom = input.retainFrom
+  if (retainFrom !== undefined) input = { ...input, retainFrom: undefined }
   // The deadline belongs to the enclosing limits scope (evaluateChart /
   // getChartInfo / renderSpec / session), so one wall clock covers the whole
   // call -- the `fit` loop re-enters this function per iteration and must not
@@ -1053,7 +1058,7 @@ function prepareChartCtx(
   const extraFp = `${input.domainRaw ? valueKey(input.domainRaw) : ''}\u0002${valueKey(getTextMetricsProvider())}\u0002${input.containerSize ? `${input.containerSize.width}x${input.containerSize.height}` : ''}\u0002${input.measuredSize ? `${input.measuredSize.width}x${input.measuredSize.height}` : ''}\u0002${formatEnvironmentKey()}`
   const ctx: EvalContext = {
     ...(keepsTupleHistory(chart) ? { modifiedFields: new Map<string, ReadonlySet<string> | null>() } : {}),
-    sceneRows: kept, chart, scope: rootScope(chart), abort: { failures: [] }, ...(passMemory !== undefined ? { passMemory } : {}), ...(input.retainFrom !== undefined ? { retainFrom: input.retainFrom } : {}), signalParams, width, height, datasets, setData, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
+    sceneRows: kept, chart, scope: rootScope(chart), abort: { failures: [] }, ...(passMemory !== undefined ? { passMemory } : {}), ...(retainFrom !== undefined ? { retainFrom } : {}), signalParams, width, height, datasets, setData, scales, scaleTypes, projections: transformProjections, projectionStamp: new Map(), projectionIncomplete: new Set(), geoStale: false, runtime, _defs: defs,
     layoutState: { failed: false, warnings: [] }, initDone: new Set(), hostSignals: new Set([
       ...Object.keys(input.signals ?? {}),
       // an explicit view size (the host's, or the fit loop's resize) wins over an `init`
@@ -4493,6 +4498,8 @@ function evaluateViewPass(chart: CompiledChart, hostInput: RuntimeInput, txn: Ev
   // Event-loop wiring (non-serialized internals)
   ;(scene as unknown as { runtime?: unknown }).runtime = ctx.runtime
   sealMarkScope(ctx.markScope, ctx.chart)
+  // (the scene this evaluation continued has been read: the context the scene's runtime keeps must not keep it, or each scene keeps the one before it)
+  ctx.retainFrom = undefined
   // (a signal whose value is a dataset's own rows -- `update: "data('t')"` -- holds the array the evaluation reads, which a later pulse
   // advances in place: the scene keeps the rows it was made with as its dataset does, through a copy made here, at the one place
   // the scene takes its signals; C30, Q14)
