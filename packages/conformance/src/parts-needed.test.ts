@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * `specNeeds(spec).parts` (what the React shells load before a chart's first render, @aster-charts/core/lean) never misses a part the
+ * `specNeeds(spec).parts` (what the React shells load before a chart's first render, @aster-charts/core/internal) never misses a part the
  * engine reads, and a chart drawn with just the parts it names is the chart drawn with all of them.
  *
  * The ground truth is the engine itself, as in addons-needed.test.ts: every corpus spec (Vega, and Vega-Lite through the pinned vega-lite
@@ -18,7 +18,7 @@ import * as vl from 'vega-lite'
 import '@aster-charts/core/geo'
 import '@aster-charts/core/transforms'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
-import { partLoaded, specNeeds, withdrawParts } from '@aster-charts/core/lean'
+import { partLoaded, specNeeds, withdrawParts } from '@aster-charts/core/internal'
 import { compileChart, type SpecLimits, type VgSpec } from '@aster-charts/core'
 import { checkLoad, checkParts } from './parts-needed.testlib.js'
 

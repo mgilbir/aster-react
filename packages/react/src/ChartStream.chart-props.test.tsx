@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { forEachVariant } from './testing/variants'
 import { ChartStream, type ChartStreamHandle } from './ChartStream'
 import { ChartWorkerStream, type ChartWorkerStreamHandle } from './ChartWorkerStream'
-import { handleChartWorkerStreamRequest, type ChartWorkerStreamRequest } from './worker'
+import { handleChartWorkerStreamRequest, type ChartWorkerStreamRequest } from './worker-impl'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 

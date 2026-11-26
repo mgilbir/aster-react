@@ -51,6 +51,8 @@ for (const dir of PACKAGES) {
   const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'))
   for (const [key, target] of Object.entries(pkg.exports)) {
     if (key === './package.json') continue
+    // the internal entries (@aster-charts/core/internal*) are not public API and have no section: scripts/public-surface.test.mjs holds them out of API.md
+    if (/^\.\/internal(\/|$)/.test(key)) continue
     entries.push({ pkg: pkg.name, entry: key === '.' ? pkg.name : pkg.name + key.slice(1), file: join(pkgDir, target.default), types: join(pkgDir, target.types) })
   }
 }
@@ -115,10 +117,10 @@ describe('every type an entry exports is named in docs/API.md, and no type it na
 
   it('the names the check reads are there (it is not vacuous): the types of the entries, and the declared ones the docs name', () => {
     expect(isMentioned(code, 'NoSuchTypeAnywhere')).toBe(false)
-    expect(exportedAnywhere.has('ChartSession') && exportedAnywhere.has('ScaleContext') && exportedAnywhere.has('ChartStreamInput')).toBe(true)
-    expect(declared.has('ScaleContext') && declared.has('TransformContext') && declared.has('ChartStreamInput')).toBe(true)
+    expect(exportedAnywhere.has('ChartSession') && exportedAnywhere.has('ScaleContext') && exportedAnywhere.has('TooltipInfo')).toBe(true)
+    expect(declared.has('ScaleContext') && declared.has('TransformContext') && declared.has('TooltipInfo')).toBe(true)
     expect([...byEntry.values()].flat().filter((n) => n.isType).length).toBeGreaterThan(150)
-    // (C730: with the three exports of ScaleContext, TransformContext and ChartStreamInput removed, the test above reports them: seen to fail)
+    // (C730: with the three exports of ScaleContext, TransformContext and ChartStreamInput removed, the test above reports them: seen to fail. ChartStreamInput has since become internal (declared nowhere), so TooltipInfo stands in the sanity check)
   })
 })
 

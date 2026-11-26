@@ -2,7 +2,7 @@
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, afterEach } from 'vitest'
-import { handleChartWorkerRequest, useChartWorker } from './worker'
+import { handleChartWorkerRequest, useChartWorker } from './worker-impl'
 import { FakeWorker } from './testing/fake-worker'
 
 const spec = {

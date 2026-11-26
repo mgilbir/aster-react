@@ -20,7 +20,7 @@ import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { StreamPolicy, VgSpec } from '@aster-charts/core'
-import { handleChartWorkerStreamRequest, type ChartWorkerStreamRequest, type ChartWorkerStreamResponse } from './worker'
+import { handleChartWorkerStreamRequest, type ChartWorkerStreamRequest, type ChartWorkerStreamResponse } from './worker-impl'
 import { useChartWorkerStream, type WorkerChartStreamResult } from './useChartWorkerStream'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true

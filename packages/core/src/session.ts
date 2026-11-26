@@ -248,11 +248,6 @@ export interface ChartSession {
    * `autoChanges`) are this call's only.
    */
   change(input?: RuntimeInput): SceneRoot | null
-  /**
-   * Metadata for the last evaluation: the compiled chart (with signalDefs for
-   * the event loop) and the scene. Null before the first evaluate.
-   */
-  last: () => { chart: CompiledChart; scene: SceneRoot } | null
   /** Source/transform pulse inferred or supplied by the last evaluation. */
   pulse: () => DataPulse | null
 }
@@ -344,6 +339,18 @@ export interface ChartSessionOptions {
    * afresh. Default false: every evaluation is the first render of its input. `<Chart>` makes its session with it on.
    */
   runningView?: boolean
+}
+
+/** What each session's last evaluation compiled and drew (see `lastEvaluation`). */
+const lastOfSession = new WeakMap<ChartSession, () => { chart: CompiledChart; scene: SceneRoot } | null>()
+
+/**
+ * The compiled chart (with its signalDefs) and the scene of a session's last evaluation, or `null` before the first. Not on the session
+ * (a session's surface is `evaluate`, `change` and `pulse`): the engine's own tests read it by this function, which is on no entry.
+ * @internal
+ */
+export function lastEvaluation(session: ChartSession): { chart: CompiledChart; scene: SceneRoot } | null {
+  return lastOfSession.get(session)?.() ?? null
 }
 
 export function createChartSession(options: ChartSessionOptions = {}): ChartSession {
@@ -592,8 +599,8 @@ export function createChartSession(options: ChartSessionOptions = {}): ChartSess
       const input = withSettings(lastSettings, given)
       return withLimits(input.limits, () => changeOnce(input))
     },
-    last: () => (lastChart && lastScene ? { chart: lastChart, scene: lastScene } : null),
     pulse: () => lastPulse,
   }
+  lastOfSession.set(session, () => (lastChart && lastScene ? { chart: lastChart, scene: lastScene } : null))
   return session
 }

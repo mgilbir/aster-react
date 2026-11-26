@@ -18,7 +18,7 @@
  * - The loader's `limits` are the chart's; its `signal` is the chart's (an abort), never the host's.
  */
 import * as React from 'react'
-import { emptyUrlData } from '@aster-charts/core/lean'
+import { emptyUrlData } from '@aster-charts/core/internal'
 import type { SpecLimits, VgSpec } from '@aster-charts/core'
 import type { LoadOptions } from '@aster-charts/core/load'
 import { useLatest } from './inputs.js'
@@ -27,9 +27,9 @@ import { useStableContent } from './spec.js'
 /** The loader options the host gives `<Chart urlLoad>`: its own `signal`, `signals` and `limits` are the chart's. */
 export type UrlLoadOptions = Omit<LoadOptions, 'signal' | 'signals' | 'limits'>
 
-interface Loader { loadSpecData: typeof import('@aster-charts/core/load').loadSpecData; datasetUrls: typeof import('@aster-charts/core/lean/load').datasetUrls }
+interface Loader { loadSpecData: typeof import('@aster-charts/core/load').loadSpecData; datasetUrls: typeof import('@aster-charts/core/internal/load').datasetUrls }
 let loadAddon: Promise<Loader> | undefined
-const importLoader = (): Promise<Loader> => (loadAddon ??= Promise.all([import('@aster-charts/core/load'), import('@aster-charts/core/lean/load')])
+const importLoader = (): Promise<Loader> => (loadAddon ??= Promise.all([import('@aster-charts/core/load'), import('@aster-charts/core/internal/load')])
   .then(([load, plan]) => ({ loadSpecData: load.loadSpecData, datasetUrls: plan.datasetUrls }))
   .catch((e: unknown) => {
     loadAddon = undefined

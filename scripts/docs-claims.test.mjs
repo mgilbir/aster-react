@@ -71,9 +71,9 @@ describe('the ADR index lists every record, and the records say what holds (C84,
     const adr = read(`${ADR_DIR}/0004-release-and-provenance.md`)
     const stated = /Entry points that no row imports: ([^\n]+(?:\n  [^\n]+)*)\./.exec(adr)?.[1] ?? ''
     const named = [...stated.matchAll(/`(@aster-charts\/[\w/-]+)`/g)].map((x) => x[1])
-    // (the internal `/lean*` are one parenthesis)
-    expect(unimported.filter((s) => !s.includes('/lean')).sort()).toEqual(named.sort())
-    expect(stated).toContain('/lean*')
+    // (the internal `/internal*` are one parenthesis)
+    expect(unimported.filter((s) => !s.includes('/internal')).sort()).toEqual(named.sort())
+    expect(stated).toContain('/internal*')
   })
 })
 
@@ -101,10 +101,10 @@ describe('the incremental guarantee states the exceptions where the oracle makes
 })
 
 describe('the entry points the documents list are the `exports` maps (C375, C731)', () => {
-  /** The public subpaths of a package ("/dom"), the internal `/lean*` ones counted as the one entry "/lean". */
-  const subpaths = (pkg) => [...new Set(Object.keys(manifest(pkg).exports).filter((k) => k !== '.' && k !== './package.json').map((k) => (k.startsWith('./lean') ? '/lean' : k.slice(1))))]
+  /** The public subpaths of a package ("/dom"), the internal `/internal*` ones counted as the one entry "/internal". */
+  const subpaths = (pkg) => [...new Set(Object.keys(manifest(pkg).exports).filter((k) => k !== '.' && k !== './package.json').map((k) => (k.startsWith('./internal') ? '/internal' : k.slice(1))))]
   const rowOf = (md, startsWith) => md.split('\n').find((l) => l.startsWith(startsWith)) ?? ''
-  const lacking = (row, subs) => subs.filter((s) => !(s === '/lean' ? /`\/lean\*?`/.test(row) : row.includes(`\`${s}\``)))
+  const lacking = (row, subs) => subs.filter((s) => !(s === '/internal' ? /`\/internal\*?`/.test(row) : row.includes(`\`${s}\``)))
   const API = read('docs/API.md')
   const README = read('README.md')
 
@@ -118,15 +118,15 @@ describe('the entry points the documents list are the `exports` maps (C375, C731
   ])('%s: %s names every entry', (pkg, _where, md, startsWith) => {
     const row = rowOf(md, startsWith)
     expect(row, `no row starting ${startsWith}`).not.toBe('')
-    // (API.md leaves the internal `/lean*` to its own paragraph; the other two name them)
-    const subs = subpaths(pkg).filter((s) => !(md === API && s === '/lean'))
+    // (API.md leaves the internal `/internal*` to its own paragraph; the other two name them)
+    const subs = subpaths(pkg).filter((s) => !(md === API && s === '/internal'))
     expect(lacking(row, subs)).toEqual([])
   })
 
   it('the core README names every add-on entry', () => {
     const text = read('packages/core/README.md')
     // (written as `/dom` or as the whole specifier)
-    expect(subpaths('core').filter((s) => s !== '/lean' && !text.includes(`\`${s}\``) && !text.includes(`@aster-charts/core${s}`))).toEqual([])
+    expect(subpaths('core').filter((s) => s !== '/internal' && !text.includes(`\`${s}\``) && !text.includes(`@aster-charts/core${s}`))).toEqual([])
   })
 
   it('the check bites: a row with an entry left out is reported', () => {

@@ -15,7 +15,7 @@ Aster Charts reads a Vega or Vega-Lite spec and produces a scene graph, then SVG
 | Package | Entry points | What it is |
 |---|---|---|
 | `@aster-charts/vl` | `.` | `compile(vlSpec)`: Vega-Lite to Vega. It does not import `@aster-charts/core`. |
-| `@aster-charts/core` | `.` (the barrel: compile, evaluate, SVG string), `/addons`, `/geo`, `/transforms`, `/load`, `/dom`, `/signals`, `/canvas`, `/hit`, `/transition`, `/png`, and `/lean`, `/lean/*` (the engine without its parts: what the React shells import, listed in `exports` but not an API a host should build on) | The engine. Heavy or optional parts are separate entries (see "Geo projections & the add-on boundary"). |
+| `@aster-charts/core` | `.` (the barrel: compile, evaluate, SVG string), `/addons`, `/geo`, `/transforms`, `/load`, `/dom`, `/signals`, `/canvas`, `/hit`, `/transition`, `/png`, and `/internal`, `/internal/*` (the engine without its parts: what the React shells import, listed in `exports` but not an API a host should build on) | The engine. Heavy or optional parts are separate entries (see "Geo projections & the add-on boundary"). |
 | `@aster-charts/react` | `.` (`<Chart>`, hooks, streams, workers), `/lite` (`<SvgChart>`), `/interaction`, `/png`, `/vl`, `/all`, `/ssr`, `/worker`, `/worker-entry` | The React bindings: one chart implementation (`ChartCore`) behind two shells. |
 
 ```mermaid
@@ -25,7 +25,7 @@ flowchart LR
   end
   subgraph core["@aster-charts/core"]
     C0["@aster-charts/core<br/>compileChart, evaluateChart, renderSceneToSvg,<br/>renderSpec, createChartStream, limits"]
-    LEAN["/lean, /lean/*<br/>the engine with its parts left out<br/>(internal)"]
+    LEAN["/internal, /internal/*<br/>the engine with its parts left out<br/>(internal)"]
     DOM["/dom<br/>createChartSession, patchSceneDom"]
     CAN["/canvas"]
     HIT["/hit"]
@@ -67,7 +67,7 @@ flowchart LR
   ADD -. "dynamic import on demand" .-> GEO & TRX & LOAD
 ```
 
-*Package map. Solid arrows are static imports, dotted ones are dynamic imports or injected values. The shells (`<Chart>`, `<SvgChart>`) import `@aster-charts/core/lean`, the engine with the slots of its parts left empty; in a browser build the canvas renderer and the signal loop are separate chunks fetched on demand (`canvas-deferred.ts`, `signals-deferred.ts`), and only the hit index is imported statically (by the `interaction` capability `<Chart>` carries). `<SvgChart>` imports none of them and receives the interaction capability only through its `interaction` prop, and the PNG export only through its `png` prop. `core/dom` is imported by `session.ts` and `ssr.ts` alone, `core/addons` by the worker modules alone, and the barrel `@aster-charts/core` as a value by `ssr.ts`, `worker.ts`, `producerQueue.ts` and `useChartWorkerStream.ts`: the worker shells (`<ChartWorkerStream>`, `useChartWorkerStream`) carry the whole synchronous engine, `<ChartStream>` does not (C82). `scripts/docs-claims.test.mjs` checks the entry lists of this section against the `exports` maps.*
+*Package map. Solid arrows are static imports, dotted ones are dynamic imports or injected values. The shells (`<Chart>`, `<SvgChart>`) import `@aster-charts/core/internal`, the engine with the slots of its parts left empty; in a browser build the canvas renderer and the signal loop are separate chunks fetched on demand (`canvas-deferred.ts`, `signals-deferred.ts`), and only the hit index is imported statically (by the `interaction` capability `<Chart>` carries). `<SvgChart>` imports none of them and receives the interaction capability only through its `interaction` prop, and the PNG export only through its `png` prop. `core/dom` is imported by `session.ts` and `ssr.ts` alone, `core/addons` by the worker modules alone, and the barrel `@aster-charts/core` as a value by `ssr.ts`, `worker-impl.ts`, `producerQueue.ts` and `useChartWorkerStream.ts`: the worker shells (`<ChartWorkerStream>`, `useChartWorkerStream`) carry the whole synchronous engine, `<ChartStream>` does not (C82). `scripts/docs-claims.test.mjs` checks the entry lists of this section against the `exports` maps.*
 
 **The render lifecycle** of a `<Chart>`: read what the spec needs (`specNeeds`: the add-ons, and in a browser build the parts of the engine) and suspend until they are loaded, evaluate the spec in a chart session, write the output (full SVG on the first commit, a patch afterwards, or a canvas paint), then bind the signal event loop, whose signal and data changes feed the next evaluation. The sequence is drawn under "ChartCore and the two shells".
 
@@ -418,7 +418,7 @@ Their callers read them from slots (`engine-parts.ts`) instead of importing them
   loop's parts), `/hit`, `/canvas` and `/png` (with the path reader); `createChartStream` installs the pulse path when it is called. So
   `renderSpec`, `createChartSession().evaluate`, `renderChartToStaticMarkup` and `hydrateChart` work for every spec they accepted, with
   nothing to load first.
-- **The React shells use `@aster-charts/core/lean`** (`/lean/hit`, `/lean/signals`, `/lean/canvas`, `/lean/stream`; internal), the
+- **The React shells use `@aster-charts/core/internal`** (`/internal/hit`, `/internal/signals`, `/internal/canvas`, `/internal/stream`; internal), the
   same functions with the slots left empty. Under the `browser` export condition that is what a React app's charts load up front;
   anywhere else (a server, a test runner) the subpath resolves to `lean-full.ts`, which fills every slot, so a synchronous server render
   draws what it always drew.
@@ -444,7 +444,7 @@ Their callers read them from slots (`engine-parts.ts`) instead of importing them
 - **An empty slot never changes a result.** Reading one throws (`[aster] the "legend" part of the engine is not loaded`), so a missed
   detection refuses a chart instead of drawing it differently, and the regular-expression screen cannot be skipped: under limits a
   pattern is refused before it is compiled.
-- **All up front.** `import '@aster-charts/react/all'` (`@aster-charts/core/lean/all`, `lean-all.ts`) puts every part in its slot by a
+- **All up front.** `import '@aster-charts/react/all'` (`@aster-charts/core/internal/all`, `lean-all.ts`) puts every part in its slot by a
   call when it runs, so an app that prefers no wait bundles the whole engine and never suspends for a part; `preloadParts(names?)`
   fetches parts ahead of time without bundling them.
 - **The path reader stays up front** for `<Chart>`: the hit index parses the shapes the engine writes (geoshapes, guides) and any
@@ -460,6 +460,33 @@ Their callers read them from slots (`engine-parts.ts`) instead of importing them
   `Chart.lean-all.test.tsx` (the opt-in import: no chart waits); the `core-parts`, `react-lean` and `react-lean-all` patterns of the
   bundle-shaking gate.
 
+## Internal plumbing (not public API)
+
+Some of what `@aster-charts/react` and this repository's tests need from `@aster-charts/core` (and from `@aster-charts/vl`) is not API: the lean
+engine of the browser build, the scene metadata, the loader of the signal loop. The maintainer's decision (DECISIONS Q20) is that none of it is on a
+public entry, so a package's public entries hold only what its API.md section documents. The mechanism, in one place:
+
+- **One family of subpaths, `@aster-charts/core/internal*`**, in the `exports` map: `internal` (the engine as the shells use it: the former `lean`),
+  `internal/hit`, `internal/signals`, `internal/canvas`, `internal/stream`, `internal/load`, `internal/all`, and `internal/testing` (what only the conformance
+  gates call: `sceneIntersect`). The `browser` / `default` conditions that keep a browser build lean (ADR 0011) are on these entries, as before. A package
+  cannot hide a subpath from a bundler that resolves it (an `exports` map has no importer-dependent entry), so the boundary is made of three things instead:
+  what a consumer's TypeScript is told, a test that fails on a leak, and the documents.
+- **A consumer's declaration is a module that declares nothing.** Each internal entry's `types` condition is `./dist/not-public.d.ts` (`export {}`), so `import { x }
+  from '@aster-charts/core/internal'` is a compile error for an application. This repository's tsconfig names the custom condition `aster-internal`
+  (`tsconfig.base.json`, `customConditions`), which each internal entry lists first and which points at the real declaration; `react`, `conformance` and the
+  tests resolve through it. The published declarations of `@aster-charts/react` and `@aster-charts/vl` never mention an internal entry.
+- **`stripInternal` is on in the three `tsconfig.build.json`**, so a member tagged `@internal` (the scene's `__scales` and `__scaleMap`, `ChartProps.sceneOverride`
+  and `onStreamInput`, `compileUnit`, the worker plumbing) is not in the shipped declarations. A symbol that an internal entry exports must not carry that tag
+  (the declaration of the entry would name something its neighbour stripped); a package that needs scene metadata reads it through `sceneScaleMap(root)` and
+  `sceneScaleSnapshots(scope)` (`scene-access.ts`), not by the member's name.
+- **Nothing public re-exports an internal.** `ChartSession` is `evaluate`, `change` and `pulse` (the engine's tests read the last evaluation through
+  `lastEvaluation(session)` of `session.ts`, on no entry); `@aster-charts/react/worker` exports the worker protocol (`worker.ts`) and the hooks' shared helpers live in
+  `worker-impl.ts`; the Vega-Lite compiler is registered by importing `@aster-charts/react/vl` (`vl-registry.ts`), and `compileUnit` is `compile`'s unit case.
+- **The test is `scripts/public-surface.test.mjs`.** It reads every public entry's runtime exports and declarations and fails on an `@internal` export (found in the
+  sources by the compiler API), a name only an internal entry exports (derived from the `exports` maps and `dist`), one of DECISIONS Q20's symbols, an import of an
+  internal entry from a shipped declaration, a built declaration file that does not type-check by itself (`skipLibCheck` off), or a name in API.md that is an internal.
+  `scripts/verify-publish.mjs` proves the packed tarballs: every internal entry still imports at run time, and a consumer's `tsc` is refused every name from one.
+
 ## ChartCore and the two shells
 
 `@aster-charts/react` has one chart implementation, `ChartCore` (`packages/react/src/ChartCore.tsx`: evaluation, the DOM patcher, pan/zoom,
@@ -472,7 +499,7 @@ its caller gives it. So `@aster-charts/react/lite` (`SvgChart`) never reaches th
 (the `interaction` value) is the only way hit and signals enter a bundle that uses `<SvgChart>`. The shell split costs `<Chart>` 0.7 kB gzip
 (the property reads through the capability objects, and the missing-capability report that only `<SvgChart>` can trigger).
 
-`<SvgChart>` was chosen over lazy-loading the capabilities: the cost of each is explicit in the importing code ([ADR 0007](adr/0007-svgchart-shell-over-lazy-loading.md)). The first paint is NOT always synchronous, though: in a browser build (a resolver that applies the `browser` export condition of `@aster-charts/core/lean*`) a chart whose spec needs a part of the engine or an add-on suspends once, the first time any chart on the page needs it, and shows the `<Suspense>` fallback; a chart that needs none paints in its first commit, and so does every chart under `import '@aster-charts/react/all'`, under `preloadParts`, and on a server (where every part is there, [ADR 0011](adr/0011-engine-parts-load-on-demand-in-browser-builds.md)).
+`<SvgChart>` was chosen over lazy-loading the capabilities: the cost of each is explicit in the importing code ([ADR 0007](adr/0007-svgchart-shell-over-lazy-loading.md)). The first paint is NOT always synchronous, though: in a browser build (a resolver that applies the `browser` export condition of `@aster-charts/core/internal*`) a chart whose spec needs a part of the engine or an add-on suspends once, the first time any chart on the page needs it, and shows the `<Suspense>` fallback; a chart that needs none paints in its first commit, and so does every chart under `import '@aster-charts/react/all'`, under `preloadParts`, and on a server (where every part is there, [ADR 0011](adr/0011-engine-parts-load-on-demand-in-browser-builds.md)).
 
 ### The React boundary: one identity rule, one error channel
 
@@ -595,8 +622,8 @@ Everything else that runs at import time only fills the module's own tables (`sc
 | core `part-*.js`, `parts-evaluate.js`, `parts-signals.js`, `parts-all.js` | `installPart(...)` into `engine-parts.ts`'s slots | imported bare by the entries that carry the parts (below) |
 | core `index.js`, `addon-dom.js`, `entry-signals.js`, `entry-hit.js`, `entry-canvas.js`, `entry-png.js`, `lean-full.js`, `lean-signals-full.js` | bare imports of the parts their functions read | the entries re-export their implementation modules; a bundler that sees a module with no code of its own as side-effect free drops its bare imports, and the synchronous API loses its parts. (A React module never re-exports one of them: `@aster-charts/react`'s `createChartSession` is a function of its own, so an app that does not call it does not carry the parts) |
 | core `lean-all.js` | `installPart(...)` of every part, by a call when the module runs | `import '@aster-charts/react/all'` (through the react entry below) puts every part in its slot and nothing else uses it |
-| react `all.js` | the bare import of `@aster-charts/core/lean/all` | the entry exists only for that effect: a bundler that dropped it would leave the shells waiting for parts the app asked to have up front |
-| react `vl.js` | `registerVegaLiteCompiler(...)` (a `globalThis` registry under `Symbol.for('@aster-charts/react/vega-lite-compiler')`) | `import '@aster-charts/react/vl'` |
+| react `all.js` | the bare import of `@aster-charts/core/internal/all` | the entry exists only for that effect: a bundler that dropped it would leave the shells waiting for parts the app asked to have up front |
+| react `vl.js` | `registerVegaLiteCompiler(...)` (internal to the package: `vl-registry.ts`; a `globalThis` registry under `Symbol.for('@aster-charts/react/vega-lite-compiler')`) | `import '@aster-charts/react/vl'` |
 | react `worker-entry.js` | `globalThis.onmessage = ...` | `import '@aster-charts/react/worker-entry'` is the worker's whole body |
 
 ### How the manifests are checked

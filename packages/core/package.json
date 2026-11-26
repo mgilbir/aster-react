@@ -49,37 +49,49 @@
       "types": "./dist/entry-png.d.ts",
       "default": "./dist/entry-png.js"
     },
-    "./lean": {
-      "types": "./dist/lean.d.ts",
+    "./internal": {
+      "aster-internal": "./dist/lean.d.ts",
+      "types": "./dist/not-public.d.ts",
       "browser": "./dist/lean.js",
       "default": "./dist/lean-full.js"
     },
-    "./lean/hit": {
-      "types": "./dist/hit.d.ts",
+    "./internal/hit": {
+      "aster-internal": "./dist/hit.d.ts",
+      "types": "./dist/not-public.d.ts",
       "browser": "./dist/hit.js",
       "default": "./dist/entry-hit.js"
     },
-    "./lean/signals": {
-      "types": "./dist/signals-deferred.d.ts",
+    "./internal/signals": {
+      "aster-internal": "./dist/signals-deferred.d.ts",
+      "types": "./dist/not-public.d.ts",
       "browser": "./dist/signals-deferred.js",
       "default": "./dist/lean-signals-full.js"
     },
-    "./lean/canvas": {
-      "types": "./dist/canvas-deferred.d.ts",
+    "./internal/canvas": {
+      "aster-internal": "./dist/canvas-deferred.d.ts",
+      "types": "./dist/not-public.d.ts",
       "browser": "./dist/canvas-deferred.js",
       "default": "./dist/part-canvas.js"
     },
-    "./lean/load": {
-      "types": "./dist/lean-load.d.ts",
+    "./internal/load": {
+      "aster-internal": "./dist/lean-load.d.ts",
+      "types": "./dist/not-public.d.ts",
       "default": "./dist/lean-load.js"
     },
-    "./lean/stream": {
-      "types": "./dist/stream.d.ts",
+    "./internal/stream": {
+      "aster-internal": "./dist/stream.d.ts",
+      "types": "./dist/not-public.d.ts",
       "default": "./dist/stream.js"
     },
-    "./lean/all": {
-      "types": "./dist/lean-all.d.ts",
+    "./internal/all": {
+      "aster-internal": "./dist/lean-all.d.ts",
+      "types": "./dist/not-public.d.ts",
       "default": "./dist/lean-all.js"
+    },
+    "./internal/testing": {
+      "aster-internal": "./dist/internal-testing.d.ts",
+      "types": "./dist/not-public.d.ts",
+      "default": "./dist/internal-testing.js"
     },
     "./package.json": "./package.json"
   },

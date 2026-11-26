@@ -12,7 +12,7 @@
  * ended it. The answers themselves come from the real handlers (`handleWorkerMessage`), the code a worker entry runs.
  */
 import type { ChartStream } from '@aster-charts/core'
-import { handleWorkerMessage, type ChartWorkerRequest, type ChartWorkerStreamRequest } from '../worker.js'
+import { handleWorkerMessage, type ChartWorkerRequest, type ChartWorkerStreamRequest } from '../worker-impl.js'
 
 export type PostedMessage = { id: number; kind?: string; op?: string; streamId?: number } & Record<string, unknown>
 

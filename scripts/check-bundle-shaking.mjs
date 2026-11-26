@@ -729,11 +729,11 @@ const PATTERNS = [
   },
   {
     name: 'react-lean',
-    why: "<Chart> in a browser build (`browser` condition: @aster-charts/core/lean): a plain chart loads no part of the engine; a legend, a custom path, a selection test, a canvas and a change of data load theirs on demand, from chunks the entry does not contain, and draw what the full engine draws",
+    why: "<Chart> in a browser build (`browser` condition: @aster-charts/core/internal): a plain chart loads no part of the engine; a legend, a custom path, a selection test, a canvas and a change of data load theirs on demand, from chunks the entry does not contain, and draw what the full engine draws",
     split: true,
     dom: true,
     browser: true,
-    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart } from '@aster-charts/react'\nimport { ENGINE_PARTS, createChartSession, partLoaded, renderSceneToSvg } from '@aster-charts/core/lean'`,
+    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart } from '@aster-charts/react'\nimport { ENGINE_PARTS, createChartSession, partLoaded, renderSceneToSvg } from '@aster-charts/core/internal'`,
     body: `
       const loaded = () => ENGINE_PARTS.filter(partLoaded).join()
       const roots = []
@@ -802,7 +802,7 @@ const PATTERNS = [
     split: true,
     dom: true,
     browser: true,
-    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { ChartStream } from '@aster-charts/react'\nimport { ENGINE_PARTS, partLoaded } from '@aster-charts/core/lean'`,
+    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { ChartStream } from '@aster-charts/react'\nimport { ENGINE_PARTS, partLoaded } from '@aster-charts/core/internal'`,
     body: `
       const loaded = () => ENGINE_PARTS.filter(partLoaded).join()
       const mount = (spec) => {
@@ -841,7 +841,7 @@ const PATTERNS = [
     split: true,
     dom: true,
     browser: true,
-    imports: `import '@aster-charts/react/all'\nimport * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart } from '@aster-charts/react'\nimport { ENGINE_PARTS, partLoaded } from '@aster-charts/core/lean'`,
+    imports: `import '@aster-charts/react/all'\nimport * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart } from '@aster-charts/react'\nimport { ENGINE_PARTS, partLoaded } from '@aster-charts/core/internal'`,
     body: `
       const out = { missing: ENGINE_PARTS.filter((p) => !partLoaded(p)).join(), first: {} }
       for (const [name, spec, props] of [['legend', ${lit(LEGEND_VG)}, {}], ['parts', ${lit(PARTS_VG)}, {}], ['rare', ${lit(RARE_VG)}, {}], ['canvas', ${lit(RARE_VG)}, { renderer: 'canvas' }]]) {
@@ -885,7 +885,7 @@ async function esbuildBuild(p, entry, out) {
     treeShaking: true,
     format: 'esm',
     platform: 'node',
-    // a pattern of a browser app resolves the `browser` export condition, as a browser build does (`@aster-charts/core/lean`)
+    // a pattern of a browser app resolves the `browser` export condition, as a browser build does (`@aster-charts/core/internal`)
     ...(p.browser ? { conditions: ['browser'] } : {}),
     splitting: !!p.split,
     // React is a peer dependency of the consumer's app, not part of what is being shaken.

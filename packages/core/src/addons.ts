@@ -14,7 +14,7 @@
  * Nothing here is imported by `@aster-charts/core`'s main entry: an app that does not use this module does not pay for it.
  *
  * The same walk names the parts of the engine a spec may read (`specNeeds`, `partsNeeded`; see engine-parts.ts), which the public
- * entries carry and the React shells, on `@aster-charts/core/lean`, load on demand (`loadParts`).
+ * entries carry and the React shells, on `@aster-charts/core/internal`, load on demand (`loadParts`).
  */
 import { dataFormatRegistry, geoRegistry, LOAD_ADDON_FORMATS, transformRegistry } from './registry.js'
 import { HARD_MAX_SPEC_DEPTH } from './limits.js'
@@ -44,6 +44,7 @@ export interface AddonOptions {
 }
 
 /** Every transform the `@aster-charts/core/transforms` add-on registers (and `requireTransform` asks it for). */
+export type { EnginePart }
 export const TRANSFORMS_ADDON_TYPES: readonly string[] = [
   'kde', 'density', 'quantile', 'regression', 'loess', 'pack', 'partition', 'treemap', 'wordcloud', 'voronoi',
   'pie', 'cross', 'countpattern', 'dotbin', 'geopoint', 'geojson', 'linkpath',
@@ -541,7 +542,7 @@ function collectData(spec: Json): unknown[] {
  * path (svgpath), an expression that calls vega-selections' functions, `intersect()`, `modify()` / `setdata()`, a `timer` event stream;
  * under `limits` anything that can hand a regular expression to the screen (regex); with a random source, datasets that may draw from
  * it (pulse). The pulse path is otherwise loaded when a chart's data first changes. Every public entry of `@aster-charts/core` carries
- * the parts its functions can use: this is for the React shells, which use `@aster-charts/core/lean`.
+ * the parts its functions can use: this is for the React shells, which use `@aster-charts/core/internal`.
  */
 export function partsNeeded(spec: VgSpec, options?: PartOptions): readonly EnginePart[] {
   return specNeeds(spec, options).parts
@@ -631,8 +632,8 @@ export function partsNotLoaded(needed: readonly EnginePart[]): readonly EnginePa
 
 type PartModule = { part: unknown }
 /**
- * (the canvas part is loaded by `<Chart>`'s canvas capability, through `@aster-charts/core/lean/canvas`, and the signal loop by the
- * interaction capability, through `@aster-charts/core/lean/signals`: no evaluation reads either)
+ * (the canvas part is loaded by `<Chart>`'s canvas capability, through `@aster-charts/core/internal/canvas`, and the signal loop by the
+ * interaction capability, through `@aster-charts/core/internal/signals`: no evaluation reads either)
  */
 const partImporters: Record<Exclude<EnginePart, 'canvas' | 'signals'>, () => Promise<PartModule>> = {
   aggregate: () => import('./part-aggregate.js'),
@@ -656,8 +657,8 @@ const partsLoading = new Map<EnginePart, Promise<void>>()
 
 function loadPart(name: EnginePart): Promise<void> {
   if (partLoaded(name)) return Promise.resolve()
-  if (name === 'canvas') return Promise.reject(new Error('[aster] the canvas part is loaded by the canvas capability (@aster-charts/core/lean/canvas)'))
-  if (name === 'signals') return Promise.reject(new Error('[aster] the signals part is loaded by the interaction capability (@aster-charts/core/lean/signals)'))
+  if (name === 'canvas') return Promise.reject(new Error('[aster] the canvas part is loaded by the canvas capability (@aster-charts/core/internal/canvas)'))
+  if (name === 'signals') return Promise.reject(new Error('[aster] the signals part is loaded by the interaction capability (@aster-charts/core/internal/signals)'))
   let p = partsLoading.get(name)
   if (!p) {
     p = partImporters[name]().then(
@@ -684,7 +685,7 @@ export function loadParts(names: readonly EnginePart[]): Promise<void> {
 
 /**
  * Import whatever `spec` needs and does not have yet, add-ons and parts of the engine alike: `loadAddonsFor` for a host of
- * `@aster-charts/core/lean` (the React shells). Resolves at once when nothing is missing.
+ * `@aster-charts/core/internal` (the React shells). Resolves at once when nothing is missing.
  */
 export function loadPartsFor(spec: VgSpec, options?: PartOptions): Promise<void> {
   let needs: SpecNeeds
@@ -705,7 +706,7 @@ const SPEC_PARTS: readonly EnginePart[] = ENGINE_PARTS.filter((p) => p !== 'canv
 
 /**
  * Load parts of the engine ahead of time (every part a spec can name when no names are given): for an app on
- * `@aster-charts/core/lean` (the React shells in a browser build) that knows which families its charts use and would rather fetch them
+ * `@aster-charts/core/internal` (the React shells in a browser build) that knows which families its charts use and would rather fetch them
  * before the first chart than when it renders. Resolves once they are all loaded; rejects, naming the part, when an import fails, and
  * with a TypeError for a name that is not such a part (`'canvas'` and `'signals'` are the React capabilities' to load: `preloadParts`
  * of `@aster-charts/react` takes them too). A part already loaded is not fetched again. (`import '@aster-charts/react/all'` instead puts

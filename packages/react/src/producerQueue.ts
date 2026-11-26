@@ -11,7 +11,7 @@
  */
 import { AsterStreamBackpressureError, type StreamPolicy } from '@aster-charts/core'
 import { batchRows, createBatchFold, type BatchFold } from './batches.js'
-import type { ChartWorkerBatch } from './worker.js'
+import type { ChartWorkerBatch } from './worker-impl.js'
 
 export interface ProducerQueueBounds {
   capacity: number

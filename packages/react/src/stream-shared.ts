@@ -6,7 +6,8 @@
  */
 import * as React from 'react'
 import type { DataPulse, SceneRoot, StreamBatch, StreamFlush, StreamStats, VgSpec } from '@aster-charts/core'
-import type { ChartProps, ChartStreamInput } from './Chart.js'
+import type { ChartProps } from './Chart.js'
+import type { ChartStreamInput } from './chart-types.js'
 import { positionalScales, viewToDomainRaw } from './interaction.js'
 import { normalizeSpecResult, useStableSpec } from './spec.js'
 import type { StreamFlushFailureInfo } from './useChartStream.js'

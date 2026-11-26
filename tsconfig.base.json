@@ -16,6 +16,7 @@
     "skipLibCheck": true,
     "declaration": true,
     "esModuleInterop": true,
-    "noEmit": true
+    "noEmit": true,
+    "customConditions": ["aster-internal"]
   }
 }

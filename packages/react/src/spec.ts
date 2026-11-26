@@ -1,6 +1,6 @@
 import * as React from 'react'
 import type { VgSpec } from '@aster-charts/core'
-import { chartSkeleton } from '@aster-charts/core/lean'
+import { chartSkeleton } from '@aster-charts/core/internal'
 import { compileVegaLite } from './vl-registry.js'
 
 /** A plain object (not an array, a string, a class instance): the only value that can be a spec. */

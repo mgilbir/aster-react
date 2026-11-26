@@ -10003,7 +10003,7 @@ function planLayerProjections(root: VLSpec, parsed: Array<{ l: VLSpec }>): { roo
   }
 }
 
-/** Compile a single unit spec (validated; the input is not mutated). */
+/** Compile a single unit spec (validated; the input is not mutated). Tests call it; it is on no entry of the package. @internal */
 export function compileUnit(input: VLSpec): VLSpec {
   const payloads: RowPayloads = new Set()
   return withRows(payloads, () => {

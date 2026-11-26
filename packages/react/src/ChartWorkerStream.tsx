@@ -13,7 +13,7 @@ import {
 import { useStableContent } from './spec.js'
 import { useChartWorkerStream, type ChartWorkerStreamOptions } from './useChartWorkerStream.js'
 export type { ChartWorkerStreamHandle } from './stream-shared.js'
-import type { WorkerTextMetrics, WorkerUrlPolicyInput } from './worker.js'
+import type { WorkerTextMetrics, WorkerUrlPolicyInput } from './worker-impl.js'
 
 export interface ChartWorkerStreamProps extends Omit<CommonStreamProps, 'textMetrics'> {
   spec: VgSpec

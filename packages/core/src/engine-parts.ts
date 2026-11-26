@@ -3,7 +3,7 @@
  *
  * Every public entry of `@aster-charts/core` (`renderSpec`, `compileChart` / `evaluateChart`, `createChartSession`, the signal loop,
  * the renderers) carries the parts its functions can use, as it always did: it imports their `part-*.ts` modules, which put them in
- * the slots below. `@aster-charts/core/lean` is the same engine with the slots left empty, for the React shells: they read which
+ * the slots below. `@aster-charts/core/internal` is the same engine with the slots left empty, for the React shells: they read which
  * parts a spec needs (`partsNeeded` in addons.ts), import exactly those (`loadParts`), and render once they are there, through the same
  * Suspense wait as the opt-in add-ons. A chart that needs none of them never fetches anything.
  *
@@ -204,7 +204,7 @@ export function requestPart(name: EnginePart): void {
   requester?.(name)
 }
 
-/** @internal Take parts out of their slots and get a function that puts them back (a test seam for the lean path). */
+/** Internal plumbing (`@aster-charts/core/internal`, not public API): take parts out of their slots and get a function that puts them back (a test seam for the lean path). */
 export function withdrawParts(names: readonly EnginePart[]): () => void {
   const saved = names.map((n) => [n, slots[n]] as const)
   for (const n of names) delete slots[n]

@@ -10,7 +10,7 @@ import { useChartStream } from './useChartStream'
 import { useChartWorkerStream, type WorkerChartStreamResult } from './useChartWorkerStream'
 import {
   handleChartWorkerRequest, handleWorkerMessage, registerWorkerUrlPolicy, useChartWorker,
-} from './worker'
+} from './worker-impl'
 import { forEachVariant } from './testing/variants'
 import { FakeWorker } from './testing/fake-worker'
 

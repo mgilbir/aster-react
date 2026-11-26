@@ -15,7 +15,7 @@ import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { SpecLimits, StreamBatch, VgSpec } from '@aster-charts/core'
-import { handleChartWorkerStreamRequest, type ChartWorkerStreamRequest } from './worker'
+import { handleChartWorkerStreamRequest, type ChartWorkerStreamRequest } from './worker-impl'
 import { useChartStream } from './useChartStream'
 import { useChartWorkerStream } from './useChartWorkerStream'
 

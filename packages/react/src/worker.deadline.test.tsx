@@ -19,7 +19,7 @@ import type { VgSpec } from '@aster-charts/core'
 import {
   AsterWorkerTimeoutError, handleChartWorkerRequest, handleChartWorkerStreamRequest, useChartWorker,
   type ChartWorkerRequest, type ChartWorkerStreamRequest, type WorkerChartResult,
-} from './worker'
+} from './worker-impl'
 import { useChartWorkerStream, type WorkerChartStreamResult } from './useChartWorkerStream'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true

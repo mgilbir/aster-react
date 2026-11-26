@@ -33,7 +33,7 @@ import './addon-transforms.js'
 import './addon-geo.js'
 import { compileChart } from './compiler.js'
 import { evaluateChart } from './evaluate.js'
-import { createChartSession } from './session.js'
+import { createChartSession, lastEvaluation } from './session.js'
 import { diffRows, type RowDiff } from './pulse.js'
 import { applyChangeset, newChangeset, planModify, type Changeset } from './modify.js'
 import { datasetsOfScene, renderSceneToSvg } from './index.js'
@@ -1100,9 +1100,9 @@ function run(target: 'chart' | 'session', g: GenSpec, world0: World, steps: Step
     return input
   }
   const first = attempt(() => session.evaluate(specFor(world) as never, sessionInput(world, {})))
-  const irAtCompile = JSON.stringify(session.last()?.chart ?? null)
+  const irAtCompile = JSON.stringify(lastEvaluation(session)?.chart ?? null)
   const irCheck = (stepNo: number, op: string): RunResult | null => {
-    const now = JSON.stringify(session.last()?.chart ?? null)
+    const now = JSON.stringify(lastEvaluation(session)?.chart ?? null)
     return now === irAtCompile ? null : fail(stepNo, op, 'compiled IR mutated by the session', firstDiff(JSON.parse(irAtCompile), JSON.parse(now)) ?? '')
   }
   const r0 = compare(-1, 'init', first, world, undefined, 0) ?? irCheck(-1, 'init')

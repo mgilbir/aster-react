@@ -170,7 +170,7 @@ export interface ChartStream {
    * all queued batches go. Never touches committed rows or the last scene.
    */
   discard(): number
-  /** The underlying session (for `last()`, imperative `change()`, ...). Throws after `close()`. */
+  /** The underlying session (for imperative `change()`, `pulse()`, ...). Throws after `close()`. */
   session(): ChartSession
 }
 

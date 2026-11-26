@@ -1,5 +1,5 @@
 /**
- * `@aster-charts/core/lean/all` (for `import '@aster-charts/react/all'`): every part of the engine in its slot from the start
+ * `@aster-charts/core/internal/all` (for `import '@aster-charts/react/all'`): every part of the engine in its slot from the start
  * (engine-parts.ts), the canvas renderer and the signal event loop included, by static imports. An app that imports it bundles the
  * whole engine up front, as `@aster-charts/core` itself does, and the React shells never wait for a part: what they would load on
  * demand is already loaded. The opt-in add-ons (`/geo`, `/transforms`, `/load`) stay opt-in: an app imports those it uses itself.

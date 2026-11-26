@@ -4,7 +4,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import type { ChartStream, VgSpec } from '@aster-charts/core'
-import { createWorkerDispatcher, type ChartWorkerResponse, type ChartWorkerStreamResponse } from './worker'
+import { createWorkerDispatcher, type ChartWorkerResponse, type ChartWorkerStreamResponse } from './worker-impl'
 
 vi.mock('@aster-charts/core/addons', async (importOriginal) => {
   const real = await importOriginal<typeof import('@aster-charts/core/addons')>()

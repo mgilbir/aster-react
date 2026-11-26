@@ -250,8 +250,8 @@ describe('@aster-charts/react/lite never reaches the canvas renderer, the hit in
     expect(chainToForbidden('Chart.tsx', fromSrc)).not.toBeNull()
   })
   it('the guard bites: a value import of the lean hit index in ChartCore is reported with its chain', () => {
-    const tampered = (f: string): string => (f === 'ChartCore.tsx' ? `import { buildHitIndex } from '@aster-charts/core/lean/hit'\n${fromSrc(f)}` : fromSrc(f))
-    expect(chainToForbidden('lite.ts', tampered)).toEqual(['lite.ts', 'SvgChart.tsx', 'ChartCore.tsx', '@aster-charts/core/lean/hit'])
+    const tampered = (f: string): string => (f === 'ChartCore.tsx' ? `import { buildHitIndex } from '@aster-charts/core/internal/hit'\n${fromSrc(f)}` : fromSrc(f))
+    expect(chainToForbidden('lite.ts', tampered)).toEqual(['lite.ts', 'SvgChart.tsx', 'ChartCore.tsx', '@aster-charts/core/internal/hit'])
   })
   it('the guard bites: a value import of core/hit in ChartCore is reported with its chain', () => {
     const tampered = (f: string): string => (f === 'ChartCore.tsx' ? `import { buildHitIndex } from '@aster-charts/core/hit'\n${fromSrc(f)}` : fromSrc(f))
@@ -284,9 +284,9 @@ describe('@aster-charts/react/lite never reaches the canvas renderer, the hit in
     })
     it('does not report a type-only import or export, nor the lean engine itself', () => {
       expect(chainToForbidden('lite.ts', tamper("import type { HitIndex } from '@aster-charts/core/hit'\nimport { type A } from '@aster-charts/core/canvas'\nexport type { B } from '@aster-charts/core/signals'", true))).toBeNull()
-      expect(isForbiddenPackage('@aster-charts/core/lean')).toBe(false)
+      expect(isForbiddenPackage('@aster-charts/core/internal')).toBe(false)
       expect(isForbiddenPackage('@aster-charts/core')).toBe(false)
-      expect(isForbiddenPackage('@aster-charts/core/lean/hit')).toBe(true)
+      expect(isForbiddenPackage('@aster-charts/core/internal/hit')).toBe(true)
     })
   })
 })

@@ -46,7 +46,7 @@ const OUT_DIR = join(CONF_DIR, '.tmp-browser-geometry')
 const entry = `
 import * as vega from 'vega'
 import { compileChart, evaluateChart } from '@aster-charts/core'
-import { sceneIntersect } from '@aster-charts/core/signals'
+import { sceneIntersect } from '@aster-charts/core/internal/testing'
 import { buildHitIndex } from '@aster-charts/core/hit'
 import { loadImages, sceneImageUrls, withSceneImages } from '@aster-charts/core/canvas'
 import { genGeometrySpec, rng, MARK_TYPES } from '../src/geometry-specs.ts'

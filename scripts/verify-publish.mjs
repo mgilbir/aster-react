@@ -16,7 +16,8 @@
  *     and its `types` and `default` targets exist,
  *  6. `tsc` typechecks a consumer file that uses the public types, with
  *     `module: nodenext` so the `exports` map and its `types` conditions are
- *     resolved exactly as a consumer's compiler resolves them,
+ *     resolved exactly as a consumer's compiler resolves them; the internal entries
+     (`@aster-charts/core/internal*`, not public API) must declare nothing to it,
  *  7. a Vega and a Vega-Lite render run through the installed packages,
  *  8. a consumer app that depends on import side effects (`@aster-charts/react/vl`, `@aster-charts/core/geo`,
  *     `@aster-charts/core/transforms`, the guide captions) is BUNDLED from the installed tarballs with esbuild
@@ -57,6 +58,9 @@ for (const pkg of PUBLIC) {
     fail(`packages/${pkg}/dist is missing — run \`pnpm build\` first`)
   }
 }
+
+/** An internal entry (plumbing for the sibling packages; not public API): `@aster-charts/core/internal*`. */
+const isInternalEntry = (sub) => /^\.\/internal(\/|$)/.test(sub)
 
 /** Every `exports` key except `./package.json`, as [subpath, { types, default }]. */
 function entriesOf(manifest) {
@@ -116,8 +120,15 @@ try {
     const m = manifests.get(pkg)
     const wanted = [...REQUIRED]
     for (const [sub, target] of entriesOf(m)) {
-      for (const cond of ['types', 'default']) {
-        if (typeof target?.[cond] !== 'string') fail(`@aster-charts/${pkg} exports["${sub}"] has no "${cond}" condition`)
+      if (isInternalEntry(sub)) {
+        // a consumer's declaration is a module that declares nothing (step 6b proves it); the repo's own `aster-internal` condition
+        // names the real one, which is a build product and is not asked for here
+        if (target?.types !== './dist/not-public.d.ts') fail(`@aster-charts/${pkg} exports["${sub}"] is internal (not public API) and must declare nothing to a consumer: "types": "./dist/not-public.d.ts"`)
+        if (typeof target?.default !== 'string') fail(`@aster-charts/${pkg} exports["${sub}"] has no "default" condition`)
+      } else {
+        for (const cond of ['types', 'default']) {
+          if (typeof target?.[cond] !== 'string') fail(`@aster-charts/${pkg} exports["${sub}"] has no "${cond}" condition`)
+        }
       }
       // every file ANY condition names ships (the `browser` targets are not what Node resolves, so nothing else would read them)
       for (const leaf of leavesOf(target)) wanted.push(leaf.replace(/^\.\//, ''))
@@ -182,7 +193,8 @@ for (const s of specifiers) {
   }
 
   // 6) Typecheck a consumer that uses the public types, resolving through the `exports` map.
-  const typeImports = specifiers.map((s, i) => `import * as entry${i} from '${s}'\nvoid entry${i}`).join('\n')
+  const publicSpecifiers = specifiers.filter((s) => !/^@aster-charts\/[a-z]+\/internal(\/|$)/.test(s))
+  const typeImports = publicSpecifiers.map((s, i) => `import * as entry${i} from '${s}'\nvoid entry${i}`).join('\n')
   writeFileSync(join(project, 'consumer.ts'), `${typeImports}
 import type { VgSpec, RuntimeInput, SceneRoot, SpecLimits, ChartInfo } from '@aster-charts/core'
 import { renderSpec, evaluateChart, compileChart, getChartInfo, chartInfoFromScene, AsterLimitError } from '@aster-charts/core'
@@ -251,6 +263,29 @@ void [exported, fromLite, pngLiteEl, direct, PNG_MAX_PIXELS]
     fail('the consumer file does not typecheck against the installed packages (see tsc output above)')
   }
   console.log('[verify-publish] consumer typecheck PASS (module nodenext, skipLibCheck off)')
+
+  // 6b) The internal entries are not public API: they declare nothing to a consumer, so TypeScript refuses every name imported from
+  //     one (they still import at run time: step 5, the React shells need them).
+  const internalSpecifiers = specifiers.filter((s) => !publicSpecifiers.includes(s))
+  if (internalSpecifiers.length === 0) fail('no internal entry is declared: the internal-entry check below would be vacuous')
+  mkdirSync(join(project, 'internal-probe'), { recursive: true })
+  writeFileSync(join(project, 'internal-probe', 'probe.ts'), internalSpecifiers.map((s, i) => `import { notPublicApi as internal${i} } from '${s}'\nvoid internal${i}`).join('\n') + '\n')
+  writeFileSync(join(project, 'internal-probe', 'tsconfig.json'), JSON.stringify({
+    compilerOptions: { target: 'es2022', module: 'nodenext', moduleResolution: 'nodenext', strict: true, noEmit: true, skipLibCheck: false, types: [], lib: ['es2022', 'dom'] },
+    files: ['probe.ts'],
+  }))
+  let probeOutput = ''
+  try {
+    run(process.execPath, [TSC, '-p', 'internal-probe/tsconfig.json'], { cwd: project, stdio: ['ignore', 'pipe', 'pipe'] })
+  } catch (e) {
+    probeOutput = String(e.stdout ?? '')
+  }
+  // (TypeScript names the one module every internal entry resolves to, so each import is matched by its line: the i-th is on line 2i+1)
+  const refused = internalSpecifiers.filter((_s, i) => new RegExp(`probe\\.ts\\(${2 * i + 1},\\d+\\): error TS2305: .*has no exported member 'notPublicApi'`).test(probeOutput))
+  if (refused.length !== internalSpecifiers.length) {
+    fail(`a consumer's TypeScript resolves declarations for internal entries (not public API): ${internalSpecifiers.filter((s) => !refused.includes(s)).join(', ')}\n${probeOutput.slice(0, 4000)}`)
+  }
+  console.log(`[verify-publish] the ${internalSpecifiers.length} internal entries declare nothing to a consumer PASS`)
 
   // 7) Render Vega and Vega-Lite through the installed packages.
   writeFileSync(join(project, 'smoke.mjs'), `

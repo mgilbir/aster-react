@@ -16,7 +16,7 @@ import { renderSpec, type VgSpec } from '@aster-charts/core'
 import { isAddonLoaded } from '@aster-charts/core/addons'
 import { useChart } from './useChart'
 import { useChartStream } from './useChartStream'
-import { useChartWorker } from './worker'
+import { useChartWorker } from './worker-impl'
 import { ignoreSuspendedActWarning } from './testing/quiet'
 
 ignoreSuspendedActWarning()

@@ -114,7 +114,8 @@ const SCOPES: Array<{ markname?: string; marktype?: string }> = [
 const entry = `
 import * as vega from 'vega'
 import { compileChart, evaluateChart, compileExpr } from '@aster-charts/core'
-import { sceneIntersect, bindSceneSignals } from '@aster-charts/core/signals'
+import { bindSceneSignals } from '@aster-charts/core/signals'
+import { sceneIntersect } from '@aster-charts/core/internal/testing'
 import { renderSceneToDomElement } from '@aster-charts/core/dom'
 import { renderSceneToCanvas, createCanvasEvents } from '@aster-charts/core/canvas'
 import { buildHitIndex } from '@aster-charts/core/hit'
