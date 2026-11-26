@@ -801,6 +801,8 @@ export interface SceneGroup extends SceneItem {
   markClipPathD?: string
   /** A grid header or footer the layout had no column (row) for: it stays where it was and adds nothing to the bounds of the group. */
   unbounded?: boolean
+  /** An authored mark of role `title`: the layout reads it as the title and adds it to no bounds of its own (`unbounded`), but the bounds of the group item that holds it count it. */
+  titleRole?: boolean
   /** Pre-computed rounded-rect path `d` for clip-path defs (when cornerRadius > 0). */
   clipPathD?: string
   /**

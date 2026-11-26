@@ -359,6 +359,11 @@ export interface LegendBuildInput {
   labels?: 'none'
   /** the pass stopped, but after the layout of the entries' grid: it ran, though the legend itself was not laid out (`raw`) */
   entryGrid?: boolean
+  /**
+   * The operators that list the entries never ran (they read a scale that was never evaluated): the legend has what reads nothing of
+   * it -- its title, encoded as any -- and a gradient's strip, joined and left unencoded.
+   */
+  entriesUnrun?: boolean
 }
 
 export interface GuideHost extends EntryHost {
@@ -516,7 +521,11 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
   let strip = new Bounds()
   const entryLeaves: SceneItem[] = []
   stage('entry', () => {})
-  if (type !== GradientLegend && type !== DiscreteLegend) {
+  if (inp.entriesUnrun === true) {
+    makeTitle()
+    if (type === GradientLegend) entryLeaves.push({ _part: 'gradient', _kind: 'rect', _bare: true, x: 0, y: 0, path: 'M0,0h0v0h0Z' } as unknown as SceneItem)
+    cutShort = true
+  } else if (type !== GradientLegend && type !== DiscreteLegend) {
     // (a symbol legend's entries are instances of their own, ranked after the title)
     makeTitle()
     if (inp.entries === 'none') cutShort = true
