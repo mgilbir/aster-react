@@ -23,7 +23,8 @@ export async function launchBrowser(browserType, options) {
     const browser = await browserType.launch(options)
     // (every Playwright Browser is an EventEmitter; `disconnected` fires on close() and on a crash)
     const emitter = /** @type {any} */ (browser)
-    emitter.on('disconnected', () => removeTempDir(dir))
+    // (`disconnected` fires when the connection closes, while Chromium may still be writing: what it writes after is removed at exit)
+    emitter.on('disconnected', () => removeTempDir(dir, { again: true }))
     return browser
   } catch (error) {
     removeTempDir(dir)

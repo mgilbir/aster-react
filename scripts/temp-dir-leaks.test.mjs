@@ -83,6 +83,16 @@ describe('what is still alive when the process ends is removed (no `finally` run
   }
   const fill = `const d = makeTempDir('aster-leak-'); writeFileSync(join(d, 'big'), 'x'.repeat(1 << 16));\n`
 
+  it('a directory a late writer recreates after removeTempDir(dir, { again: true }) is removed at exit (a browser still shutting down)', () => {
+    const { r, box } = child(`import { mkdirSync } from 'node:fs'\n${fill} const { removeTempDir } = await import(${JSON.stringify(HELPER)}); removeTempDir(d, { again: true }); mkdirSync(join(d, 'Crashpad'), { recursive: true }); process.exit(0)`)
+    expect(r.status, r.stderr).toBe(0)
+    expect(entries(box)).toEqual([])
+  })
+  it('without `again`, a removed directory is forgotten (nothing to sweep, nothing removed that is not ours)', () => {
+    const { r, box } = child(`import { mkdirSync } from 'node:fs'\n${fill} const { removeTempDir } = await import(${JSON.stringify(HELPER)}); removeTempDir(d); mkdirSync(d); process.exit(0)`)
+    expect(r.status, r.stderr).toBe(0)
+    expect(entries(box).length).toBe(1)
+  })
   it('process.exit(1) inside a try (the script\'s `finally` does not run)', () => {
     const { r, box } = child(`${fill} try { process.exit(1) } finally { }`)
     expect(r.status).toBe(1)
