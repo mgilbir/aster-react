@@ -192,6 +192,11 @@ describe('the gate runner fails a gate that leaves a temp directory, on every wa
     expect(gateTmp).not.toBe(tmpdir())
     expect(existsSync(gateTmp), 'the gate\'s temp dir is removed after it').toBe(false)
   })
+  it('tsx\'s own per-user directory (one fixed name, reused by every run) is the one entry a gate may leave; any other name fails', async () => {
+    const mk = (name) => ({ name: 'tool', command: process.execPath, args: ['-e', `const fs=require('node:fs'),os=require('node:os'),p=require('node:path');fs.mkdirSync(p.join(os.tmpdir(), ${JSON.stringify(name)}))`], why: 't' })
+    expect((await runAll([mk(`tsx-${process.getuid()}`)])).code).toBe(0)
+    expect((await runAll([mk(`tsx-${process.getuid() + 1}`)])).code).toBe(1)
+  })
   it('a gate that exits 0 and leaves a directory fails with `left temp dirs`, and the leftover is removed', async () => {
     const { code, out } = await runAll([tmpLeaker('leak-ok', '')])
     expect(code).toBe(1)
