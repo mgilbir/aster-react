@@ -65,11 +65,12 @@ function boxOf(cmds: Cmd[], inflate: number): Box | null {
 
 const field = (state: string, name: string): string | undefined => new RegExp(`(?:^| )${name}=(\\S+)`).exec(state)?.[1]
 
-function inflationOf(p: Painted): number {
+/** (`smooth`: every subpath is a whole circle, which has no corner for a join to miter) */
+function inflationOf(p: Painted, smooth = false): number {
   if (p.op !== 'stroke') return 1
   const st = p.state ?? ''
   const width = Number(field(st, 'width') ?? 1)
-  const miter = field(st, 'join') === 'miter' ? Math.max(1, Number(field(st, 'miter') ?? 10)) : 1
+  const miter = !smooth && field(st, 'join') === 'miter' ? Math.max(1, Number(field(st, 'miter') ?? 10)) : 1
   const pen = (field(st, 'pen') ?? '1,0,0,1').split(',').map(Number)
   const scale = Math.max(Math.abs(pen[0]!) + Math.abs(pen[2]!), Math.abs(pen[1]!) + Math.abs(pen[3]!))
   const cap = field(st, 'cap') === 'square' ? Math.SQRT2 : 1
@@ -121,8 +122,9 @@ export function canonicalPaints(painted: readonly Painted[]): string[] {
     const subs: Cmd[][] = []
     for (const cmd of cmds) { if (cmd.c === 'M' || !subs.length) subs.push([]); subs[subs.length - 1]!.push(cmd) }
     const parts = p.path.split(/ (?=M)/)
-    const boxes = subs.map((s) => boxOf(s, inflationOf(p)))
-    const whole = boxOf(cmds, inflationOf(p))
+    const smooth = subs.every((s) => s.length === 2 && s[0]!.c === 'M' && s[1]!.c === 'O')
+    const boxes = subs.map((s) => boxOf(s, inflationOf(p, smooth)))
+    const whole = boxOf(cmds, inflationOf(p, smooth))
     const split = subs.length > 1 && parts.length === subs.length && boxes.every((b) => b !== null) && (
       !anyBoxesMeet(boxes as Box[])
       || (field(st, 'alpha') === '1' && opaqueColour(p.style) && (

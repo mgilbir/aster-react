@@ -923,6 +923,20 @@ export function anyBoxesMeet(boxes: Box[]): boolean {
   return false
 }
 
+/** Whether a piece is a circle written as two semicircular arcs (`M x,y A r,r,0,1,s,x2,y2 A r,r,0,1,s,x,y`): a curve with no corner. */
+function isCirclePiece(part: string): boolean {
+  const c = pieceCommands(part)
+  if (c.length < 3 || c.length > 4 || c[0]!.c !== 'M' || c[0]!.n.length !== 2) return false
+  if (c.length === 4 && c[3]!.c !== 'Z') return false
+  const [a1, a2] = [c[1]!, c[2]!]
+  if (a1.c !== 'A' || a2.c !== 'A' || a1.n.length !== 7 || a2.n.length !== 7) return false
+  const r = a1.n[0]!
+  if (!(r > 0) || a1.n[1] !== r || a2.n[0] !== r || a2.n[1] !== r || a1.n[3] !== 1 || a2.n[3] !== 1 || a1.n[4] !== a2.n[4]) return false
+  const [x0, y0] = c[0]!.n as [number, number]
+  // (two semicircles: the chord between the ends is the diameter, and the second arc comes back to the start)
+  return Math.abs(Math.hypot(a1.n[5]! - x0, a1.n[6]! - y0) - 2 * r) < 1e-2 && a2.n[5] === x0 && a2.n[6] === y0
+}
+
 /** The numbers of an absolute path piece (`M1,2L3,4Z`), command by command. */
 function pieceCommands(part: string): Array<{ c: string; n: number[] }> {
   const out: Array<{ c: string; n: number[] }> = []
@@ -1060,9 +1074,11 @@ function boxOfPoints(pts: Array<[number, number]>): Box | null {
   return [x1, y1, x2, y2]
 }
 
-/** Largest scale the linear part applies (Frobenius norm bounds the spectral norm). */
+/** Largest scale the linear part applies: its spectral norm (the larger singular value), a hair over for rounding. */
 function linScale(m: Mat): number {
-  return Math.sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2] + m[3] * m[3])
+  const s = m[0] * m[0] + m[1] * m[1] + m[2] * m[2] + m[3] * m[3]
+  const det = m[0] * m[3] - m[1] * m[2]
+  return Math.sqrt((s + Math.sqrt(Math.max(0, s * s - 4 * det * det))) / 2) * (1 + 1e-12)
 }
 
 /**
@@ -1135,7 +1151,9 @@ function paintedBox(el: XmlEl, a: Record<string, string>, m: Mat, eff: Record<st
     const ml = Number((style.find((st) => st.startsWith('stroke-miterlimit=')) ?? 'stroke-miterlimit=4').slice(18))
     const cap = style.find((st) => st.startsWith('stroke-linecap='))
     const join = style.find((st) => st.startsWith('stroke-linejoin='))
-    let k = join === undefined || join === 'stroke-linejoin=miter' ? Math.max(1, ml) : 1
+    // (a path of nothing but circles has no corner for a join to miter)
+    const circles = el.tag === 'path' && geom.slice(5).split('|')[0]!.split(/(?=M)/).every(isCirclePiece)
+    let k = !circles && (join === undefined || join === 'stroke-linejoin=miter') ? Math.max(1, ml) : 1
     if (cap === 'stroke-linecap=square') k = Math.max(k, Math.SQRT2)
     if (!Number.isFinite(sw) || !Number.isFinite(k)) return null
     inflate += (sw * linScale(m) * k) / 2
@@ -1258,8 +1276,17 @@ function pathHull(d: string): Array<[number, number]> | null {
           const y1 = -Math.sin(phi) * dx + Math.cos(phi) * dy
           const lambda = (x1 * x1) / (rx * rx) + (y1 * y1) / (ry * ry)
           if (lambda > 1) { rx *= Math.sqrt(lambda); ry *= Math.sqrt(lambda) }
-          const reach = 2 * Math.max(rx, ry)
-          pts.push([ex - reach, ey - reach], [ex + reach, ey + reach])
+          // (the arc lies on its ellipse, and the ellipse in the disc of its larger radius about its centre: the centre is found from the
+          // ends as the SVG implementation notes F.6.5 do, and the disc grown by what the paths' three decimals can move it (0.0005 a coordinate))
+          const [large, sweep] = [n[3]! !== 0, n[4]! !== 0]
+          const rx2 = rx * rx, ry2 = ry * ry
+          const den = rx2 * y1 * y1 + ry2 * x1 * x1
+          const coef = den > 0 ? (large === sweep ? -1 : 1) * Math.sqrt(Math.max(0, (rx2 * ry2 - den) / den)) : 0
+          const kx = coef * (rx * y1) / ry, ky = coef * (-ry * x1) / rx
+          const mx = Math.cos(phi) * kx - Math.sin(phi) * ky + (cx + ex) / 2
+          const my = Math.sin(phi) * kx + Math.cos(phi) * ky + (cy + ey) / 2
+          const reach = Math.max(rx, ry) + 0.002
+          pts.push([mx - reach, my - reach], [mx + reach, my + reach])
         }
         // (a zero radius draws the straight line between the ends)
         pts.push([cx, cy], [ex, ey])

@@ -118,3 +118,29 @@ describe('canonicalizeSvg: the unpinned behaviours (C672)', () => {
     expect(CASES.length).toBeGreaterThanOrEqual(70)
   })
 })
+
+/**
+ * N-batch of translucent / stroked circles (the batches of core's overlap-batch.ts): one path of circles whose painted boxes do not
+ * meet is those circles, one record each; the box of a circle is the circle (its centre found from the arcs' ends) and its stroke, with
+ * no miter corner, the scale of a transform its spectral norm; and a batch of circles that do meet is NOT taken for the circles one by one (their overlap composites once).
+ */
+describe('N-batch of circles whose strokes do not meet', () => {
+  const circ = (x: number, y: number, r: number): string => `M${x + r},${y}A${r},${r},0,1,1,${x - r},${y}A${r},${r},0,1,1,${x + r},${y}`
+  const paint = 'fill="#4c78a8" stroke="#222222" stroke-width="1.5" opacity="0.5"'
+  const one = (d: string): string => `<path d="${d}" ${paint}/>`
+  const batch = (...c: Array<[number, number, number]>): string => one(c.map(([x, y, r]) => circ(x, y, r)).join(''))
+  const each = (...c: Array<[number, number, number]>): string => c.map(([x, y, r]) => one(circ(x, y, r))).join('')
+  const noDiff = (a: string, b: string): string[] => diffCanonical(canonicalizeSvg(wrap(a)), canonicalizeSvg(wrap(b)))
+
+  it('apart: a batch is its circles', () => {
+    expect(noDiff(batch([20, 30, 4], [34, 30, 4], [60, 50, 3.5]), each([20, 30, 4], [34, 30, 4], [60, 50, 3.5]))).toEqual([])
+  })
+  it('the gap that separates two circles is the one their strokes and a pixel of antialiasing leave (1.5 / 2 + 1 each side)', () => {
+    // centres 4 + 4 + 2 * (0.75 + 1) = 11.5 apart: boxes touch (meet); a hair more and they do not
+    expect(noDiff(batch([20, 30, 4], [31.5, 30, 4]), each([20, 30, 4], [31.5, 30, 4]))).not.toEqual([])
+    expect(noDiff(batch([20, 30, 4], [31.6, 30, 4]), each([20, 30, 4], [31.6, 30, 4]))).toEqual([])
+  })
+  it('overlapping circles in one path are not circles one by one', () => {
+    expect(noDiff(batch([20, 30, 4], [25, 30, 4]), each([20, 30, 4], [25, 30, 4]))).not.toEqual([])
+  })
+})

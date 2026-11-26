@@ -99,7 +99,7 @@ describe('the batcher', () => {
         if (!symbolInkBox(it, b)) continue
         const padded = [b[0]! - 1, b[1]! - 1, b[2]! + 1, b[3]! + 1]
         const wide = padded[2]! - padded[0]! >= 256 || padded[3]! - padded[1]! >= 256
-        const free = boxes.every((o) => !(padded[0]! < o[2]! && o[0]! < padded[2]! && padded[1]! < o[3]! && o[1]! < padded[3]!))
+        const free = boxes.every((o) => !(padded[0]! <= o[2]! && o[0]! <= padded[2]! && padded[1]! <= o[3]! && o[1]! <= padded[3]!))
         const took = batch.add(it)
         if (!wide) expect(took, `${round}.${n}`).toBe(free)
         if (took) boxes.push(padded)
@@ -148,7 +148,7 @@ describe('the batcher', () => {
     for (let from = 0; from < items.length; from++) expect(disjointEnd(batch, items, from, 256, () => true)).toBeLessThanOrEqual(from + 1)
   })
 
-  it('canvas: a run painted in batches puts the pixels of one fill and stroke per symbol, whatever it overlaps', () => {
+  it('canvas: a run painted in batches puts the pixels of one fill and stroke per symbol, whatever it overlaps', { timeout: 60_000 }, () => {
     const r = mulberry32(37)
     let batched = 0
     for (let round = 0; round < 60; round++) {

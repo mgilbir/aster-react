@@ -283,6 +283,15 @@ describe('denseMarks batching', () => {
     expect(renderSceneToDomElement(pile, document, { denseMarks: true }).querySelectorAll('g.mark-symbol > path').length).toBe(1000)
   })
 
+  it('a symbol with an accessible name keeps its element: batches hold the nameless ones (or those aria hides)', () => {
+    const named = (extra: Record<string, unknown>) => evaluateChart(compileChart(denseSpec(1000, { opacity: { value: 0.5 }, ...extra }) as never))
+    const elements = (scene: ReturnType<typeof named>) => renderSceneToDomElement(scene, document, { denseMarks: true }).querySelectorAll('g.mark-symbol > path').length
+    const described = named({ description: { signal: '"point " + datum.x' } })
+    expect(elements(described)).toBe(1000)
+    expect(elements(named({}))).toBeLessThan(200)
+    expect(elements(named({ description: { signal: '"point " + datum.x' }, aria: { value: false } }))).toBeLessThan(200)
+  })
+
   it('appends into the last chunk without touching earlier ones', async () => {
     const { createChartStream } = await import('./stream.js')
     const spec = denseSpec(600)
