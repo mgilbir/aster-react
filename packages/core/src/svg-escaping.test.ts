@@ -64,7 +64,7 @@ const CHANNELS: Record<string, Kind> = {
   cornerRadius: 'num', cornerRadiusTopLeft: 'num', cornerRadiusTopRight: 'num', cornerRadiusBottomLeft: 'num',
   cornerRadiusBottomRight: 'num', dx: 'num', dy: 'num', fontSize: 'num', lineHeight: 'num', limit: 'num',
   strokeWidth: 'num', opacity: 'num', fillOpacity: 'num', strokeOpacity: 'num', scaleX: 'num', scaleY: 'num',
-  tension: 'num', strokeDashOffset: 'num', strokeMiterLimit: 'num', theta: 'num', zindex: 'num',
+  tension: 'num', strokeDashOffset: 'num', strokeMiterLimit: 'num', theta: 'num',
   fill: 'color', stroke: 'color',
   strokeDash: 'dash',
   shape: 'shape', baseline: 'str', align: 'str', interpolate: 'str', orient: 'str', strokeJoin: 'str',
@@ -87,6 +87,7 @@ const CHANNELS: Record<string, Kind> = {
 const STRUCTURE: Record<string, string> = {
   items: 'the child list',
   marktype: 'the mark kind the renderer dispatches on',
+  zindex: 'the order items paint in (paint-order.ts compares it as a number; no renderer writes it)',
   mark: 'the item\'s mark group (a back reference)',
   datum: 'the row an item was made from (written only as `dataDatum`)',
   __gen: 'the evaluation that made the item (the patcher\'s clean test)',
@@ -385,6 +386,15 @@ describe('SVG string renderer escapes every attribute and text value', () => {
       })
     })
   }
+
+  it('zindex orders painting and is never written: a hostile value reaches no output', () => {
+    for (const h of HOSTILE) {
+      let svg: string
+      try { svg = renderSceneToSvg(withChannel('zindex', h)) } catch { continue }
+      expect(svg, JSON.stringify(h)).not.toContain(String(h))
+      expect(describeDiff(skeletonOfSvg(svg), skeletonOfSvg(renderSceneToSvg(withChannel('zindex', 5)))), JSON.stringify(h)).toBeNull()
+    }
+  })
 
   it('the object forms are drawn, not refused, by most channels (guards the checks above, which skip a refusal)', () => {
     const drawn = Object.keys(CHANNELS).filter((channel) => {
