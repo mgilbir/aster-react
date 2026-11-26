@@ -21,7 +21,7 @@
  *
  * The stream owns a `ChartSession` and a spec. It never mutates the spec.
  */
-import { createChartSession, type ChartSession } from './session.js'
+import { createChartSession, noteDeepFrozen, type ChartSession } from './session.js'
 import { installPart, partLoaded } from './engine-parts.js'
 import { applyPipelineWithPulse } from './incremental-engine.js'
 import { dict } from './util.js'
@@ -482,16 +482,25 @@ function frozenSnapshot(spec: VgSpec): VgSpec {
     return c
   }
   const pending: object[] = []
+  let deep = true
   const root = copyOf(spec)
   while (pending.length) {
     const from = pending.pop()!
     const to = copies.get(from)! as Record<string, unknown>
     for (const k of Object.keys(from)) {
       const v = (from as Record<string, unknown>)[k]
-      to[k] = plain(v) ? copyOf(v) : v
+      if (plain(v)) to[k] = copyOf(v)
+      else {
+        // (anything else that is an object, and a function, is shared as it is and is not frozen: the copy is then not deep-frozen)
+        if (v !== null && (typeof v === 'object' || typeof v === 'function')) deep = false
+        to[k] = v
+      }
     }
   }
   for (const c of copies.values()) Object.freeze(c)
+  // (every object of the copy is ours, frozen, with data properties only: the session need not walk it again to know it is deep-frozen,
+  // which for a spec with its rows in it is a walk of every row at the first flush)
+  if (deep) noteDeepFrozen(copies.values())
   return root as VgSpec
 }
 

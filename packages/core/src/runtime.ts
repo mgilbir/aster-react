@@ -866,6 +866,8 @@ interface EvalContext {
   signalErrors?: Map<string, unknown>
   /** The items of the named marks built so far (a mark may read another mark's items as its data: `from: {data: <mark name>}`). */
   markItems: Map<string, SceneItem[]>
+  /** What `runtime.data` reads the named marks' items from (`markItems` while the evaluation runs; see {@link MarkScope}). */
+  markScope: MarkScope
   /** The container of each named mark built so far (its type and items; a group mark's are its group items): what a `label` transform avoids or labels. */
   markContainers: Map<string, { marktype: string; items: SceneItem[] }>
   /** While a top-level group mark is made: every list of gradient definitions registered, in order (see `GroupMarkRecord.defs`). */
@@ -1013,10 +1015,11 @@ function prepareChartCtx(
   }
   // (the items of the named marks made so far: what `data('<mark>')` reads, as vega's DataScope of a mark is its items)
   const markItems = new Map<string, SceneItem[]>()
+  const markScope: MarkScope = { items: markItems }
   const runtime: ExpressionRuntime = {
     scale: (name) => scales.get(name),
     // (vega-functions `data`: the values of the data scope of that name; a named mark's scope is its items, in the order it draws them)
-    data: (name) => rowsOf(name) ?? (markNamesOf(chart).has(name) ? markItems.get(name) : undefined),
+    data: (name) => rowsOf(name) ?? (markNamesOf(chart).has(name) ? markItemsRead(markScope, name) : undefined),
     projection: (name) => transformProjections.get(name),
     tree: (name) => {
       const root = transformHierarchies.get(name)
@@ -1056,7 +1059,7 @@ function prepareChartCtx(
       // an explicit view size (the host's, or the fit loop's resize) wins over an `init`
       ...(explicitSize.width ? ['width'] : []), ...(explicitSize.height ? ['height'] : []),
     ]),
-    hierarchies: transformHierarchies, affected: new Set(), incremental: false, ...(txn.engine ? { engine: txn.engine } : {}), deadline, checkDeadline, markItems, markContainers: new Map(),
+    hierarchies: transformHierarchies, affected: new Set(), incremental: false, ...(txn.engine ? { engine: txn.engine } : {}), deadline, checkDeadline, markItems, markScope, markContainers: new Map(),
     datasetPulses: new Map(),
     prev, committed: txn.prev, ...(txn.unchanged ? { unchanged: txn.unchanged } : {}), ...(txn.pulseBases ? { pulseBases: txn.pulseBases } : {}), ...(txn.lastPass ? { earlier: txn.lastPass } : {}), draft: newState(txn.gen), ids: { value: txn.prev?.idCounter ?? 0 }, idStart: txn.prev?.idCounter ?? 0, gen: txn.gen, claimed: txn.claimed, extraFp, ...encodeLogEntry(input.signals), dsEpoch: 0, scaleReuse: new Map(), distinctCache: new WeakMap(), defsAsked: { n: 0 },
     domainRaw: input.domainRaw ? new Map(Object.entries(input.domainRaw).map(([k, v]) => [k, v])) : undefined,
@@ -1265,16 +1268,20 @@ const refuseHint = (what: string, name: string, why: string): never => {
  * The part of `checkHints` that needs no chart (the session checks it before it reads the hints): every change list is a list of
  * whole numbers (an array, or another iterable such as a Set), every pulse an object that says something.
  */
+function hintIndices(what: string, name: string, list: unknown, field: string): void {
+  if (list === null || typeof list !== 'object' || typeof (list as Iterable<unknown>)[Symbol.iterator] !== 'function') refuseHint(what, name, `but its ${field} is not a list of row indices`)
+  for (const i of list as Iterable<unknown>) if (!Number.isInteger(i)) refuseHint(what, name, `but ${typeof i === 'number' ? String(i) : JSON.stringify(i) ?? String(i)} in its ${field} is not a row index (a whole number)`)
+}
 export function checkHintShapes(input: RuntimeInput): void {
-  const indices = (what: string, name: string, list: unknown, field: string): void => {
-    if (list === null || typeof list !== 'object' || typeof (list as Iterable<unknown>)[Symbol.iterator] !== 'function') refuseHint(what, name, `but its ${field} is not a list of row indices`)
-    for (const i of list as Iterable<unknown>) if (!Number.isInteger(i)) refuseHint(what, name, `but ${typeof i === 'number' ? String(i) : JSON.stringify(i) ?? String(i)} in its ${field} is not a row index (a whole number)`)
-  }
-  for (const [name, list] of Object.entries(input.dataChanges ?? {})) indices('dataChanges', name, list, 'list')
-  for (const [name, p] of Object.entries(input.dataPulse ?? {})) {
+  const changes = input.dataChanges
+  if (changes !== undefined) for (const name of Object.keys(changes)) hintIndices('dataChanges', name, changes[name], 'list')
+  const pulses = input.dataPulse
+  if (pulses === undefined) return
+  for (const name of Object.keys(pulses)) {
+    const p = pulses[name]!
     if (p === null || typeof p !== 'object') refuseHint('dataPulse', name, 'but its pulse is not an object')
     if (p.changed === undefined && p.from === undefined && !p.appendOnly) refuseHint('dataPulse', name, 'but its pulse says nothing (no `changed`, `from` or `appendOnly`)')
-    if (p.changed !== undefined) indices('dataPulse', name, p.changed, '`changed`')
+    if (p.changed !== undefined) hintIndices('dataPulse', name, p.changed, '`changed`')
     if (p.from !== undefined && !Array.isArray(p.from)) refuseHint('dataPulse', name, 'but its `from` is not an array')
   }
 }
@@ -2406,7 +2413,7 @@ function buildAxisAndLegend(
   // What placing the legends reads besides the legends themselves: the anchors, the plot's size and whether they are laid out.
   // `config.legend.layout`, as vega reads it (`objectProperty`): signals at any depth, the value they hold now
   const legendLayout = legends.length ? resolvedLegendLayout(ctx) : NO_LAYOUT
-  const placement = keep && legends.length > 0 && guidesKeepable(ctx) ? legendPlacementKey(anchorsOf(), layoutW, layoutH, ctx.rawGuides === true || ctx.legendsRaw === true) + '\u0001' + valueKey(legendLayout) : null
+  const placement = keep && legends.length > 0 && guidesKeepable(ctx) ? legendPlacementKey(anchorsOf(), layoutW, layoutH, ctx.rawGuides === true || ctx.legendsRaw === true) + '\u0001' + (legendLayout === NO_LAYOUT ? NO_LAYOUT_KEY : valueKey(legendLayout)) : null
   // Every legend of the scope kept as the evaluation before placed it, when each is kept and they are placed against the same: the
   // placement of one depends on the others of its orient, so they are kept together or made again together (see `keptLegends`).
   const keptGroups = placement !== null ? keptLegends(ctx, legends, placement) : undefined
@@ -2472,6 +2479,8 @@ function buildAxisAndLegend(
 
 /** What the legends of a scope are placed against (see `buildAxisAndLegend`), as a key: the anchors, the plot's size, the raw mode. */
 const NO_LAYOUT: Record<string, unknown> = {}
+/** (`valueKey` of the empty layout, which is the layout of nearly every chart: not computed on each evaluation) */
+const NO_LAYOUT_KEY = valueKey(NO_LAYOUT)
 
 /** `config.legend.layout` with the signals in it (at any depth, or the whole of it) resolved; none when it is no object. */
 function resolvedLegendLayout(ctx: EvalContext): Record<string, unknown> {
@@ -3215,6 +3224,47 @@ function sameRows(ctx: EvalContext, name: string): boolean {
   // (a name that is a mark's, not a dataset's: its items, which nothing pins across evaluations, are never known to be the same)
   if (!ctx.datasets.has(name) && markNamesOf(ctx.chart).has(name)) return false
   return !ctx.affected.has(name) && samePin(ctx.prev?.rows.get(name), ctx.datasets.get(name))
+}
+
+/**
+ * The items of the named marks that an expression runtime reads (`data('<mark>')`): the evaluation's own map while it runs, and after
+ * the scene it made is returned (`sealMarkScope`) the same map only for a chart that reads a mark by name (`readsMarkItemsByName`).
+ * The runtime is held by the scene, and so by whatever holds the scene for the evaluation after; a runtime that holds an evaluation's
+ * items keeps them reachable from a scene that is already old when the next evaluation makes its own, and every minor collection
+ * then copies and promotes the items of every scene made since (measured: a signal write on 10 000 items took twice as long
+ * for it). A chart that reads no mark's items cannot ask for them later, so its runtime lets them go.
+ */
+interface MarkScope {
+  items: Map<string, SceneItem[]> | null
+}
+function markItemsRead(scope: MarkScope, name: string): SceneItem[] | undefined {
+  return scope.items?.get(name)
+}
+function sealMarkScope(scope: MarkScope, chart: CompiledChart): void {
+  if (scope.items !== null && !readsMarkItemsByName(chart)) scope.items = null
+}
+
+/** Whether an expression of the chart may read a named mark's items: names one in `data(...)`, or a dataset by a name it computes. */
+const READS_MARK_ITEMS = new WeakMap<CompiledChart, boolean>()
+function readsMarkItemsByName(chart: CompiledChart): boolean {
+  let out = READS_MARK_ITEMS.get(chart)
+  if (out !== undefined) return out
+  const names = markNamesOf(chart)
+  let reads = false
+  if (names.size > 0) {
+    const seen = new Set<object>()
+    const visit = (str: string): void => {
+      if (reads) return
+      const read = datasetsReadIn(str)
+      if (read === null || read.some((n) => names.has(n))) reads = true
+    }
+    for (const part of [chart.signalDefs, chart.data.map(dataWithoutRows), chart.scales, chart.axes, chart.legends, chart.marks, chart.projections, chart.layout, chart.frameEncode, chart.title, chart.style]) {
+      walkStrings(part, visit, seen)
+      if (reads) break
+    }
+  }
+  READS_MARK_ITEMS.set(chart, (out = reads))
+  return out
 }
 
 /** The names of a chart's marks, at any depth (what `data('<name>')` and `from: {data: <name>}` may read instead of a dataset). */
@@ -4427,11 +4477,19 @@ function evaluateViewPass(chart: CompiledChart, hostInput: RuntimeInput, txn: Ev
   }
   // Event-loop wiring (non-serialized internals)
   ;(scene as unknown as { runtime?: unknown }).runtime = ctx.runtime
+  sealMarkScope(ctx.markScope, ctx.chart)
   // (a signal whose value is a dataset's own rows -- `update: "data('t')"` -- holds the array the evaluation reads, which a later pulse
   // advances in place: the scene keeps the rows it was made with as its dataset does, through a copy made here, at the one place
   // the scene takes its signals; C30, Q14)
-  const liveRows = new Set<unknown>(ctx.datasets.values())
-  for (const [name, value] of Object.entries(ctx.signalParams)) if (Array.isArray(value) && liveRows.has(value)) ctx.signalParams[name] = value.slice()
+  // (the set of live rows is made only when a signal holds an array: most charts have none)
+  let liveRows: Set<unknown> | undefined
+  const params = ctx.signalParams
+  for (const name of Object.keys(params)) {
+    const value = params[name]
+    if (!Array.isArray(value)) continue
+    liveRows ??= new Set<unknown>(ctx.datasets.values())
+    if (liveRows.has(value)) params[name] = value.slice()
+  }
   ;(scene as unknown as { signalParams?: Record<string, unknown> }).signalParams = ctx.signalParams
   ;(scene as unknown as { compiled?: unknown }).compiled = ctx.chart
   // the limits the scene was evaluated under: the event loop runs the scene's handlers under them (signals.ts `bindSceneSignals`)

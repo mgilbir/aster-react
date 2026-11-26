@@ -88,6 +88,13 @@ const NESTED_ROWS = new WeakMap<object, string>()
 
 /** Objects known to be deep-frozen: neither they nor anything they reach can change, so what was read of them stays true. */
 const DEEP_FROZEN = new WeakSet<object>()
+/**
+ * Record objects the caller has just frozen and knows reach nothing but data properties holding primitives and objects of the same
+ * set (a copy it made itself): `isDeepFrozen` then answers for them with one lookup instead of a walk of everything they hold.
+ */
+export function noteDeepFrozen(objects: Iterable<object>): void {
+  for (const o of objects) DEEP_FROZEN.add(o)
+}
 /** Whether `root` and everything it reaches is frozen (answered once per object: later calls are one lookup). */
 export function isDeepFrozen(root: unknown): boolean {
   if (root === null || typeof root !== 'object') return false
