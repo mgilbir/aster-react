@@ -55,9 +55,15 @@ export function makeTempDir(prefix, base = tmpdir()) {
   return dir
 }
 
-/** Remove a directory made by `makeTempDir`. Safe to call twice. @param {string} dir */
-export function removeTempDir(dir) {
-  live.delete(dir)
+/**
+ * Remove a directory made by `makeTempDir`. Safe to call twice.
+ * `again` keeps it registered: whatever a late writer puts there afterwards (a browser that is still shutting down when its connection
+ * closes) is removed when the process ends.
+ * @param {string} dir
+ * @param {{ again?: boolean }} [options]
+ */
+export function removeTempDir(dir, { again = false } = {}) {
+  if (!again) live.delete(dir)
   rmSync(dir, { recursive: true, force: true, maxRetries: 3 })
 }
 
