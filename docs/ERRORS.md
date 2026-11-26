@@ -413,7 +413,7 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
 - **A group mark whose `role` is a guide's is refused when the spec is compiled.** A `group` mark with the role `axis`, `legend` or
   `title` (vega lays it out as that guide), or a prefixed one (`axis-label`, `legend-entry`, `title-text`, ...) that holds marks,
   signals, data, scales, projections, axes, legends or a title, is a `SpecParseError` whose message starts
-  `[aster] a group mark with the role "<role>"`. vega-parser makes no scope of it: what it holds is parsed in the scope around it and
+  `[aster] a group mark with the role "<role>"`, raised after every error vega's own parser raises for the spec (a duplicate name inside such a group mark is vega's message). vega-parser makes no scope of it: what it holds is parsed in the scope around it and
   its marks are attached to the scenegraph by their place among the marks of their container (the group's one item when it has exactly
   one row, else the root frame, over whatever mark held that place), so what is drawn depends on how many rows its data has and drops
   marks that were not the group's. Drop the role, give the group a `layout` or a facet (vega then makes a scope of it), or name the
