@@ -972,7 +972,8 @@ point selection and the a11y tree resolve through the scene.
   antialiasing on every side) meets a box already in the batch, so each batch holds symbols that share no pixel and the
   pixels are the per-item ones (`pnpm conformance:batch` holds batched and per-item drawings to the same pixels). A
   scatter that overlaps heavily is therefore many small batches, down to one element per symbol, whatever `denseMarks`
-  says; consecutive items with the same paint share a path.
+  says; consecutive items with the same paint share a path. A symbol that has a `description` (its aria-label and role,
+  which every Vega-Lite mark carries) keeps its own element, as vega's SVG gives it one, unless `aria: false`.
 - Client-only mounts batch directly. SSR/hydrated pages emit the per-item markup on
   the server (so hydration matches) and switch to batched in place after hydration.
 - A mark with `href` links is never batched.
