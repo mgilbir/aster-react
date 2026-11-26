@@ -76,27 +76,29 @@ export function adjustSpatial(rec: Record<string, unknown>, encode: Record<strin
   if (marktype === 'rule') return
   const canSwap = marktype === 'rect' || marktype === 'group' || marktype === 'image'
   if (program === undefined) {
-    // one adjustment over the merged set's channels (the hot path: every item of every mark)
-    const has = (k: string): boolean => encode[k] != null
-    const n = (k: string): number => rec[k] as number
-    if (has('x2')) {
-      if (has('x')) {
-        if (canSwap && n('x') > n('x2')) { const t = rec['x']; rec['x'] = rec['x2']; rec['x2'] = t }
-        rec['width'] = n('x2') - n('x')
+    // one adjustment over the merged set's channels (the hot path: every item of every mark; no closure is made for it)
+    const hasX2 = encode['x2'] != null
+    const hasXc = encode['xc'] != null
+    const hasY2 = encode['y2'] != null
+    const hasYc = encode['yc'] != null
+    if (hasX2) {
+      if (encode['x'] != null) {
+        if (canSwap && (rec['x'] as number) > (rec['x2'] as number)) { const t = rec['x']; rec['x'] = rec['x2']; rec['x2'] = t }
+        rec['width'] = (rec['x2'] as number) - (rec['x'] as number)
       } else {
-        rec['x'] = n('x2') - (n('width') || 0)
+        rec['x'] = (rec['x2'] as number) - ((rec['width'] as number) || 0)
       }
     }
-    if (has('xc')) rec['x'] = n('xc') - (n('width') || 0) / 2
-    if (has('y2')) {
-      if (has('y')) {
-        if (canSwap && n('y') > n('y2')) { const t = rec['y']; rec['y'] = rec['y2']; rec['y2'] = t }
-        rec['height'] = n('y2') - n('y')
+    if (hasXc) rec['x'] = (rec['xc'] as number) - ((rec['width'] as number) || 0) / 2
+    if (hasY2) {
+      if (encode['y'] != null) {
+        if (canSwap && (rec['y'] as number) > (rec['y2'] as number)) { const t = rec['y']; rec['y'] = rec['y2']; rec['y2'] = t }
+        rec['height'] = (rec['y2'] as number) - (rec['y'] as number)
       } else {
-        rec['y'] = n('y2') - (n('height') || 0)
+        rec['y'] = (rec['y2'] as number) - ((rec['height'] as number) || 0)
       }
     }
-    if (has('yc')) rec['y'] = n('yc') - (n('height') || 0) / 2
+    if (hasYc) rec['y'] = (rec['yc'] as number) - ((rec['height'] as number) || 0) / 2
     return
   }
   const merged = (k: string): boolean => encode[k] != null
