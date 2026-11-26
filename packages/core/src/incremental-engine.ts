@@ -18,7 +18,7 @@ import { checkRowCount } from './limits.js'
 import { markTuples, copyTuple } from './util.js'
 import { beforeWrite } from './content-stamp.js'
 import { datasetsReadIn } from './step-reuse.js'
-import { lexedText } from './expr-text.js'
+import { callPattern, lexedText } from './expr-text.js'
 import type { CompiledTransform, SortSpec } from './types.js'
 import {
   applyIdentifier, applyOne, DATA_DEPENDENT_EXPR, idField, notePublished, pulseBaseLength, withCarry,
@@ -684,7 +684,7 @@ function generatingPulse(
  * ...).
  */
 /** Expression functions that read a scale (see runtime.ts `SCALE_FN_EXPR`). */
-const READS_SCALE = /\b(scale|bandwidth|bandspace|invert|domain|range|copy|gradient)\s*\(/
+const READS_SCALE = callPattern('scale|bandwidth|bandspace|invert|domain|range|copy|gradient')
 
 /**
  * Whether a filter's verdict on a row is a function of the row (and of what does not change in this evaluation): a row it kept or

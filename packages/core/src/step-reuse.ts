@@ -14,7 +14,7 @@
 import { parseExpressionCached, type Expr } from './expr-parser.js'
 import { refId, valueKey } from './fingerprint.js'
 import { mayDrawRandom } from './random-tape.js'
-import { lexedAsWritten, lexedText } from './expr-text.js'
+import { callPattern, lexedAsWritten, lexedText } from './expr-text.js'
 import type { CompiledTransform } from './types.js'
 
 /** Transform types that read their rows, their parameters and the signals those mention, and nothing else of the view. */
@@ -384,7 +384,7 @@ function eachNode(tree: unknown, visit: (node: { type: string } & Record<string,
 /** Expression functions that read a dataset's hierarchy (vega-functions' tree lookups): what they read is not keyed by its rows. */
 const TREE_FUNCTIONS = new Set(['treePath', 'treeAncestors'])
 /** Mentions a call that may read a dataset (see {@link DATASET_FUNCTIONS}, {@link TREE_FUNCTIONS}), in lexed text. */
-const DATASET_CALL_TEXT = /\b(data|indata|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve|treePath|treeAncestors)\s*\(/
+const DATASET_CALL_TEXT = callPattern('data|indata|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve|treePath|treeAncestors')
 
 /**
  * The datasets the expression `str` reads by the names it spells out (`data("store")`, `vlSelectionTest("store", datum)`): `[]` when

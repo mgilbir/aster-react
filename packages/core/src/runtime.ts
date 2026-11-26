@@ -17,7 +17,7 @@ import { applyTransforms, applyTransformsToSharedRows, copiesRows, rowUseOf, sor
 import { fieldOf, flatKeyFn, groupKeyFn } from './row-keys.js'
 import { atRandomSite, contentKey, mayDrawRandom, normalPairs, replayable } from './random-tape.js'
 import { autosizeOf as autosizeValueOf, paddingOf, type Autosize, type AutosizeType, type Padding } from './view-props.js'
-import { lexedText } from './expr-text.js'
+import { callPattern, lexedText } from './expr-text.js'
 import { isEngineNode, noteEngineScene } from './scene-registry.js'
 import { parseExpressionCached, type Expr } from './expr-parser.js'
 import { datasetsReadIn, identifiersIn, scalesReadIn, dependencyKey, fieldsWritten, namesIn, pipelineReadsOf, reuse, runsOf, stepCounts, stepReadsOf, type StepReads, type StepRecord } from './step-reuse.js'
@@ -80,7 +80,7 @@ import { LEGEND_SCALES } from './legend-scales.js'
 import { part, requestPart } from './engine-parts.js'
 import { guideReading, type GuideKind } from './guide-model.js'
 import { ExpressionFailure, isSignal, isUnencoded, itemAriaOf, propsOf, type GuideStyles, type UserEncode } from './guide-encode.js'
-import { entryReadsItem } from './expr-reads.js'
+import { callsData, entryReadsItem } from './expr-reads.js'
 import { datumText, encodeLogOf, handlesItems, hasNamedSetsIn, hasTriggers, keptItems, namedSetsOf, stampEncodeIdent, stampEncodeSets, stampItemMark, type EncodeLog } from './encode-handlers.js'
 import { defaultMergedConfig } from './config-defaults.js'
 
@@ -1043,7 +1043,7 @@ function prepareChartCtx(
         const made = compileExpr(expr, runtime)
         // (a value that holds rows `data()` gave is made of what a later pulse advances in place, and it outlives the pulse in the scene --
         // a signal's, an item's property -- so it is made of copies where it is made: C30, Q14, the immutability of a returned scene)
-        compiled = DATA_CALL.test(expr)
+        compiled = callsData(expr)
           ? (datum, params, event, item) => {
               const v = made(datum, params, event, item)
               return v !== null && typeof v === 'object' ? detachLive(v, handedOut) : v
@@ -1628,7 +1628,7 @@ export class ProjectionRegistry extends Map<string, unknown> {
  * spells otherwise only with `\uXXXX` escapes, and the lexer skips the blanks `lexedText` turns into spaces -- so a call is found
  * whatever its spelling (and a word inside a string literal at worst finds one that is not there).
  */
-export const DATA_DEPENDENT_EXPR = /\b(data|indata|domain|range|scale|bandwidth|bandspace|invert|copy|gradient|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve|treePath|treeAncestors)\s*\(/
+export const DATA_DEPENDENT_EXPR = callPattern('data|indata|domain|range|scale|bandwidth|bandspace|invert|copy|gradient|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve|treePath|treeAncestors')
 
 /**
  * Evaluate static signal `update` expressions in declaration order against the
@@ -2007,7 +2007,7 @@ function resolveSignalUpdates(ctx: EvalContext, staticOnly = false, changedNames
  * host's window. An update that makes one runs whenever it is asked to. (The clock and the random source are read once per run, as
  * vega reads them once per pulse.)
  */
-const UNKEYED_SIGNAL_CALL = /\b(windowSize|screen|geo[A-Za-z]*)\s*\(/
+const UNKEYED_SIGNAL_CALL = callPattern('windowSize|screen|geo[A-Za-z]*')
 
 interface SignalReads { names: readonly string[]; data: readonly string[] | null; scales: boolean; trees: boolean }
 const SIGNAL_READS = new WeakMap<CompiledSignalDef, Map<string, SignalReads | null>>()
@@ -2665,11 +2665,11 @@ function walkStrings(
 }
 
 /** Expression functions that read scales. */
-const SCALE_FN_EXPR = /\b(scale|bandwidth|bandspace|invert|domain|range|copy|gradient)\s*\(/
+const SCALE_FN_EXPR = callPattern('scale|bandwidth|bandspace|invert|domain|range|copy|gradient')
 /** Expression functions that read datasets. */
-const DATA_FN_EXPR = /\b(data|indata|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve)\s*\(/
+const DATA_FN_EXPR = callPattern('data|indata|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve')
 /** Expression functions that read a dataset's hierarchy (`treePath`, `treeAncestors`). */
-const TREE_FN_EXPR = /\b(treePath|treeAncestors)\s*\(/
+const TREE_FN_EXPR = callPattern('treePath|treeAncestors')
 
 /** What a dataset's pipeline reads besides its `source`. */
 interface DatasetDeps { names: Set<string>; allData: boolean }
@@ -3075,7 +3075,7 @@ const KEYED_VIEW_SIGNALS = ['width', 'height', 'padding', 'autosize', 'backgroun
  * window, and the geo functions (a projection is made from signals of its own). A definition that makes one is keyed by every
  * signal.
  */
-const UNNAMED_READ_CALL = /\b(now|random|sampleNormal|sampleLogNormal|sampleUniform|windowSize|screen|containerSize|geo[A-Za-z]*)\s*\(/
+const UNNAMED_READ_CALL = callPattern('now|random|sampleNormal|sampleLogNormal|sampleUniform|windowSize|screen|containerSize|geo[A-Za-z]*')
 
 const NAMES_MENTIONED = new WeakMap<object, readonly string[] | null>()
 
@@ -5705,9 +5705,6 @@ function keptBuild(ctx: EvalContext, name: string, inputs: readonly unknown[] | 
   }
   return undefined
 }
-
-/** Code that may ask a dataset's rows (`data(...)`, as vega-functions names it). */
-const DATA_CALL = /\bdata\s*\(/
 
 /**
  * Values `detachLive` walked: the ones that hold no array the engine advances in place, and the copies it made. A signal's value is

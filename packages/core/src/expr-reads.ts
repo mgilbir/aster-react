@@ -88,6 +88,33 @@ export function testedStoresIn(code: string): string[] {
   return out
 }
 
+/**
+ * Whether an expression calls `data`, as the evaluator resolves the callee (the parsed tree, not the text: `(data)('t')`,
+ * `data ('t')`, `\u0064ata('t')` and the encoders' spelling `_data('t')` all call it). Only a bare name is callable, so only a call of
+ * a name is looked at. `data` is the one function that hands out an array the engine advances in place (a dataset's rows, a named
+ * mark's items; `treePath` and `treeAncestors` answer fresh arrays of rows, `indata` and the selection functions answer derived
+ * values). Not cached here: the runtime decides once per expression text. Text the parser refuses answers `true` (it is refused where it is compiled; what is unknown is taken to call it).
+ */
+export function callsData(code: string): boolean {
+  let found = false
+  const visit = (n: unknown): void => {
+    if (found || n == null || typeof n !== 'object') return
+    if (Array.isArray(n)) { n.forEach(visit); return }
+    const node = n as AstNode
+    if (node.type === 'CallExpression') {
+      const callee = node.callee as AstNode | undefined
+      // (`_name` is the encoders' spelling of `name`, as the evaluator reads it)
+      if (callee?.type === 'Identifier') {
+        const name = callee.name as string
+        if ((name.startsWith('_') ? name.slice(1) : name) === 'data') { found = true; return }
+      }
+    }
+    for (const k of Object.keys(node)) if (k !== 'type') visit(node[k])
+  }
+  try { visit(parseExpressionCached(code)) } catch { return true }
+  return found
+}
+
 /** The identifiers an expression reads (signal references among them), and `data:NAME` for every dataset it reads by name. */
 export function expressionReads(code: string): ReadonlySet<string> {
   let have = READS.get(code)
