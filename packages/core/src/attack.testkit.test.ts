@@ -8,23 +8,31 @@ import { mkdirSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { makeTempDir, removeTempDir } from '../../../scripts/lib/temp-dir.mjs'
-import { attack } from './attack.testkit.js'
 
 const root = makeTempDir('aster-attack-guard-')
-afterAll(() => removeTempDir(root))
-let n = 0
+// TMPDIR is the sandbox BEFORE the kit is imported: a directory the kit makes when it is loaded (the old module-level one) is seen too.
+const box = join(root, 'os-tmp')
+mkdirSync(box)
+const realTmp = process.env.TMPDIR
+process.env.TMPDIR = box
+const { attack } = await import('./attack.testkit.js')
+afterAll(() => {
+  if (realTmp === undefined) delete process.env.TMPDIR
+  else process.env.TMPDIR = realTmp
+  removeTempDir(root)
+})
 
-/** Run `fn` with TMPDIR (the OS temp dir) pointed at a fresh directory; return what is left in it afterwards. */
+/** Run `fn`; return what is in the sandbox afterwards (it must be nothing: not even between attacks). */
 async function leftBehind(fn: () => Promise<unknown>): Promise<string[]> {
-  const box = join(root, `tmp${n++}`)
-  mkdirSync(box)
-  const old = process.env.TMPDIR
-  process.env.TMPDIR = box
-  try { await fn() } finally { if (old === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = old }
+  await fn()
   return readdirSync(box)
 }
 
 describe('attack() leaves no temp directory', () => {
+  it('after the kit is loaded and before any attack runs', () => {
+    expect(readdirSync(box)).toEqual([])
+  })
+
   it('when the body returns', async () => {
     expect(await leftBehind(async () => { expect((await attack('return 1 + 1')).value).toBe(2) })).toEqual([])
   }, 60_000)

@@ -43,7 +43,7 @@ import { spawn } from 'node:child_process'
 import { readdirSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { cli } from './lib/cli.mjs'
-import { makeTempDir, removeTempDir } from './lib/temp-dir.mjs'
+import { makeTempDir, removeTempDir, sandboxEnv } from './lib/temp-dir.mjs'
 
 /**
  * Every gate has a deadline (a Playwright page that never settles must not hold a run, or CI's six-hour default, hostage): the
@@ -204,7 +204,7 @@ export function runGate(g, { stdio = 'inherit', env = process.env } = {}) {
 async function runInTempSandbox(g, run) {
   const sandbox = makeTempDir('aster-gate-tmp-')
   try {
-    const r = await run(g, { env: { ...process.env, TMPDIR: sandbox, TMP: sandbox, TEMP: sandbox } })
+    const r = await run(g, { env: { ...process.env, ...sandboxEnv(sandbox) } })
     const leaked = readdirSync(sandbox)
     if (leaked.length) {
       console.error(`[gates] ${g.name} left ${leaked.length} entr${leaked.length === 1 ? 'y' : 'ies'} in its temp dir (a temp directory must be removed on success, on failure and when killed): ${leaked.slice(0, 10).join(', ')}${leaked.length > 10 ? ', ...' : ''}`)

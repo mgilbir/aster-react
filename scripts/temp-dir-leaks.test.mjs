@@ -18,7 +18,7 @@ import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
 import { runGate, runGates } from './gates.mjs'
-import { makeTempDir, removeTempDir, withTempDir, withTempDirSync } from './lib/temp-dir.mjs'
+import { makeTempDir, removeTempDir, sandboxEnv, withTempDir, withTempDirSync } from './lib/temp-dir.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const HELPER = join(root, 'scripts', 'lib', 'temp-dir.mjs')
@@ -78,7 +78,7 @@ describe('what is still alive when the process ends is removed (no `finally` run
   const child = (body, env = {}) => {
     const box = sandbox()
     const code = `import { makeTempDir, withTempDir } from ${JSON.stringify(HELPER)}\nimport { writeFileSync } from 'node:fs'\nimport { join } from 'node:path'\n${body}`
-    const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, TMPDIR: box, ...env }, encoding: 'utf8', timeout: 30_000 })
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, ...sandboxEnv(box), ...env }, encoding: 'utf8', timeout: 30_000 })
     return { r, box }
   }
   const fill = `const d = makeTempDir('aster-leak-'); writeFileSync(join(d, 'big'), 'x'.repeat(1 << 16));\n`
@@ -112,40 +112,61 @@ describe('what is still alive when the process ends is removed (no `finally` run
   })
 })
 
-describe('a browser launched with launchBrowser leaves nothing in the temp dir, however its script ends (Playwright alone leaves ~100 MB)', () => {
-  const run = (ending) => {
+describe('a browser launched with launchBrowser leaves nothing in the temp dir, however its script ends (Playwright alone has left ~100 MB)', () => {
+  // `fake` stands for Playwright: it makes its profile directory in the OS temp dir at launch, as Playwright does, and removes it only in close().
+  const run = (ending, { real = false } = {}) => {
     const box = sandbox()
-    const code = `import { chromium } from 'playwright'
-import { launchBrowser } from ${JSON.stringify(join(root, 'scripts', 'lib', 'launch-browser.mjs'))}
-const browser = await launchBrowser(chromium, { headless: true })
-await browser.newPage()
+    const code = `import { launchBrowser } from ${JSON.stringify(join(root, 'scripts', 'lib', 'launch-browser.mjs'))}
+import { EventEmitter } from 'node:events'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+${real ? "import { chromium } from 'playwright'" : ''}
+const fake = { launch: async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'playwright_chromiumdev_profile-'))
+  writeFileSync(join(profile, 'Cookies'), 'x'.repeat(1 << 16))
+  const b = new EventEmitter()
+  b.close = async () => { rmSync(profile, { recursive: true }); b.emit('disconnected') }
+  return b
+} }
+const browser = await launchBrowser(${real ? 'chromium' : 'fake'}, { headless: true })
 ${ending}`
-    const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: join(root, 'packages', 'conformance'), env: { ...process.env, TMPDIR: box }, encoding: 'utf8', timeout: 90_000 })
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: join(root, 'packages', 'conformance'), env: { ...process.env, ...sandboxEnv(box) }, encoding: 'utf8', timeout: 90_000 })
     return { r, box }
   }
   it('closed', () => {
     const { r, box } = run('await browser.close()')
     expect(r.status, r.stderr).toBe(0)
     expect(entries(box)).toEqual([])
-  }, 120_000)
+  })
   it('the script throws before it closes', () => {
     const { r, box } = run("throw new Error('the check failed')")
     expect(r.status).toBe(1)
     expect(entries(box)).toEqual([])
-  }, 120_000)
+  })
   it('the script calls process.exit before it closes', () => {
     const { r, box } = run('process.exit(2)')
     expect(r.status).toBe(2)
     expect(entries(box)).toEqual([])
-  }, 120_000)
+  })
+  it('the script is ended by a signal before it closes', () => {
+    const { r, box } = run("process.kill(process.pid, 'SIGTERM'); await new Promise((res) => setTimeout(res, 20_000))")
+    expect(r.signal).toBe('SIGTERM')
+    expect(entries(box)).toEqual([])
+  })
   it('the browser cannot be launched (the directory made for it goes too)', () => {
     const box = sandbox()
     const code = `import { launchBrowser } from ${JSON.stringify(join(root, 'scripts', 'lib', 'launch-browser.mjs'))}
 await launchBrowser({ launch: async () => { throw new Error('no browser') } }).catch((e) => console.log(e.message))`
-    const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, TMPDIR: box }, encoding: 'utf8', timeout: 30_000 })
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, ...sandboxEnv(box) }, encoding: 'utf8', timeout: 30_000 })
     expect(r.stdout.trim()).toBe('no browser')
     expect(entries(box)).toEqual([])
   })
+  it('real Chromium, thrown before close (a race inside Playwright\'s own clean-up on exit no longer leaves its profile)', () => {
+    const { r, box } = run("await browser.newPage(); throw new Error('the check failed')", { real: true })
+    expect(r.status).toBe(1)
+    expect(entries(box)).toEqual([])
+  }, 120_000)
 })
 
 describe('the gate runner fails a gate that leaves a temp directory, on every way the gate can end', () => {
