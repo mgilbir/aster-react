@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { spawnAsync } from './lib/spawn-async.mjs'
-import { makeTempDir, removeTempDir } from './lib/temp-dir.mjs'
+import { makeTempDir, removeTempDir, sandboxEnv } from './lib/temp-dir.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PUBLIC = ['core', 'react', 'vl']
@@ -54,7 +54,7 @@ const editManifest = (dir, pkg, edit) => {
 }
 
 const verify = (dir, env = {}) => spawnAsync(process.execPath, [join(root, 'scripts', 'verify-publish.mjs')], {
-  encoding: 'utf8', env: { ...process.env, ASTER_VERIFY_PUBLISH_ROOT: dir, TMPDIR: sandbox, ...env }, timeout: 280_000,
+  encoding: 'utf8', env: { ...process.env, ASTER_VERIFY_PUBLISH_ROOT: dir, ...sandboxEnv(sandbox), ...env }, timeout: 280_000,
 })
 const out = (r) => r.stdout + r.stderr
 

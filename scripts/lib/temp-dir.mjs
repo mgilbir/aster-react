@@ -11,7 +11,8 @@
  */
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 /** @type {Set<string>} */
 const live = new Set()
@@ -84,4 +85,16 @@ export function withTempDirSync(prefix, fn) {
   } finally {
     removeTempDir(dir)
   }
+}
+
+/**
+ * The environment of a process whose OS temp dir is `dir` (a sandbox that must end empty). Node's compile cache lives in
+ * `$TMPDIR/node-compile-cache` unless told otherwise (tsc, vite and pnpm turn it on): it is a cache, not a leak, so it is kept outside
+ * the sandbox, in node_modules/.cache, where every run shares it.
+ * @param {string} dir
+ * @returns {Record<string, string>}
+ */
+export function sandboxEnv(dir) {
+  const compileCache = process.env.NODE_COMPILE_CACHE ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'node_modules', '.cache', 'node-compile-cache')
+  return { TMPDIR: dir, TMP: dir, TEMP: dir, NODE_COMPILE_CACHE: compileCache }
 }
