@@ -62,6 +62,24 @@ const symbolValues = (n: number, paintIndex: (i: number) => Record<string, unkno
     ...extra(i),
   }))
 
+// The same lattice with a slip every 1200 items, so no symbol is drawn twice on one spot: two that coincide double the rasterizer's
+// antialiasing difference between one path and many elements (a difference of rasterization, not of compositing).
+const scattered = (n: number, paintIndex: (i: number) => Record<string, unknown>) =>
+  Array.from({ length: n }, (_, i) => ({ x: (i * 37 + 11 * Math.floor(i / 1200)) % 400, y: (i * 23 + 5 * Math.floor(i / 1200)) % 300, ...paintIndex(i) }))
+
+// 3000 symbols dropped at random (a seeded generator) into a 190 x 140 patch: neighbours overlap all over, so the batches are cut
+// at hundreds of places
+const cluster = (paintIndex: (i: number) => Record<string, unknown>) => {
+  let a = 413
+  const rnd = (): number => {
+    a = (a + 0x6d2b79f5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+  return Array.from({ length: 3000 }, (_, i) => ({ x: 100 + Math.floor(rnd() * 190), y: 100 + Math.floor(rnd() * 140), ...paintIndex(i) }))
+}
+
 const shapes = ['circle', 'square', 'diamond', 'triangle-up', 'cross', 'triangle-down']
 
 function denseSpec(values: Array<Record<string, unknown>>, markExtra: Record<string, unknown> = {}, clip = false): Record<string, unknown> {
@@ -122,9 +140,21 @@ const entries0: Entry[] = [
       size: 40,
     }))),
   },
-  // translucent items keep their own element (one path would composite overlaps once)
-  { name: 'batch-opacity-fallback', batched: false, spec: denseSpec(symbolValues(8000, (i) => ({ fill: '#4c78a8', size: 30, op: 0.5 + (Math.floor(i / 1000) % 2) * 0.2 }))) },
-  // one translucent run among opaque ones: the opaque runs batch, the translucent one does not
+  // translucent, blended and filled-and-stroked symbols share a path only where their ink cannot overlap (one path would composite
+  // an overlap once): a field this dense overlaps often, so the batches are short, and every cut must leave the picture as it was
+  { name: 'batch-opacity-disjoint', batched: true, spec: denseSpec(scattered(8000, (i) => ({ fill: '#4c78a8', size: 30, op: 0.5 + (Math.floor(i / 1000) % 2) * 0.2 }))) },
+  { name: 'batch-fill-stroke', batched: true, spec: denseSpec(scattered(8000, () => ({ fill: '#4c78a8', stroke: 'white', sw: 1, size: 30 }))) },
+  { name: 'batch-fill-stroke-shapes', batched: true, spec: denseSpec(scattered(8000, (i) => ({ fill: palette[Math.floor(i / 400) % 3], stroke: '#222', sw: 1 + (Math.floor(i / 400) % 4), size: 20 + (i % 7) * 10, shape: shapes[i % shapes.length] }))) },
+  { name: 'batch-blend', batched: true, spec: denseSpec(scattered(4000, () => ({ fill: '#e45756', size: 30 })), { blend: { value: 'multiply' } }) },
+  { name: 'batch-stroke-opacity', batched: true, spec: denseSpec(scattered(4000, () => ({ stroke: '#4c78a8', sw: 3, size: 30 })), { strokeOpacity: { value: 0.4 } }) },
+  { name: 'batch-cluster-opacity', batched: true, spec: denseSpec(cluster(() => ({ fill: '#e45756', size: 30, op: 0.5 }))) },
+  { name: 'batch-cluster-blend', batched: true, spec: denseSpec(cluster(() => ({ fill: '#e45756', size: 30 })), { blend: { value: 'multiply' } }) },
+  { name: 'batch-cluster-fill-stroke', batched: true, spec: denseSpec(cluster(() => ({ fill: '#e45756', stroke: 'white', sw: 2, size: 30, op: 0.5 }))) },
+  // the benchmark's scatter: random positions, a stroked translucent symbol, 1000 of them
+  { name: 'batch-scatter-1000', batched: true, spec: denseSpec(Array.from({ length: 1000 }, (_, i) => ({ x: ((i * 2654435761) >>> 0) % 4000 / 10, y: ((i * 40503 + 7) >>> 0) % 3000 / 10, fill: '#4682b4', stroke: 'white', sw: 1, size: 80, op: 0.7 }))) },
+  // symbols piled on each other: no two consecutive ones are apart, so nothing may be batched
+  { name: 'batch-translucent-piled', batched: false, spec: denseSpec(Array.from({ length: 4000 }, (_, i) => ({ x: 100 + (i % 7), y: 100 + (i % 5), fill: '#4c78a8', size: 200, op: 0.5 }))) },
+  // one translucent run among opaque ones: the opaque runs batch, and so does the translucent one where it is apart
   { name: 'batch-opacity-mixed', batched: true, spec: denseSpec(symbolValues(4000, (i) => ({ fill: palette[Math.floor(i / 1000)], size: 30, op: Math.floor(i / 1000) === 2 ? 0.5 : 1 }))) },
   // rotated items keep their own element
   { name: 'batch-rotated', batched: false, spec: denseSpec(symbolValues(4000, (i) => ({ fill: '#4c78a8', size: 30, shape: shapes[i % shapes.length] })), { angle: { value: 35 } }) },
