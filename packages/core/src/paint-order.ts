@@ -17,15 +17,35 @@ import type { SceneGroup, SceneItem } from './types.js'
 
 interface Zindexed { zindex?: unknown }
 
+/** What was known of an engine items array when it was last scanned: its first `n` items (the last of them is `last`) had no `zindex`. */
+interface Scanned { n: number; last: object; editGen: number | undefined }
+const SCANNED = new WeakMap<object, Scanned>()
+/** An array shorter than this is scanned each time: the memo costs more than it saves. */
+const SCAN_MEMO_MIN = 1024
+
 /**
  * `items` in the order vega paints them: the array itself when no item has a truthy `zindex` (the common case: one pass, nothing
  * allocated), else a new array.
+ *
+ * The array the engine keeps a mark's items in only ever grows by an append (or is edited in place with `__editGen` stamped, see
+ * runtime.ts), so a long one remembers how far it was scanned: the next call looks at the items added since, not at all of them (a
+ * stream of 100 000 symbols appended to one at a time was scanned in full by each patch of the DOM). The memo is trusted only while the
+ * stamp is the one it was made under and the last item it saw is still where it was.
  */
 export function paintOrder<T extends object>(items: readonly T[]): readonly T[] {
   const n = items.length
+  const engine = n >= SCAN_MEMO_MIN && (items as { __engineItems?: true }).__engineItems === true
+  const editGen = engine ? (items as { __editGen?: number }).__editGen : undefined
   let first = 0
+  if (engine) {
+    const memo = SCANNED.get(items)
+    if (memo !== undefined && memo.n <= n && memo.editGen === editGen && items[memo.n - 1] === memo.last) first = memo.n
+  }
   while (first < n && !(items[first] as Zindexed).zindex) first++
-  if (first === n) return items
+  if (first === n) {
+    if (engine) SCANNED.set(items, { n, last: items[n - 1]!, editGen })
+    return items
+  }
   const out: T[] = items.slice(0, first)
   const raised: Array<{ item: T; index: number }> = []
   for (let i = first; i < n; i++) {

@@ -108,3 +108,42 @@ describe("an expression runtime's view of the marks' items", () => {
     expect((quiet as unknown as { runtime: { data: (name: string) => unknown } }).runtime.data('pts')).toBeUndefined()
   })
 })
+
+describe('paintOrder over the items array the engine appends to', () => {
+  type It = { id: number; zindex?: number }
+  /** vega's order without any memory: the items whose zindex is falsy first, in order, then the others by zindex, ties in order. */
+  const reference = (items: readonly It[]): It[] => {
+    const flat = items.filter((i) => !i.zindex)
+    const raised = items.map((item, index) => ({ item, index })).filter((x) => x.item.zindex).sort((a, b) => a.item.zindex! - b.item.zindex! || a.index - b.index)
+    return [...flat, ...raised.map((x) => x.item)]
+  }
+
+  it('is the order of a full scan after any run of appends, stamped in-place edits and rollbacks', async () => {
+    const { paintOrder } = await import('./paint-order.js')
+    const rnd = lcg(99)
+    for (let run = 0; run < 40; run++) {
+      const items = Array.from({ length: 1100 + Math.floor(rnd() * 100) }, (_, i): It => ({ id: i })) as It[] & { __engineItems?: true; __editGen?: number }
+      items.__engineItems = true
+      let next = items.length
+      let gen = 0
+      for (let step = 0; step < 60; step++) {
+        const r = rnd()
+        if (r < 0.45) {
+          const k = 1 + Math.floor(rnd() * 3)
+          for (let j = 0; j < k; j++) items.push(rnd() < 0.08 ? { id: next++, zindex: 1 + Math.floor(rnd() * 3) } : { id: next++ })
+        } else if (r < 0.65) {
+          // an item replaced in place: the engine stamps the array
+          const at = Math.floor(rnd() * items.length)
+          items[at] = rnd() < 0.5 ? { id: next++, zindex: 2 } : { id: next++ }
+          items.__editGen = ++gen
+        } else if (r < 0.85) {
+          // a rolled-back append, then another: the array is shorter, then as long as before with other items in the tail
+          const drop = 1 + Math.floor(rnd() * 12)
+          items.length = Math.max(1030, items.length - drop)
+          for (let j = 0; j < drop + 2; j++) items.push(rnd() < 0.15 ? { id: next++, zindex: 1 } : { id: next++ })
+        }
+        expect(paintOrder(items).map((i) => i.id)).toEqual(reference(items).map((i) => i.id))
+      }
+    }
+  })
+})
