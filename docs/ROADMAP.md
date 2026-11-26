@@ -114,14 +114,10 @@ Each item is something the code or the gates show today; none is a plan that has
   the total coverage error of the 122-drawing raster ratchet by 14%, but 22 drawings get worse, so it is not in; doing it together
   with a re-calibration of the curve subdivision is the work. It is what separates the one generated spec (`label-1006`) whose label
   Chromium places and Aster drops ([ARCHITECTURE.md](ARCHITECTURE.md#deviations-from-vega), the dashed round-cap row).
-- **Authored marks with a guide's role.** A group mark whose `role` starts with `axis`, `legend` or `title` is a scope in Aster;
-  vega-parser parses what it holds once in the scope around it and draws no container for it (held, still differing, by
-  `mark-role-config-vs-vega: a group mark whose role starts with axis, legend or title`). A `frame` or `scope` mark that reads a
-  scale ranked late (its domain reads data) fails its layout among the late operators in vega -- the later marks are made unencoded,
-  the view is not laid out -- where Aster draws it as an ordinary mark; for a mark that reads no late scale the pass stops at it, as
-  in vega ([ARCHITECTURE.md](ARCHITECTURE.md#deviations-from-vega)). A failing guide part that reads no late scale, over a late scale
-  (a strip whose own `fill` throws), leaves the scale unevaluated in vega -- no mark that reads it is encoded and no guide over it has a
-  caption; Aster still draws them (`legend-strip-late-scale-vs-vega.test.ts` says which cases it covers).
+- **A group mark with a guide's role.** Refused, not drawn ([ERRORS.md](ERRORS.md#deliberate-differences-from-vega)): vega attaches the
+  marks of such a group mark to its container by position, over the marks that held the place, in a number that depends on the rows of
+  the group's data. Drawing it as vega does means reproducing the scenegraph's slot arithmetic for a chart no author means to draw;
+  the refusal is generated from the parser's own rule and pinned by `mark-role-config-vs-vega.test.ts`.
 - **Mark triggers on group marks and in nested scopes.** A named mark's `on` triggers write onto the items of leaf marks; a group
   mark's own items take no write, and a trigger of a mark inside a group that declares no signals runs once, not per group item
   (`mark-triggers-vs-vega.test.ts`). The `<mark>`-named data of an outer scope is visible to inner marks in Aster, where vega's

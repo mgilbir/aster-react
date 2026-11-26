@@ -985,6 +985,10 @@ function run(target: 'chart' | 'session', g: GenSpec, world0: World, steps: Step
       const a = actual instanceof Error ? actual.message : 'ok'
       const b = ref instanceof Error ? ref.message : 'ok'
       if (a !== b) return fail(stepNo, op, 'error', `reference: ${b}; incremental: ${a}`)
+      // (a state whose pass stops before a scale ranked late leaves an axis over it half built, which vega cannot draw either, and
+      // Aster refuses as it refuses a failing tick count: the state a hostile value led to, refused alike by the reference and the
+      // incremental evaluation -- the agreement this test is about. Any other refusal is the generator's mistake, below.)
+      if (/vega cannot draw the half-built axis either/.test(b)) return null
       // (both sides refusing the same state is agreement, but every generated state is one a chart can draw: a scenario that does not
       // evaluate compares nothing, and a generator that makes one has stopped testing what it names)
       return fail(stepNo, op, 'generator', `the generated state does not evaluate on either side: ${b}`)

@@ -115,15 +115,6 @@ export const EXPECTED_DIFFERENCES = Object.freeze([
   },
   {
     gate: 'test',
-    case: 'mark-role-config-vs-vega: a group mark whose role starts with axis, legend or title',
-    reason:
-      "vega-parser does not make a scope of a group mark whose role is a guide's (`axis`, `legend`, `title`, and the prefixed `axis-label`, "
-      + "`legend-entry`, `title-text` ...): what it holds is parsed once, in the scope around it, and vega draws no container for the group "
-      + "mark or its items (one `rect` where Aster draws a rect per group item inside its own `role-axis` container). Aster makes a group "
-      + "mark a scope whatever its role (C205, open: the parse of such a group mark is not modelled)."
-  },
-  {
-    gate: 'test',
     case: 'guide-null-vs-vega: a legend layout parameter nulled in the config',
     reason:
       "`config.legend.gridAlign`, `rowPadding`, `columnPadding` or `gradientLength` = null: vega-parser writes `undefined` into the "

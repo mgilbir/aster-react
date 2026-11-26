@@ -385,6 +385,57 @@ function authoredRoles(r: Rnd): Scenario {
   }
 }
 
+/**
+ * Operators ranked late (C205): a failing operator among the ones that read a scale whose domain reads data leaves everything ranked
+ * before it made (a `frame` / `scope` mark's layout, an encode over a late scale: the marks that read none are encoded, a group
+ * mark's items are hollow), and one before them (an encode, a failing strip) leaves the late scales unevaluated (the marks that read
+ * one are bare, the legend over one has no entries, no guide over one has a caption). In the view and in a group item whose scales
+ * are its own, over rows that come and go, with the failing operator, the marks around it and the guides varying.
+ */
+function lateRanked(r: Rnd): Scenario {
+  const pipe = pipeline(r)
+  const late = { name: 'late', type: 'linear', domain: { data: 't', field: 'x' }, range: 'width' }
+  const early = { name: 'early', type: 'linear', domain: [0, 10], range: 'height' }
+  const cat = { name: 'cat', type: 'ordinal', domain: { data: 't', field: 'k' }, range: 'category' }
+  const cat0 = { name: 'cat0', type: 'ordinal', domain: ['a', 'b'], range: 'category' }
+  const leaf = (u: Record<string, unknown>, extra: Record<string, unknown> = {}): Record<string, unknown> => ({ type: 'rect', from: { data: 't' }, ...extra, encode: { update: { y: { value: 1 }, width: { value: 6 }, height: { value: 6 }, ...u } } })
+  const lateX = { x: { scale: 'late', field: 'x' } }
+  const throws = { signal: 'datum.no.x' }
+  const stops: Array<[string, Record<string, unknown>[], boolean, Record<string, unknown>?]> = [
+    ['frame over late', [leaf(lateX, { role: 'frame' })], true],
+    ['scope over late', [leaf(lateX, { role: 'scope' })], true],
+    ['frame over early', [leaf({ x: { scale: 'early', field: 'v' } }, { role: 'frame' })], false],
+    ['encode over late throws', [leaf({ ...lateX, fill: throws })], true],
+    ['encode throws', [leaf({ x: throws })], false],
+    ['strip throws', [], false, { legends: [{ fill: 'cat0', type: 'gradient', encode: { gradient: { update: { fill: throws } } } }] }],
+    ['strip throws over late', [], false, { legends: [{ fill: 'cat', type: 'gradient', encode: { gradient: { update: { fill: throws } } } }] }],
+    ['legend role over late', [leaf(lateX, { role: 'legend' })], true],
+    ['title role over late', [leaf(lateX, { role: 'title' })], true],
+  ]
+  const [, stopMarks, stopsAmongLate, stopGuides] = pick(r, stops)
+  const witnesses = [leaf(lateX), leaf({ x: { scale: 'early', field: 'v' } }), leaf({ x: { value: 30 } })]
+  const around = Array.from({ length: int(r, 0, 2) }, () => pick(r, witnesses))
+  const marks = r() < 0.5 ? [...around, ...stopMarks] : [...stopMarks, ...around]
+  // (an axis over a late scale is the half-built one when the failing operator is ranked before it: refused, which nothing here compares)
+  const axes = r() < 0.6 ? [stopsAmongLate && r() < 0.5 ? { scale: 'late', orient: 'bottom', title: 'L' } : { scale: 'early', orient: 'left' }] : []
+  const legends = [...(stopGuides?.legends as Record<string, unknown>[] | undefined ?? []), ...(r() < 0.5 ? [{ fill: pick(r, ['cat', 'cat0']), title: 'C' }] : [])]
+  const inGroup = r() < 0.5
+  const scales = [late, early, cat, cat0]
+  const body = { scales, ...(axes.length ? { axes } : {}), ...(legends.length ? { legends } : {}), ...(r() < 0.5 ? { title: 'T' } : {}), marks }
+  const group = {
+    type: 'group', ...(r() < 0.5 ? { from: { data: 't' } } : {}), encode: { update: { x: { value: 5 }, y: { value: 5 }, width: { value: 100 }, height: { value: 60 } } },
+    data: [{ name: 'u', source: 't' }], ...body,
+    scales: scales.map((sc) => ({ ...sc, ...(typeof (sc as { domain?: unknown }).domain === 'object' && !Array.isArray((sc as { domain?: unknown }).domain) ? { domain: { ...(sc as unknown as { domain: Record<string, unknown> }).domain, data: 'u' } } : {}) })),
+    marks: marks.map((m) => (m.from ? { ...m, from: { data: 'u' } } : m)),
+  }
+  return {
+    spec: { ...FRAME, autosize: pick(r, ['pad', 'none']), data: [hostData(r, 't', { transform: [...pipe] })], ...(inGroup ? { marks: [group] } : body) } as unknown as VgSpec,
+    data: { t: rowsOf(r, int(r, 0, 8)) },
+    mutable: ['t'],
+    row: plainRow,
+  }
+}
+
 /** A group mark's own signals (C483): derived signals in any declaration order over the rows of the cells they are in. */
 function scopedSignals(r: Rnd): Scenario {
   const pipe = pipeline(r)
@@ -417,6 +468,7 @@ export const SHAPES: ReadonlyArray<readonly [string, (r: Rnd) => Scenario]> = [
   ['mark triggers: writes onto items', markWrites],
   ['authored marks with a layout role', authoredRoles],
   ["a group mark's own signals", scopedSignals],
+  ['operators ranked late', lateRanked],
   ['mark-from-mark', markFromMark],
   ['group-scoped reads', groupScopedReads],
   ['fitted projection', fittedProjection],
