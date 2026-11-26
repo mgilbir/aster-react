@@ -97,7 +97,7 @@ describe('the batcher', () => {
         const it = randomItem(r, () => at(r))
         const b = [0, 0, 0, 0]
         if (!symbolInkBox(it, b)) continue
-        const padded = [b[0]! - 1, b[1]! - 1, b[2]! + 1, b[3]! + 1]
+        const padded = [b[0]! - 1.01, b[1]! - 1.01, b[2]! + 1.01, b[3]! + 1.01]
         const wide = padded[2]! - padded[0]! >= 256 || padded[3]! - padded[1]! >= 256
         const free = boxes.every((o) => !(padded[0]! <= o[2]! && o[0]! <= padded[2]! && padded[1]! <= o[3]! && o[1]! <= padded[3]!))
         const took = batch.add(it)

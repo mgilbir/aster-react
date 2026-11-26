@@ -109,8 +109,13 @@ export interface DomDesc {
   dense?: boolean
 }
 
+/**
+ * A coordinate baked into a batch's path, to three decimals, half away from zero with a nudge of 1e-9: a position that is a tie in
+ * one order of float operations (320.5855) and a hair under it in the other (the group's translate added to the item's own, as an
+ * element's `transform` does) lands on the same thousandth as the element it replaces.
+ */
 function round3(v: number): string {
-  const r = Math.round(v * 1000) / 1000
+  const r = Math.round((v + Math.sign(v) * 1e-9) * 1000) / 1000
   return Object.is(r, -0) ? '0' : String(r)
 }
 

@@ -12,8 +12,8 @@
 import type { SceneItem } from './types.js'
 import { symbolInkBox } from './bounds.js'
 
-/** Every side of a box grows by this much: the pixel an anti-aliased edge can spill into. */
-const PAD = 1
+/** Every side of a box grows by this much: the pixel an anti-aliased edge can spill into, and a hundredth over (the oracle's own boxes carry the rounding of a path's three decimals, normalize.ts). */
+const PAD = 1.01
 /** The grid's cell, in scene units, and the most cells one box may span on an axis (a bigger symbol keeps its own element). */
 const CELL = 32
 const MAX_SPAN = 8
