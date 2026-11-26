@@ -895,8 +895,8 @@ lean engine with no bundler to fill the slots: there a chart that needs a part s
 For those, `import '@aster-charts/react/all'` or `await preloadParts()` before the first render is the remedy. The first paint is
 synchronous where nothing needs loading and everywhere under `/all` ([ADR 0011](adr/0011-engine-parts-load-on-demand-in-browser-builds.md)).
 
-The base `@aster-charts/react` entry does not include the Vega-Lite compiler; importing `@aster-charts/react/vl` adds about 124 kB
-gzip to the bundle (`<Chart>` 190.6 kB, `<Chart>` + `@aster-charts/react/vl` 314.2 kB eager, from the budgets of
+The base `@aster-charts/react` entry does not include the Vega-Lite compiler; importing `@aster-charts/react/vl` adds about 141 kB
+gzip to the bundle (`<Chart>` 226.0 kB, `<Chart>` + `@aster-charts/react/vl` 367.5 kB eager, from the budgets of
 `pnpm --filter @aster-charts/benchmarks run budget`, which `scripts/perf-docs.test.mjs` ties to these figures; all rows are in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)). Passing a VL spec without the add-on reports an error naming the missing
 import (in `<Chart>`'s error state and `onError`, `useChart`'s `error`; not thrown). Vega specs need no extra import. Worker hosts must import `@aster-charts/react/vl` in the worker entry as well,
 since compilation happens there.
@@ -1080,8 +1080,8 @@ SVG renderer.) Server markup is identical with or without
 hit index).
 
 Sizes (gzip, eager, from the budgets of `pnpm --filter @aster-charts/benchmarks run budget`, which `scripts/perf-docs.test.mjs` ties to
-these figures): `<Chart>` 190.6 kB,
-`<SvgChart>` 179.0 kB, `<SvgChart>` + `interaction` 190.3 kB ([PERFORMANCE.md](PERFORMANCE.md#bundle-sizes) holds every row). Use `<Chart>` unless that 11.6 kB
+these figures): `<Chart>` 226.0 kB,
+`<SvgChart>` 210.7 kB, `<SvgChart>` + `interaction` 225.6 kB ([PERFORMANCE.md](PERFORMANCE.md#bundle-sizes) holds every row). Use `<Chart>` unless that 15.3 kB
 matters; it is the zero-setup default and its behaviour does not depend on this component.
 
 #### Hooks
