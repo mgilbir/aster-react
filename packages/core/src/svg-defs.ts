@@ -33,6 +33,34 @@ export function hash53(str: string, seed = 0): string {
   return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36)
 }
 
+/**
+ * `hash53` of a string given in pieces, without joining them first: `add` the pieces in order, `digest` once. The digest is
+ * `hash53(pieces.join(''))` (the hash reads the characters one after the other), so a text built only to be hashed is never built.
+ */
+export class Hash53Stream {
+  private h1 = 0xdeadbeef
+  private h2 = 0x41c6ce57
+  add(str: string): this {
+    let h1 = this.h1
+    let h2 = this.h2
+    for (let i = 0; i < str.length; i++) {
+      const ch = str.charCodeAt(i)
+      h1 = Math.imul(h1 ^ ch, 2654435761)
+      h2 = Math.imul(h2 ^ ch, 1597334677)
+    }
+    this.h1 = h1
+    this.h2 = h2
+    return this
+  }
+  digest(): string {
+    let h1 = this.h1
+    let h2 = this.h2
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909)
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909)
+    return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36)
+  }
+}
+
 export class ClipCollector {
   /** id -> definition, in first-use order. */
   readonly defs = new Map<string, ClipDef>()

@@ -27,7 +27,7 @@
  * the same description they would get from upstream Vega.
  */
 import { Bounds as Box, boundItemOfKind } from './bounds.js'
-import { hash53 } from './svg-defs.js'
+import { Hash53Stream, hash53 } from './svg-defs.js'
 import { withSceneOutput } from './scene-output.js'
 import type { SceneGroup, SceneItem, SceneNode, SceneRoot } from './types.js'
 import { axisLabel, guideTitleText, legendLabel, scalesFromSnapshots } from './guide-caption.js'
@@ -96,6 +96,9 @@ export interface A11yOptions {
 
 interface Bounds { x1: number; y1: number; x2: number; y2: number }
 
+/** The box an item is measured into (one per module: `itemBounds` reads its four numbers at once, and does not recurse). */
+const SCRATCH = new Box()
+
 /** The marks whose items are the points of one path: an item's node is the point it stands for. */
 const PATH_MARKS = new Set(['line', 'area', 'trail'])
 
@@ -108,7 +111,7 @@ function itemBounds(it: SceneItem, tx: number, ty: number, kind: string): Bounds
   const py = +(it.y as number) || 0
   let x1 = px, y1 = py, x2 = px, y2 = py
   if (!PATH_MARKS.has(kind)) {
-    const b = new Box()
+    const b = SCRATCH.clear()
     // (a value the bounds reader refuses -- a pass vega stops at -- leaves the item at its position: the tree never throws)
     try { boundItemOfKind(b, it, kind) } catch { b.clear() }
     if (!b.empty() && Number.isFinite(b.x1) && Number.isFinite(b.y1) && Number.isFinite(b.x2) && Number.isFinite(b.y2)) {
@@ -160,11 +163,18 @@ function summaryBox(group: SceneGroup, items: SceneItem[], gx: number, gy: numbe
  */
 function datumKey(datum: unknown): string | undefined {
   if (datum == null || typeof datum !== 'object') return datum == null ? undefined : `v${hash53(typeof datum + ':' + String(datum))}`
-  let text = ''
-  for (const [k, v] of Object.entries(datum as Record<string, unknown>)) {
-    if (v === null || (typeof v !== 'object' && typeof v !== 'function')) text += `${k.length}:${k}=${typeof v}:${String(v)};`
+  // (the text `<k.length>:<k>=<typeof v>:<String(v)>;` of each primitive field, hashed as it is read: no text of the datum is made)
+  const h = new Hash53Stream()
+  let any = false
+  const rec = datum as Record<string, unknown>
+  for (const k of Object.keys(rec)) {
+    const v = rec[k]
+    if (v === null || (typeof v !== 'object' && typeof v !== 'function')) {
+      any = true
+      h.add(String(k.length)).add(':').add(k).add('=').add(typeof v).add(':').add(String(v)).add(';')
+    }
   }
-  return text === '' ? undefined : `d${hash53(text)}`
+  return any ? `d${h.digest()}` : undefined
 }
 
 /**
@@ -184,13 +194,16 @@ function markIds(markId: string, items: readonly SceneItem[]): string[] {
 
 function primitiveDatumLabel(datum: unknown): string | undefined {
   if (datum == null || typeof datum !== 'object') return undefined
-  const parts: string[] = []
-  for (const [k, v] of Object.entries(datum as Record<string, unknown>)) {
+  const rec = datum as Record<string, unknown>
+  let out: string | undefined
+  let n = 0
+  for (const k of Object.keys(rec)) {
+    const v = rec[k]
     if (k.startsWith('__') || v == null || typeof v === 'object') continue
-    parts.push(`${k}: ${String(v)}`)
-    if (parts.length >= 4) break
+    out = out === undefined ? `${k}: ${String(v)}` : `${out}, ${k}: ${String(v)}`
+    if (++n >= 4) break
   }
-  return parts.length ? parts.join(', ') : undefined
+  return out
 }
 
 function textOf(items: SceneItem[] | undefined): string | undefined {
@@ -208,7 +221,7 @@ function markNode(it: SceneItem, group: SceneGroup, id: string, tx: number, ty: 
   const b = itemBounds(it, tx, ty, marktype)
   const datumLabel = it.description ?? (it.datum != null ? primitiveDatumLabel(it.datum) : undefined)
   const label = datumLabel ?? (it.text != null ? String(it.text) : `${marktype} mark`)
-  const node: Omit<A11yNode, 'selected'> = {
+  const node: A11yNode = {
     id,
     kind: 'mark',
     marktype,
@@ -218,8 +231,11 @@ function markNode(it: SceneItem, group: SceneGroup, id: string, tx: number, ty: 
     description: datumLabel,
     x: b.x1, y: b.y1, width: b.x2 - b.x1, height: b.y2 - b.y1,
     datum: it.datum,
+    selected: undefined,
   }
-  return { ...node, selected: opts.isSelected?.(node) }
+  // (the predicate is given the node with `selected` still unset, as it always was)
+  node.selected = opts.isSelected?.(node)
+  return node
 }
 
 function guideNode(group: SceneGroup, id: string, tx: number, ty: number, scales: Map<string, unknown>, locale: SceneRoot['__locale']): A11yNode | null {
