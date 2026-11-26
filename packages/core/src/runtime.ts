@@ -8506,6 +8506,8 @@ interface EncodePlan {
   urls: boolean
   /** The per-set spatial adjustment of the encode, when its sets split a dimension's edges (spatial.ts); looked up once. */
   spatial: SpatialProgram | undefined
+  /** Whether the set defines an edge or a centre (`x2`, `xc`, `y2`, `yc`): without one, and without a program, no item of it is adjusted. */
+  edges: boolean
   /** Whether an expression of the encode names `item` (see resolveEncodeSet). */
   readsItem: boolean
 }
@@ -8579,7 +8581,7 @@ function encodePlan(encode: Record<string, EncodeValue | EncodeValue[]>): Encode
   }
   const plainSpecs = plainKeys.map((k) => encode[k]!)
   const plainKinds = Uint8Array.from(plainSpecs, encodeKind)
-  plan = { plainKeys, signalKeys, definedSpec, plainSpecs, plainKinds, urls: Object.keys(encode).some((k) => URL_CHANNELS.has(k)), spatial: spatialProgramFor(encode), readsItem: Object.values(encode).some((e) => entryReadsItem(e)) }
+  plan = { plainKeys, signalKeys, definedSpec, plainSpecs, plainKinds, urls: Object.keys(encode).some((k) => URL_CHANNELS.has(k)), spatial: spatialProgramFor(encode), edges: ['x2', 'xc', 'y2', 'yc'].some((k) => encode[k] != null), readsItem: Object.values(encode).some((e) => entryReadsItem(e)) }
   encodePlanCache.set(encode, plan)
   return plan
 }
@@ -8791,7 +8793,7 @@ function resolveEncodeSetOf(encode: Record<string, EncodeValue | EncodeValue[]>,
   const strokePaint = rec['stroke']
   if (strokePaint !== null && typeof strokePaint === 'object') registerGradient(strokePaint, ctx)
   // vega-runtime's `adjustSpatial`, per encode set (spatial.ts): x2/xc/y2/yc become x/y/width/height
-  adjustSpatial(rec, encode, marktype, plan.spatial)
+  if (plan.edges || plan.spatial !== undefined) adjustSpatial(rec, encode, marktype, plan.spatial)
 
   // The URL channels go through the policy as the item is made (outside the encode's own error handling: a refusal is the
   // policy's error, not an encode failure). An item then only ever holds what the policy made of them, so an item kept from an
