@@ -36,7 +36,7 @@ import { implicit as implicitCategory } from './scale-discrete.js'
 import { ITEM_MARK, geoRegistry, requireGeo } from './registry.js'
 import { chartLocale, formatEnvironmentKey, type Locale } from './locale.js'
 import { adjustSpatial, ENTER_COPY, spatialProgramFor, type SpatialProgram } from './spatial.js'
-import { objectProperty } from './object-property.js'
+import { holdsSignal, objectProperty } from './object-property.js'
 import type {
   CompiledAxis,
   CompiledChart,
@@ -2412,8 +2412,9 @@ function buildAxisAndLegend(
   }
   // What placing the legends reads besides the legends themselves: the anchors, the plot's size and whether they are laid out.
   // `config.legend.layout`, as vega reads it (`objectProperty`): signals at any depth, the value they hold now
-  const legendLayout = legends.length ? resolvedLegendLayout(ctx) : NO_LAYOUT
-  const placement = keep && legends.length > 0 && guidesKeepable(ctx) ? legendPlacementKey(anchorsOf(), layoutW, layoutH, ctx.rawGuides === true || ctx.legendsRaw === true) + '\u0001' + (legendLayout === NO_LAYOUT ? NO_LAYOUT_KEY : valueKey(legendLayout)) : null
+  const resolvedLayout = legends.length ? resolvedLegendLayout(ctx) : NO_RESOLVED
+  const legendLayout = resolvedLayout.layout
+  const placement = keep && legends.length > 0 && guidesKeepable(ctx) ? legendPlacementKey(anchorsOf(), layoutW, layoutH, ctx.rawGuides === true || ctx.legendsRaw === true) + '\u0001' + (resolvedLayout.key ?? valueKey(legendLayout)) : null
   // Every legend of the scope kept as the evaluation before placed it, when each is kept and they are placed against the same: the
   // placement of one depends on the others of its orient, so they are kept together or made again together (see `keptLegends`).
   const keptGroups = placement !== null ? keptLegends(ctx, legends, placement) : undefined
@@ -2482,14 +2483,28 @@ const NO_LAYOUT: Record<string, unknown> = {}
 /** (`valueKey` of the empty layout, which is the layout of nearly every chart: not computed on each evaluation) */
 const NO_LAYOUT_KEY = valueKey(NO_LAYOUT)
 
-/** `config.legend.layout` with the signals in it (at any depth, or the whole of it) resolved; none when it is no object. */
-function resolvedLegendLayout(ctx: EvalContext): Record<string, unknown> {
+/** A legend layout as the evaluation reads it, and its `valueKey` when it is the same on every evaluation. */
+interface ResolvedLayout { layout: Record<string, unknown>; key: string | undefined }
+const NO_RESOLVED: ResolvedLayout = { layout: NO_LAYOUT, key: NO_LAYOUT_KEY }
+const STATIC_LAYOUTS = new WeakMap<object, ResolvedLayout>()
+
+/**
+ * `config.legend.layout` with the signals in it (at any depth, or the whole of it) resolved; none when it is no object. One that holds no
+ * signal is resolved, and keyed, once: it is the same on every evaluation.
+ */
+function resolvedLegendLayout(ctx: EvalContext): ResolvedLayout {
   const raw = ctx.chart.legendLayout
-  if (raw === undefined) return NO_LAYOUT
+  if (raw === undefined) return NO_RESOLVED
+  const fixed = STATIC_LAYOUTS.get(raw)
+  if (fixed !== undefined) return fixed
   const v = objectProperty(raw, (code) => {
     try { return evalSignal(ctx.runtime.expr(code), ctx.signalParams) } catch (e) { reportEvalError(ctx, e); return undefined }
   })
-  return v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : NO_LAYOUT
+  const layout = v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : NO_LAYOUT
+  if (holdsSignal(raw)) return { layout, key: undefined }
+  const resolved = { layout, key: valueKey(layout) }
+  STATIC_LAYOUTS.set(raw, resolved)
+  return resolved
 }
 
 function legendPlacementKey(anchors: { xb: Sides; yb: Sides }, w: number, h: number, raw: boolean): string {
