@@ -92,6 +92,31 @@ function samePrint(a: Print, b: Print): boolean {
 }
 
 /**
+ * Whether `rows`, the array `before` was made of, still prints as `before` does: as long, and each sampled row the very object it was,
+ * holding the same fields with the same values -- `samePrint (before, printOf (rows))` without making the print. The common case of a
+ * flush of a stream or a render with the same array (nothing changed): nothing is allocated but the descriptor of each field read.
+ */
+function unchangedSince(before: Print, rows: readonly unknown[]): boolean {
+  if (before.length !== rows.length) return false
+  for (const p of before.picks) {
+    const row = rows[p.at]
+    if (!Object.is(row, p.row)) return false
+    if (row === null || typeof row !== 'object') continue
+    let j = 0
+    for (const f in row) {
+      if (!Object.hasOwn(row, f)) continue
+      if (j === SAMPLE_FIELDS) break
+      if (f !== p.fields[j]) return false
+      const d = Object.getOwnPropertyDescriptor(row, f)
+      if (!Object.is(d === undefined ? undefined : 'value' in d ? d.value : ACCESSOR, p.values[j])) return false
+      j++
+    }
+    if (j !== p.fields.length) return false
+  }
+  return true
+}
+
+/**
  * Whether a sampled row of `before` that `rows` (a new array) holds at the same index -- the very row object -- holds other values
  * now: rows changed in place and handed back in a new array (`rows[3].v = 3; setData([...rows])`), which the diff takes for unchanged
  * rows (the same objects) as it takes the same array.
@@ -168,6 +193,8 @@ export function checkChartRows(owner: object, spec: unknown, input: RowWatchInpu
     seen.add(name)
     const { rows: arr, vl } = originOf(rows)
     const prev = w.prints.get(name)
+    // (the same array, printing as it did: nothing to keep, nothing to say)
+    if (prev !== undefined && prev.rows === arr && unchangedSince(prev, arr)) return
     const next = printOf(arr)
     w.prints.set(name, next)
     if (prev === undefined || hinted.has(name) || w.warned.has(name)) return
