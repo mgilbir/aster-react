@@ -53,6 +53,7 @@ describe('a session over a pipeline of casts gives the rows the history gives', 
 
   it('over generated rows, for every cast: rows replaced, kept, removed, appended', () => {
     const rnd = lcg(4242)
+    let compared = 0
     const pick = <T,>(xs: readonly T[]): T => xs[Math.floor(rnd() * xs.length)]!
     for (let n = 0; n < 40; n++) {
       const fn = pick(['toNumber', 'toDate', 'toString', 'toBoolean'])
@@ -74,8 +75,11 @@ describe('a session over a pipeline of casts gives the rows the history gives', 
         const b = kept.evaluate(base(next, withHistory), { data: { d: next } })
         const strip = (text: string): string => JSON.stringify((JSON.parse(text) as Array<Array<[string, unknown]>>).map((r) => r.filter(([k]) => k !== 'h')))
         expect(strip(cells(a)), `${fn} step ${step}`).toBe(strip(cells(b)))
+        compared += (JSON.parse(cells(a)) as unknown[]).length
         rows = next
       }
     }
+    // (the comparison is of rows, not of two empty lists)
+    expect(compared).toBeGreaterThan(1000)
   })
 })
