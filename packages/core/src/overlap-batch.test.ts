@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest'
 import { AlphaCanvas } from './raster.js'
 import { renderSceneToCanvas } from './canvas.js'
 import { symbolInkBox } from './bounds.js'
+import { batchablePaint } from './render.js'
 import { DisjointBatch, disjointEnd } from './overlap-batch.js'
 import { mulberry32, pick } from './scene-fuzz.testlib.js'
 import type { SceneItem, SceneRoot } from './types.js'
@@ -145,5 +146,35 @@ describe('the batcher', () => {
     const items = Array.from({ length: 80 }, () => ({ x: 100 + r() * 5, y: 100 + r() * 5, size: 200, shape: 'circle', fill: 'red', fillOpacity: 0.5 }) as unknown as SceneItem)
     const batch = new DisjointBatch()
     for (let from = 0; from < items.length; from++) expect(disjointEnd(batch, items, from, 256, () => true)).toBeLessThanOrEqual(from + 1)
+  })
+
+  it('canvas: a run painted in batches puts the pixels of one fill and stroke per symbol, whatever it overlaps', () => {
+    const r = mulberry32(37)
+    let batched = 0
+    for (let round = 0; round < 60; round++) {
+      const [name, at] = fields[round % fields.length]!
+      // (one paint across the run)
+      const paint = { fill: pick(r, ['steelblue', 'rgba(200,0,0,0.5)', undefined]), stroke: pick(r, ['white', 'black', undefined]), strokeWidth: pick(r, [1, 2, 3]), fillOpacity: pick(r, [0.4, 0.7, 1]), opacity: pick(r, [0.6, 1]) }
+      if (paint.fill === undefined && paint.stroke === undefined) paint.fill = 'steelblue'
+      // (an opaque run of a fill or a stroke is one path as it always was, and where its symbols overlap, a pixel at the edge of two
+      // is covered once, not twice: that is the old batching's, not this one's)
+      if (batchablePaint(paint as unknown as SceneItem)) continue
+      // (a canvas run is symbols of one size and shape, as well as one paint)
+      const look = { size: pick(r, [9, 30, 64, 120]), shape: pick(r, ['circle', 'square', 'diamond', 'cross']) }
+      const items = Array.from({ length: 300 }, () => { const [x, y] = at(r); return { x, y, ...look, ...paint } as unknown as SceneItem })
+      const scene = { width: W, height: H, padding: { top: 0, left: 0, right: 0, bottom: 0 }, items: [{ marktype: 'symbol', role: 'mark', items }] } as unknown as SceneRoot
+      const on = new AlphaCanvas(W, H)
+      const off = new AlphaCanvas(W, H)
+      let fills = 0
+      const count = (c: AlphaCanvas): AlphaCanvas => { const f = c.fill.bind(c); c.fill = (...a: Parameters<AlphaCanvas['fill']>) => { fills++; return f(...a) }; return c }
+      renderSceneToCanvas(scene, count(on), { batchSymbols: true })
+      const batchedFills = fills
+      fills = 0
+      renderSceneToCanvas(scene, count(off), { batchSymbols: false })
+      expect(Array.from(on.alpha), `${name} round ${round}: ${JSON.stringify(paint)}`).toEqual(Array.from(off.alpha))
+      if (paint.fill !== undefined && batchedFills < fills / 2) batched++
+    }
+    // (the batching did happen where the symbols are apart: the property is not vacuous)
+    expect(batched).toBeGreaterThan(5)
   })
 })
