@@ -410,6 +410,15 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
 - **A trail with a negative `size` throws.** A trail's size is a radius, and a negative one is `negative radius: <n>` (a plain
   `Error`, no `[aster]` prefix, no `code`), thrown out of `renderSpec`, every renderer and `buildHitIndex`; nothing is logged. d3-path
   and `vega.toSVG` throw the same message, so the chart is not drawn at all, as in Vega (pinned by `geometry-differential.test.ts`).
+- **A group mark whose `role` is a guide's is refused when the spec is compiled.** A `group` mark with the role `axis`, `legend` or
+  `title` (vega lays it out as that guide), or a prefixed one (`axis-label`, `legend-entry`, `title-text`, ...) that holds marks,
+  signals, data, scales, projections, axes, legends or a title, is a `SpecParseError` whose message starts
+  `[aster] a group mark with the role "<role>"`. vega-parser makes no scope of it: what it holds is parsed in the scope around it and
+  its marks are attached to the scenegraph by their place among the marks of their container (the group's one item when it has exactly
+  one row, else the root frame, over whatever mark held that place), so what is drawn depends on how many rows its data has and drops
+  marks that were not the group's. Drop the role, give the group a `layout` or a facet (vega then makes a scope of it), or name the
+  role something else. A prefixed role with nothing in it, and one with a layout or a facet, is an ordinary group mark. The roles of
+  a leaf mark (`axis`, `legend`, `title`, `frame`, `scope`) are laid out as vega's view layout reads them.
 - **Safety refusals.** Limits, the regular-expression screen, the URL policy, the hard spec-depth ceiling and the
   `bin`/`stratify` refusals are Aster additions; see `docs/LIMITS.md`.
 - **An encode channel may not name the engine's own item state.** An encode writes each channel onto the scene item under its
@@ -534,7 +543,7 @@ with the change that adds it.
 | `[aster] unknown easing ` | `transition.easing` names a curve `EASING_NAMES` does not list (a `RangeError`) |
 | `[aster] the transition easing answered ` | a function easing returned a number that is not finite |
 | `[aster] an evaluation that keeps incremental state needs the incremental engine` | `evaluateChartPending` was handed no engine: use `evaluateChart` or a session |
-| `[aster] the ticks of the axis over scale "<name>" failed` / `... read a signal that threw` | an axis whose ticks cannot be made is refused as vega's own `toSVG` fails on its half-built axis |
+| `[aster] the ticks of the axis over scale "<name>" failed` / `... read a signal that threw` / `... were never made: the pass stopped before the scale was evaluated` | an axis whose ticks cannot be made is refused as vega's own `toSVG` fails on its half-built axis: the ticks failed, read a signal that threw, or the pass stopped at an operator ranked before the scale (a scale whose domain reads data is ranked after every operator that reads none) |
 | `[aster] data must be an object of datasets ({ name: rows[] }); got ` | the React `data` prop is not a record of rows |
 | `[aster] initial.random is a function and cannot be sent to a worker; ` | `<ChartWorkerStream random>` with a Worker |
 | `[aster] a urlPolicy with allow/onDeny functions cannot be sent to a worker; ` | a function policy with a Worker: register hooks by name (`registerWorkerUrlPolicy`) |

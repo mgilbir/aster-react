@@ -23,6 +23,19 @@ async function oracle(spec: Spec): Promise<string> {
     vega.parse(structuredClone(spec) as never), { renderer: 'none', logLevel: 0 })
   try { await view.runAsync(); return await view.toSVG() } finally { view.finalize() }
 }
+/**
+ * Vega's document, or undefined when vega cannot write one: a pass that stopped at an operator ranked among the late ones leaves a scenegraph
+ * with holes (ticks never made, marks never made from them) and vega's own serialiser throws on it. Aster must refuse such a chart too
+ * (see `refusesWhatVegaCannotDraw`): it is never given a document to draw that vega has none for.
+ */
+async function vegaDocument(spec: Spec): Promise<string | undefined> {
+  try { return await oracle(spec) } catch { return undefined }
+}
+function refusesWhatVegaCannotDraw(spec: Spec, what: string): void {
+  const log = console.error
+  console.error = () => {}
+  try { expect(() => aster(spec), `${what}: vega cannot serialise it, Aster must not draw it`).toThrow(/vega cannot draw/) } finally { console.error = log }
+}
 function aster(spec: Spec): { string: string; dom: string } {
   const scene = evaluateChart(compileChart(spec as never))
   return { string: renderSceneToSvg(scene), dom: new XMLSerializer().serializeToString(renderSceneToDomElement(scene, document) as unknown as Node)
@@ -109,13 +122,12 @@ function markSpec(r: () => number): Spec {
   if (type === 'group') m.marks = [{ type: 'rect', encode: { update: { width: { value: 5 }, height: { value: 5 }, description: { value: 'inner' } } } }]
   const d = pick(r, DESCRIPTIONS); if (d !== undefined) m.description = d
   const a = pick(r, ARIAS); if (a !== undefined) m.aria = a
-  // (the role a spec gives a mark. A guide's own roles on a DATA mark are read by vega's ARIA as the guide's, and its layout lays the
-  // mark out by them (C205: `axis`, `legend`, `title`), generated and judged in full. Not generated: `frame` and `scope`, which
-  // mark-role-config-vs-vega.test.ts compares in every cell (over marks that read no late scale: this generator's marks read the
-  // chart's data-driven scales, where vega ranks the failing layout among the late operators, which is not modelled), and a guide
-  // role on a GROUP mark, which vega parses into the scope around it and draws no container for -- held, still differing, in
-  // mark-role-config-vs-vega.test.ts (scripts/lib/expected-differences.mjs) and listed in docs/ARCHITECTURE.md "Deviations from Vega")
-  const roles = type === 'group' ? ['mark', 'custom'] : ['mark', 'axis', 'legend', 'title', 'axis-label', 'legend-entry', 'title-text', 'title-subtitle', 'legend-label', 'custom']
+  // (the role a spec gives a mark. A guide's own roles on a DATA mark are read by vega's ARIA as the guide's, and its layout reads the
+  // mark by its role (C205: `axis`, `legend`, `title`, and `frame` and `scope`, which it takes for groups and throws at), generated and
+  // judged in full, over the chart's data-driven scales too: a layout that fails there is ranked among the late operators, and the
+  // charts vega cannot serialise for it are held to be refused. A guide role on a GROUP mark is refused when the spec is compiled
+  // (vega parses what it holds into the scope around it: mark-role-config-vs-vega.test.ts holds the refusal, docs/ERRORS.md says it)
+  const roles = type === 'group' ? ['mark', 'custom'] : ['mark', 'axis', 'legend', 'title', 'axis-label', 'legend-entry', 'title-text', 'title-subtitle', 'legend-label', 'custom', 'frame', 'scope']
   if (maybe(r, 0.2)) m.role = pick(r, roles)
   if (maybe(r, 0.15)) m.interactive = false
   return m
@@ -153,7 +165,9 @@ function generated(seed: number): Spec {
 }
 
 async function judge(spec: Spec, what: string): Promise<void> {
-  const want = canonicalizeSvg(await oracle(spec))
+  const doc = await vegaDocument(spec)
+  if (doc === undefined) return refusesWhatVegaCannotDraw(spec, what)
+  const want = canonicalizeSvg(doc)
   const got = aster(spec)
   expect(diffCanonical(want, canonicalizeSvg(got.string)), `string: ${what}`).toEqual([])
   expect(diffCanonical(want, canonicalizeSvg(got.dom)), `dom: ${what}`).toEqual([])
@@ -161,7 +175,9 @@ async function judge(spec: Spec, what: string): Promise<void> {
 
 /** Judge only the document's structure (the ARIA): for a chart whose geometry or paint vega draws in a way that has its own gate. */
 async function judgeStructure(spec: Spec, what: string): Promise<void> {
-  const want = canonicalizeSvg(await oracle(spec))
+  const doc = await vegaDocument(spec)
+  if (doc === undefined) return refusesWhatVegaCannotDraw(spec, what)
+  const want = canonicalizeSvg(doc)
   const got = aster(spec)
   for (const [kind, svg] of [['string', got.string], ['dom', got.dom]] as const) {
     expect(diffCanonical(want, canonicalizeSvg(svg)).filter((x) => x.startsWith('structure:')), `${kind}: ${what}`).toEqual([])
@@ -172,7 +188,12 @@ async function judgeStructure(spec: Spec, what: string): Promise<void> {
 async function judgeAll(specs: Array<[string, Spec]>): Promise<void> {
   const bad: string[] = []
   for (const [what, spec] of specs) {
-    const want = canonicalizeSvg(await oracle(spec))
+    const doc = await vegaDocument(spec)
+    if (doc === undefined) {
+      try { refusesWhatVegaCannotDraw(spec, what) } catch (e) { bad.push((e as Error).message) }
+      continue
+    }
+    const want = canonicalizeSvg(doc)
     const got = aster(spec)
     // (the document's STRUCTURE is the ARIA; geometry and paint have their own gates)
     const structural = (a: string): string[] => diffCanonical(want, canonicalizeSvg(a)).filter((x) => x.startsWith('structure:'))
@@ -243,9 +264,10 @@ describe('generated guides and marks carry the ARIA vega writes', () => {
 
 describe('the matrix is not vacuous', () => {
   it('each family occurs in vega\'s documents with the ARIA the comparison judges', async () => {
-    const seen = { axis: 0, legend: 0, title: 0, subtitle: 0, hiddenGuide: 0, hiddenMark: 0, markContainer: 0, item: 0, noparts: 0 }
+    const seen = { axis: 0, legend: 0, title: 0, subtitle: 0, hiddenGuide: 0, hiddenMark: 0, markContainer: 0, item: 0, noparts: 0, layoutRole: 0 }
     for (let seed = 0; seed < 600; seed++) {
-      const svg = await oracle(generated(seed))
+      const svg = await vegaDocument(generated(seed))
+      if (svg === undefined) continue // (a chart vega cannot serialise: judged above, held to be refused)
       seen.axis += +/role-axis[^>]*role="graphics-symbol" aria-roledescription="axis"/.test(svg)
       seen.legend += +/aria-roledescription="legend"/.test(svg)
       seen.title += +/aria-roledescription="title"/.test(svg)
@@ -258,9 +280,11 @@ describe('the matrix is not vacuous', () => {
       seen.item += +/aria-roledescription="[a-z]+ mark"/.test(svg)
       // (an axis that draws nothing and is still a graphics-symbol: its group holds the background and an empty parts group)
       seen.noparts += +/class="mark-group role-axis"[^>]*role="graphics-symbol"[^>]*><g[^>]*><path class="background"[^>]*\/><g\/>/.test(svg)
+      // (a mark whose role is `frame` or `scope`, which vega's layout reads as a group and throws at)
+      seen.layoutRole += +/class="mark-[a-z]+ role-(frame|scope)"/.test(svg)
     }
     // (the generator draws the part-less axis in 11 of 600 seeds; the hand-written block above holds it in full)
-    for (const [k, v] of Object.entries(seen)) expect(v, k).toBeGreaterThan(k === 'noparts' ? 5 : 20)
+    for (const [k, v] of Object.entries(seen)) expect(v, k).toBeGreaterThan(k === 'noparts' || k === 'layoutRole' ? 5 : 20)
   }, 300_000)
 })
 
