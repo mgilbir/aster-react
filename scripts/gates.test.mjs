@@ -5,13 +5,13 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
 import { parseDocument } from 'yaml'
 import { DEFAULT_TIMEOUT_MS, GATES, runGate, runGates, selectGates, timeoutOf } from './gates.mjs'
+import { makeTempDir, removeTempDir } from './lib/temp-dir.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const read = (rel) => readFileSync(join(root, rel), 'utf8')
@@ -259,7 +259,7 @@ describe('every gate has a deadline and can fail on it (C251)', () => {
   }, 20_000)
 
   it('the whole process tree dies with it (a browser the gate started must not outlive the deadline)', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'aster-gates-'))
+    const dir = makeTempDir('aster-gates-')
     try {
       const pidFile = join(dir, 'grandchild.pid')
       const code = `const { spawn } = require('node:child_process'); const c = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }); require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(c.pid)); setInterval(() => {}, 1000)`
@@ -271,7 +271,7 @@ describe('every gate has a deadline and can fail on it (C251)', () => {
         try { process.kill(pid, 0); await new Promise((res) => setTimeout(res, 100)) } catch { alive = false }
       }
       expect(alive, `grandchild ${pid} survived the deadline`).toBe(false)
-    } finally { rmSync(dir, { recursive: true, force: true }) }
+    } finally { removeTempDir(dir) }
   }, 30_000)
 
   it('a gate that exits 0 passes and one that exits 1 fails, without a timeout', async () => {

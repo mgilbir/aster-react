@@ -3,43 +3,20 @@
  * sweep cases. Usage: npx tsx src/diff-vl.ts <family|case-filter> [limit]
  */
 import * as vl from 'vega-lite'
-import { mkdtempSync, readdirSync, symlinkSync, mkdirSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join, dirname } from 'node:path'
 import { createRequire } from 'node:module'
 import { compile as compileOurs } from '@aster-charts/vl'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { makeShimNodeModules, removeShimNodeModules } from './sweeps/shim-node-modules.mjs'
 
 cli({ url: import.meta.url, args: '<family|case-filter> [limit]' })
 
 const require = createRequire(import.meta.url)
 
-function makeNodeModules(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'aster-diff-'))
-  mkdirSync(join(dir, 'node_modules'))
-  const base = dirname(require.resolve('vega'))
-  const stores = [
-    join(base, '..', '..'),
-    join(dirname(require.resolve('vega-lite')), '..', '..'),
-  ]
-  const seen = new Set<string>()
-  for (const store of stores) {
-    let entries: string[] = []
-    try { entries = readdirSync(store) } catch { continue }
-    for (const name of entries) {
-      if (seen.has(name) || name.startsWith('.')) continue
-      seen.add(name)
-      try { symlinkSync(join(store, name), join(dir, 'node_modules', name), 'dir') } catch { /* linked */ }
-    }
-  }
-  return join(dir, 'node_modules')
-}
-
 const filter = process.argv[2] ?? ''
 const limit = Number(process.argv[3] ?? 5)
 
 const { generate } = await import(`./sweeps/${'vega-lite' + '-schema'}.mjs`)
-const ctx = { vl, require, nodeModules: makeNodeModules() }
+const ctx = { vl, require, nodeModules: makeShimNodeModules(require) }
 const { cases } = generate(ctx)
 const selected = cases.filter((c: any) => !filter || c.name.includes(filter))
 console.log(`${selected.length} cases match`)
@@ -95,4 +72,4 @@ for (const c of selected.slice(0, limit)) {
   if (!onlyO.length && !onlyU.length && !changed.length) console.log('  specs identical')
 }
 
-rmSync(ctx.nodeModules, { recursive: true, force: true })
+removeShimNodeModules(ctx.nodeModules)

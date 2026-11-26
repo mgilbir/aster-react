@@ -16,8 +16,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { makeTempDir, removeTempDir } from '../../../scripts/lib/temp-dir.mjs'
 import { join } from 'node:path'
 import { buildSync } from 'esbuild'
 import { compileChart, evaluateChart } from './index.js'
@@ -394,7 +393,7 @@ describe('hit grid memory', () => {
     // The old index allocated one list entry per covered cell: ~10^9 cells for
     // this rect, i.e. "FATAL ERROR: Reached heap limit". Run it in a child with a
     // memory cap so a regression cannot take the test runner down with it.
-    const dir = mkdtempSync(join(tmpdir(), 'aster-hit-'))
+    const dir = makeTempDir('aster-hit-')
     let res: ReturnType<typeof spawnSync>
     try {
       const bundle = join(dir, 'hit.mjs')
@@ -419,7 +418,7 @@ describe('hit grid memory', () => {
       `
       res = spawnSync(process.execPath, ['--max-old-space-size=256', '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 60_000 })
     } finally {
-      rmSync(dir, { recursive: true, force: true })
+      removeTempDir(dir)
     }
     expect(String(res.stderr), 'child stderr').not.toMatch(/heap limit|out of memory/i)
     expect(res.status, `child exit (${res.signal ?? ''}) ${String(res.stderr).slice(0, 300)}`).toBe(0)

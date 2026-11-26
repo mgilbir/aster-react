@@ -76,6 +76,19 @@ The exit codes of these scripts are: 0 for success (and for `--help` and `--list
 The shared code is `scripts/lib/cli.mjs` (`cli()`); `scripts/cli-usage.test.mjs` runs every script's `--help` and an unknown option
 and fails when a script named in a `package.json` does not call `cli()`, so a new script must call it.
 
+### Temporary directories
+
+A test, gate or script that makes a temporary directory removes it: on success, on a failure, on a thrown assertion and when it is
+killed. Make one with `makeTempDir` / `withTempDir` from `scripts/lib/temp-dir.mjs` (never `mkdtemp`), and launch a Playwright
+browser with `launchBrowser` from `scripts/lib/launch-browser.mjs` (never `.launch(`): the directory goes when the callback ends or
+`removeTempDir` is called, and whatever is still alive goes when the process exits or receives SIGINT, SIGTERM or SIGHUP (a `finally`
+does not run after `process.exit`). A child process that writes into a directory leaves it to its parent, which owns and removes it
+(a SIGKILLed child cannot clean up after itself).
+
+`pnpm check` runs every gate with `TMPDIR` pointed at a fresh directory and fails a gate that leaves anything in it
+(`FAIL <gate> (left temp dirs)`, naming the entries); `scripts/temp-dir-leaks.test.mjs` plants each kind of leak and watches it fail, and
+fails on a `mkdtemp` or `.launch(` call outside the two helpers. Four weeks of gate runs without this left 394 GB of `aster-*` directories.
+
 ## Writing a new test
 
 - **Core**: a focused Vitest file beside the module (`packages/core/src/*.test.ts`);

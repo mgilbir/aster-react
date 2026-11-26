@@ -1,6 +1,6 @@
 /** dist-problems (the budget's stale/orphan check) and clean-dist (what `pnpm build` runs first), on throw-away trees (C566). */
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, utimesSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
+import { makeTempDir, removeTempDir } from './lib/temp-dir.mjs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -9,7 +9,7 @@ import { spawnAsync } from './lib/spawn-async.mjs'
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..')
 const made = []
-afterAll(() => { for (const d of made) rmSync(d, { recursive: true, force: true }) })
+afterAll(() => { for (const d of made) removeTempDir(d) })
 
 function put(root, rel, text = 'x', age = 0) {
   const p = join(root, rel)
@@ -21,7 +21,7 @@ function put(root, rel, text = 'x', age = 0) {
 
 /** A tree with one built package (`core`: a.ts, b.tsx, a test file and a testing helper that its tsconfig.build.json excludes). */
 function tree() {
-  const root = mkdtempSync(join(tmpdir(), 'aster-dist-'))
+  const root = makeTempDir('aster-dist-')
   made.push(root)
   put(root, 'packages/core/tsconfig.build.json', JSON.stringify({ exclude: ['src/**/*.test.ts', 'src/testing'] }), 100)
   put(root, 'packages/core/src/a.ts', 'export const a = 1', 100)
@@ -71,7 +71,7 @@ describe('scripts/clean-dist.mjs and the build scripts', () => {
     expect((await run()).status).toBe(0)
   })
   it('refuses to run where there is no package.json (it would remove the wrong dist)', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'aster-clean-')); made.push(dir)
+    const dir = makeTempDir('aster-clean-'); made.push(dir)
     mkdirSync(join(dir, 'dist')); writeFileSync(join(dir, 'dist', 'keep.js'), 'x')
     const r = await spawnAsync(process.execPath, [join(repo, 'scripts', 'clean-dist.mjs')], { cwd: dir, timeout: 30_000 })
     expect(r.status).toBe(2)

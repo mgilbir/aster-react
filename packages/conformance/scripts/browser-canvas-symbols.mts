@@ -19,12 +19,14 @@
  * Run standalone: npx tsx scripts/browser-canvas-symbols.mts [--browser=chromium]
  * It is also run by `pnpm conformance:canvas` (gate `canvas`).
  */
-import { writeFileSync, rmSync, mkdirSync, mkdtempSync } from 'node:fs'
+import { writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { makeTempDir } from '../../../scripts/lib/temp-dir.mjs'
 import { GATE_FLAGS, runGate } from '../../../scripts/lib/run-gate.mjs'
+import { launchBrowser } from '../../../scripts/lib/launch-browser.mjs'
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)
@@ -37,7 +39,7 @@ export interface SymbolRunResult { cases: Array<{ name: string; error?: string }
 const SCATTER_LIMIT_MS = 5000
 
 export async function runSymbolRunOracle(browserName: 'chromium' | 'firefox' | 'webkit' = 'chromium', plant = false): Promise<SymbolRunResult> {
-  const OUT_DIR = mkdtempSync(join(CONF_DIR, '.tmp-browser-canvas-symbols-')) // (one directory per run: concurrent runs do not clobber each other)
+  const OUT_DIR = makeTempDir('.tmp-browser-canvas-symbols-', CONF_DIR) // (one directory per run: concurrent runs do not clobber each other)
   rmSync(OUT_DIR, { recursive: true, force: true })
   mkdirSync(OUT_DIR, { recursive: true })
   const entry = `
@@ -109,7 +111,7 @@ window.__time = (shape, n) => {
   })
   writeFileSync(join(OUT_DIR, 'index.html'), '<!doctype html><html><body><script src="./page.js"></script></body></html>')
   const playwright = await import('playwright')
-  const browser = await playwright[browserName].launch({ headless: true, args: browserName === 'chromium' ? ['--disable-dev-shm-usage'] : [] })
+  const browser = await launchBrowser(playwright[browserName], { headless: true, args: browserName === 'chromium' ? ['--disable-dev-shm-usage'] : [] })
   const page = await browser.newPage({ deviceScaleFactor: 1 })
   const pageErrors: string[] = []
   page.on('pageerror', (e) => pageErrors.push(e.message.slice(0, 200)))

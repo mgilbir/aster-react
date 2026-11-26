@@ -16,6 +16,7 @@ import type { AddressInfo } from 'node:net'
 import { chromium, type Browser } from 'playwright'
 import { renderSpec } from '@aster-charts/core'
 import { namesAnotherDocument } from '../../core/src/css-url.testlib.js'
+import { launchBrowser } from '../../../scripts/lib/launch-browser.mjs'
 
 /** Paint texts: within the page, another document, and each way an escape changes which one it is. */
 const PAINTS = [
@@ -51,7 +52,7 @@ beforeAll(async () => {
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
-  browser = await chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] })
+  browser = await launchBrowser(chromium, { headless: true, args: ['--disable-dev-shm-usage'] })
 }, 60_000)
 
 afterAll(async () => {

@@ -19,6 +19,10 @@
  * Each gate has a deadline (`timeoutMs`, else DEFAULT_TIMEOUT_MS): a gate that exceeds it is killed with its process tree, reported as
  * `FAIL <gate> (timeout)`, and the run goes on. `--only` and `--skip` both take gate names and tags.
  *
+ * Every gate runs with its OS temp dir (TMPDIR) pointed at a fresh directory of the runner's, and must leave it empty: a gate that
+ * makes a temp directory and does not remove it (on a failure too) FAILS with `(left temp dirs)`, naming what it left. The leftovers
+ * are removed. (Four weeks of gate runs once left 394 GB of `aster-*` directories behind.)
+ *
  * Exit codes: 0 every selected gate passed (or --list/--help), 1 a blocking gate failed or timed out, 2 bad usage (an unknown option or gate name), 130 interrupted.
  *
  * Every gate says how its exit status is earned (`verdict`), and scripts/gate-self-test.test.mjs holds each one to it:
@@ -36,8 +40,10 @@
  * Skipping them locally is allowed; CI never skips anything.
  */
 import { spawn } from 'node:child_process'
+import { readdirSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { cli } from './lib/cli.mjs'
+import { makeTempDir, removeTempDir } from './lib/temp-dir.mjs'
 
 /**
  * Every gate has a deadline (a Playwright page that never settles must not hold a run, or CI's six-hour default, hostage): the
@@ -192,6 +198,25 @@ export function runGate(g, { stdio = 'inherit', env = process.env } = {}) {
 }
 
 /**
+ * Run one gate with TMPDIR (and TMP, TEMP) pointed at a fresh directory and report what it left in it, after removing that.
+ * @returns {Promise<{ r: Awaited<ReturnType<typeof runGate>>, leaked: string[] }>}
+ */
+async function runInTempSandbox(g, run) {
+  const sandbox = makeTempDir('aster-gate-tmp-')
+  try {
+    const r = await run(g, { env: { ...process.env, TMPDIR: sandbox, TMP: sandbox, TEMP: sandbox } })
+    const leaked = readdirSync(sandbox)
+    if (leaked.length) {
+      console.error(`[gates] ${g.name} left ${leaked.length} entr${leaked.length === 1 ? 'y' : 'ies'} in its temp dir (a temp directory must be removed on success, on failure and when killed): ${leaked.slice(0, 10).join(', ')}${leaked.length > 10 ? ', ...' : ''}`)
+      for (const name of leaked) rmSync(`${sandbox}/${name}`, { recursive: true, force: true })
+    }
+    return { r, leaked }
+  } finally {
+    removeTempDir(sandbox)
+  }
+}
+
+/**
  * Run `selected` in order and print the summary. Returns the exit code: 0 all passed, 1 a blocking gate failed or timed out.
  * @param {typeof GATES} selected
  */
@@ -201,27 +226,27 @@ export async function runGates(selected, { failFast = false, total = selected.le
     const t0 = Date.now()
     if (inCI) console.log(`::group::${g.name}`)
     console.log(`\n[gates] ${g.name}: pnpm ${g.args.join(' ')}  (deadline ${Math.round(timeoutOf(g) / 60_000)} min)`)
-    const r = await run(g)
+    const { r, leaked } = await runInTempSandbox(g, run)
     const secs = ((Date.now() - t0) / 1000).toFixed(0)
     if (inCI) console.log('::endgroup::')
-    results.push({ name: g.name, ok: r.ok, timedOut: r.timedOut, blocking: g.blocking !== false, secs })
+    results.push({ name: g.name, ok: r.ok && leaked.length === 0, timedOut: r.timedOut, leaked: leaked.length > 0, blocking: g.blocking !== false, secs })
     if (r.timedOut) console.error(`[gates] ${g.name} exceeded its deadline of ${timeoutOf(g) / 1000} s and was killed`)
-    if (!r.ok && inCI) console.log(`::${g.blocking === false ? 'warning' : 'error'}::gate ${g.name} failed${r.timedOut ? ' (timeout)' : ''}`)
+    if ((!r.ok || leaked.length) && inCI) console.log(`::${g.blocking === false ? 'warning' : 'error'}::gate ${g.name} failed${r.timedOut ? ' (timeout)' : ''}${leaked.length ? ' (left temp dirs)' : ''}`)
     if (r.interrupted) { console.error('[gates] interrupted'); return 130 }
-    if (!r.ok && g.blocking !== false && failFast) break
+    if ((!r.ok || leaked.length) && g.blocking !== false && failFast) break
   }
 
   console.log('\n[gates] summary')
   for (const r of results) {
     const tag = r.ok ? 'PASS' : r.blocking ? 'FAIL' : 'WARN'
-    console.log(`  ${tag}  ${r.name.padEnd(18)} ${r.secs}s${r.timedOut ? ' (timeout)' : ''}`)
+    console.log(`  ${tag}  ${r.name.padEnd(18)} ${r.secs}s${r.timedOut ? ' (timeout)' : ''}${r.leaked ? ' (left temp dirs)' : ''}`)
   }
   const failed = results.filter((r) => !r.ok && r.blocking)
   if (selected.length < total) {
     console.log(`[gates] NOTE: ${total - selected.length} gate(s) not run; this is not the full CI list`)
   }
   if (failed.length) {
-    console.error(`[gates] ${failed.length} blocking gate(s) failed: ${failed.map((r) => r.name + (r.timedOut ? ' (timeout)' : '')).join(', ')}`)
+    console.error(`[gates] ${failed.length} blocking gate(s) failed: ${failed.map((r) => r.name + (r.timedOut ? ' (timeout)' : '') + (r.leaked ? ' (left temp dirs)' : '')).join(', ')}`)
     return 1
   }
   console.log('[gates] all selected gates passed')

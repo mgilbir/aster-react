@@ -10,13 +10,13 @@
  *
  * Needs `pnpm build` (the gates judge dist; the `build` gate runs before `test`) and Playwright Chromium.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
 import { GATES } from './gates.mjs'
 import { spawnAsync } from './lib/spawn-async.mjs'
+import { makeTempDir, removeTempDir } from './lib/temp-dir.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const read = (rel) => readFileSync(join(root, rel), 'utf8')
@@ -26,8 +26,8 @@ const PACKAGES = {
   '@aster-charts/benchmarks': 'packages/benchmarks',
 }
 const rootPkg = JSON.parse(read('package.json'))
-const empty = mkdtempSync(join(tmpdir(), 'aster-gate-self-test-'))
-afterAll(() => rmSync(empty, { recursive: true, force: true }))
+const empty = makeTempDir('aster-gate-self-test-')
+afterAll(() => removeTempDir(empty))
 
 /** The package directory, script file and fixed arguments a gate runs (`tsx <file> <args>` in a package's scripts). */
 function scriptOf(gate) {

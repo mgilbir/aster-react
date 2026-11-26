@@ -29,11 +29,11 @@
  */
 import { build } from 'esbuild'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { cli } from './lib/cli.mjs'
+import { makeTempDir, removeTempDir } from './lib/temp-dir.mjs'
 
 cli({ url: import.meta.url })
 
@@ -79,7 +79,8 @@ function browserLeavesOf(target) {
   return Array.isArray(target) ? target.flatMap(browserLeavesOf) : []
 }
 
-const tmp = mkdtempSync(join(tmpdir(), 'aster-publish-'))
+// `fail()` ends the process with process.exit, which skips the `finally` below: the directory is also removed on exit (temp-dir.mjs).
+const tmp = makeTempDir('aster-publish-')
 try {
   // 1) Pack the way the release packs: `pnpm pack` rewrites `workspace:` ranges to real versions.
   const tarballs = new Map()
@@ -491,5 +492,5 @@ console.log('reeval ok')
   }
   console.log('[verify-publish] PASS — packed with pnpm, installed with npm, every export imports and typechecks, Vega and Vega-Lite render, a tree-shaken bundle keeps its side effects')
 } finally {
-  rmSync(tmp, { recursive: true, force: true })
+  removeTempDir(tmp)
 }

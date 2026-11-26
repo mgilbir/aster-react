@@ -4,18 +4,18 @@
  */
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import {  } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { download, regenerate } from './gallery-fetch.mts'
 import { sha256, verifyCache, type Manifest } from '../src/gallery/cache.js'
+import { makeTempDir, removeTempDir } from '../../../scripts/lib/temp-dir.mjs'
 
 const FILES: Record<string, string> = { 'a.vg.json': '{"a":1}', 'b.vg.json': '{"b":2}', 'skip.txt': 'not a spec' }
 let server: Server
 let base = ''
 let hangs = 0
-const scratch = mkdtempSync(join(tmpdir(), 'aster-gallery-fetch-test-'))
+const scratch = makeTempDir('aster-gallery-fetch-test-')
 
 beforeAll(async () => {
   server = createServer((req, res) => {
@@ -39,7 +39,7 @@ beforeAll(async () => {
 afterAll(() => {
   server.closeAllConnections()
   server.close()
-  rmSync(scratch, { recursive: true, force: true })
+  removeTempDir(scratch)
 })
 
 const at = () => ({ raw: base, api: base, timeoutMs: 200, backoffMs: 10 })

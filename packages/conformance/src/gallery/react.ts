@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { chromium, type Browser, type BrowserContext } from 'playwright'
 import { BASE_URL, dataUrlsIn, localFileFor, readSpec, type GallerySpec, type Outcome } from './lib.js'
+import { launchBrowser } from '../../../../scripts/lib/launch-browser.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const MIME: Record<string, string> = { '.json': 'application/json', '.csv': 'text/csv', '.tsv': 'text/tab-separated-values', '.png': 'image/png', '.arrow': 'application/octet-stream' }
@@ -70,7 +71,7 @@ async function runPage<I extends { id: string }, O extends Outcome>(specs: I[], 
   })
   const js = bundle.outputFiles[0]!.text
   const html = '<!doctype html><html><body><script src="./page.js"></script></body></html>'
-  const browser = await chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] })
+  const browser = await launchBrowser(chromium, { headless: true, args: ['--disable-dev-shm-usage'] })
   hooks.onBrowser?.(browser)
   // (a worker that fails -- a page that never becomes ready, a context that cannot open a page -- stops the others taking work
   // and the browser is closed whatever happened: no Chromium is left running, and no worker reports after the run has failed)

@@ -16,19 +16,21 @@
  *
  * Run after `pnpm build`: npx tsx scripts/browser-conformance.mts [--limit=N] [--filter=substr]
  */
-import { readdirSync, readFileSync, writeFileSync, rmSync, mkdirSync, mkdtempSync } from 'node:fs'
+import { readdirSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { chromium } from 'playwright'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { makeTempDir } from '../../../scripts/lib/temp-dir.mjs'
 import { GATE_FLAGS, intOption, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
+import { launchBrowser } from '../../../scripts/lib/launch-browser.mjs'
 
 cli({ url: import.meta.url, flags: { limit: 'eq', filter: 'eq', ...GATE_FLAGS } })
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)
-const OUT_DIR = mkdtempSync(join(CONF_DIR, '.tmp-browser-conformance-')) // (one directory per run: concurrent runs do not clobber each other)
+const OUT_DIR = makeTempDir('.tmp-browser-conformance-', CONF_DIR) // (one directory per run: concurrent runs do not clobber each other)
 
 const argv = process.argv.slice(2)
 const arg = (n: string, d: string): string => argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1] ?? d
@@ -113,7 +115,7 @@ async function main(gate: Gate): Promise<void> {
   })
   writeFileSync(join(OUT_DIR, 'index.html'), `<!doctype html><html><body><script src="./page.js"></script></body></html>`)
 
-  const browser = await chromium.launch({ headless: true, args: ['--disable-dev-shm-usage', '--js-flags=--max-old-space-size=4096'] })
+  const browser = await launchBrowser(chromium, { headless: true, args: ['--disable-dev-shm-usage', '--js-flags=--max-old-space-size=4096'] })
   try {
     const page = await browser.newPage()
     page.on('pageerror', (e) => gate.problem(`page error: ${e.message.slice(0, 200)}`))

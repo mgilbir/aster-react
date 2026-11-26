@@ -11,8 +11,8 @@
  *    versions (the replay in packages/core/src/oracle-vectors.test.ts compares it the same way).
  */
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readdirSync, readFileSync } from 'node:fs'
+import { makeTempDir, removeTempDir } from '../../../scripts/lib/temp-dir.mjs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -24,12 +24,12 @@ const BYTE_UNSTABLE_ACROSS_ENGINES = new Set(['d3-color.json'])
 
 const scratch: string[] = []
 function regenerate(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'aster-vectors-'))
+  const dir = makeTempDir('aster-vectors-')
   scratch.push(dir)
   execFileSync(process.execPath, [generator, '--out', dir], { stdio: 'pipe', timeout: 120_000 })
   return dir
 }
-afterAll(() => { for (const d of scratch) rmSync(d, { recursive: true, force: true }) })
+afterAll(() => { for (const d of scratch) removeTempDir(d) })
 
 const NUM = /[-+]?\d+\.\d+(?:e[+-]?\d+)?/gi
 

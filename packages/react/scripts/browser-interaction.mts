@@ -42,6 +42,7 @@ import { chromium, type Page } from 'playwright'
 import { compile as compileVl } from '@aster-charts/vl'
 import { cli } from '../../../scripts/lib/cli.mjs'
 import { GATE_FLAGS, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
+import { launchBrowser } from '../../../scripts/lib/launch-browser.mjs'
 
 cli({ url: import.meta.url, flags: GATE_FLAGS })
 
@@ -1347,7 +1348,7 @@ await runGate({
   reads: ['core', 'vl', 'react'],
   run: async (g) => {
     gate = g
-    const browser = await chromium.launch()
+    const browser = await launchBrowser(chromium)
     try {
       {
         // <SvgChart png={png}>: the export, asked for; the rest of the light chart is unchanged (its own suites run below, for SvgChart)

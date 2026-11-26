@@ -27,9 +27,6 @@
  * something different from vega-lite's output counts as 'vega-differ' and fails the run. Aster's runtime
  * is lenient, so without this flag an invalid emitted spec can still look "ok".
  */
-import { mkdtempSync, readdirSync, symlinkSync, mkdirSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join, dirname } from 'node:path'
 import { createRequire } from 'node:module'
 import * as vega from 'vega'
 import * as vl from 'vega-lite'
@@ -44,40 +41,11 @@ import { withOracleRandom } from './gallery/seeded.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
 import { deepFreeze, forEngines } from './engines.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { makeShimNodeModules, removeShimNodeModules } from './sweeps/shim-node-modules.mjs'
 
 cli({ url: import.meta.url, flags: { floor: 'value', 'min-ok': 'value', 'max-node-error': 'value', 'max-retained': 'value', filter: 'value', 'vega-check': 'bool' }, args: '<sweep-name>' })
 
 const require = createRequire(import.meta.url)
-
-/** Build a shim node_modules dir symlinking every package the sweep reads. */
-function makeNodeModules(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'aster-sweep-'))
-  mkdirSync(join(dir, 'node_modules'))
-  const base = dirname(require.resolve('vega')) // .../vega/build
-  const stores = [
-    join(base, '..', '..'), // vega@x.y.z/node_modules (vega, vega-scenegraph, vega-projection)
-    join(dirname(require.resolve('vega-lite')), '..', '..'), // vega-lite@x/node_modules
-  ]
-  const seen = new Set<string>()
-  for (const store of stores) {
-    let entries: string[] = []
-    try {
-      entries = readdirSync(store)
-    } catch {
-      continue
-    }
-    for (const name of entries) {
-      if (seen.has(name) || name.startsWith('.')) continue
-      seen.add(name)
-      try {
-        symlinkSync(join(store, name), join(dir, 'node_modules', name), 'dir')
-      } catch {
-        /* already linked */
-      }
-    }
-  }
-  return join(dir, 'node_modules')
-}
 
 interface SweepCase {
   name: string
@@ -426,7 +394,7 @@ async function main(): Promise<void> {
     }
   }
 
-  const nodeModules = makeNodeModules()
+  const nodeModules = makeShimNodeModules(require)
   try {
     const { generate } = await import(`./sweeps/${sweepName}.mjs`)
     const ctx = { vega, vl, require, nodeModules }
@@ -525,7 +493,7 @@ async function main(): Promise<void> {
       console.log(`[${sweepName}] PASS`)
     }
   } finally {
-    rmSync(nodeModules, { recursive: true, force: true })
+    removeShimNodeModules(nodeModules)
   }
 }
 

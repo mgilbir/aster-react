@@ -2,8 +2,8 @@
  * `runGate` (scripts/lib/run-gate.mjs) owns every conformance gate's verdict, so its own failure paths are tested here: a real
  * process per case (scripts/run-gate.fixture.mjs reports what it is told), its exit code and its verdict lines.
  */
-import { mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { makeTempDir, removeTempDir } from './lib/temp-dir.mjs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -148,8 +148,8 @@ describe('intOption: numeric flags are validated (Number("abc") is NaN, and a lo
 })
 
 describe('staleDist: a gate never judges a build older than its sources', () => {
-  const scratch = mkdtempSync(join(tmpdir(), 'aster-dist-fresh-'))
-  afterAll(() => rmSync(scratch, { recursive: true, force: true }))
+  const scratch = makeTempDir('aster-dist-fresh-')
+  afterAll(() => removeTempDir(scratch))
   const at = (file, seconds) => utimesSync(file, seconds, seconds)
   const repo = (name) => {
     const dir = join(scratch, name)

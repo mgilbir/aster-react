@@ -12,12 +12,14 @@
  * It is also run by `pnpm conformance:canvas` (gate `canvas`, which floors the frames <Chart> painted nothing for: if
  * `paintsSameAs` never held, every frame would be a full repaint compared with a full repaint). It reads the core sources.
  */
-import { writeFileSync, rmSync, mkdirSync, mkdtempSync } from 'node:fs'
+import { writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { makeTempDir } from '../../../scripts/lib/temp-dir.mjs'
 import { GATE_FLAGS, intOption, runGate } from '../../../scripts/lib/run-gate.mjs'
+import { launchBrowser } from '../../../scripts/lib/launch-browser.mjs'
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)
@@ -32,7 +34,7 @@ export async function runDirtyPixelOracle(
   steps = 14,
   plant = false,
 ): Promise<DirtyOracleResult> {
-  const OUT_DIR = mkdtempSync(join(CONF_DIR, '.tmp-browser-canvas-dirty-')) // (one directory per run: concurrent runs do not clobber each other)
+  const OUT_DIR = makeTempDir('.tmp-browser-canvas-dirty-', CONF_DIR) // (one directory per run: concurrent runs do not clobber each other)
   rmSync(OUT_DIR, { recursive: true, force: true })
   mkdirSync(OUT_DIR, { recursive: true })
   const entry = `
@@ -95,7 +97,7 @@ window.__runDirty = (seed, steps, dpr, plant) => {
   })
   writeFileSync(join(OUT_DIR, 'index.html'), '<!doctype html><html><body><script src="./page.js"></script></body></html>')
   const playwright = await import('playwright')
-  const browser = await playwright[browserName].launch({ headless: true, args: browserName === 'chromium' ? ['--disable-dev-shm-usage'] : [] })
+  const browser = await launchBrowser(playwright[browserName], { headless: true, args: browserName === 'chromium' ? ['--disable-dev-shm-usage'] : [] })
   const page = await browser.newPage({ deviceScaleFactor: 1 })
   const pageErrors: string[] = []
   page.on('pageerror', (e) => pageErrors.push(e.message.slice(0, 200)))
