@@ -346,11 +346,15 @@ function denseSymbolItems(items: SceneItem[], chunkSize: number): DomDesc[] {
 /** The batch under construction (one at a time: reset for each). */
 const DISJOINT = new DisjointBatch()
 
-/** An item a disjoint batch may carry: a symbol at a finite position and size, upright, with a paint that does not depend on its own box. */
+/**
+ * An item a disjoint batch may carry: a symbol at a finite position and size, upright, with a paint that does not depend on its own
+ * box, and no accessible name of its own (a `description` is the item's aria-label and role: vega's SVG gives each such item an
+ * element for it, and so does a batch of none).
+ */
 function disjointMember(it: SceneItem): boolean {
   const x = it.x
   const y = it.y
-  return x != null && y != null && Number.isFinite(x) && Number.isFinite(y)
+  return (it.description == null || it.aria === false) && x != null && y != null && Number.isFinite(x) && Number.isFinite(y)
     && Number.isFinite(Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2)
     && disjointBatchable(it, isGradientPaint)
 }

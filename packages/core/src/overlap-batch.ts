@@ -6,7 +6,8 @@
  * symbols, in their original order, so the picture is the one-element-per-item picture exactly.
  *
  * "Cannot reach the same pixel": each box is the symbol's ink (`symbolInkBox`) grown by one pixel on every side, so two boxes that
- * do not overlap are two pixels apart at least, and no anti-aliased edge of one touches a pixel of the other.
+ * do not meet (boxes that touch meet: the conformance normalizer's own test of two painted boxes) are more than two pixels apart, and
+ * no anti-aliased edge of one touches a pixel of the other.
  */
 import type { SceneItem } from './types.js'
 import { symbolInkBox } from './bounds.js'
@@ -58,7 +59,7 @@ export class DisjointBatch {
         if (members === undefined) continue
         for (const m of members) {
           const o = m * 4
-          if (x1 < boxes[o + 2]! && boxes[o]! < x2 && y1 < boxes[o + 3]! && boxes[o + 1]! < y2) return false
+          if (x1 <= boxes[o + 2]! && boxes[o]! <= x2 && y1 <= boxes[o + 3]! && boxes[o + 1]! <= y2) return false
         }
       }
     }
