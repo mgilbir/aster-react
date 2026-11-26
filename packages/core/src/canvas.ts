@@ -41,6 +41,7 @@ import {
 } from './render.js'
 import { withSceneOutput } from './scene-output.js'
 import { paintOrder, scopeInPaintOrder } from './paint-order.js'
+import { DisjointBatch, disjointEnd } from './overlap-batch.js'
 import { areaGeometry, lineGeometry, rectData, symbolGeometry, trailGeometry } from './geometry.js'
 import { arcSegs, curveExactSegs, drawCurveExact, segsOf, symbolExactSegs } from './geometry-read.js'
 
@@ -1200,39 +1201,35 @@ function runPath(ctx: CanvasLike): RunPath | null {
 function renderSymbolRuns(items: SceneItem[], ctx: CanvasLike, defs: SceneDefs[] | undefined): void {
   let run: SceneItem[] = []
   let key = ''
-  const flush = (): void => {
-    if (!run.length) return
-    // (one path per run only where it paints what one path per item paints: an opaque, unblended run that fills or strokes, not
-    // both -- render.ts `batchablePaint`, as the SVG batches; a run shares its paint key, so its first item speaks for it)
-    if (run[0]!.angle || !batchablePaint(run[0]!) || run.some((it) => isGradientPaint(it.fill) || isGradientPaint(it.stroke))) {
-      for (const it of run) {
-        const x = it.x || 0
-        const y = it.y || 0
-        const r = Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
-        const segs = symbolSegs((it as Record<string, unknown>).shape as string | undefined, r)
-        buildInItemFrame(ctx, x, y, ((it as Record<string, unknown>).angle as number) || 0, 1, 1, () => tracePath(ctx, segs))
-        paintPath(ctx, segs, it, defs, 'auto', gradientBox(it))
-      }
-      run = []
-      return
+  const batch = new DisjointBatch()
+  const paintEach = (its: SceneItem[]): void => {
+    for (const it of its) {
+      const x = it.x || 0
+      const y = it.y || 0
+      const r = Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
+      const segs = symbolSegs((it as Record<string, unknown>).shape as string | undefined, r)
+      buildInItemFrame(ctx, x, y, ((it as Record<string, unknown>).angle as number) || 0, 1, 1, () => tracePath(ctx, segs))
+      paintPath(ctx, segs, it, defs, 'auto', gradientBox(it))
     }
-    const first = run[0]!
+  }
+  /** `its`, items of one paint, as one path and one fill / stroke. */
+  const paintAsOne = (its: SceneItem[]): void => {
+    const first = its[0]!
     const shape0 = (first as Record<string, unknown>).shape as string | undefined
     const radiusOf = (it: SceneItem): number => Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
     const closed = shape0 != null && shape0 !== 'circle' && symbolSegs(shape0, radiusOf(first)).some((sg) => sg.cmd === 'Z' || sg.cmd === 'z')
     const whole = closed ? runPath(ctx) : null
     if (whole !== null) {
-      for (const it of run) {
+      for (const it of its) {
         const one = runPath(ctx)!
         tracePath(one, symbolSegs(shape0, radiusOf(it)), it.x || 0, it.y || 0)
         whole.addPath(one)
       }
       paintPath(ctx, [], first, defs, 'auto', undefined, whole)
-      run = []
       return
     }
     ctx.beginPath()
-    for (const it of run) {
+    for (const it of its) {
       const x = it.x || 0
       const y = it.y || 0
       const r = radiusOf(it)
@@ -1245,7 +1242,24 @@ function renderSymbolRuns(items: SceneItem[], ctx: CanvasLike, defs: SceneDefs[]
       }
     }
     paintPath(ctx, [], first, defs, 'auto')
+  }
+  const flush = (): void => {
+    if (!run.length) return
+    const its = run
     run = []
+    const first = its[0]!
+    // (one path per run only where it paints what one path per item paints: an opaque, unblended run that fills or strokes, not
+    // both -- render.ts `batchablePaint`, as the SVG batches; a run shares its paint key, so its first item speaks for it. A run
+    // that is not, goes in one path per stretch of items whose ink is apart, in order: overlap-batch.ts)
+    if (first.angle || its.some((it) => isGradientPaint(it.fill) || isGradientPaint(it.stroke))) paintEach(its)
+    else if (batchablePaint(first)) paintAsOne(its)
+    else {
+      let from = 0
+      while (from < its.length) {
+        const to = disjointEnd(batch, its, from, its.length, () => true)
+        if (to - from < 2) { paintEach([its[from]!]); from++ } else { paintAsOne(from === 0 && to === its.length ? its : its.slice(from, to)); from = to }
+      }
+    }
   }
   for (const it of items) {
     const k = symbolPaintKey(it)

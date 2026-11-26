@@ -266,13 +266,21 @@ describe('denseMarks batching', () => {
     expect(batched.querySelector('g.mark-symbol > path')!.getAttribute('transform')).toBeNull()
   })
 
-  it('keeps translucent items as individual elements', () => {
+  it('a translucent symbol shares a path only with symbols it cannot overlap', () => {
+    // 200 items have opacity 0.5: where they are apart they batch (overlap-batch.ts), in order, with the opaque runs around them
     const scene = evaluateChart(compileChart(denseSpec(1000, {}, true) as never))
     const batched = renderSceneToDomElement(scene, document, { denseMarks: true })
-    // 200 items have opacity 0.5 and must not be composited into a chunk.
     const paths = [...batched.querySelectorAll('g.mark-symbol > path')]
-    expect(paths.length).toBeGreaterThanOrEqual(200)
     expect(subpaths(batched)).toBe(1000)
+    const translucent = paths.filter((p) => p.getAttribute('opacity') === '0.5')
+    expect(translucent.length).toBeGreaterThan(0)
+    expect(translucent.length).toBeLessThan(200)
+    // a pile of them on one spot overlaps everywhere: one element each
+    const pile = evaluateChart(compileChart({
+      ...denseSpec(1000, { size: { value: 200 }, opacity: { value: 0.5 } }),
+      data: [{ name: 't', values: Array.from({ length: 1000 }, (_, i) => ({ x: 100 + (i % 5), y: 100 + (i % 3) })) }],
+    } as never))
+    expect(renderSceneToDomElement(pile, document, { denseMarks: true }).querySelectorAll('g.mark-symbol > path').length).toBe(1000)
   })
 
   it('appends into the last chunk without touching earlier ones', async () => {

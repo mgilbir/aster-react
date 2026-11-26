@@ -139,11 +139,11 @@ describe('Chart denseMarks', () => {
     container.remove()
   })
 
-  // Only opaque, unrotated symbols batch: one path composites once where separate elements composite at every overlap, so a
-  // translucent symbol keeps its own element (the batch gate holds batched and per-item drawings to the same pixels). A
-  // mark whose items are all translucent -- the chart-bench scatter, `fillOpacity: 0.7` and a tooltip -- is drawn per item
-  // in every shell and on every path to the DOM, whatever `denseMarks` says.
-  describe('a translucent or rotated symbol keeps its own element', () => {
+  // One path composites once where separate elements composite at every overlap, so a translucent (or blended, or filled and
+  // stroked) symbol shares a path only with symbols whose ink cannot reach the same pixel (overlap-batch.ts; the batch gate holds
+  // batched and per-item drawings to the same pixels), and a rotated one never does. A symbol that overlaps its neighbours is
+  // drawn per item in every shell and on every path to the DOM, whatever `denseMarks` says.
+  describe('a translucent symbol shares a path only with ones it cannot overlap; a rotated symbol keeps its own element', () => {
     const translucent = (extra: Record<string, unknown>): Record<string, unknown> => {
       const spec = makeSpec(values(1000)) as Record<string, unknown> & { marks: Array<{ encode: { update: Record<string, unknown> } }> }
       Object.assign(spec.marks[0]!.encode.update, extra)
@@ -155,17 +155,29 @@ describe('Chart denseMarks', () => {
       ['strokeOpacity', { stroke: { value: '#000' }, strokeOpacity: { value: 0.5 } }],
       ['angle', { shape: { value: 'square' }, angle: { value: 30 } }],
     ]
+    const piled = (extra: Record<string, unknown>): Record<string, unknown> => {
+      const spec = translucent(extra) as { data: Array<{ values: unknown }> }
+      spec.data[0]!.values = Array.from({ length: 1000 }, (_, i) => ({ x: 100 + (i % 7), y: 100 + (i % 5) }))
+      return spec
+    }
     for (const [name, extra] of cases) {
       forEachVariant(['svg', 'interaction'], (Chart) => {
-        it(`${name}: per item on a client-only mount, with denseMarks auto and true`, async () => {
+        it(`${name}: on a client-only mount, with denseMarks auto and true`, async () => {
           for (const dense of ['auto', true] as const) {
-            const container = document.createElement('div')
-            document.body.appendChild(container)
-            const root = createRoot(container)
-            await act(async () => { root.render(<Chart spec={translucent(extra)} width={400} height={300} denseMarks={dense} tooltip a11y={false} />) })
-            expect(markPaths(container)).toBe(1000)
-            await act(async () => { root.unmount() })
-            container.remove()
+            for (const [label, spec] of [['spread', translucent(extra)], ['piled', piled(extra)]] as const) {
+              const container = document.createElement('div')
+              document.body.appendChild(container)
+              const root = createRoot(container)
+              await act(async () => { root.render(<Chart spec={spec} width={400} height={300} denseMarks={dense} tooltip a11y={false} />) })
+              if (name === 'angle' || label === 'piled') expect(markPaths(container), `${name} ${label}`).toBe(1000)
+              else {
+                // spread out, the translucent symbols batch: fewer elements, every symbol still drawn once
+                expect(markPaths(container), `${name} ${label}`).toBeLessThan(200)
+                expect(subpaths(container)).toBe(1000)
+              }
+              await act(async () => { root.unmount() })
+              container.remove()
+            }
           }
         })
       })
@@ -185,11 +197,8 @@ describe('Chart denseMarks', () => {
     })
 
     forEachVariant(['svg'], (Chart) => {
-      it('per item after hydration too, and an opaque run among translucent items still batches', async () => {
-        // the items whose x is a multiple of 3 opaque: each translucent item keeps its element, each run of opaque ones is a path
-        const rows = values(1000)
-        let expected = 0
-        rows.forEach((r, i) => { if (r.x % 3 !== 0 || i === 0 || rows[i - 1]!.x % 3 !== 0) expected++ })
+      it('batched the same after hydration, and an opaque run among translucent items still batches', async () => {
+        // the items whose x is a multiple of 3 opaque: a run of opaque ones is a path, translucent ones batch where they are apart
         const spec = makeSpec(values(1000)) as Record<string, unknown> & { marks: Array<{ encode: { update: Record<string, unknown> } }> }
         spec.marks[0]!.encode.update.fillOpacity = { signal: 'datum.x % 3 === 0 ? 1 : 0.7' }
         const markup = renderToString(<Chart spec={spec} width={400} height={300} a11y={false} />)
@@ -200,8 +209,16 @@ describe('Chart denseMarks', () => {
         await act(async () => { root = hydrateRoot(container, <Chart spec={spec} width={400} height={300} a11y={false} />) })
         await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
         expect(subpaths(container)).toBe(1000)
-        expect(markPaths(container)).toBe(expected)
-        expect(expected).toBeLessThan(1000)
+        // (hydration lands on the structure a client-only mount builds)
+        const hydrated = markPaths(container)
+        const fresh = document.createElement('div')
+        document.body.appendChild(fresh)
+        const r1 = createRoot(fresh)
+        await act(async () => { r1.render(<Chart spec={spec} width={400} height={300} a11y={false} />) })
+        expect(hydrated).toBe(markPaths(fresh))
+        expect(hydrated).toBeLessThan(900)
+        await act(async () => { r1.unmount() })
+        fresh.remove()
         await act(async () => { root!.unmount() })
         container.remove()
         // an opaque mark of the same size batches, so the difference is the opacity alone
@@ -215,7 +232,7 @@ describe('Chart denseMarks', () => {
       })
     })
 
-    it('per item in a stream', async () => {
+    it('a stream batches them too, and a stream of a pile stays per item', async () => {
       const container = document.createElement('div')
       document.body.appendChild(container)
       const root = createRoot(container)
@@ -223,9 +240,20 @@ describe('Chart denseMarks', () => {
         root.render(<ChartStream spec={translucent({ fillOpacity: { value: 0.7 } }) as never} width={400} height={300} a11y={false} />)
       })
       await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
-      expect(markPaths(container)).toBe(1000)
+      expect(markPaths(container)).toBeLessThan(200)
+      expect(subpaths(container)).toBe(1000)
       await act(async () => { root.unmount() })
       container.remove()
+      const heap = document.createElement('div')
+      document.body.appendChild(heap)
+      const r2 = createRoot(heap)
+      await act(async () => {
+        r2.render(<ChartStream spec={piled({ fillOpacity: { value: 0.7 } }) as never} width={400} height={300} a11y={false} />)
+      })
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+      expect(markPaths(heap)).toBe(1000)
+      await act(async () => { r2.unmount() })
+      heap.remove()
     })
   })
 })
