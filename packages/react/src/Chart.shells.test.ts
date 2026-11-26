@@ -176,14 +176,14 @@ const FORBIDDEN_CORE_ENTRIES = new Set(['canvas', 'hit', 'signals', 'png'])
 const FORBIDDEN_MODULES = ['canvas-capability.ts', 'interaction-capability.ts', 'png-capability.ts']
 
 /**
- * Is `spec` one of the forbidden core entries, by any route: the entry itself, the lean engine's copy of it (`lean/hit`), or a path
+ * Is `spec` one of the forbidden core entries, by any route: the entry itself, the lean engine's copy of it (`internal/hit`), or a path
  * into the package (`@aster-charts/core/dist/hit.js`, `.../src/signals`)? Matched by prefix, so a deeper path does not slip by.
  */
 export function isForbiddenPackage(spec: string): boolean {
   const m = /^@aster-charts\/core\/(.+)$/.exec(spec)
   if (!m) return false
   const parts = m[1]!.split('/')
-  while (parts[0] === 'lean' || parts[0] === 'dist' || parts[0] === 'src') parts.shift()
+  while (parts[0] === 'internal' || parts[0] === 'dist' || parts[0] === 'src') parts.shift()
   const head = parts[0]?.replace(/\.(?:[cm]?[jt]s)$/, '')
   return head != null && FORBIDDEN_CORE_ENTRIES.has(head)
 }
