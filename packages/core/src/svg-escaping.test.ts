@@ -64,7 +64,7 @@ const CHANNELS: Record<string, Kind> = {
   cornerRadius: 'num', cornerRadiusTopLeft: 'num', cornerRadiusTopRight: 'num', cornerRadiusBottomLeft: 'num',
   cornerRadiusBottomRight: 'num', dx: 'num', dy: 'num', fontSize: 'num', lineHeight: 'num', limit: 'num',
   strokeWidth: 'num', opacity: 'num', fillOpacity: 'num', strokeOpacity: 'num', scaleX: 'num', scaleY: 'num',
-  tension: 'num', strokeDashOffset: 'num', strokeMiterLimit: 'num', theta: 'num', zindex: 'num',
+  tension: 'num', strokeDashOffset: 'num', strokeMiterLimit: 'num', theta: 'num',
   fill: 'color', stroke: 'color',
   strokeDash: 'dash',
   shape: 'shape', baseline: 'str', align: 'str', interpolate: 'str', orient: 'str', strokeJoin: 'str',
