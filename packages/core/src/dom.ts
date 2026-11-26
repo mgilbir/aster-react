@@ -22,6 +22,8 @@ import { formatEnvironmentKey } from './locale.js'
 import { drawnPathCommands } from './path-data.js'
 import { symbolGeometry, type PathData, type SymbolGeometry } from './geometry.js'
 import { paintOrder } from './paint-order.js'
+import { DisjointBatch, disjointBatchable, disjointEnd } from './overlap-batch.js'
+import { isGradientPaint } from './svg-defs.js'
 import {
   PairAttrSink,
   areaMarkAttrs,
@@ -210,7 +212,11 @@ const DENSE_SYMBOL_CHUNK = 256
  * `gen`: the scene generation it was built in; `stamped`: every item in it carried a generation then (an unstamped item is
  * never clean, see `isClean`); `d`: its path data; `open`: it ended at the end of the items, short of the size bound.
  */
-interface DenseChunk { from: number; to: number; first: SceneItem; last: SceneItem; desc: DomDesc; gen: number | undefined; stamped: boolean; d: string; open: boolean }
+interface DenseChunk {
+  from: number; to: number; first: SceneItem; last: SceneItem; desc: DomDesc; gen: number | undefined; stamped: boolean; d: string; open: boolean
+  /** A batch of translucent, blended or stroked symbols apart from one another (`overlap-batch.ts`): what ended it is the item after it. */
+  disjoint?: { stop: SceneItem | undefined }
+}
 
 /**
  * Whether every item of a chunk is clean (`isClean`), proved without reading them when the items array is one the engine
@@ -259,8 +265,10 @@ function denseSymbolItems(items: SceneItem[], chunkSize: number): DomDesc[] {
   while (i < items.length) {
     const first = items[i]!
     if (!batchableSymbol(first)) {
-      // Translucent or degenerate items keep their own element (batching would
-      // change overlap compositing); never drop them.
+      // A translucent, blended or filled-and-stroked symbol shares a path only with symbols it cannot overlap (below); one
+      // that none can join, and a degenerate one, keep their own element; never dropped.
+      const run = disjointSymbolRun(items, i, chunkSize, cachedChunks, chunks, out)
+      if (run > i) { i = run; continue }
       out.push(symbolItemDesc(first))
       i++
       continue
@@ -279,7 +287,7 @@ function denseSymbolItems(items: SceneItem[], chunkSize: number): DomDesc[] {
     // is skipped. Only the growing tail chunk is ever re-scanned, which keeps an
     // append at one pass of cheap flag reads instead of two property-heavy ones.
     const full = cachedChunks?.get(from)
-    if (full && full.first === first && full.to - from === chunkSize && full.to <= items.length
+    if (full && full.disjoint === undefined && full.first === first && full.to - from === chunkSize && full.to <= items.length
       && items[full.to - 1] === full.last) {
       if (chunkClean(items, full, from, full.to)) {
         full.desc.clean = true
@@ -293,7 +301,7 @@ function denseSymbolItems(items: SceneItem[], chunkSize: number): DomDesc[] {
     // ended: its own items need neither the batchable / paint scan nor translating again (see the full-chunk case above), so
     // an append costs the appended items, not the tail chunk.
     const open = cachedChunks?.get(from)
-    const resume = open !== undefined && open.open && open.first === first && open.to <= items.length && items[open.to - 1] === open.last
+    const resume = open !== undefined && open.disjoint === undefined && open.open && open.first === first && open.to <= items.length && items[open.to - 1] === open.last
       && chunkClean(items, open, from, open.to) ? open : null
     let to = resume !== null ? resume.to : i + 1
     while (to < items.length && to - from < chunkSize) {
@@ -305,7 +313,7 @@ function denseSymbolItems(items: SceneItem[], chunkSize: number): DomDesc[] {
       to++
     }
     const cached = cachedChunks?.get(from)
-    if (cached && cached.to === to && cached.first === first) {
+    if (cached && cached.disjoint === undefined && cached.to === to && cached.first === first) {
       if (resume === cached || chunkClean(items, cached, from, to)) {
         cached.desc.clean = true
         chunks.set(from, cached)
@@ -333,6 +341,55 @@ function denseSymbolItems(items: SceneItem[], chunkSize: number): DomDesc[] {
   }
   DENSE.set(items, { items, chunkSize, chunks })
   return out
+}
+
+/** The batch under construction (one at a time: reset for each). */
+const DISJOINT = new DisjointBatch()
+
+/** An item a disjoint batch may carry: a symbol at a finite position and size, upright, with a paint that does not depend on its own box. */
+function disjointMember(it: SceneItem): boolean {
+  const x = it.x
+  const y = it.y
+  return x != null && y != null && Number.isFinite(x) && Number.isFinite(y)
+    && Number.isFinite(Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2)
+    && disjointBatchable(it, isGradientPaint)
+}
+
+/**
+ * The batch of symbols from `from` that `batchableSymbol` refuses for their paint (translucent, blended, filled and stroked):
+ * consecutive items of one paint whose ink boxes (`overlap-batch.ts`) are pairwise apart, so that one path draws the pixels the
+ * elements draw one by one. Pushes its descriptor and returns the index after it; `from` itself when it would hold fewer than two
+ * items (the caller gives that one an element of its own). A batch built before is reused when its items, and the item that ended
+ * it, are unchanged.
+ */
+function disjointSymbolRun(items: SceneItem[], from: number, chunkSize: number, cachedChunks: Map<number, DenseChunk> | null,
+  chunks: Map<number, DenseChunk>, out: DomDesc[]): number {
+  const first = items[from]!
+  if (!disjointMember(first)) return from
+  const cached = cachedChunks?.get(from)
+  if (cached !== undefined && cached.disjoint !== undefined && cached.first === first && cached.to <= items.length
+    && items[cached.to - 1] === cached.last
+    && (cached.disjoint.stop === undefined ? cached.to === items.length : items[cached.to] === cached.disjoint.stop && isClean(cached.disjoint.stop))
+    && chunkClean(items, cached, from, cached.to)) {
+    cached.desc.clean = true
+    chunks.set(from, cached)
+    out.push(cached.desc)
+    return cached.to
+  }
+  const to = disjointEnd(DISJOINT, items, from, chunkSize, (it) => disjointMember(it) && (it === first || (samePaint(first, it) && !batchablePaint(it))))
+  if (to - from < 2) return from
+  let d = ''
+  let stamped = true
+  for (let j = from; j < to; j++) {
+    const it = items[j]!
+    if (it.__gen == null) stamped = false
+    const r = Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
+    d += symbolTranslated(symbolGeometry((it as Record<string, unknown>).shape as string | undefined, r), it.x as number, it.y as number, translatePathData)
+  }
+  const desc: DomDesc = { tag: 'path', attrs: pairs((w) => { w.t('d', d); paintAttrs(first, w) }) }
+  chunks.set(from, { from, to, first, last: items[to - 1]!, desc, gen: CURRENT_GEN, stamped, d, open: false, disjoint: { stop: items[to] } })
+  out.push(desc)
+  return to
 }
 
 function symbolItemDesc(it: SceneItem): DomDesc {

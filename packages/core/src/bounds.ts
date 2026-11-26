@@ -7,7 +7,7 @@
  */
 import { SYMBOL_DEFAULT_SIZE, pushAll } from './util.js'
 import type { SceneGroup, SceneItem, SceneNode } from './types.js'
-import { itemArcGeometry } from './render.js'
+import { isPaint, itemArcGeometry } from './render.js'
 import { areaGeometry, lineGeometry, symbolGeometry, trailGeometry, type CurveGeometry } from './geometry.js'
 import { BoundsPen, cubicAt, cubicTurns } from './bounds-pen.js'
 import { part } from './engine-parts.js'
@@ -778,6 +778,50 @@ function boundSymbol(bounds: Bounds, it: SceneItem): Bounds {
   } else addShapeExtent(bounds, shape, r, angle)
   boundStroke(bounds, it, true)
   return bounds.translate(it.x || 0, it.y || 0)
+}
+
+/**
+ * The box a symbol item's ink can reach, as `[x1, y1, x2, y2]` written into `out`, or false when it cannot be bounded (a position,
+ * size, angle or stroke width that is not a number). Not vega's bound (`boundSymbol`: vega's counts a miter tip of four widths on
+ * every shape, a circle's too): the shape's own extent, plus how far its stroke can really reach (half the width; the diagonal of
+ * it at a square cap; at a mitered corner of any shape but a circle, half the width times the miter limit, the canvas's default 10
+ * when the item names none, the larger of the two renderers' defaults). What the overlap batching (`overlap-batch.ts`) proves two
+ * symbols apart by.
+ */
+export function symbolInkBox(it: SceneItem, out: number[]): boolean {
+  const rec = it as Record<string, unknown>
+  const r = Math.sqrt(+((it.size != null ? it.size : SYMBOL_DEFAULT_SIZE) as number)) / 2
+  const shape = (rec.shape || 'circle') as string
+  const angle = rec.angle as number | undefined
+  let x1 = -r, y1 = -r, x2 = r, y2 = r
+  if (shape !== 'circle' || angle) {
+    const b = new Bounds()
+    if (shape === 'circle') {
+      const pen = new BoundsPen(b, angle)
+      pen.moveTo(r, 0)
+      pen.arc(0, 0, r, 0, 2 * Math.PI)
+    } else addShapeExtent(b, shape, r, angle)
+    x1 = b.x1; y1 = b.y1; x2 = b.x2; y2 = b.y2
+  }
+  let reach = 0
+  if (isPaint(it.stroke)) {
+    const width = it.strokeWidth != null ? +it.strokeWidth : 1
+    reach = (rec.strokeCap === 'square' ? Math.SQRT2 : 1) * width / 2
+    const join = rec.strokeJoin ?? rec.strokeLineJoin
+    if (shape !== 'circle' && (!join || join === 'miter')) {
+      reach = Math.max(reach, (rec.strokeMiterLimit != null ? +rec.strokeMiterLimit : 10) * width / 2)
+    }
+    // (a stroke thinner than a pixel is drawn a pixel wide, at a fraction of its alpha: a hairline)
+    if (!(reach >= 0.5)) reach = Number.isNaN(reach) ? reach : 0.5
+  }
+  const x = it.x || 0
+  const y = it.y || 0
+  out[0] = x1 + x - reach
+  out[1] = y1 + y - reach
+  out[2] = x2 + x + reach
+  out[3] = y2 + y + reach
+  return Number.isFinite(out[0]) && Number.isFinite(out[1]) && Number.isFinite(out[2]) && Number.isFinite(out[3])
+    && out[0]! <= out[2]! && out[1]! <= out[3]!
 }
 
 /**
