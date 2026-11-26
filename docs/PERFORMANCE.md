@@ -410,7 +410,7 @@ machine was shared (load average 2 to 40): numbers are CPU time for the Node pat
 | first evaluate of a 10k-row session (per session, warm JIT) | 13.8 | 14.3 | 13.7 | -0% |
 
 Transforms over 50 000 rows with and without `limits` (the per-loop clock ticks), the label transform, `bench:transforms`, `bench:scales`, `bench:transition`, `bench:browser-stream`, `bench:memory` and the whole Vega corpus (436 specs: evaluate and render level, compile +45%) were run too: none is more than 10% slower than main apart from what is listed above (`bench:scales` +4% to +9% of 2 to 9 us,
-`bench:transition` at 10 000 rects +11% for a non-animated patch). Bundle sizes are in the table below (every row grew by the release's features: `<Chart>` +33 kB gzip up front, +47 kB with what loads on demand).
+`bench:transition` at 10 000 rects +11% for a non-animated patch). Bundle sizes are in the table below (every row grew by the release's features: `<Chart>` +33 kB gzip up front, +48 kB with what loads on demand).
 
 ## Bundle sizes
 
