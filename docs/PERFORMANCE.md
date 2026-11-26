@@ -69,8 +69,8 @@ the browser).
   and explicit `flush()` pulses. `<ChartStream>`/`<ChartWorkerStream>` reuse the SVG patcher and the canvas
   backend; canvas path parsing and symbol generation are cached, solid paints skip bbox computation, dense
   same-paint symbol runs batch into one fill or one stroke when that paints what one path per item paints (opaque,
-  unblended, filled or stroked but not both: overlapping translucent or filled-and-stroked symbols are painted one by
-  one), and append-only streamed scenes paint just the new mark items.
+  unblended, filled or stroked but not both; a translucent, blended or filled-and-stroked run is cut where a symbol's ink
+  box meets one already in the batch, so each batch is symbols that cannot share a pixel), and append-only streamed scenes paint just the new mark items.
 - **Incremental scales**: continuous and discrete domains are reused when a changeset provably cannot move
   them; append-only continuous updates patch the min/max census in O(appended) instead of rescanning. A discrete
   scale over data (ordinal colour, shape, size, strokeDash; band; point) keeps its object when its rows change and its
@@ -380,8 +380,8 @@ machine was shared (load average 2 to 40): numbers are CPU time for the Node pat
 - the accessible tree: +21% for a chart of at most 150 items (0.24 -> 0.29 ms), +83% for 15 000 items in summary mode (4.2 -> 7.7 ms): each item's box is its exact vega bounds, and its id the hash of its datum.
 - `compileChart` +25% (59 -> 74 us) and Vega-Lite `compile` +33% to +42% for facet, layer and parameter specs (0.24 to 0.34 -> 0.32 to 0.47 ms; point +1%, hconcat +7%): the schema and consumption checks and the compile-time expression vetting; once per spec.
 - the first operations of a process: importing `core` +14% (89 -> 102 ms CPU), the first Vega-Lite compile 18 -> 27 ms, and a larger code base takes about three times as many operations to reach the speed main reaches in 100.
-- a scatter of translucent symbols draws one element per symbol (1 000 elements, 82 batched on main): jsdom mount 5.5 -> 23.8 ms, Chromium first render 9.1 -> 15.6 ms and update 7.7 -> 17.8 ms (the vega-embed control is level). Batching translucent symbols composites them differently from vega's separate elements, so they keep their own.
-- a repeated `evaluate` with identical inputs 0.05 -> 0.10 ms, a brush with an unrelated signal write 0.31 -> 0.43 ms, `<Chart>`'s line update in Chromium +2 ms (compile + evaluate is +0.4 ms of it).
+- a scatter of translucent or stroked symbols draws one element per batch of symbols whose ink cannot overlap (about 45 elements for 1 000 random symbols, against 4 on main, which batched overlapping ones wrongly): Chromium first render 2.6 -> 3.2 ms and update 2.9 -> 3.5 ms (+21% to +23%, from +80% and +100% when each symbol had its own element; quiet machine, five rotating triples). The remaining 0.6 ms is the 45 elements against 4 and the box of each symbol.
+- a repeated `evaluate` with identical inputs 0.05 -> 0.10 ms, a brush with an unrelated signal write 0.31 -> 0.43 ms, `<Chart>`'s line update in Chromium 2.15 -> 2.40 ms (+12%, quiet machine, six rotating triples; a CPU profile of 120 updates puts it all in compile and evaluate, React's render and commit are level: 0.01 ms; the +29% of a loaded run did not repeat).
 
 **Steady state, long loops, three rounds, alternating processes**
 
