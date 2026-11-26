@@ -8,6 +8,7 @@
  */
 import { appendFileSync } from 'node:fs'
 import { enc } from './differential-util.mts'
+import { turn } from '../../../scripts/lib/turn.mjs'
 
 export type Rng = ReturnType<typeof makeRng>
 
@@ -94,26 +95,48 @@ export function holdsData(v: unknown): boolean {
  * generator whose cases mostly refuse or produce nothing can be told apart from one that exercises the code.
  */
 export function compareCases(name: string, count: number, gen: (i: number) => Case): { cases: number; refused: number; informative: number } {
+  const t = tally(name, count)
+  for (let i = 0; i < count; i++) t.add(i, gen(i))
+  return t.done()
+}
+
+/**
+ * `compareCases` for a suite whose cases take long enough to hold a vitest worker's event loop for a minute on a loaded machine: the
+ * loop turns once every few cases (turn.mjs), so the worker reads the host's replies in between. Same result, same errors.
+ */
+export async function compareCasesAsync(name: string, count: number, gen: (i: number) => Case): Promise<{ cases: number; refused: number; informative: number }> {
+  const t = tally(name, count)
+  for (let i = 0; i < count; i++) {
+    if (i % 8 === 0) await turn()
+    t.add(i, gen(i))
+  }
+  return t.done()
+}
+
+function tally(name: string, count: number): { add: (i: number, c: Case) => void; done: () => { cases: number; refused: number; informative: number } } {
   const bad: string[] = []
   let refused = 0
   let informative = 0
   let failures = 0
-  for (let i = 0; i < count; i++) {
-    const c = gen(i)
-    if (process.env.ASTER_DIFF_TRACE) appendFileSync(process.env.ASTER_DIFF_TRACE, `${name} #${i} ${c.label}\n`)
-    const want = outcome(c.oracle)
-    const got = outcome(c.aster)
-    if ((want as { threw?: string }).threw) refused++
-    else if ((c.informative ?? holdsData)((want as { value?: unknown }).value)) informative++
-    if (JSON.stringify(want) !== JSON.stringify(got)) {
-      failures++
-      if (bad.length < 5) {
-        bad.push(`  #${i} ${c.label}\n     oracle ${JSON.stringify(want)?.slice(0, 220)}\n     aster  ${JSON.stringify(got)?.slice(0, 220)}`)
+  return {
+    add(i, c) {
+      if (process.env.ASTER_DIFF_TRACE) appendFileSync(process.env.ASTER_DIFF_TRACE, `${name} #${i} ${c.label}\n`)
+      const want = outcome(c.oracle)
+      const got = outcome(c.aster)
+      if ((want as { threw?: string }).threw) refused++
+      else if ((c.informative ?? holdsData)((want as { value?: unknown }).value)) informative++
+      if (JSON.stringify(want) !== JSON.stringify(got)) {
+        failures++
+        if (bad.length < 5) {
+          bad.push(`  #${i} ${c.label}\n     oracle ${JSON.stringify(want)?.slice(0, 220)}\n     aster  ${JSON.stringify(got)?.slice(0, 220)}`)
+        }
       }
-    }
+    },
+    done() {
+      if (failures) throw new Error(`${name}: ${failures}/${count} cases differ from the oracle\n${bad.join('\n')}`)
+      return { cases: count, refused, informative }
+    },
   }
-  if (failures) throw new Error(`${name}: ${failures}/${count} cases differ from the oracle\n${bad.join('\n')}`)
-  return { cases: count, refused, informative }
 }
 
 /**

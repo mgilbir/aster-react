@@ -12,6 +12,7 @@ import * as vega from 'vega'
 import { compile } from '@aster-charts/vl'
 import { renderWithVega, renderWithVegaChecked } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
+import { turn } from '../../../scripts/lib/turn.mjs'
 
 type Spec = Record<string, any>
 const DATA = {
@@ -140,6 +141,7 @@ describe('@aster-charts/vl == vega-lite: mark properties from the mark def, the 
       let compared = 0
       for (const [p, v] of Object.entries(PROPS)) {
         for (const [place, make] of Object.entries(PLACES)) for (const [shape, encoding] of encodings.entries()) {
+          await turn()
           const spec: Spec = { data: DATA, encoding, ...make(m, p, v) }
           let oracle: Spec
           try { oracle = oracleOf(spec) } catch { continue }
@@ -208,6 +210,7 @@ describe('@aster-charts/vl == vega-lite: invalid values per channel, a field on 
       for (const [encName, encoding] of Object.entries(ENCODINGS)) {
         for (const mode of MODES) {
           for (const [cfgName, invalid] of Object.entries(SCALE_INVALID)) {
+            await turn()
             const enc: Spec = mark === 'text' ? { ...encoding, text: n('a') } : encoding
             const spec: Spec = { data: NULLS, mark: mode === undefined ? mark : { type: mark, invalid: mode }, encoding: enc, ...(invalid ? { config: { scale: { invalid } } } : {}) }
             let oracle: Spec

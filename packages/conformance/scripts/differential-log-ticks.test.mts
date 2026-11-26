@@ -11,7 +11,7 @@ import * as vegaScale from 'vega-scale'
 import { describe, expect, it, vi } from 'vitest'
 import * as asterScale from '../../core/src/scale.ts'
 import { AsterLimitError, HARD_CAPS } from '../../core/src/limits.ts'
-import { compareCases, makeRng, scaled, type Rng } from './differential-gen.mts'
+import { compareCasesAsync, makeRng, scaled, type Rng } from './differential-gen.mts'
 
 vi.setConfig({ testTimeout: 300_000 })
 
@@ -36,11 +36,11 @@ function genDomain(r: Rng, base: number): number[] {
 }
 
 describe(`log scale ticks over whole bases vs vega-scale (generated, live)`, () => {
-  it('equal ticks and labels where d3 gives a bounded number of them; a typed refusal past the ceiling', () => {
+  it('equal ticks and labels where d3 gives a bounded number of them; a typed refusal past the ceiling', async () => {
     const r = makeRng(0x96)
     let refused = 0
     let compared = 0
-    const stats = compareCases('log ticks', scaled(3000), () => {
+    const stats = await compareCasesAsync('log ticks', scaled(3000), () => {
       const base = r.pick(BASES)
       const domain = genDomain(r, base)
       const count = r.pick([undefined, 1, 3, 5, 10, 20, 50])
@@ -72,5 +72,5 @@ describe(`log scale ticks over whole bases vs vega-scale (generated, live)`, () 
     // both outcomes are common: large bases are drawn enough to reach the ceiling, and most cases compare ticks
     expect(refused).toBeGreaterThan(scaled(3000) * 0.01)
     expect(compared).toBeGreaterThan(scaled(3000) * 0.7)
-  })
+  }, 600_000)
 })
