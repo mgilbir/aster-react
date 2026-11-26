@@ -7,14 +7,14 @@
  * new block is checked from the day it is written. A block is a module of its own; one that shows a fragment declares what it needs
  * (`declare const spec: VgSpec`). Needs `pnpm build`.
  */
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { makeTempDir, removeTempDir } from './lib/temp-dir.mjs'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { codeBlocks, missingBuilds, root, typeCheckBlocks } from './lib/doc-blocks.mjs'
 
-const work = mkdtempSync(join(tmpdir(), 'aster-docs-'))
-afterAll(() => rmSync(work, { recursive: true, force: true }))
+const work = makeTempDir('aster-docs-')
+afterAll(() => removeTempDir(work))
 
 const markdownIn = (dir, deep) => {
   const out = []

@@ -27,7 +27,7 @@
  *
  * Run after `pnpm build`: npx tsx scripts/browser-canvas-parity.mts [--limit=N] [--filter=substr] [--browser=chromium]
  */
-import { readdirSync, readFileSync, writeFileSync, rmSync, mkdirSync, mkdtempSync } from 'node:fs'
+import { readdirSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
@@ -35,15 +35,17 @@ import { chromium } from 'playwright'
 import * as vega from 'vega'
 import { gradientSpec, makeRng, UNPAINTABLE_KINDS } from './gradient-gen.mts'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { makeTempDir } from '../../../scripts/lib/temp-dir.mjs'
 import { GATE_FLAGS, intOption, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
 import { CANVAS_LIMITS, COMPARE_PIXELS_SOURCE } from './canvas-pixels.mts'
 import { compileChart, evaluateChart } from '@aster-charts/core'
+import { launchBrowser } from '../../../scripts/lib/launch-browser.mjs'
 
 cli({ url: import.meta.url, flags: { limit: 'eq', filter: 'eq', browser: 'eq', pixel: 'eq', ratio: 'eq', mean: 'eq', local: 'eq', ...GATE_FLAGS } })
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)
-const OUT_DIR = mkdtempSync(join(CONF_DIR, '.tmp-browser-canvas-')) // (one directory per run: concurrent runs do not clobber each other)
+const OUT_DIR = makeTempDir('.tmp-browser-canvas-', CONF_DIR) // (one directory per run: concurrent runs do not clobber each other)
 const argv = process.argv.slice(2)
 const arg = (n: string, d: string): string => argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1] ?? d
 const LIMIT = intOption(argv.find((a) => a.startsWith('--limit='))?.split('=')[1], '--limit', 0)
@@ -452,7 +454,7 @@ async function phase1(gate: Gate): Promise<void> {
   writeFileSync(join(OUT_DIR, 'index.html'), `<!doctype html><html><body><script src="./page.js"></script></body></html>`)
 
   const playwright = await import('playwright')
-  const browser = await playwright[BROWSER].launch({ headless: true, args: BROWSER === 'chromium' ? ['--disable-dev-shm-usage'] : [] })
+  const browser = await launchBrowser(playwright[BROWSER], { headless: true, args: BROWSER === 'chromium' ? ['--disable-dev-shm-usage'] : [] })
   try {
     const page = await browser.newPage({ deviceScaleFactor: 1 })
     page.on('pageerror', (e) => gate.problem(`page error: ${e.message.slice(0, 200)}`))

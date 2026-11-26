@@ -3,13 +3,13 @@
  * by tests; these assert the properties that keep a release safe.
  */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
 import { PUBLISH_ORDER } from './lib/release.mjs'
+import { makeTempDir, removeTempDir } from './lib/temp-dir.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const WF = process.env.ASTER_RELEASE_WORKFLOW ?? join(root, '.github', 'workflows', 'release.yml')
@@ -142,10 +142,12 @@ describe('release.yml actions are pinned by commit SHA', () => {
 })
 
 describe('scripts/check-release-tag.mjs', () => {
-  const tmp = mkdtempSync(join(tmpdir(), 'aster-reltag-'))
-  afterAll(() => rmSync(tmp, { recursive: true, force: true }))
+  const tmp = makeTempDir('aster-reltag-')
+  afterAll(() => removeTempDir(tmp))
+  let n = 0
   const fixture = (versions) => {
-    const dir = mkdtempSync(join(tmp, 'r-'))
+    const dir = join(tmp, `r-${n++}`)
+    mkdirSync(dir)
     for (const [pkg, version] of Object.entries(versions)) {
       mkdirSync(join(dir, 'packages', pkg), { recursive: true })
       writeFileSync(join(dir, 'packages', pkg, 'package.json'), JSON.stringify({ name: `@aster-charts/${pkg}`, version }))
@@ -183,7 +185,7 @@ describe('docs/RELEASE.md: the documented tag steps start the workflow (C367)', 
   it('the tag and the push commands of the block, run literally, deliver the tag to the remote', () => {
     const cmds = block.split('\n').map((l) => l.replace(/\s+#.*$/, '').trim()).filter((l) => /^git (tag|push) /.test(l))
     expect(cmds.some((c) => c.startsWith('git tag ')), 'the block tags').toBe(true)
-    const dir = mkdtempSync(join(tmpdir(), 'aster-reldoc-'))
+    const dir = makeTempDir('aster-reldoc-')
     try {
       const remote = join(dir, 'remote.git')
       const clone = join(dir, 'clone')
@@ -205,7 +207,7 @@ describe('docs/RELEASE.md: the documented tag steps start the workflow (C367)', 
       const tags = git(remote, 'tag', '--list').split('\n').filter(Boolean)
       expect(tags, `after: ${cmds.join(' ; ')}`).toContain('v0.1.0')
     } finally {
-      rmSync(dir, { recursive: true, force: true })
+      removeTempDir(dir)
     }
   })
 

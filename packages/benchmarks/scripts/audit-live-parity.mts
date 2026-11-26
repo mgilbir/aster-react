@@ -7,12 +7,13 @@
 import { chromium } from 'playwright'
 import { canonicalizeSvg, diffCanonical } from '../../conformance/src/normalize.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { launchBrowser } from '../../../scripts/lib/launch-browser.mjs'
 
 cli({ url: import.meta.url, args: '[url]' })
 
 const URL = process.argv[2] ?? 'https://aster-charts-demo.ringed-crane.workers.dev/'
 
-const browser = await chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] })
+const browser = await launchBrowser(chromium, { headless: true, args: ['--disable-dev-shm-usage'] })
 const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } })
 await page.goto(URL, { waitUntil: 'networkidle', timeout: 60_000 })
 await page.waitForFunction(() => document.querySelectorAll('.vega-pane svg').length >= 18, null, { timeout: 60_000 })

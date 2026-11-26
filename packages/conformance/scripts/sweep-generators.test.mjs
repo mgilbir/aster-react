@@ -2,34 +2,21 @@
  * What the schema sweeps generate (audit C263, C332, C479, C619, C759): a property that is several kinds at once is swept as all of
  * them, a skip reason that is false is not a skip, a name collision never replaces a case, and the stack journey stacks.
  */
-import { mkdtempSync, mkdirSync, readdirSync, symlinkSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import * as vega from 'vega'
 import * as vl from 'vega-lite'
 import { enumerableUnion, uniqueName, generate as generateVega } from '../src/sweeps/vega-schema.mjs'
 import { generate as generateVL } from '../src/sweeps/vega-lite-schema.mjs'
 import { generate as generateValues } from '../src/sweeps/values.mjs'
+import { makeShimNodeModules, removeShimNodeModules } from '../src/sweeps/shim-node-modules.mjs'
 
 const require = createRequire(import.meta.url)
 
-/** The directory run-sweep.ts builds: every package of vega's and vega-lite's stores, side by side. */
-function nodeModules() {
-  const dir = mkdtempSync(join(tmpdir(), 'aster-sweep-test-'))
-  mkdirSync(join(dir, 'node_modules'))
-  const seen = new Set()
-  for (const store of [join(dirname(require.resolve('vega')), '..', '..'), join(dirname(require.resolve('vega-lite')), '..', '..')]) {
-    for (const name of readdirSync(store)) {
-      if (seen.has(name) || name.startsWith('.')) continue
-      seen.add(name)
-      try { symlinkSync(join(store, name), join(dir, 'node_modules', name), 'dir') } catch { /* linked */ }
-    }
-  }
-  return join(dir, 'node_modules')
-}
-const ctx = () => ({ vega, vl, require, nodeModules: nodeModules() })
+/** The directory run-sweep.ts builds (one for the file; removed after it, and by scripts/lib/temp-dir.mjs at the latest). */
+const nodeModules = makeShimNodeModules(require)
+afterAll(() => removeShimNodeModules(nodeModules))
+const ctx = () => ({ vega, vl, require, nodeModules })
 
 describe('values of a property that is several kinds (C263)', () => {
   const words = { enum: ['millisecond', 'year'] }

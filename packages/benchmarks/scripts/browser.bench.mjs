@@ -19,6 +19,7 @@ import { summarize, table, fmt } from '../src/stats.js'
 import { ensureBuilt } from '../src/ensure-built.ts'
 import { BROWSER_EMBEDS, checkBrowserBench } from '../src/browser-floors.ts'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { launchBrowser } from '../../../scripts/lib/launch-browser.mjs'
 
 cli({ url: import.meta.url, flags: { kind: 'eq', memory: 'eq', points: 'eq', reps: 'eq', seconds: 'eq' } })
 
@@ -63,7 +64,7 @@ writeFileSync(
 <body><div id="stage"></div><script src="./bench.js"></script></body></html>`,
 )
 
-const browser = await chromium.launch({
+const browser = await launchBrowser(chromium, {
   headless: true,
   // Container-safe: /dev/shm can be tiny where CI runs, and the JS heap of a
   // 100k-point scene page needs more than Chromium's conservative default.

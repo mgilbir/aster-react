@@ -11,6 +11,7 @@ import { drawShape, measure, type Disagreement } from '../src/raster-measure.js'
 // (the shapes drawn read the path reader from a slot the public entries fill: core's own modules, so the part is imported too)
 import '../../core/src/part-svgpath.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { launchBrowser } from '../../../scripts/lib/launch-browser.mjs'
 
 // `--rebaseline` keeps the alpha already recorded (and the browser's name) and only recounts the baseline against the engine as it is now.
 cli({ url: import.meta.url, flags: { rebaseline: 'bool' } })
@@ -23,7 +24,7 @@ if (process.argv.includes('--rebaseline')) {
   out = recorded.alpha
   browserName = recorded.browser
 } else {
-  const browser = await chromium.launch({ headless: true })
+  const browser = await launchBrowser(chromium, { headless: true })
   const page = await browser.newPage()
   out = await page.evaluate((shapes) => {
     const alphas: Record<string, number[]> = {}

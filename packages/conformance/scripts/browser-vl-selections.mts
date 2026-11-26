@@ -40,17 +40,18 @@
  * sel-vega.svg, sel-aster.svg and sel-vega-fresh.svg into SEL_DUMP_DIR (default `aster-vl-selections-dump` under the OS temp
  * directory; created if missing) and prints the directory. Each case overwrites the previous one's files, so combine it with --filter.
  */
-import { writeFileSync, rmSync, mkdirSync, mkdtempSync } from 'node:fs'
+import { writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import type { Page } from 'playwright'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { makeTempDir } from '../../../scripts/lib/temp-dir.mjs'
 import { GATE_FLAGS, intOption, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
 import { READ_PIXELS, pixelDiff, type Pixels } from './canvas-pixels.mts'
 import { chartBenchSurvival } from './chart-bench-survival.mts'
+import { launchBrowser } from '../../../scripts/lib/launch-browser.mjs'
 
 cli({ url: import.meta.url, flags: { filter: 'eq', 'min-cases': 'eq', 'max-retained': 'eq', 'max-retained-canvas': 'eq', renderer: 'eq', ...GATE_FLAGS } })
 
@@ -58,7 +59,7 @@ const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)
 const ROOT = dirname(dirname(CONF_DIR))
 const REACT_DIR = join(ROOT, 'packages', 'react')
-const OUT_DIR = mkdtempSync(join(CONF_DIR, '.tmp-browser-vl-selections-')) // (one directory per run: concurrent runs do not clobber each other)
+const OUT_DIR = makeTempDir('.tmp-browser-vl-selections-', CONF_DIR) // (one directory per run: concurrent runs do not clobber each other)
 const argv = process.argv.slice(2)
 const arg = (n: string, d: string): string => argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1] ?? d
 const FILTER = arg('filter', '')
@@ -764,7 +765,7 @@ writeFileSync(join(OUT_DIR, 'index.html'), '<!doctype html><html><body style="ma
 // ---- driver -----------------------------------------------------------------------
 
 const playwright = await import('playwright')
-const browser = await playwright.chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] })
+const browser = await launchBrowser(playwright.chromium, { headless: true, args: ['--disable-dev-shm-usage'] })
 
 /** What a step left: the signals, the stores, and the picture (the SVG text, or on the canvas renderer the canvas's pixels). */
 interface Snapshot { signals: Record<string, string>; stores: Record<string, string>; scoped?: string; tip?: string; svg: string | Pixels; fresh?: string | Pixels }
@@ -1016,7 +1017,7 @@ async function main(gate: Gate): Promise<void> {
           if (vs.stores[n] !== as.stores[n]) problems.push(`${label}: store ${n}: vega=${vs.stores[n]!.slice(0, 200)} aster=${as.stores[n]!.slice(0, 200)}`)
         }
         if (process.env.SEL_DUMP && i === Number(process.env.SEL_DUMP_AT ?? 0) && typeof vs.svg === 'string') {
-          const dir = process.env.SEL_DUMP_DIR ?? join(tmpdir(), 'aster-vl-selections-dump')
+          const dir = process.env.SEL_DUMP_DIR ?? join(CONF_DIR, '.tmp-vl-selections-dump')
           mkdirSync(dir, { recursive: true })
           writeFileSync(join(dir, 'sel-vega.svg'), vs.svg)
           writeFileSync(join(dir, 'sel-aster.svg'), String(as.svg))

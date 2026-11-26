@@ -18,19 +18,21 @@
  *
  * Run: pnpm --filter @aster-charts/conformance exec tsx scripts/browser-intersect.mts [--filter=substr]   (after `pnpm build`)
  */
-import { writeFileSync, rmSync, mkdirSync, mkdtempSync } from 'node:fs'
+import { writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { makeTempDir } from '../../../scripts/lib/temp-dir.mjs'
 import { GATE_FLAGS, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
+import { launchBrowser } from '../../../scripts/lib/launch-browser.mjs'
 
 cli({ url: import.meta.url, flags: { filter: 'eq', ...GATE_FLAGS } })
 /** `--filter=substr`: only the scopes (`{"markname":"m_rect"}`...) whose JSON contains it (a narrowed run: no floors). */
 const FILTER = process.argv.slice(2).find((a) => a.startsWith('--filter='))?.slice('--filter='.length) ?? ''
 
 const CONF_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
-const OUT_DIR = mkdtempSync(join(CONF_DIR, '.tmp-browser-intersect-')) // (one directory per run: concurrent runs do not clobber each other)
+const OUT_DIR = makeTempDir('.tmp-browser-intersect-', CONF_DIR) // (one directory per run: concurrent runs do not clobber each other)
 
 const V = (value: unknown) => ({ value })
 const F = (field: string) => ({ field })
@@ -234,7 +236,7 @@ interface Case { key: string; nonEmpty: boolean; want?: unknown; got?: unknown; 
 
 async function main(gate: Gate): Promise<void> {
   const playwright = await import('playwright')
-  const browser = await playwright.chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] })
+  const browser = await launchBrowser(playwright.chromium, { headless: true, args: ['--disable-dev-shm-usage'] })
   try {
     const page = await browser.newPage({ deviceScaleFactor: 1, viewport: { width: 500, height: 700 } })
     page.on('pageerror', (e) => gate.problem(`page error: ${e.message.slice(0, 300)}`))

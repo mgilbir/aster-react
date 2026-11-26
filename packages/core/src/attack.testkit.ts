@@ -12,14 +12,12 @@
 import { expect } from 'vitest'
 import { build } from 'esbuild'
 import { spawn } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { withTempDir } from '../../../scripts/lib/temp-dir.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const scratch = mkdtempSync(join(tmpdir(), 'aster-limits-'))
-process.on('exit', () => { try { rmSync(scratch, { recursive: true, force: true }) } catch { /* best effort */ } })
 
 /** Allowance on top of 2 * maxTimeMs for one uninterruptible chunk of work and GC. */
 export const SLACK_MS = 400
@@ -48,12 +46,17 @@ export interface AttackResult {
 
 const trellisSpec = readFileSync(join(here, '..', 'testdata', 'limits-trellis.vg.json'), 'utf8')
 
-let counter = 0
 /**
  * Run `body` (async JS with `core` and `trellisSpec` in scope; may `return` a
- * JSON value) in a child process with a 512 MB heap cap and a hard kill.
+ * JSON value) in a child process with a 512 MB heap cap and a hard kill. The child's bundle lives in a temp directory the PARENT
+ * owns and removes once the child is gone, however it ended (returned, threw, was killed, ran out of memory) and whether or not
+ * the bundle could be built; a SIGKILLed child cannot clean up after itself.
  */
-export async function attack(body: string): Promise<AttackResult> {
+export function attack(body: string): Promise<AttackResult> {
+  return withTempDir('aster-limits-', (scratch) => runAttack(body, scratch))
+}
+
+async function runAttack(body: string, scratch: string): Promise<AttackResult> {
   const entry = `
     import * as core from ${JSON.stringify(join(here, 'index.ts'))}
     import ${JSON.stringify(join(here, 'addon-load.ts'))}
@@ -76,7 +79,7 @@ export async function attack(body: string): Promise<AttackResult> {
     // these src files side-effect free and drop them; this harness tests behaviour, not tree-shaking (check:bundle does).
     ignoreAnnotations: true,
   })
-  const file = join(scratch, `attack-${++counter}.mjs`)
+  const file = join(scratch, 'attack.mjs')
   writeFileSync(file, out.outputFiles[0]!.text)
   return new Promise((resolve) => {
     const child = spawn(process.execPath, ['--max-old-space-size=512', file], { stdio: ['ignore', 'pipe', 'pipe'] })

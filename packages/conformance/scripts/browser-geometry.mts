@@ -35,6 +35,7 @@ import { cli } from '../../../scripts/lib/cli.mjs'
 import { GATE_FLAGS, intOption, runGate } from '../../../scripts/lib/run-gate.mjs'
 import { KNOWN_DIFFERENCES } from '../src/geometry-differences.ts'
 import { within as deadline } from '../src/deadline.ts'
+import { launchBrowser } from '../../../scripts/lib/launch-browser.mjs'
 
 cli({ url: import.meta.url, flags: { seeds: 'eq', ...GATE_FLAGS } })
 const SEEDS = intOption(process.argv.find((a) => a.startsWith('--seeds='))?.slice('--seeds='.length), '--seeds', 160)
@@ -283,7 +284,7 @@ await runGate({
   run: async (gate) => {
     const t0 = Date.now()
     const playwright = await import('playwright')
-    const browser = await playwright.chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] })
+    const browser = await launchBrowser(playwright.chromium, { headless: true, args: ['--disable-dev-shm-usage'] })
     const page = await browser.newPage({ deviceScaleFactor: 1, viewport: { width: 1400, height: 1000 } })
     page.on('pageerror', (e) => console.error('[page]', e.message.slice(0, 300)))
     await page.goto(`file://${join(OUT_DIR, 'index.html')}`)

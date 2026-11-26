@@ -2,8 +2,8 @@
  * The publish step of the Release workflow, run for real against a fake `npm` on PATH, and the tag/dist-tag rules it uses.
  * C66: a prerelease tag must never publish as `latest`. C231: a run that failed halfway must be finishable by re-running.
  */
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { makeTempDir, removeTempDir } from './lib/temp-dir.mjs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -11,8 +11,16 @@ import { PUBLISH_ORDER, distTagFor, versionOfTag } from './lib/release.mjs'
 import { spawnAsync } from './lib/spawn-async.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const tmp = mkdtempSync(join(tmpdir(), 'aster-relpub-'))
-afterAll(() => rmSync(tmp, { recursive: true, force: true }))
+const tmp = makeTempDir('aster-relpub-')
+afterAll(() => removeTempDir(tmp))
+
+let scratchCount = 0
+/** A fresh subdirectory of `tmp` (removed with it). */
+const scratchDir = (prefix) => {
+  const dir = join(tmp, `${prefix}${scratchCount++}`)
+  mkdirSync(dir)
+  return dir
+}
 
 // A prerelease and a stable form of every shape semver 2.0.0 allows; `pre` is what the test expects, written by hand.
 const VERSIONS = [
@@ -50,7 +58,7 @@ describe('tag and dist-tag rules', () => {
  * 503 for FAKE_VIEW_DOWN; `publish` appends its argv to FAKE_LOG and fails for FAKE_FAIL (a package name fragment).
  */
 function fakeNpm() {
-  const bin = mkdtempSync(join(tmp, 'bin-'))
+  const bin = scratchDir('bin-')
   const file = join(bin, 'npm')
   writeFileSync(file, `#!/usr/bin/env node
 const a = process.argv.slice(2)
@@ -75,13 +83,13 @@ const bin = fakeNpm()
 
 /** A tarball dir for `version` with every package, optionally leaving one out. */
 function tarballs(version, omit) {
-  const dir = mkdtempSync(join(tmp, 'tgz-'))
+  const dir = scratchDir('tgz-')
   for (const pkg of PUBLISH_ORDER) if (pkg !== omit) writeFileSync(join(dir, `aster-charts-${pkg}-${version}.tgz`), 'x')
   return dir
 }
 
 async function publish(tag, dir, env = {}, extra = []) {
-  const log = join(mkdtempSync(join(tmp, 'log-')), 'publish.jsonl')
+  const log = join(scratchDir('log-'), 'publish.jsonl')
   writeFileSync(log, '')
   const r = await spawnAsync(process.execPath, [join(root, 'scripts/release-publish.mjs'), tag, dir, ...extra], {
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_LOG: log, ...env }, timeout: 30_000,

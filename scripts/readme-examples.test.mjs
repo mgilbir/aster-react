@@ -6,21 +6,21 @@
  * workspace (this test needs `pnpm build`, which `pnpm check` runs first), mapped to the specifiers the README imports
  * (`scripts/lib/doc-blocks.mjs`; the other documents' blocks are `scripts/docs-examples.test.mjs`).
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import ts from 'typescript'
 import { afterAll, describe, expect, it } from 'vitest'
 
 import { PATHS, codeBlocks, missingBuilds, root, typeCheckBlocks } from './lib/doc-blocks.mjs'
+import { makeTempDir, removeTempDir } from './lib/temp-dir.mjs'
 
 const pkg = (name) => join(root, 'packages', name)
 const dist = (name, file) => join(pkg(name), 'dist', file)
 
 const blocks = codeBlocks(readFileSync(join(root, 'README.md'), 'utf8'))
-const work = mkdtempSync(join(tmpdir(), 'aster-readme-'))
-afterAll(() => rmSync(work, { recursive: true, force: true }))
+const work = makeTempDir('aster-readme-')
+afterAll(() => removeTempDir(work))
 
 describe('the paths the README blocks are checked against', () => {
   it('are the manifests\' `exports`: every public entry, with the file it declares', () => {
@@ -33,7 +33,7 @@ describe('the paths the README blocks are checked against', () => {
   })
 
   it('a README block that imports createChartSession from @aster-charts/core/dom type-checks (the entry the old map got wrong)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'aster-readme-dom-'))
+    const dir = makeTempDir('aster-readme-dom-')
     try {
       const file = join(dir, 'dom.ts')
       writeFileSync(file, `import { createChartSession, chartSkeleton } from '@aster-charts/core/dom'\nexport const x = [createChartSession, chartSkeleton]\n`)
@@ -42,7 +42,7 @@ describe('the paths the README blocks are checked against', () => {
         options: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler, strict: true, noEmit: true, skipLibCheck: true, baseUrl: root, paths: PATHS },
       })
       expect(ts.getPreEmitDiagnostics(program).map((d) => ts.flattenDiagnosticMessageText(d.messageText, '\n'))).toEqual([])
-    } finally { rmSync(dir, { recursive: true, force: true }) }
+    } finally { removeTempDir(dir) }
   })
 })
 

@@ -26,6 +26,7 @@ import { summarize, table, fmt } from '../src/stats.js'
 import { ensureBuilt } from '../src/ensure-built.ts'
 import { checkStreamBench, streamCells } from '../src/browser-floors.ts'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { launchBrowser } from '../../../scripts/lib/launch-browser.mjs'
 
 cli({ url: import.meta.url, flags: { batch: 'eq', dense: 'eq', engines: 'eq', points: 'eq', policies: 'eq', renderers: 'eq', seconds: 'eq', 'vega-modes': 'eq' } })
 
@@ -67,7 +68,7 @@ writeFileSync(
   '<!doctype html><html><head><meta charset="utf-8"></head><body><script src="./bench.js"></script></body></html>',
 )
 
-const browser = await chromium.launch({
+const browser = await launchBrowser(chromium, {
   headless: true,
   args: ['--disable-dev-shm-usage', '--js-flags=--max-old-space-size=4096'],
 })

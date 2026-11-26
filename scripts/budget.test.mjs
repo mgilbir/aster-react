@@ -3,14 +3,14 @@
  * measure is judged against its ceiling inside a band, the two tables agree with the rows, each file of an app is gzipped on its own, and
  * the stale-dist check reads the build's own excludes. The runs that plant a fault in the bundler are in bundle-shaking.test.mjs.
  */
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gzipSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
 import { HEADROOM_MAX, HEADROOM_MIN, buildInputs, distProblems, excludeTest, inconsistencies, judge, weigh } from '../packages/benchmarks/scripts/budget-lib.mjs'
 import { BUDGETS, ENTRIES, TOTALS } from '../packages/benchmarks/scripts/budget-rows.mjs'
+import { makeTempDir, removeTempDir } from './lib/temp-dir.mjs'
 
 const KB = 1024
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -86,7 +86,7 @@ describe('the stale-dist check reads what the build emits', () => {
   })
 
   const make = (excludes, src, dist) => {
-    const dir = mkdtempSync(join(tmpdir(), 'aster-dist-'))
+    const dir = makeTempDir('aster-dist-')
     const pkg = join(dir, 'packages', 'p')
     mkdirSync(join(pkg, 'src'), { recursive: true })
     mkdirSync(join(pkg, 'dist'), { recursive: true })
@@ -103,7 +103,7 @@ describe('the stale-dist check reads what the build emits', () => {
     try {
       expect(buildInputs(pkg).map((f) => f.slice(pkg.length + 5)).sort()).toEqual(['a.ts', 'b.test.ts'])
       expect(distProblems(dir, ['p'])).toEqual([])
-    } finally { rmSync(dir, { recursive: true, force: true }) }
+    } finally { removeTempDir(dir) }
   })
 
   it('reports a missing output, an older one, and one whose source is gone', () => {
@@ -115,7 +115,7 @@ describe('the stale-dist check reads what the build emits', () => {
       expect(problems).toMatch(/dist\/a\.js is older than its source/)
       expect(problems).toMatch(/dist\/b\.js is missing/)
       expect(problems).toMatch(/dist\/gone\.js is an orphan: it has no source/)
-    } finally { rmSync(dir, { recursive: true, force: true }) }
+    } finally { removeTempDir(dir) }
   })
 
   it('the committed packages: their build inputs are what the build emits (when built)', () => {

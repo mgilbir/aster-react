@@ -3,6 +3,7 @@
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import { treeRoot } from './tree-root.mjs'
+import { launchBrowser } from '../../../../scripts/lib/launch-browser.mjs'
 const WT = treeRoot()
 const kind = process.argv[3] ?? 'brush'
 const N = +(process.argv[4] ?? 5000)
@@ -29,7 +30,7 @@ const rows = Array.from({ length: N }, (_, i) => ({ a: (i * 7919) % 1000, b: (i 
 const param = kind === 'brush' ? { name: 'sel', select: 'interval' } : { name: 'sel', select: { type: 'point', on: 'pointerover', nearest: kind === 'nearest' } }
 const spec = compile({ width: 560, height: 320, data: { values: rows }, params: [param], mark: 'point',
   encoding: { x: { field: 'a', type: 'quantitative' }, y: { field: 'b', type: 'quantitative' }, color: { condition: { param: 'sel', field: 'c', type: 'nominal', empty: kind === 'brush' }, value: 'grey' } } })
-const browser = await chromium.launch()
+const browser = await launchBrowser(chromium)
 try {
   const page = await browser.newPage({ viewport: { width: 800, height: 500 } })
   page.on('pageerror', (e) => console.log('page error', e.message))

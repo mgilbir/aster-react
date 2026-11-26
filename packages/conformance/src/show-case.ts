@@ -1,7 +1,5 @@
 /** Render one sweep case through both engines and dump the SVGs. Usage: npx tsx src/show-case.ts <case-name-substr> */
-import { mkdtempSync, readdirSync, symlinkSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join, dirname } from 'node:path'
+import { writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import * as vega from 'vega'
 import * as vl from 'vega-lite'
@@ -12,34 +10,17 @@ import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
 import { compile as compileVL } from '@aster-charts/vl'
 import { cli } from '../../../scripts/lib/cli.mjs'
 import { forEngines } from './engines.js'
+import { makeShimNodeModules, removeShimNodeModules } from './sweeps/shim-node-modules.mjs'
 
 cli({ url: import.meta.url, args: '<case-name-substr>' })
 
 const require = createRequire(import.meta.url)
 
-function makeNodeModules(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'aster-show-'))
-  mkdirSync(join(dir, 'node_modules'))
-  const base = dirname(require.resolve('vega'))
-  const stores = [join(base, '..', '..'), join(dirname(require.resolve('vega-lite')), '..', '..')]
-  const seen = new Set<string>()
-  for (const store of stores) {
-    let entries: string[] = []
-    try { entries = readdirSync(store) } catch { continue }
-    for (const name of entries) {
-      if (seen.has(name) || name.startsWith('.')) continue
-      seen.add(name)
-      try { symlinkSync(join(store, name), join(dir, 'node_modules', name), 'dir') } catch { /* linked */ }
-    }
-  }
-  return join(dir, 'node_modules')
-}
-
 const filter = process.argv[2] ?? ''
-const nm = makeNodeModules()
+const nm = makeShimNodeModules(require)
 const { generate } = await import(`./sweeps/${'vega-lite' + '-schema'}.mjs`)
 const { cases } = generate({ vl, require, nodeModules: nm })
-rmSync(nm, { recursive: true, force: true })
+removeShimNodeModules(nm)
 const c = cases.find((x: any) => x.name.includes(filter))
 if (!c) { console.error('no case matches'); process.exit(1) }
 console.log(`case: ${c.name} (${c.family}.${c.property})`)

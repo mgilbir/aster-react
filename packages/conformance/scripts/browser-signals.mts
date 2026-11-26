@@ -37,22 +37,24 @@
  *
  * Run after `pnpm build`: pnpm conformance:signals [--filter=substr] [--min-cases=N] [--pick-only] [--pick-scenes=N] [--renderer=svg|canvas]
  */
-import { writeFileSync, rmSync, mkdirSync, mkdtempSync } from 'node:fs'
+import { writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { compile as compileVL } from '../../vl/src/index.ts'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.ts'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { makeTempDir } from '../../../scripts/lib/temp-dir.mjs'
 import { GATE_FLAGS, intOption, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
 import { PICK_ENTRY, pickScenes, runPickPhase } from './browser-signals-pick.mts'
 import { READ_PIXELS, hasInk, pixelDiff, type Pixels } from './canvas-pixels.mts'
+import { launchBrowser } from '../../../scripts/lib/launch-browser.mjs'
 
 cli({ url: import.meta.url, flags: { filter: 'eq', 'min-cases': 'eq', 'pick-only': 'bool', 'pick-scenes': 'eq', renderer: 'eq', 'max-canvas-as-svg': 'eq', 'print-vega': 'bool', ...GATE_FLAGS } })
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)
-const OUT_DIR = mkdtempSync(join(CONF_DIR, '.tmp-browser-signals-')) // (one directory per run: concurrent runs do not clobber each other)
+const OUT_DIR = makeTempDir('.tmp-browser-signals-', CONF_DIR) // (one directory per run: concurrent runs do not clobber each other)
 const argv = process.argv.slice(2)
 const arg = (n: string, d: string): string => argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1] ?? d
 const FILTER = arg('filter', '')
@@ -892,7 +894,7 @@ writeFileSync(join(OUT_DIR, 'pick.html'), '<!doctype html><html><body style="mar
 // ---- driver -----------------------------------------------------------------------
 
 const playwright = await import('playwright')
-const browser = await playwright.chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] })
+const browser = await launchBrowser(playwright.chromium, { headless: true, args: ['--disable-dev-shm-usage'] })
 
 interface Observed { signals: Record<string, string>; scoped: string; errors: string[] }
 

@@ -6,17 +6,26 @@
  * ASTER_VERIFY_PUBLISH_ROOT and requires it to fail with that fault's message. The unmodified copy must pass, so a
  * failure cannot come from the harness. Needs `pnpm build` (the `build` gate runs first).
  */
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { spawnAsync } from './lib/spawn-async.mjs'
+import { makeTempDir, removeTempDir } from './lib/temp-dir.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PUBLIC = ['core', 'react', 'vl']
-const scratch = mkdtempSync(join(tmpdir(), 'aster-verify-publish-test-'))
-afterAll(() => rmSync(scratch, { recursive: true, force: true }))
+const scratch = makeTempDir('aster-verify-publish-test-')
+afterAll(() => removeTempDir(scratch))
+// The script runs with its OS temp dir (TMPDIR) pointed at a directory of ours, and leaves nothing in it: not after a pass, not after
+// a planted fault that ends the script with process.exit (a `finally` does not run then). A leaked tarball set is ~10 MB a run.
+const sandbox = join(scratch, 'os-tmp')
+mkdirSync(sandbox)
+afterEach(() => {
+  const left = readdirSync(sandbox)
+  for (const d of left) rmSync(join(sandbox, d), { recursive: true, force: true })
+  expect(left, 'verify-publish left temp directories behind').toEqual([])
+})
 
 let n = 0
 /** A scratch repository holding what `pnpm pack` and the script read: workspace files, legal files, manifests and dist. */
@@ -45,7 +54,7 @@ const editManifest = (dir, pkg, edit) => {
 }
 
 const verify = (dir, env = {}) => spawnAsync(process.execPath, [join(root, 'scripts', 'verify-publish.mjs')], {
-  encoding: 'utf8', env: { ...process.env, ASTER_VERIFY_PUBLISH_ROOT: dir, ...env }, timeout: 280_000,
+  encoding: 'utf8', env: { ...process.env, ASTER_VERIFY_PUBLISH_ROOT: dir, TMPDIR: sandbox, ...env }, timeout: 280_000,
 })
 const out = (r) => r.stdout + r.stderr
 

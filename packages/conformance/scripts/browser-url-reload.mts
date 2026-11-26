@@ -22,7 +22,7 @@
  *
  * Run: pnpm conformance:url-reload [--filter=substr]   (after `pnpm build`)
  */
-import { writeFileSync, rmSync, mkdirSync, mkdtempSync } from 'node:fs'
+import { writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join, dirname } from 'node:path'
@@ -31,14 +31,16 @@ import { build } from 'esbuild'
 import type { Page } from 'playwright'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { makeTempDir } from '../../../scripts/lib/temp-dir.mjs'
 import { GATE_FLAGS, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
+import { launchBrowser } from '../../../scripts/lib/launch-browser.mjs'
 
 cli({ url: import.meta.url, flags: { filter: 'eq', ...GATE_FLAGS } })
 
 const CONF_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
 const ROOT = dirname(dirname(CONF_DIR))
 const REACT_DIR = join(ROOT, 'packages', 'react')
-const OUT_DIR = mkdtempSync(join(CONF_DIR, '.tmp-browser-url-reload-'))
+const OUT_DIR = makeTempDir('.tmp-browser-url-reload-', CONF_DIR)
 const FILTER = process.argv.slice(2).find((a) => a.startsWith('--filter='))?.slice('--filter='.length) ?? ''
 
 // ---- the data server ------------------------------------------------------------------
@@ -289,7 +291,7 @@ const canon = (svg: string): ReturnType<typeof canonicalizeSvg> => canonicalizeS
 
 async function main(gate: Gate): Promise<void> {
   const playwright = await import('playwright')
-  const browser = await playwright.chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] })
+  const browser = await launchBrowser(playwright.chromium, { headless: true, args: ['--disable-dev-shm-usage'] })
   try {
     const t0 = Date.now()
     let agree = 0

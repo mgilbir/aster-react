@@ -8,8 +8,8 @@ import { runInline } from './react.js'
 import { settleWithin } from '../render-vega.js'
 import { logged, vegaSvg, warned } from './oracle.js'
 import { loggedErrorsDiffer, oracleProblem, runStatic } from './static.js'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
+import { makeTempDir, removeTempDir } from '../../../../scripts/lib/temp-dir.mjs'
 import { join } from 'node:path'
 
 describe('gallery data URLs (C394)', () => {
@@ -99,7 +99,7 @@ describe('a spec that makes vega log an error is compared on the document and on
   })
 
   it('a projection type vega does not know passes when Aster draws the same document and logs the same error (and not when it logs none)', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'aster-gallery-'))
+    const dir = makeTempDir('aster-gallery-')
     try {
       const spec = (type: string): unknown => ({
         width: 100, height: 60, padding: 5,
@@ -115,7 +115,7 @@ describe('a spec that makes vega log an error is compared on the document and on
       // the same document where nothing is logged is not the comparison: a known type logs nothing on either side
       expect((await run('mercator')).status).toBe('pass')
     } finally {
-      rmSync(dir, { recursive: true, force: true })
+      removeTempDir(dir)
     }
   }, 120_000)
 })

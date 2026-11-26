@@ -6,8 +6,8 @@
  */
 import { describe, it, expect, afterAll } from 'vitest'
 import ts from 'typescript'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { makeTempDir, removeTempDir } from '../../../scripts/lib/temp-dir.mjs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import './addon-transforms.js'
@@ -318,9 +318,9 @@ describe('data-sized arrays never go through argument spread', () => {
 
   describe('the scan walks the real workspace packages only', () => {
     const tmp: string[] = []
-    afterAll(() => { for (const d of tmp) rmSync(d, { recursive: true, force: true }) })
+    afterAll(() => { for (const d of tmp) removeTempDir(d) })
     const fixture = (): string => {
-      const root = mkdtempSync(join(tmpdir(), 'aster-scan-'))
+      const root = makeTempDir('aster-scan-')
       tmp.push(root)
       writeFileSync(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n  - "apps/*"\n\nallowBuilds:\n  esbuild: true\n')
       const pkg = (rel: string, src: Record<string, string> | null): void => {

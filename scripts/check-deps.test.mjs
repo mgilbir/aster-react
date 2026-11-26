@@ -3,8 +3,8 @@
  * a violation in a throw-away repo fixture and runs the real CLI against it; the
  * clean fixture and the negative controls prove the check is not simply failing.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { makeTempDir, removeTempDir } from './lib/temp-dir.mjs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -22,7 +22,7 @@ function put(root, rel, text) {
 
 /** A clean three-package repo with built output. `edit` plants the violation. */
 function fixture(edit = () => {}) {
-  const root = mkdtempSync(join(tmpdir(), 'aster-checkdeps-'))
+  const root = makeTempDir('aster-checkdeps-')
   made.push(root)
   for (const p of PKGS) {
     put(root, `packages/${p}/package.json`, JSON.stringify({ name: `@aster-charts/${p}`, dependencies: {}, files: ['dist'] }))
@@ -41,7 +41,7 @@ async function run(root, ...args) {
 }
 
 afterAll(() => {
-  for (const d of made) rmSync(d, { recursive: true, force: true })
+  for (const d of made) removeTempDir(d)
 })
 
 describe('check-deps', () => {
