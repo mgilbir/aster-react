@@ -53,19 +53,20 @@ const isObject = (v: unknown): v is Rec => v !== null && typeof v === 'object'
  * -- the one group item the mark has when it has exactly one, else the root frame, over whatever mark held that place before. What is
  * drawn then depends on how many rows the mark's data has and on the marks around it, and a role of exactly `axis`, `legend` or `title`
  * is also laid out by the view as the guide it names (a half pixel, the legend grid, the title's anchor). Aster does not follow that:
- * the mark is refused when the spec is compiled (ERRORS.md, ROADMAP.md "Authored marks with a guide's role").
+ * the mark is refused when the spec is compiled, after the errors vega's parser raises for it (ERRORS.md, ROADMAP.md).
  */
 const GUIDE_ROLE_GROUP_CONTENT = ['marks', 'signals', 'data', 'scales', 'projections', 'axes', 'legends', 'title'] as const
-function refuseGuideRoleGroup(m: Rec, facet: boolean): void {
+function guideRoleGroupRefusal(m: Rec, facet: boolean): SpecParseError | undefined {
   const role = m.role
   if (typeof role !== 'string' || !(role.startsWith('axis') || role.startsWith('legend') || role.startsWith('title'))) return
   const holds = GUIDE_ROLE_GROUP_CONTENT.filter((k) => { const v = m[k]; return Array.isArray(v) ? v.length > 0 : v != null && v !== false && v !== '' })
   if (role === 'axis' || role === 'legend' || role === 'title') {
-    throw new SpecParseError(`[aster] a group mark with the role "${role}" is not supported: vega lays a mark of that role out as the guide it names, and Aster draws a group mark as a group mark`)
+    return new SpecParseError(`[aster] a group mark with the role "${role}" is not supported: vega lays a mark of that role out as the guide it names, and Aster draws a group mark as a group mark`)
   }
   if (!m.layout && !facet && holds.length > 0) {
-    throw new SpecParseError(`[aster] a group mark with the role "${role}" that holds ${holds.join(', ')} is not supported: vega parses what it holds in the scope around it and attaches its marks over the marks of the root frame, or of its one group item, so what it draws depends on how many rows its data has`)
+    return new SpecParseError(`[aster] a group mark with the role "${role}" that holds ${holds.join(', ')} is not supported: vega parses what it holds in the scope around it and attaches its marks over the marks of the root frame, or of its one group item, so what it draws depends on how many rows its data has`)
   }
+  return undefined
 }
 
 /**
@@ -131,6 +132,8 @@ class Check {
    * pattern): what `limits.regex: 'refuse'` refuses it for (limits.ts `checkChartRegex`).
    */
   readonly regexSites: string[] = []
+  /** The first group mark a guide's role makes Aster refuse (see `guideRoleGroupRefusal`), thrown once the walk found no error of vega's. */
+  refusal: SpecParseError | undefined
   /** The data sets an expression has vega index by `unit` (expr-reads.ts `unitIndexedIn`). */
   readonly unitIndexed = new Set<string>()
 
@@ -723,7 +726,6 @@ class Check {
     if (this.owner !== null && isRecord(m.from) && typeof m.from.data === 'string') this.edge(dataKey(m.from.data), this.owner)
     const group = m.type === 'group'
     const facet = isRecord(m.from) && isRecord(m.from.facet) ? m.from.facet : undefined
-    if (group) refuseGuideRoleGroup(m, facet !== undefined)
     checkFrom(m.from, group, this.names)
     // vega-parser parseData: a facet with no data of its own aggregates its data set by its groupby, the facet's `aggregate` being
     // that transform's parameters (`fields`, `ops`, `as`, `cross`: any of them a signal); then its keys (C126)
@@ -752,8 +754,12 @@ class Check {
         if (!facet.data) throw new SpecParseError('Facet must reference a data set: ' + stringValue(facet))
         if (!facet.field && !facet.groupby) throw new SpecParseError('Facet must specify groupby or field: ' + stringValue(facet))
       }
-      // a group is a scope of data sets of its own (a facet's name is a data set of the group's scope)
-      const names = new Names(this.names)
+      // a group is a scope of data sets of its own, unless its role is a guide's and it has no layout and no facet: then it is parsed in
+      // its parent's (a facet's name is a data set of the group's scope). Such a group mark is refused below, once vega's own errors
+      // for what it holds have been raised in vega's order.
+      const role = typeof m.role === 'string' ? m.role : ''
+      const guideRole = role.startsWith('axis') || role.startsWith('legend') || role.startsWith('title')
+      const names = !guideRole || !!m.layout || facet !== undefined ? new Names(this.names) : this.names
       if (facet !== undefined) names.declare(facet.name)
       const inner: string[] = []
       const scope = new Scope(this.scope)
@@ -774,6 +780,9 @@ class Check {
         this.trigger(on, String(m.name))
       }
     }
+    // (what vega accepts and Aster does not draw as vega does is refused after everything vega's parser refuses in the spec: the first of
+    // them, once the walk is done)
+    if (group) this.refusal ??= guideRoleGroupRefusal(m, facet !== undefined)
   }
 
   /**
@@ -989,6 +998,7 @@ export function checkExpressions(spec: Rec, config: Rec = {}): readonly string[]
 export function checkSpecExpressions(spec: Rec, config: Rec = {}): { regexSites: readonly string[]; unitIndexed: readonly string[] } {
   const check = new Check(config)
   check.view(spec, config)
+  if (check.refusal !== undefined) throw check.refusal
   return { regexSites: check.regexSites, unitIndexed: [...check.unitIndexed] }
 }
 

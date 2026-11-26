@@ -137,7 +137,15 @@ function agreeOnParsing(spec: Spec, what: string): 'refused' | 'accepted' {
     expect((got as Error).message, what).toBe(want.error)
     return 'refused'
   }
-  expect(() => compileChart(spec as never), `${what}: vega accepts it`).not.toThrow()
+  let got: unknown
+  try { compileChart(spec as never) } catch (e) { got = e }
+  if (got !== undefined) {
+    // (the one spec vega accepts that Aster refuses, after every error of vega's: a group mark with a guide's role that holds something --
+    // it is refused at compile, C205, mark-role-config-vs-vega.test.ts -- and only there)
+    expect(what, `${what}: vega accepts it and Aster refuses it with ${(got as Error).message}`).toMatch(/guide role/)
+    expect(got).toBeInstanceOf(SpecParseError)
+    expect((got as Error).message).toMatch(/^\[aster\] a group mark with the role "axis-like" that holds /)
+  }
   return 'accepted'
 }
 

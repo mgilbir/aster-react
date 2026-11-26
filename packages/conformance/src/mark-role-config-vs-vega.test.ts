@@ -89,7 +89,7 @@ const refusal = (spec: Spec): unknown => {
 
 describe('a group mark with a guide role is refused when the spec is compiled (C205)', () => {
   const group = (role: string, extra: Spec = {}, content: Spec = { marks: [{ type: 'rect', encode: { update: { width: { value: 5 }, height: { value: 5 } } } }] }): Spec => ({
-    width: 120, height: 70, data: structuredClone(DATA), marks: [{ type: 'group', role, from: { data: 't' }, encode: { update: { width: { value: 20 }, height: { value: 20 } } }, ...content, ...extra }],
+    width: 120, height: 70, data: structuredClone(DATA), scales: [{ name: 'c', type: 'ordinal', domain: ['p', 'q'], range: 'category' }], marks: [{ type: 'group', role, from: { data: 't' }, encode: { update: { width: { value: 20 }, height: { value: 20 } } }, ...content, ...extra }],
   })
   const ROLE_NAMES = ['axis', 'axis-label', 'axis-title', 'legend', 'legend-entry', 'legend-label', 'title', 'title-text', 'title-subtitle']
 
@@ -136,6 +136,13 @@ describe('a group mark with a guide role is refused when the spec is compiled (C
       }
     })
   }
+
+  it("vega's own errors come first: a duplicate name inside such a group mark is vega's message, not the refusal", async () => {
+    const spec = group('axis-label', {}, { data: [{ name: 'u', values: [] }, { name: 'u', values: [] }] })
+    const want = await oracle(spec).then(() => undefined, (e: Error) => e.message)
+    expect(want).toMatch(/^Duplicate data set name/)
+    expect((refusal(spec) as Error).message).toBe(want)
+  })
 
   it('a prefixed role is no refusal where vega makes a scope of it: a layout or a facet, and the cells compare with vega', async () => {
     for (const extra of [{ layout: { columns: 1 } }, { from: { facet: { data: 't', name: 'f', groupby: 'k' } } }]) {
