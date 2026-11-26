@@ -2,7 +2,7 @@ import * as React from 'react'
 import { createPortal } from 'react-dom'
 import type { A11yNode, A11yOptions, ChartInfo, Logger, SceneItem, SceneRoot, VgSpec } from '@aster-charts/core'
 // The engine as the shells use it: without the parts most charts never run, which `useAddons` loads for a spec that needs them
-// (see `@aster-charts/core/lean`).
+// (see `@aster-charts/core/internal`).
 import {
   buildA11yTree,
   chartInfoFromScene,
@@ -12,8 +12,8 @@ import {
   createPointMapper,
   resolveCursor,
   consoleLogger,
-  checkChartRows, shareRowWatch,
-} from '@aster-charts/core/lean'
+  checkChartRows, shareRowWatch, sceneScaleMap,
+} from '@aster-charts/core/internal'
 import { isPromiseLike, normalizeSpecResult, useChartEpoch, useStableContent, useStableSpecRows } from './spec.js'
 import { useAddons } from './addons.js'
 import { useUrlData } from './urlData.js'
@@ -26,7 +26,7 @@ import {
 // The incremental DOM patcher ships as the `@aster-charts/core/dom` addon, which every chart needs. The canvas
 // renderer and the hit/signal event loop are NOT imported here: they arrive as the `canvas` and
 // `interaction` props (see capabilities.ts), so `<SvgChart>` bundles neither.
-import { createChartSession, hasDenseSymbolMarks, patchSceneDom, renderSceneToDomElement } from '@aster-charts/core/lean'
+import { createChartSession, hasDenseSymbolMarks, patchSceneDom, renderSceneToDomElement } from '@aster-charts/core/internal'
 import type { CanvasEvents, CanvasSceneSnapshot, ItemImage } from '@aster-charts/core/canvas'
 import type { HitIndex } from '@aster-charts/core/hit'
 import type { CursorTracker, SignalBinding } from '@aster-charts/core/signals'
@@ -1398,7 +1398,7 @@ function ChartView({
     if (!displayScene || a11yOpts == null) return null
     // Live scales when the scene has them; otherwise the serialized snapshots
     // on the scene (worker clones) are used by buildA11yTree itself.
-    const live = (displayScene as { __scaleMap?: unknown }).__scaleMap !== undefined
+    const live = sceneScaleMap(displayScene) !== undefined
     const scales = (live ? chartInfo?.scales : undefined) ?? new Map()
     return buildA11yTree(displayScene, scales as Map<string, unknown>, a11yOpts)
   }, [displayScene, a11yOpts, chartInfo])

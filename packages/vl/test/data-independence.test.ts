@@ -2,7 +2,8 @@
 import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { compile, compileUnit } from '../src/index.js'
+import { compile } from '../src/index.js'
+import { compileUnit } from '../src/compile.js'
 import type { VLSpec } from '../src/index.js'
 
 // What a Vega-Lite spec compiles to depends on its structure, not on its rows: compiling reads no row of an inline `data.values`

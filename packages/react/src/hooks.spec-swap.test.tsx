@@ -13,7 +13,7 @@ import { act } from 'react'
 import { describe, it, expect, afterEach } from 'vitest'
 import { useChart } from './useChart'
 import { useChartStream, type UseChartStreamResult } from './useChartStream'
-import { useChartWorker } from './worker'
+import { useChartWorker } from './worker-impl'
 import { useChartWorkerStream, type WorkerChartStreamResult } from './useChartWorkerStream'
 import { FakeWorker } from './testing/fake-worker'
 

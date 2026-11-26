@@ -35,6 +35,7 @@ import {
   type SceneRoot,
 } from '@aster-charts/core'
 import { forEngines } from './engines.js'
+import { sceneScaleSnapshots } from '@aster-charts/core/internal'
 
 export interface SceneDiffResult {
   diffs: string[]
@@ -153,7 +154,7 @@ function scaleSnapshots(map: Record<string, unknown> | Map<string, unknown> | un
   return out.sort((a, b) => a.name.localeCompare(b.name))
 }
 
-function fromOurScales(scales: ScaleSnapshot[]): ScaleSnapshot[] {
+function fromOurScales(scales: readonly ScaleSnapshot[]): ScaleSnapshot[] {
   return scales.map((s) => ({
     name: s.name,
     type: s.type,
@@ -288,7 +289,7 @@ function asterMarks(nodes: readonly SceneNode[]): CMark[] {
         key: keyOf(n as unknown as Record<string, unknown>),
         items: zorder(run.filter((g) => !flag(g, 'emptyMark'))).map((g) => ({
           item: g as unknown as SceneItem, ...itemRecord(g as unknown as SceneItem, 'group', asterGroupItem(g)),
-          scales: g.__scales ? fromOurScales(g.__scales) : [],
+          scales: fromOurScales(sceneScaleSnapshots(g) ?? []),
           marks: asterMarks((g.items ?? []) as SceneNode[]),
         })),
       })
@@ -438,7 +439,7 @@ export async function sceneDiff(spec: Record<string, unknown>, adjustOurs?: (sce
     // Root scope scales come from the view's own runtime context (the scene's
     // context scales are operator wrappers; `_runtime.scales` is the root map).
     const rootScales = scaleSnapshots((view as unknown as { _runtime?: { scales?: Map<string, unknown> } })._runtime?.scales)
-    t.scales += compareScales(rootScales, fromOurScales(scene.__scales ?? []), 'root', t.diffs)
+    t.scales += compareScales(rootScales, fromOurScales(sceneScaleSnapshots(scene) ?? []), 'root', t.diffs)
     compareScope(real, ours, '', t)
   } finally {
     view.finalize()

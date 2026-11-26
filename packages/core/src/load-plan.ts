@@ -1,5 +1,5 @@
 /**
- * Planning the url datasets of a spec (internal, `@aster-charts/core/lean/load`): which datasets load from which url, with a
+ * Planning the url datasets of a spec (internal, `@aster-charts/core/internal/load`): which datasets load from which url, with a
  * `{signal}` url evaluated over its own scope's signals and the host's. `loadSpecData` (addon-load.ts) fetches what this plans;
  * `datasetUrls` is the plan without the fetch, for a host that keeps url data current.
  */

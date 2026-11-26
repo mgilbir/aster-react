@@ -2,7 +2,8 @@
 import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { compile, compileUnit } from '../src/index.js'
+import { compile } from '../src/index.js'
+import { compileUnit } from '../src/compile.js'
 import { DATA, xq, yq, cn, deepFreeze, objects } from './helpers.js'
 
 const CONFORMANCE = join(__dirname, '..', '..', 'conformance')

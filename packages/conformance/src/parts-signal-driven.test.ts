@@ -8,7 +8,7 @@
  * found one failure at a time, and the signal loop answering clicks over the view).
  */
 import { describe, expect, it } from 'vitest'
-import { specNeeds, type EnginePart } from '@aster-charts/core/lean'
+import { specNeeds, type EnginePart } from '@aster-charts/core/internal'
 import type { VgSpec } from '@aster-charts/core'
 import { checkParts } from './parts-needed.testlib.js'
 

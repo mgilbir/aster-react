@@ -11,7 +11,7 @@
  * honoured (reported once through the logger).
  */
 import * as React from 'react'
-import { tickStep } from '@aster-charts/core/lean'
+import { tickStep } from '@aster-charts/core/internal'
 
 export interface SignalBindDef {
   name?: unknown

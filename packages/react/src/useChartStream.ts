@@ -19,8 +19,8 @@ import type {
   UrlDataMode,
   VgSpec,
 } from '@aster-charts/core'
-import { renderSceneToSvg } from '@aster-charts/core/lean'
-import { createChartStream, getStreamFlushFailure } from '@aster-charts/core/lean/stream'
+import { renderSceneToSvg } from '@aster-charts/core/internal'
+import { createChartStream, getStreamFlushFailure } from '@aster-charts/core/internal/stream'
 import { normalizeSpecResult, useStableContent, useStableSpec } from './spec.js'
 import { useAddons } from './addons.js'
 

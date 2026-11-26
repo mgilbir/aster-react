@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 import type { ChartStream } from '@aster-charts/core'
-import { createWorkerDispatcher } from './worker.js'
+import { createWorkerDispatcher } from './worker-impl.js'
 
 const scope = globalThis as unknown as DedicatedWorkerGlobalScope
 const streams = new Map<number, ChartStream>()

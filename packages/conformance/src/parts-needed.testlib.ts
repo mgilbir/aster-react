@@ -14,8 +14,8 @@
 import { renderSceneToCanvas } from '@aster-charts/core/canvas'
 import {
   createChartSession, renderSceneToSvg, specNeeds, loadParts, partLoaded, withdrawParts, ENGINE_PARTS, type EnginePart,
-} from '@aster-charts/core/lean'
-import { buildHitIndex } from '@aster-charts/core/lean/hit'
+} from '@aster-charts/core/internal'
+import { buildHitIndex } from '@aster-charts/core/internal/hit'
 import { bindSceneSignals } from '@aster-charts/core/signals'
 import { loadSpecData, type LoadOptions } from '@aster-charts/core/load'
 import type { RuntimeInput, SceneRoot, VgSpec } from '@aster-charts/core'
@@ -23,7 +23,7 @@ import { makeRecorder } from '../../core/src/canvas-record.testlib.js'
 
 /**
  * The parts a spec can make the engine read (the canvas renderer is asked for by `renderer="canvas"` and the signal loop by a chart
- * that binds it: `specNeeds(...).eventLoop`; this check draws with both, as `@aster-charts/core/canvas` and `/lean/signals` carry them).
+ * that binds it: `specNeeds(...).eventLoop`; this check draws with both, as `@aster-charts/core/canvas` and `/internal/signals` carry them).
  */
 export const SPEC_PARTS = ENGINE_PARTS.filter((p) => p !== 'canvas' && p !== 'signals')
 export const MISSING = /the "(\w+)" part of the engine is not loaded/

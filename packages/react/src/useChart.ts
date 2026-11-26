@@ -1,6 +1,7 @@
 import * as React from 'react'
 import type { RuntimeInput, SceneRoot, VgSpec } from '@aster-charts/core'
-import { checkChartRows, checkSvgLength, createChartSession, renderSceneToSvg } from '@aster-charts/core/lean'
+import type { ChartSession } from '@aster-charts/core/dom'
+import { checkChartRows, checkSvgLength, createChartSession, renderSceneToSvg } from '@aster-charts/core/internal'
 import { normalizeSpecResult, useStableContent, useStableSpec } from './spec.js'
 import { useDataInput, useStableLogger, useStablePolicy } from './inputs.js'
 import { useAddons } from './addons.js'
@@ -21,7 +22,7 @@ export interface UseChartResult {
   svg: string | null
   error: Error | null
   /** The underlying incremental session, stable across renders. */
-  session: ReturnType<typeof createChartSession>
+  session: ChartSession
 }
 
 /**
@@ -70,7 +71,7 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
   // The opt-in add-ons the spec needs load before the first evaluation: the hook suspends meanwhile (a <Suspense> boundary
   // above shows its fallback), and an import that fails is the result's `error`.
   const addonError = useAddons(normalized, input.urlData, { limits: limits != null, random: input.random != null, signals: input.signals })
-  const sessionRef = React.useRef<ReturnType<typeof createChartSession> | null>(null)
+  const sessionRef = React.useRef<ChartSession | null>(null)
   if (sessionRef.current == null) sessionRef.current = createChartSession()
   const session = sessionRef.current
   // (development builds: the rows of a render that re-evaluates nothing are checked for in-place changes too, see row-watch.ts)

@@ -1,5 +1,5 @@
 import type { ChartInfo, VgSpec } from '@aster-charts/core'
-import { panIn, scaleSpace, zoomIn, type ScaleSpace } from '@aster-charts/core/lean'
+import { panIn, scaleSpace, zoomIn, type ScaleSpace } from '@aster-charts/core/internal'
 import { describeValue } from './spec.js'
 
 export interface SelectionInterval {

@@ -15,8 +15,8 @@ import { forEachVariant } from './testing/variants'
 import { chartTooltip } from './testing/tooltip'
 
 const renders = vi.hoisted(() => ({ count: 0 }))
-vi.mock('@aster-charts/core/lean', async (importOriginal) => {
-  const lean = await importOriginal<typeof import('@aster-charts/core/lean')>()
+vi.mock('@aster-charts/core/internal', async (importOriginal) => {
+  const lean = await importOriginal<typeof import('@aster-charts/core/internal')>()
   return { ...lean, checkChartRows: (...args: Parameters<typeof lean.checkChartRows>) => { renders.count++; return lean.checkChartRows(...args) } }
 })
 

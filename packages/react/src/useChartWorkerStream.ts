@@ -62,7 +62,7 @@ import {
   type ChartWorkerStreamResponse,
   type WorkerTextMetrics,
   type WorkerUrlPolicyInput,
-} from './worker.js'
+} from './worker-impl.js'
 
 export interface ChartWorkerStreamOptions extends ChartWorkerOptions, Omit<StreamOptions, 'initial' | 'textMetrics'> {
   /**

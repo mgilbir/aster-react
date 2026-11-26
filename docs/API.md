@@ -189,8 +189,6 @@ writes a classic script (`iife`) or runs without a minifier, so such a productio
 its guard is `false`, so it never runs and reads no row. Imported unbundled -- ES modules
 from a CDN, with no `process` -- nothing is checked, and nothing throws. In Node (SSR, tests) it follows `NODE_ENV` at
 run time.
-(`checkChartRows` and `shareRowWatch`, exported by `@aster-charts/core`, are how the React shells reach the watch. They are
-internal: not part of the supported API, and called only in development builds.)
 
 ```ts
 import { createChartSession } from '@aster-charts/core/dom'
@@ -653,9 +651,6 @@ pending debounces (vega's `view.finalize()`). `setTimerClock(clock | null)` ([Ma
   pass `{ limits: scene.__limits }` so the handlers run under the limits the scene was evaluated with (`options` also takes `originX` /
   `originY`, the padding the view-space position is offset by, and `scene`). `parseEventSelector(selector)` returns the event types a selector string, event-stream object or array listens to
   (`parseEventSelector('mousemove, click')` is `['mousemove', 'click']`) and throws on a malformed one.
-  `sceneIntersect(scene, box, options, group)` is vega-scenegraph's `intersect` over a scene (the body of the `intersect()`
-  expression function: `box` is `[[x0, y0], [x1, y1]]`, `options` may hold `marktype` and `markname`); it is exported for the
-  conformance gate and is internal.
 - The cursor. `sceneHasCursor(scene)` is `true` when any item of the scene has a `cursor` channel, so a host can skip picking on
   every pointer move when none does (the answer is cached per scene). `createCursorTracker({ pick, user, onCursor, eventConfig? })`
   is vega-view's cursor logic without any DOM: `move(x, y)` takes the `cursor` of the item `pick(x, y)` finds and
@@ -689,21 +684,9 @@ families its charts use before the first chart than when it renders. The tables 
 expression). Every public entry of `@aster-charts/core` already carries the parts its functions read, so a host of the synchronous API
 never needs these; they are what the React shells use.
 
-**`@aster-charts/core/lean`, `/lean/hit`, `/lean/signals`, `/lean/canvas`, `/lean/stream`, `/lean/load`, `/lean/all` (internal).** The engine as `@aster-charts/react`'s shells use it, not covered by semver: under the `browser` export condition the parts of the
-engine are left out and loaded on demand, anywhere else every part is there. `/lean` re-exports `buildA11yTree`, `chartInfoFromScene`,
-`renderSceneToSvg`, `AsterLimitError`, `checkSvgLength`, `createPointMapper`, `resolveCursor`, `createCursorTracker`, `sceneHasCursor`, `consoleLogger`, `checkChartRows`,
-`shareRowWatch`, `checkUrlData`, `emptyUrlData` (a spec's url datasets emptied, what `<Chart urlLoad>` draws before its first load), `createChartSession`, `chartSkeleton`, `hasDenseSymbolMarks`, `patchSceneDom`,
-`renderSceneToDomElement`, the add-on and part functions above (`addonsNeeded`, `loadAddons`, `loadAddonsFor`, `missingAddons`,
-`notLoaded`, `specNeeds`, `partsNeeded`, `partsNotLoaded`, `loadParts`, `loadPartsFor`, `preloadParts`), and `ENGINE_PARTS`, `part(name)` (a loaded
-part; throws for an empty slot), `partLoaded(name)`, `withdrawParts(names)` (a test seam that empties slots and returns a function
-that fills them again) and `setUpShell()` (what the shells call once: the guide captions and the loader of the pulse path). It also
-carries plumbing that is on no public entry: `scaleSpace`, `panIn`, `zoomIn` (the space Vega-Lite's `bind: "scales"` moves a scale
-in, and vega's pan / zoom in it, for the shells' pan and zoom; `ScaleSpace` is the type of that space) and `tickStep` (the step of a bound slider without one). `EngineParts` is the type of the slots (`ENGINE_PARTS` lists the names).
-`/lean/hit` is `@aster-charts/core/hit`; `/lean/canvas` exports `loadCanvasPart()`, which loads the canvas renderer for
-`<Chart renderer="canvas">` (and, where the `browser` condition is not applied, `part`, the renderer itself); `/lean/signals` exports `loadSignalsPart()`,
-which loads the signal event loop (the `signals` part: `bindSceneSignals`) for a chart the shells bind it for, a spec that declares
-signals (`specNeeds(spec).eventLoop`) or a host that listens to them; `/lean/load` exports `datasetUrls(spec, { signals, limits })` (the urls `loadSpecData` would request, with no request: `<Chart urlLoad>` compares it to decide whether a signal change loads); `/lean/stream` is the chart stream (`createChartStream`,
-`getStreamFlushFailure`); `/lean/all` exports nothing: importing it puts every part in its slot (what `@aster-charts/react/all` imports).
+**`@aster-charts/core/internal*` is not public API.** The package's `exports` map lists a few `internal` subpaths: plumbing for `@aster-charts/react` and this
+repository's tests, with no semver, no declarations for a consumer (TypeScript sees a module that declares nothing there) and no description in this document
+(see ARCHITECTURE.md, "Internal plumbing"). Nothing on a public entry depends on them, and nothing documented here is reached through them.
 
 #### `@aster-charts/core/dom`
 
@@ -906,9 +889,9 @@ the app's charts use them; the add-ons stay opt-in (`import '@aster-charts/core/
 name that is not a part rejects with a `TypeError`). Where the `browser` export condition is not applied (a server render, a test runner
 under Node's default conditions) every part is always there and none of this changes anything.
 
-**"A browser build" is a resolver that applies the `browser` condition of `@aster-charts/core/lean*`**, whether or not it bundles. Node run
+**"A browser build" is a resolver that applies the `browser` export condition** (the one `@aster-charts/react` selects its lean engine by), whether or not it bundles. Node run
 with `--conditions=browser`, and test runners that default to it (a jsdom Jest environment, edge and worker toolchains), resolve the
-lean modules with no bundler to fill the slots: there a chart that needs a part suspends (and `renderToString` renders the fallback).
+lean engine with no bundler to fill the slots: there a chart that needs a part suspends (and `renderToString` renders the fallback).
 For those, `import '@aster-charts/react/all'` or `await preloadParts()` before the first render is the remedy. The first paint is
 synchronous where nothing needs loading and everywhere under `/all` ([ADR 0011](adr/0011-engine-parts-load-on-demand-in-browser-builds.md)).
 
@@ -935,15 +918,6 @@ first load arrives (and on the server), the previous rows stay while the next ur
 (else the logger) while the chart keeps its rows and bound inputs. Values by content, `fetch` and `allow` through a latest-ref. Without
 `urlLoad` nothing is fetched (give the rows through `data`, or load with `useSpecData` / `loadSpecData`); `urlData="refuse"` wins over it
 ([LIMITS.md](LIMITS.md#loading-url-data-loadspecdataspec-options)).
-
-**Internal props.** `sceneOverride` and `onStreamInput` are host plumbing for `<ChartStream>` and `<ChartWorkerStream>`, which are
-built on `<Chart>`. They are internal and unstable: their shape can change in any release and they are not covered by semver. Do not
-use them in an application. `sceneOverride` (`SceneRoot | null`) makes the chart render that pre-evaluated scene instead of evaluating
-`spec` (`undefined` keeps the normal path, `null` renders the loading or error state), so a streamed scene goes through the same
-DOM patcher, canvas renderer, interaction and accessibility tree. `onStreamInput(input)` receives what the chart derives from its props and
-gestures, `{ domainRaw?, signals, containerSize?, measuredSize? }` (`ChartStreamInput`: the `domainRaw` of the pan/zoom view, the merged
-signal values, and the container the chart sizes the spec to and the one it measured), so the stream can re-evaluate with them:
-a stream sizes its spec to the container the chart measures exactly as `<Chart>` sizes its own evaluation.
 
 **`data` and `dataChanges`.** `data` is a `Record<string, unknown[]>`: the key is the *dataset name* in the spec, the
 value its rows (objects, or values; a `null` or `undefined` row is an error, as below for `renderSpec`'s `data`). A bare array does not typecheck and is refused at run time too (`data={newRows}`); write `data={{ table: newRows }}`. A name the spec does not declare is reported through `onError` like any other evaluation error. A new
@@ -1305,16 +1279,6 @@ export function Offloaded(): React.ReactElement {
   and `handleWorkerMessageWithAddons(data, missing, streams)`, which imports `missing` and then handles the message (an import that
   fails answers that message with a typed error). `errorFromWire({ name, message, code? })` rebuilds the `Error` of a worker response
   (an `AsterLimitError` for `code: 'ASTER_LIMIT'`).
-- **Host plumbing (`@internal`).** The hooks are built on helpers that the entry also exports and that are not a stable surface:
-  `useWorkerInstance(worker, workerFactory)` owns the `Worker` of a hook (the supplied one, else the factory's, terminated on unmount) and
-  returns `{ ref, epoch, expire }` (`expire(error)` terminates it after a deadline and makes a new one from the factory);
-  `listenToWorker(worker, onMessage, onFailure)` attaches the message, `error` and `messageerror` listeners and returns the
-  cleanup (`onFailure` also hears the worker's termination by a deadline); `terminateWorker(worker, error)` terminates a worker and
-  ends every listening hook's request with `error`, and `terminatedError(worker)` is that error afterwards (or `null`);
-  `workerTimeout(timeoutMs)` checks a deadline (the default when `undefined`); `replayWorkerLogs(entries, logger)` hands the log
-  entries a stream response relays to a logger; `wireTextMetrics(textMetrics, viaWorker)` and `wireUrlPolicy(policy, viaWorker)` throw the errors that refuse a provider object or
-  a policy with functions when a Worker is in use; `resolveWorkerTextMetrics(textMetrics)` and `resolveWorkerUrlPolicy(policy)` are the
-  worker-side lookups of a registered name (they throw for an unknown one).
 
 #### SSR + hydration
 
@@ -1352,9 +1316,8 @@ the canvas renderer renders an empty `<canvas>` there.
 
 #### Registry and session re-exports
 
-`@aster-charts/react` also exports `registerVegaLiteCompiler(compile)` and `hasVegaLiteCompiler()`, the registry that `@aster-charts/react/vl` fills as a
-side effect (see [`@aster-charts/vl`](#aster-chartsvl)): a host that bundles `@aster-charts/vl` itself registers `(spec) => vegaSpec` once, and `hasVegaLiteCompiler()`
-says whether one is registered. `createChartSession` is `@aster-charts/core/dom`'s, re-exported for a host that renders through the
+`@aster-charts/react` also exports `hasVegaLiteCompiler()`, which says whether `@aster-charts/react/vl` has registered the Vega-Lite compiler
+(see [`@aster-charts/vl`](#aster-chartsvl)); the registration itself is not public API: import `@aster-charts/react/vl`, or compile with `compile` and pass the Vega spec. `createChartSession` is `@aster-charts/core/dom`'s, re-exported for a host that renders through the
 session ([Sessions and per-datum updates](#sessions-and-per-datum-updates)).
 
 #### Pan, zoom and selection helpers
@@ -1433,9 +1396,8 @@ item each is about; `PickedItem` is what `pick` resolves a position to; `TimerCl
 `@aster-charts/react`: `ChartStreamProps` and `ChartWorkerStreamProps` are the props of `<ChartStream>` and `<ChartWorkerStream>`; `UseChartOptions` and
 `UseChartResult`, `UseChartStreamOptions` and `UseChartStreamResult`, `ChartWorkerStreamOptions` and `WorkerChartStreamResult`, `ChartWorkerOptions` and
 `WorkerChartResult` are the options and results of the hooks; `ChartWorkerRequest` / `ChartWorkerResponse` and `ChartWorkerStreamRequest` /
-`ChartWorkerStreamResponse` are the messages of the worker protocol; `WorkerInstance` is the worker a hook uses and the means to replace it after a deadline;
-`WorkerTextMetrics`, `WorkerUrlPolicy`, `WorkerUrlPolicyInput` and `WorkerLogEntry` are the text metrics and URL policy as they travel to a worker and one logger call
-as it comes back; `VegaLiteCompiler` is `(spec) => VgSpec`, what `registerVegaLiteCompiler` takes; `TooltipInfo` is what `renderTooltip` receives besides the
+`ChartWorkerStreamResponse` are the messages of the worker protocol; `WorkerTextMetrics`, `WorkerUrlPolicy`, `WorkerUrlPolicyInput` and `WorkerLogEntry` are the text metrics and URL policy as they travel to a worker and one logger call
+as it comes back; `TooltipInfo` is what `renderTooltip` receives besides the
 datum; `PngCapability` is the `png` prop's type; `ChartSession` is the core type, re-exported.
 
 `@aster-charts/vl`: `VLSpec` is a Vega-Lite spec (an open record), what `compile` takes.
@@ -1467,14 +1429,9 @@ the same for 3 rows as for 6,000, and the rows are treated as immutable
 
 `<Chart>` and `useChart` use this compiler for Vega-Lite input once
 `@aster-charts/react/vl` is imported, so a fresh app does not need a `vega-lite`
-dependency. Hosts that already bundle `@aster-charts/vl` themselves can instead call
-`registerVegaLiteCompiler` from `@aster-charts/react` with a function `(spec) => vegaSpec`;
-`hasVegaLiteCompiler()` reports whether one is registered. `compile` throws `VLCompileError` for
+dependency. A host that compiles Vega-Lite itself passes the Vega spec `compile` returns; `hasVegaLiteCompiler()` reports whether
+`@aster-charts/react/vl` has registered the compiler. `compile` throws `VLCompileError` for
 anything outside the supported subset (see `docs/ERRORS.md`).
-
-`compileUnit(spec)` compiles a spec that is a single unit (`mark` and `encoding`) to Vega; it validates its input and does not mutate it. For a
-unit spec it returns the same Vega spec as `compile`. It does not handle `layer`, `facet`, `concat` or `repeat`
-specs (it fails with a `TypeError`, not a `VLCompileError`): use `compile` for anything that is not known to be one unit.
 
 ### Maps and animation
 

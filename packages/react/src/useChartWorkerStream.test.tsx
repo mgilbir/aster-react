@@ -3,7 +3,7 @@ import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, afterEach } from 'vitest'
-import { handleChartWorkerStreamRequest } from './worker'
+import { handleChartWorkerStreamRequest } from './worker-impl'
 import { useChartWorkerStream, type WorkerChartStreamResult } from './useChartWorkerStream'
 import { FakeWorker } from './testing/fake-worker'
 

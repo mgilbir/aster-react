@@ -20,7 +20,7 @@ one synchronous module graph. ADR 0008 had already accepted that a chart may wai
    instead of drawing it wrong.
 2. **Two engines from one source.** `@aster-charts/core` and every synchronous entry (`/dom`, `/signals`, `/hit`, `/canvas`, `/png`)
    import the parts that their functions can read, so `renderSpec`, `createChartSession().evaluate`, `renderChartToStaticMarkup`
-   and `hydrateChart` draw every spec with nothing to load. `@aster-charts/core/lean` and `/lean/*` are the same functions with the
+   and `hydrateChart` draw every spec with nothing to load. `@aster-charts/core/internal` and `/lean/*` are the same functions with the
    slots empty; the React shells import them. The `exports` map resolves them by condition: under `browser` to the lean modules,
    anywhere else (`default`: a server, a test runner) to `lean-full.js`, which fills every slot.
 3. **What a chart needs is read, then loaded, behind the Suspense wait of ADR 0008.** `specNeeds(spec, { limits, random })`

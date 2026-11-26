@@ -7,7 +7,7 @@ import type { VgSpec } from '@aster-charts/core'
 import './vl'
 import { forEachVariant } from './testing/variants'
 import { useChart } from './useChart'
-import { useChartWorker } from './worker'
+import { useChartWorker } from './worker-impl'
 import { ChartStream, type ChartStreamHandle } from './ChartStream'
 
 // Development builds: a chart warns, once per dataset, when rows it was given are changed in place and it renders again with the same

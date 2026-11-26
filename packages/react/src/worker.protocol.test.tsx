@@ -4,12 +4,12 @@ import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, afterEach } from 'vitest'
 import { AsterLimitError, createChartStream, renderSceneToSvg, type ChartStream } from '@aster-charts/core'
-import { patchSceneDom, renderSceneToDomElement } from '@aster-charts/core/lean'
+import { patchSceneDom, renderSceneToDomElement, sceneScaleMap, sceneScaleSnapshots } from '@aster-charts/core/internal'
 import {
   cloneableScene, handleChartWorkerRequest, handleChartWorkerStreamRequest, handleWorkerMessage,
   registerWorkerTextMetrics, useChartWorker,
   type ChartWorkerResponse, type ChartWorkerStreamResponse,
-} from './worker'
+} from './worker-impl'
 import { useChartWorkerStream } from './useChartWorkerStream'
 import { FakeWorker } from './testing/fake-worker'
 
@@ -326,10 +326,10 @@ describe('worker stream payloads and queue', () => {
     expect(nodes.map((n) => Object.keys(n).join())).toEqual(keysBefore)
     expect(clone.items).not.toBe(live.items)
     expect(clone.items).toEqual(live.items)
-    expect(live.__scaleMap).toBeDefined()
+    expect(sceneScaleMap(live)).toBeDefined()
     expect(live.runtime).toBeDefined()
     expect(live.compiled).toBeDefined()
-    expect(clone.__scales?.length).toBeGreaterThan(0)
+    expect(sceneScaleSnapshots(clone)?.length).toBeGreaterThan(0)
     expect(() => structuredClone(clone)).not.toThrow()
     expect(renderSceneToSvg(live)).toContain('<svg')
   })

@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, afterEach } from 'vitest'
 import type { VgSpec } from '@aster-charts/core'
-import { handleChartWorkerRequest } from './worker'
+import { handleChartWorkerRequest } from './worker-impl'
 import { useChart } from './useChart'
 import { forEachVariant } from './testing/variants'
 

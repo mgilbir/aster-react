@@ -11,9 +11,9 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ChartStream } from '@aster-charts/core'
 
 /** A fresh module registry: the add-ons are not loaded, so a geo message takes the queued (import) path. */
-async function fresh(): Promise<typeof import('./worker')> {
+async function fresh(): Promise<typeof import('./worker-impl')> {
   vi.resetModules()
-  const W = await import('./worker')
+  const W = await import('./worker-impl')
   expect(W.prepareWorkerMessage({ id: 0, spec: geo }).missing.length).toBeGreaterThan(0)
   return W
 }

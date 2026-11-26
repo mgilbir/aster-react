@@ -11,7 +11,7 @@ import type { ChartHandle } from './chart-types'
 import { normalizeChartSpec } from './spec'
 import { useChart } from './useChart'
 import { renderChartToStaticMarkup } from './ssr'
-import { handleChartWorkerRequest } from './worker'
+import { handleChartWorkerRequest } from './worker-impl'
 
 // A spec's rows belong to the caller. The Vega-Lite compiler hands the user's own row arrays and objects through to the Vega
 // spec it makes (it copies the spec's structure, not its data), so nothing downstream may write to them: not the compile,

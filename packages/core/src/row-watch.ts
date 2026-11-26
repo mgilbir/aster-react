@@ -128,7 +128,7 @@ function watchOf(owner: object): Watch {
   return w
 }
 
-/** @internal Make `to` keep its fingerprints in `from`'s watch: two sessions of one chart warn once between them. */
+/** Internal plumbing (`@aster-charts/core/internal`, not public API): make `to` keep its fingerprints in `from`'s watch: two sessions of one chart warn once between them. */
 export function shareRowWatch(from: object, to: object): void {
   WATCHES.set(to, watchOf(from))
 }
@@ -151,7 +151,7 @@ export interface RowWatchInput {
 }
 
 /**
- * @internal Compare the rows `spec` and `input` give a chart with the ones it was given last (see the module comment), warn once
+ * Internal plumbing (`@aster-charts/core/internal`, not public API): compare the rows `spec` and `input` give a chart with the ones it was given last (see the module comment), warn once
  * per dataset whose array was changed in place, and keep the new fingerprints. Called only behind a development-build check.
  */
 export function checkChartRows(owner: object, spec: unknown, input: RowWatchInput): void {

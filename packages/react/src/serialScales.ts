@@ -37,7 +37,7 @@ interface LiveScale {
 }
 
 /** Describe every continuous numeric scale in a live scale map (worker side). */
-export function serializeScales(scales: Map<string, unknown> | undefined): SerializedScale[] {
+export function serializeScales(scales: ReadonlyMap<string, unknown> | undefined): SerializedScale[] {
   const out: SerializedScale[] = []
   if (!scales) return out
   for (const [name, scale] of scales) {

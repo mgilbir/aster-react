@@ -18,7 +18,7 @@ import type { VgSpec } from '@aster-charts/core'
 import { useChart, type UseChartOptions } from './useChart'
 import { useChartStream, type UseChartStreamOptions } from './useChartStream'
 import { useChartWorkerStream, type ChartWorkerStreamOptions } from './useChartWorkerStream'
-import { handleChartWorkerRequest, handleChartWorkerStreamRequest, registerWorkerTextMetrics, useChartWorker } from './worker'
+import { handleChartWorkerRequest, handleChartWorkerStreamRequest, registerWorkerTextMetrics, useChartWorker } from './worker-impl'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 

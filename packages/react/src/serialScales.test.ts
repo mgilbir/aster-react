@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { compileChart, evaluateChart } from '@aster-charts/core'
+import { sceneScaleMap } from '@aster-charts/core/internal'
 import { SCALE_INFO_KEY, scalesFromSerialized, serializeScales } from './serialScales.js'
 
 const specFor = (type: string, extra: Record<string, unknown> = {}, domain: unknown = [1, 100]): never => ({
@@ -24,8 +25,8 @@ describe('serialized scales rebuild invertible scales', () => {
   ] as const) {
     it(`${type} ${JSON.stringify(extra)} matches the live scale`, () => {
       const scene = evaluateChart(compileChart(specFor(type, extra, domain)), {})
-      const live = scene.__scaleMap!.get('s') as ((v: number) => number) & { invert: (p: number) => number; domain: () => unknown[] }
-      const rebuilt = scalesFromSerialized(JSON.parse(JSON.stringify(serializeScales(scene.__scaleMap)))).get('s') as typeof live
+      const live = sceneScaleMap(scene)!.get('s') as ((v: number) => number) & { invert: (p: number) => number; domain: () => unknown[] }
+      const rebuilt = scalesFromSerialized(JSON.parse(JSON.stringify(serializeScales(sceneScaleMap(scene))))).get('s') as typeof live
       expect(rebuilt).toBeDefined()
       const d0 = Number(live.domain()[0])
       const d1 = Number(live.domain()[live.domain().length - 1])
@@ -49,7 +50,7 @@ describe('serialized scales rebuild invertible scales', () => {
       ],
       marks: [],
     } as never), {})
-    const list = serializeScales(scene.__scaleMap)
+    const list = serializeScales(sceneScaleMap(scene))
     expect(list.map((s) => s.name)).toEqual(['y'])
     const y = scalesFromSerialized(list).get('y') as unknown as { (v: number): number; invert(p: number): number }
     expect(y(0)).toBe(100)
@@ -57,7 +58,7 @@ describe('serialized scales rebuild invertible scales', () => {
   })
 
   it('exposes the description under SCALE_INFO_KEY on cloneable scenes', async () => {
-    const { cloneableScene } = await import('./worker.js')
+    const { cloneableScene } = await import('./worker-impl.js')
     const scene = evaluateChart(compileChart(specFor('linear', {}, [0, 10])), {})
     const clone = cloneableScene(scene) as unknown as Record<string, unknown>
     expect(Array.isArray(clone[SCALE_INFO_KEY])).toBe(true)

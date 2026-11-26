@@ -48,5 +48,5 @@ replaced by a stronger one:
 - Decision 4 is held by one row per documented import pattern (`packages/benchmarks/scripts/budget-rows.mjs`): `core`, each core
   add-on, `useChart`, `Chart`, `SvgChart` with and without `interaction`, `Chart + all`, `Chart + VL`, `useChartWorker`,
   `hydrateChart` and `react/ssr`. Entry points that no row imports: `@aster-charts/vl` (alone), `@aster-charts/core/addons`,
-  `@aster-charts/react/png`, `@aster-charts/react/worker` and `@aster-charts/react/worker-entry` (and the internal `/lean*`).
+  `@aster-charts/react/png`, `@aster-charts/react/worker` and `@aster-charts/react/worker-entry` (and the internal `/internal*`).
   `scripts/docs-claims.test.mjs` ties this list to the rows.

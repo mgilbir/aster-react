@@ -14,13 +14,13 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { VgSpec } from '@aster-charts/core'
 
-vi.mock('@aster-charts/core/lean', async () => await import('../../core/dist/lean.js'))
-vi.mock('@aster-charts/core/lean/hit', async () => await import('../../core/dist/hit.js'))
+vi.mock('@aster-charts/core/internal', async () => await import('../../core/dist/lean.js'))
+vi.mock('@aster-charts/core/internal/hit', async () => await import('../../core/dist/hit.js'))
 // (the canvas renderer and the signal loop are not mocked into their deferred forms: the opt-in module imports their modules itself,
 // and a mock of either module would stand in for it there too)
 
 const { forEachVariant } = await import('./testing/variants')
-const { ENGINE_PARTS, partLoaded, specNeeds, withdrawParts } = await import('@aster-charts/core/lean')
+const { ENGINE_PARTS, partLoaded, specNeeds, withdrawParts } = await import('@aster-charts/core/internal')
 // a page that starts with every slot empty, then imports the opt-in module (it fills every slot when it runs: once, as an app's import)
 withdrawParts(ENGINE_PARTS)
 await import('./all')

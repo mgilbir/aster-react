@@ -3,7 +3,7 @@
  *
  * A spec that needs an opt-in add-on (`@aster-charts/core/transforms`, `/geo`, `/load`; see `@aster-charts/core/addons`) renders with
  * nothing imported by the app. The shells read what the spec needs, import it, and render when it is there. The same goes for the
- * parts of the engine that `@aster-charts/core/lean` leaves out of a browser build (the legend builder, the grid layout, the path
+ * parts of the engine that `@aster-charts/core/internal` leaves out of a browser build (the legend builder, the grid layout, the path
  * reader, vega-selections' functions...; see engine-parts.ts in @aster-charts/core): a chart that needs none of them loads nothing.
  *
  * The wait is a React Suspense wait (`use`), the same one an async `spec` and `useSpecData` already use: a <Suspense>
@@ -17,10 +17,11 @@
  */
 import * as React from 'react'
 import type { UrlDataMode, VgSpec } from '@aster-charts/core'
+import type { loadAddonsFor as CoreLoadAddonsFor } from '@aster-charts/core/addons'
 import {
-  checkUrlData, loadAddons, loadParts, notLoaded, partLoaded, partsNotLoaded, setUpShell, specNeeds,
+  loadAddonsFor as leanLoadAddonsFor, checkUrlData, loadAddons, loadParts, notLoaded, partLoaded, partsNotLoaded, setUpShell, specNeeds,
   type AddonName, type EnginePart, type PartOptions, type SpecNeeds,
-} from '@aster-charts/core/lean'
+} from '@aster-charts/core/internal'
 
 /**
  * One promise per set of add-ons and parts: what resolves to `null` (loaded) or the error that stopped it. A load that succeeded is
@@ -61,7 +62,7 @@ export interface AddonInput {
 
 /**
  * Make sure the add-ons and the parts of the engine `spec` needs are loaded (see `specNeeds` in `@aster-charts/core/addons`: the
- * parts are what `@aster-charts/core/lean` leaves out, such as the legend builder). Returns `null` once they are (at once when none is
+ * parts are what `@aster-charts/core/internal` leaves out, such as the legend builder). Returns `null` once they are (at once when none is
  * needed), the error when an import failed; suspends while an import is in flight. `null` as the spec (a scene supplied from
  * outside, which is never evaluated here) needs nothing. With `urlData: 'refuse'` a spec that has a url dataset is refused here,
  * before any import: the result is the `AsterUrlError` evaluation would throw (and an invalid `urlData` its `TypeError`).
@@ -112,4 +113,5 @@ function nonNumericSignals(signals: Readonly<Record<string, unknown>> | undefine
 const NOTHING_TO_LOAD: Promise<Error | null> = Object.assign(Promise.resolve(null), { status: 'fulfilled', value: null })
 const NOTHING: SpecNeeds = { addons: [], parts: [], eventLoop: false }
 
-export { loadAddonsFor } from '@aster-charts/core/lean'
+/** `@aster-charts/core/addons`' `loadAddonsFor` (see its declaration there), as the browser build of the engine runs it: the add-ons a spec names, and the parts it needs. */
+export const loadAddonsFor: typeof CoreLoadAddonsFor = leanLoadAddonsFor

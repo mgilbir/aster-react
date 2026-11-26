@@ -12,9 +12,9 @@ import type { InteractionCapability, PngCapability } from './capabilities.js'
 
 /** ChartProps shared with `<SvgChart>`, unchanged. These need neither the canvas nor the interaction capability. */
 export const SVG_CHART_SHARED_PROPS = [
-  'spec', 'sceneOverride', 'data', 'dataChanges', 'width', 'height', 'ariaLabel', 'incremental', 'denseMarks', 'transition',
+  'spec', 'data', 'dataChanges', 'width', 'height', 'ariaLabel', 'incremental', 'denseMarks', 'transition',
   'className', 'style', 'signals', 'onSelect', 'brush', 'panZoom', 'pan', 'zoom', 'view', 'onViewChange', 'maxZoom',
-  'signalListeners', 'onSignal', 'onStreamInput', 'interactive', 'limits', 'urlPolicy', 'urlData', 'urlLoad', 'random', 'logger', 'textMetrics',
+  'signalListeners', 'onSignal', 'interactive', 'limits', 'urlPolicy', 'urlData', 'urlLoad', 'random', 'logger', 'textMetrics',
   'a11y', 'onError',
 ] as const
 
@@ -31,6 +31,12 @@ export const SVG_CHART_SHARED_PROPS = [
 export const SVG_CHART_INTERACTION_PROPS = [
   'tooltip', 'renderTooltip', 'tooltipContainer', 'onPointSelect', 'selection', 'select', 'onSelectionChange', 'preventDefault', 'eventSources',
 ] as const
+
+/**
+ * The ChartProps members the streaming components hand `<Chart>` (`@internal` in chart-types.ts: left out of the published declarations,
+ * so not part of `<Chart>`'s public props, and not `<SvgChart>`'s at all).
+ */
+export const SVG_CHART_PLUMBING_PROPS = ['sceneOverride', 'onStreamInput'] as const
 
 /** ChartProps `<SvgChart>` does not have, each with the reason. */
 export const SVG_CHART_EXCLUDED_PROPS = {

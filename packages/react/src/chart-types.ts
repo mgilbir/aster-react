@@ -372,7 +372,7 @@ export interface ChartProps {
   onError?: (error: Error) => void
 }
 
-/** What a stream-fed chart asks its stream to apply (see `ChartProps.onStreamInput`). */
+/** What a stream-fed chart asks its stream to apply (see `ChartProps.onStreamInput`). Plumbing between the components, on no entry (not public API). */
 export interface ChartStreamInput {
   /** Scale-name -> domain overrides for the current pan/zoom view (absent = no view). */
   domainRaw?: Record<string, unknown[]>
