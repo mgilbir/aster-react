@@ -493,20 +493,42 @@ function removeUnusedDatasets(out: Obj, removable: (name: string) => boolean): v
   delete rest.data
   // (the user's rows name no dataset: they are left out of the text)
   const outside = stringifyWithoutRows(rest)
+  // (and every name and string an expression spells, as vega's lexer reads them: `data("row\\u005fdomain")` reads `row_domain`)
+  const collect = (spelled: Set<string>) => {
+    const walk = (v: unknown, key: string): void => {
+      // (only an escape can make a name the text does not hold as it is: a name or string written without one is found in the text
+      // below, bounded as the lexer bounds it; so only a text with a backslash is read token by token)
+      if (typeof v === 'string') { if (v.includes('\\') && EXPRESSION_KEYS.has(key)) for (const t of tokenize(v)) if (t.value !== undefined) spelled.add(t.value) }
+      else if (Array.isArray(v)) v.forEach((x) => walk(x, key))
+      else if (isObj(v)) for (const [k, x] of Object.entries(v)) if (k !== 'values') walk(x, k)
+    }
+    return walk
+  }
+  const outsideSpelled = new Set<string>()
+  collect(outsideSpelled)(rest, '')
+  // (each dataset is read once however many rounds the loop takes: a round only drops datasets)
+  const own = new Map<Obj, { text: string; spelled: Set<string> }>()
+  const ownOf = (d: Obj): { text: string; spelled: Set<string> } => {
+    let o = own.get(d)
+    if (o === undefined) {
+      const spelled = new Set<string>()
+      collect(spelled)({ ...d, name: undefined }, '')
+      own.set(d, (o = { text: stringifyWithoutRows({ ...d, name: undefined }), spelled }))
+    }
+    return o
+  }
   for (;;) {
     // (a name is read when it appears, whole, anywhere in the spec but its own dataset's name: a mark's `from`, a scale's domain, an
     // expression's `data("name")`, a source, a lookup)
-    const text = outside + data.map((d) => stringifyWithoutRows({ ...d, name: undefined })).join('\n')
-    // (and every name and string an expression spells, as vega's lexer reads them: `data("row\\u005fdomain")` reads `row_domain`)
-    const spelled = new Set<string>()
-    const collect = (v: unknown, key: string): void => {
-      if (typeof v === 'string') { if (EXPRESSION_KEYS.has(key)) for (const t of tokenize(v)) if (t.value !== undefined) spelled.add(t.value) }
-      else if (Array.isArray(v)) v.forEach((x) => collect(x, key))
-      else if (isObj(v)) for (const [k, x] of Object.entries(v)) if (k !== 'values') collect(x, k)
+    const spelled = new Set<string>(outsideSpelled)
+    const texts: string[] = []
+    for (const d of data) {
+      const o = ownOf(d)
+      texts.push(o.text)
+      for (const n of o.spelled) spelled.add(n)
     }
-    collect(rest, '')
-    for (const d of data) collect({ ...d, name: undefined }, '')
-    const reads = (name: string): boolean => spelled.has(name) || new RegExp(`(?<![\\w$])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w$])`).test(text)
+    const text = outside + texts.join('\n')
+    const reads = (name: string): boolean => spelled.has(name) || (text.includes(name) && new RegExp(`(?<![\\w$])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w$])`).test(text))
     const keep = data.filter((d) => !(typeof d.name === 'string' && removable(d.name) && !reads(d.name)))
     if (keep.length === data.length) return
     data = keep

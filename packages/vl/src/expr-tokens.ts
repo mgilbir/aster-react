@@ -73,7 +73,26 @@ function regexpAllowed(prev: Token | undefined): boolean {
   return prev.raw !== ')' && prev.raw !== ']' && prev.raw !== '}'
 }
 
+/**
+ * The tokens of an expression, as vega's lexer reads it. A compile reads the same few expressions again and again (every pass that
+ * renames, relabels or collects names starts from the tokens), so the tokens of a short text are kept, bounded; the list is the
+ * caller's to read, never to change.
+ */
+const TOKENS = new Map<string, Token[]>()
+const MAX_CACHED_TOKENS = 2048
+const MAX_CACHED_TEXT = 2048
+
 export function tokenize(text: string): Token[] {
+  if (text.length > MAX_CACHED_TEXT) return tokenizeText(text)
+  let tokens = TOKENS.get(text)
+  if (tokens === undefined) {
+    if (TOKENS.size >= MAX_CACHED_TOKENS) TOKENS.clear()
+    TOKENS.set(text, (tokens = tokenizeText(text)))
+  }
+  return tokens
+}
+
+function tokenizeText(text: string): Token[] {
   const out: Token[] = []
   let prev: Token | undefined
   let i = 0
