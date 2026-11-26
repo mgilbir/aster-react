@@ -124,19 +124,23 @@ chosen are at the top of `packages/benchmarks/src/incremental.bench.tsx`. What e
 
 ### Compute: incremental append vs full evaluation (node, no paint)
 
-`pnpm bench:incremental -- --points=10000 --reps=30` (three runs, medians in ms), 800x500 symbol chart,
-one row appended per update:
+`pnpm bench:incremental -- --points=10000 --reps=30` (three runs of the final stack tip, 2026-11-26, medians in ms, on a shared machine at load
+averages of 2 to 40, so absolute figures are 2 to 3 times those of the quiet-machine runs this table had before; the ratios are what to read, and
+"Final audit" below has the same paths against origin/main, alternating), 800x500 symbol chart, one row appended per update:
 
 | Path | Run 1 | Run 2 | Run 3 |
 |---|---|---|---|
-| full `evaluateChart` | 2.9 | 3.0 | 2.7 |
-| `createChartStream` append + flush | 0.2 | 0.2 | 0.2 |
-| `view.change(changeset().insert(...)).run()` in vega (`renderer: 'none'`) | 1.2 | 1.2 | 1.1 |
-| append speedup vs full | 18.3x | 15.8x | 18.2x |
-| append vs vega | 7.1x | 5.8x | 6.6x |
-| whole-array replacement speedup vs full | 15.9x | 12.7x | 17.1x |
-| DOM patch (`patchSceneDom`, 4000 points, jsdom) vs `renderSceneToSvg` | 3.3x | 3.7x | 5.4x |
-| dense 100,000-symbol mark: append patch vs mount (ms) | 1.31 vs 314.3 (249x) | 1.17 vs 275.6 (254x) | 1.12 vs 265.9 (254x) |
+| full `evaluateChart` | 10.2 | 8.5 | 6.2 |
+| `createChartStream` append + flush | 0.7 | 0.8 | 0.8 |
+| `view.change(changeset().insert(...)).run()` in vega (`renderer: 'none'`) | 2.8 | 3.4 | 2.8 |
+| append speedup vs full | 12.1x | 8.7x | 8.0x |
+| append vs vega | 3.8x | 4.2x | 3.3x |
+| whole-array replacement speedup vs full | 9.0x | 9.5x | 9.0x |
+| DOM patch (`patchSceneDom`, 4000 points, jsdom) vs `renderSceneToSvg` | 4.1x | 3.9x | 4.3x |
+| dense 100,000-symbol mark: append patch vs mount (ms) | 0.60 vs 617.0 (971x) | 0.58 vs 557.0 (986x) | 0.58 vs 568.2 (976x) |
+
+The append-versus-full ratio gate (floor 8x) read 10.2x to 11.4x on a quiet machine on the final tip (13.4x to 15.9x on origin/main): the full evaluation got
+faster (3.5 to 2.8 ms) and a development-build append slower (0.23 to 0.29 ms over its first 30 updates), see "Final audit".
 
 `pnpm bench:incremental -- --points=100000 --reps=40`: full evaluate 42.1 ms, stream append 0.3 ms
 (163x), vega `view.change` 19.0 ms (13.6 to 34.7 ms across the runs: Aster 54x to 107x cheaper), whole-array
@@ -350,6 +354,63 @@ symbol fill, headless Chromium, median frame / share of frames over 21 ms / DOM 
 (Aster SVG, microtask flush): per-item 161.2 ms median frame, 94.2% long, 100,030 DOM nodes, 18 to 19 appends in
 3 s; with `denseMarks` 33.5 ms, 96.3% long, 402 DOM nodes, 82 to 84 appends. Dense marks cut the per-frame cost by
 about 4.8x; neither SVG variant holds a 16.7 ms frame at 100,000 points, canvas does.
+
+## Final audit (2026-11-26): origin/main (7d438d0) against the stack tip, every benchmark
+
+Every benchmark of `packages/benchmarks`, the probes under `scripts/probes/` and a set of paths of their own were run on three builds side by side, in rotating
+order (main, the stack tip before this audit, the audited tip), five to nine rounds each, cold and warm, with a fixed pure-JS control per case and the Vega
+embeds as the control of the browser and jsdom rows. A path counts as slower only when the median of the per-round ratios is over 10% and holds in most rounds. The
+machine was shared (load average 2 to 40): numbers are CPU time for the Node paths, and a path measured on a loaded machine was repeated on a quiet one.
+
+**Fixed by the audit** (each has a test that fails with the fix removed; commits `fix(core)`/`perf(core)`/`perf(vl)` of `fix/audit-f3-perf-audit`):
+
+- a running view (`<Chart>`'s session) kept every scene it had ever continued alive: one scene per update, about 300 kB for a 1000-point line chart and 1 MB for a scatter (bench:memory, `asterDom` row,
+  297 kB per update against 28 kB on main). The scene a view continues was held by the input its runtime's closures kept.
+- a signal write on a 10 000-item chart took 2.3 times main's time (4.4 against 1.96 ms): the expression runtime kept the evaluation's items map, and the scene before the last kept every later scene's items alive through the minor collections.
+- a Vega-Lite line, area or trail chart (quantitative or temporal x: `toNumber` / `toDate` as a formula over its own field) was 3 to 4.5 times slower to update (3.7 -> 11 to 16 ms for one edited row of 5 000 points) and a stream or session append over such rows 12 times
+  slower and linear in the rows (0.10 -> 1.27 ms at 10 000): the tuple history copied every row with a recorded origin at every evaluation. A cast of its own field needs no history.
+- the dense SVG append patch of 100 000 symbols took twice main's time (1.19 against 0.60 ms): the paint order read every item's `zindex` at every patch.
+- a full evaluation of a 10 000-point scatter was 16% slower than main's (11.8 against 10.2 ms): an adjustment for `x2` / `xc` / `y2` / `yc` was made, with closures, for every item whether or not the set had one.
+- the first append to a stream whose spec holds 10 000 rows took 53 ms (main 3.3): the stream walked all of its own frozen copy to know it was frozen.
+
+**Still slower than main by more than 10%** (numbers and reasons; the rest of the table is level or faster):
+
+- a stream append (10 000 rows): +13% in a production build, +22% in a development one (and +27% over a stream's first 30 appends, which `bench:incremental` measures: the append-versus-full ratio gate reads 10.2x to 11.4x against its 8x floor on a quiet machine, 7.9x once in
+  five loaded runs). Spread over about twenty per-evaluation additions of the runtime work of this release, none above 1.5 us.
+- the accessible tree: +21% for a chart of at most 150 items (0.24 -> 0.29 ms), +83% for 15 000 items in summary mode (4.2 -> 7.7 ms): each item's box is its exact vega bounds, and its id the hash of its datum.
+- `compileChart` +25% (59 -> 74 us) and Vega-Lite `compile` +33% to +42% for facet, layer and parameter specs (0.24 to 0.34 -> 0.32 to 0.47 ms; point +1%, hconcat +7%): the schema and consumption checks and the compile-time expression vetting; once per spec.
+- the first operations of a process: importing `core` +14% (89 -> 102 ms CPU), the first Vega-Lite compile 18 -> 27 ms, and a larger code base takes about three times as many operations to reach the speed main reaches in 100.
+- a scatter of translucent symbols draws one element per symbol (1 000 elements, 82 batched on main): jsdom mount 5.5 -> 23.8 ms, Chromium first render 9.1 -> 15.6 ms and update 7.7 -> 17.8 ms (the vega-embed control is level). Batching translucent symbols composites them differently from vega's separate elements, so they keep their own.
+- a repeated `evaluate` with identical inputs 0.05 -> 0.10 ms, a brush with an unrelated signal write 0.31 -> 0.43 ms, `<Chart>`'s line update in Chromium +2 ms (compile + evaluate is +0.4 ms of it).
+
+**Steady state, long loops, three rounds, alternating processes**
+
+| Path (CPU ms per operation unless noted) | origin/main | stack tip before the audit | final | final vs main |
+|---|---|---|---|---|
+| evaluate scatter 10k (full) | 10.2 | 11.8 | 10.1 | -1% |
+| evaluate bar 1k (full) | 4.13 | 4.31 | 4.13 | +0% |
+| evaluate scatter, expression encode 10k | 12.7 | 13.7 | 12.3 | -3% |
+| stream append 10k rows (NODE_ENV=production) | 0.117 | 0.141 | 0.132 | +13% |
+| stream append 10k rows (dev) | 0.123 | 0.161 | 0.15 | +22% |
+| session signal write 10k items | 1.96 | 4.43 | 1.94 | -1% |
+| session signal write 10k items, under limits | 15.5 | 17.4 | 15.9 | +3% |
+| vega-lite line, 5k points, edit one row (quantitative x) | 3.68 | 13.8 | 3.84 | +4% |
+| vega-lite line, 5k points, edit one row (temporal x) | 3.82 | 16.4 | 4.1 | +7% |
+| dense SVG append patch, 100k symbols (jsdom) | 0.131 | 0.328 | 0.123 | -6% |
+| a11y tree, 15k items, default summary | 4.18 | 5.97 | 7.66 | +83% |
+| a11y tree, 15k items, every item a node | 38.6 | 69.5 | 54.7 | +42% |
+| compileChart (core) | 0.0593 | 0.0745 | 0.074 | +25% |
+| VL compile: point (fresh spec objects, median) | 0.158 | 0.164 | 0.159 | +1% |
+| VL compile: facet (fresh, median) | 0.244 | 0.373 | 0.347 | +42% |
+| VL compile: layer (fresh, median) | 0.24 | 0.336 | 0.32 | +33% |
+| VL compile: params/selection (fresh, median) | 0.339 | 0.508 | 0.466 | +37% |
+| VL compile: hconcat (fresh, median) | 0.531 | 0.584 | 0.569 | +7% |
+| VL scatter stream append, 120 appends then 2400 (wall median, last blocks) | 0.421 | 0.362 | 0.353 | -16% |
+| corpus (436 vega specs): compile+evaluate+svg, first pass | 1.06e+03 | 1.18e+03 | 1.17e+03 | +10% |
+| first evaluate of a 10k-row session (per session, warm JIT) | 13.8 | 14.3 | 13.7 | -0% |
+
+Transforms over 50 000 rows with and without `limits` (the per-loop clock ticks), the label transform, `bench:transforms`, `bench:scales`, `bench:transition`, `bench:browser-stream`, `bench:memory` and the whole Vega corpus (436 specs: evaluate and render level, compile +45%) were run too: none is more than 10% slower than main apart from what is listed above (`bench:scales` +4% to +9% of 2 to 9 us,
+`bench:transition` at 10 000 rects +11% for a non-animated patch). Bundle sizes are in the table below (every row grew by the release's features: `<Chart>` +33 kB gzip up front, +47 kB with what loads on demand).
 
 ## Bundle sizes
 
