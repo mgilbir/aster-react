@@ -5,7 +5,6 @@ import { SvgChart } from '../src/SvgChart.js'
 import { interaction } from '../src/interaction-capability.js'
 import { png } from '../src/png-capability.js'
 import type { SvgChartHandle } from '../src/svg-chart-types.js'
-import type { SceneRoot } from '@aster-charts/core'
 import { spec } from './shared.js'
 
 const ref = React.createRef<SvgChartHandle>()
@@ -17,14 +16,14 @@ export const plain = (
     data={{ t: [] }} signals={{ a: 1 }} incremental denseMarks="auto" a11y={false} interactive={false}
     onSelect={() => {}} brush={null} panZoom pan zoom view={null} onViewChange={() => {}} maxZoom={10}
     signalListeners={{ a: () => {} }} onSignal={() => {}} limits={{ maxRows: 10 }} onError={() => {}}
-    sceneOverride={null} dataChanges={{ t: [0] }} transition={{ duration: 100 }} onStreamInput={(input) => void input}
+    dataChanges={{ t: [0] }} transition={{ duration: 100 }}
     urlPolicy={{ allow: (url) => url.protocol === 'https:' }} urlData="refuse" random={() => 0.5} logger={console} textMetrics={{ measure: (t) => t.length }}
   />
 )
 
 // the props that take another type than the plain form above, and the light chart's own `png`
 export const other = (
-  <SvgChart spec={spec} sceneOverride={{} as SceneRoot} transition png={png} urlData="allow" urlLoad={{ baseURL: "https://data.example.com/", allow: (url) => url.protocol === "https:" }} dataChanges={{}} interactive />
+  <SvgChart spec={spec} transition png={png} urlData="allow" urlLoad={{ baseURL: "https://data.example.com/", allow: (url) => url.protocol === "https:" }} dataChanges={{}} interactive />
 )
 
 // with interaction: the interaction props, typed exactly like <Chart>'s

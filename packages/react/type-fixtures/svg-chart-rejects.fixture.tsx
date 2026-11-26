@@ -23,6 +23,10 @@ export const g = <SvgChart spec={spec} preventDefault />
 // @error
 export const g2 = <SvgChart spec={spec} eventSources={{ window: true }} />
 // @error
+export const g3 = <SvgChart spec={spec} sceneOverride={null} />
+// @error
+export const g4 = <SvgChart spec={spec} onStreamInput={() => {}} />
+// @error
 export const h = <SvgChart spec={spec} renderer="canvas" />
 // @error
 export const i = <SvgChart spec={spec} interaction={undefined} tooltip />

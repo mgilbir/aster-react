@@ -65,7 +65,7 @@ const SPREAD_ALLOWED: AllowedSpread[] = [
   { file: 'packages/core/src/runtime.ts', call: /texts\.push\(\.\.\.\[u\.expr, u\.signal\]/, why: 'two elements' },
   { file: 'packages/core/src/expression.ts', call: /arr\.join\(\.\.\.rest\)|str\.split as \(\.\.\.a: unknown\[\]\) => string\[\]\)\(\.\.\.rest\)/, why: 'the remaining arguments of one expression call (the separator, the limit)' },
   { file: 'packages/core/src/regex-screen.ts', call: /String\.fromCodePoint\(\.\.\.candidates\)/, why: 'the code points that have a case: a fixed set of Unicode, a few thousand, built once per process' },
-  { file: 'packages/react/src/worker.ts', call: /fn\.apply\(logger, out\)/, why: 'the arguments of one logged message a worker forwarded' },
+  { file: 'packages/react/src/worker-impl.ts', call: /fn\.apply\(logger, out\)/, why: 'the arguments of one logged message a worker forwarded' },
   { file: 'packages/core/src/runtime.ts', call: /ctx\.logger\.warn\(\.\.\.message\)/, why: 'the arguments of one warning message (vega logs a warning as several values)' },
   { file: 'packages/core/src/scale.ts', call: /register\(.*\.\.\.NUMERIC/, why: 'a module constant of scale type names' },
   { file: 'packages/core/src/scales.ts', call: /zoomed\(domain as number\[\], factor, \.\.\.(logSpace|powerSpace|symlogSpace)\(/, why: 'a pair' },
