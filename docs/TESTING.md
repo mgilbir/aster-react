@@ -86,7 +86,7 @@ does not run after `process.exit`). A child process that writes into a directory
 (a SIGKILLed child cannot clean up after itself).
 
 `pnpm check` runs every gate with `TMPDIR` pointed at a fresh directory and fails a gate that leaves anything in it
-(`FAIL <gate> (left temp dirs)`, naming the entries); `scripts/temp-dir-leaks.test.mjs` plants each kind of leak and watches it fail, and
+(`FAIL <gate> (left temp dirs)`, naming the entries; the one exception is tsx's own per-user `tsx-<uid>` directory, a single fixed-name directory reused by every run; keep `TMPDIR` short, since tsx listens on a unix socket under it); `scripts/temp-dir-leaks.test.mjs` plants each kind of leak and watches it fail, and
 fails on a `mkdtemp` or `.launch(` call outside the two helpers. Four weeks of gate runs without this left 394 GB of `aster-*` directories.
 
 ## Writing a new test

@@ -202,14 +202,19 @@ export function runGate(g, { stdio = 'inherit', env = process.env } = {}) {
  * @returns {Promise<{ r: Awaited<ReturnType<typeof runGate>>, leaked: string[] }>}
  */
 async function runInTempSandbox(g, run) {
-  const sandbox = makeTempDir('aster-gate-tmp-')
+  // tsx keeps one fixed-name directory per user (`tsx-<uid>`: its IPC sockets and transform cache) in the OS temp dir, and offers no
+  // way to move it. It is one directory, reused by every run, so it cannot pile up: the only entry a gate may leave.
+  const toolState = new Set(typeof process.getuid === 'function' ? [`tsx-${process.getuid()}`] : [])
+  // (a short name: tsx listens on a unix socket in `<TMPDIR>/tsx-<uid>/<pid>.pipe`, and a socket path is limited to ~107 characters)
+  const sandbox = makeTempDir('ag-')
   try {
     const r = await run(g, { env: { ...process.env, ...sandboxEnv(sandbox) } })
-    const leaked = readdirSync(sandbox)
+    const left = readdirSync(sandbox)
+    const leaked = left.filter((name) => !toolState.has(name))
     if (leaked.length) {
       console.error(`[gates] ${g.name} left ${leaked.length} entr${leaked.length === 1 ? 'y' : 'ies'} in its temp dir (a temp directory must be removed on success, on failure and when killed): ${leaked.slice(0, 10).join(', ')}${leaked.length > 10 ? ', ...' : ''}`)
-      for (const name of leaked) rmSync(`${sandbox}/${name}`, { recursive: true, force: true })
     }
+    for (const name of left) rmSync(`${sandbox}/${name}`, { recursive: true, force: true })
     return { r, leaked }
   } finally {
     removeTempDir(sandbox)
