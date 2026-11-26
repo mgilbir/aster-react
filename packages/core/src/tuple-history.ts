@@ -35,6 +35,12 @@ export interface HistoryStep {
   /** It runs again when a field it writes was modified upstream (a formula: `pulse.modified(as)`). */
   readonly rerunsOnWrites: boolean
   readonly rule: 'fields' | 'any' | 'once'
+  /**
+   * A formula that is nothing but a cast of the field it writes (`toNumber(datum.t)` as `t`, the shape vega-lite writes for a quantitative
+   * or temporal field): a cast of a cast is the cast, and the formula reads no signal, so it runs again only when `t` was modified, and
+   * what it gives then is what a fresh run gives. What it reads is not a read of what it wrote last time (see `historyPlan`).
+   */
+  readonly selfCast?: true
 }
 
 const PLANS = new WeakMap<readonly CompiledTransform[], readonly HistoryStep[] | null>()
@@ -58,7 +64,10 @@ export function historyPlan(transforms: readonly CompiledTransform[]): readonly 
   if (steps === null) return null
   // (a read of a field that this step or a later one writes: what the tuple holds there is what the run before left)
   for (let k = 0; k < steps.length; k++) {
-    for (let j = k; j < steps.length; j++) if (steps[k]!.inputs.some((f) => steps[j]!.writes.includes(f))) return steps
+    for (let j = k; j < steps.length; j++) {
+      if (j === k && steps[k]!.selfCast === true) continue
+      if (steps[k]!.inputs.some((f) => steps[j]!.writes.includes(f))) return steps
+    }
   }
   return null
 }
@@ -108,7 +117,8 @@ function stepOf(t: CompiledTransform): HistoryStep | null {
     case 'formula': {
       if (typeof p.expr !== 'string' || typeof p.as !== 'string') return null
       const inputs = exprFields(p.expr)
-      return inputs === null ? null : { inputs, writes: [p.as], rerunsOnWrites: true, rule: p.initonly === true ? 'once' : 'fields' }
+      if (inputs === null) return null
+      return { inputs, writes: [p.as], rerunsOnWrites: true, rule: p.initonly === true ? 'once' : 'fields', ...(isSelfCast(p.expr, p.as) ? { selfCast: true as const } : {}) }
     }
     case 'bin': case 'timeunit': {
       const field = p.field
@@ -164,6 +174,20 @@ function stepOf(t: CompiledTransform): HistoryStep | null {
     case 'voronoi': return anyRule(p, ['x', 'y'], ['path'])
     default: return null
   }
+}
+
+/** The casts of vega-lite's field types, each of which gives a value its own cast gives back unchanged (vega-util: a number passes through toDate, and so on). */
+const IDEMPOTENT_CASTS: ReadonlySet<string> = new Set(['toNumber', 'toDate', 'toString', 'toBoolean'])
+
+/** Whether `code` is `<cast>(datum.<as>)` or `<cast>(datum["<as>"])`, with the cast one of {@link IDEMPOTENT_CASTS} and no parser argument. */
+function isSelfCast(code: string, as: string): boolean {
+  let tree: Expr
+  try { tree = parseExpressionCached(code) } catch { return false }
+  const call = tree as unknown as { type?: string; callee?: { type?: string; name?: string }; arguments?: unknown[] }
+  if (call.type !== 'CallExpression' || call.callee?.type !== 'Identifier' || !IDEMPOTENT_CASTS.has(call.callee.name!) || call.arguments?.length !== 1) return false
+  const arg = call.arguments[0] as { type?: string; object?: { type?: string; name?: string }; property?: { type?: string; name?: string; value?: unknown }; computed?: boolean }
+  if (arg.type !== 'MemberExpression' || arg.object?.type !== 'Identifier' || arg.object.name !== 'datum') return false
+  return arg.computed === true ? arg.property?.type === 'Literal' && arg.property.value === as : arg.property?.type === 'Identifier' && arg.property.name === as
 }
 
 /** A step of the `any` rule: the fields its parameters `reads` name (a field, a list, a `{field}` sort; `defaults` when absent) and `as`. */
