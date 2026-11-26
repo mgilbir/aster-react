@@ -13,7 +13,7 @@ type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
 
 /** What a Vega expression may name without a signal: the root signals every view has, the datum / event / item / parent a scope gives (a group's title reads its parent), and vega's constants. */
-const GLOBAL_NAMES: ReadonlySet<string> = new Set([
+export const GLOBAL_NAMES: ReadonlySet<string> = new Set([
   'width', 'height', 'padding', 'autosize', 'background', 'datum', 'event', 'item', 'parent',
   'NaN', 'E', 'LN2', 'LN10', 'LOG2E', 'LOG10E', 'PI', 'SQRT1_2', 'SQRT2', 'MIN_VALUE', 'MAX_VALUE',
   // (the keywords the expression grammar reads as literals)
@@ -59,7 +59,7 @@ function readPlainNames(expr: string): string[] | undefined {
 }
 
 /** The names an expression reads as signals: not a property (`a.b`), not called (`f(x)`), not an object key (`{k: 1}`), not in a string. */
-function readNames(expr: string): string[] {
+export function readNames(expr: string): string[] {
   const plain = readPlainNames(expr)
   if (plain !== undefined) return plain
   const names: string[] = []
@@ -80,7 +80,7 @@ function readNames(expr: string): string[] {
 }
 
 /** Every signal the spec declares: in a `signals` list of any scope, or as the `signal` a data transform (bin, extent, geojson...) publishes. */
-function declaredSignals(node: unknown, into: Set<string>, inTransform = false): void {
+export function declaredSignals(node: unknown, into: Set<string>, inTransform = false): void {
   if (Array.isArray(node)) {
     for (const x of node) declaredSignals(x, into, inTransform)
     return
@@ -93,19 +93,24 @@ function declaredSignals(node: unknown, into: Set<string>, inTransform = false):
   }
 }
 
-/** Throws a VLCompileError for the first expression of `out` that reads a name no signal of `out` declares. */
+/**
+ * Throws a VLCompileError for the first expression of `out` that reads a name no signal of `out` declares.
+ *
+ * One walk of the spec does both jobs: it collects the declared signals and the non-global names the expressions read (with where they
+ * were read), and the first read, in the order the walk met them, whose name nothing declares is the one refused. (The path of an
+ * expression is made only for a name that is not a global: most expressions read none.)
+ */
 export function refuseUndeclaredNames(out: Obj): void {
-  // (the signals are collected the first time an expression reads a name that is not a global one: most specs have none to look for)
-  let declared: Set<string> | undefined
-  const check = (expr: string, where: string): void => {
+  const declared = new Set<string>()
+  const reads: Array<{ name: string; expr: string; at: Array<string | number> }> = []
+  const segs: Array<string | number> = []
+  const check = (expr: string): void => {
     if (GLOBAL_ONLY.has(expr)) return
     let globalOnly = true
     for (const name of readNames(expr)) {
       if (GLOBAL_NAMES.has(name)) continue
       globalOnly = false
-      if (declared === undefined) declaredSignals(out, (declared = new Set<string>()))
-      if (declared.has(name)) continue
-      throw new VLCompileError(`${where}: the expression ${JSON.stringify(expr)} reads "${name}", which no parameter or signal declares (declare it in \`params\`)`)
+      reads.push({ name, expr, at: segs.slice() })
     }
     // (the same text turns up again - in every dataset a filter is repeated in, and in the next compile of a spec being edited)
     if (globalOnly) {
@@ -113,24 +118,43 @@ export function refuseUndeclaredNames(out: Obj): void {
       GLOBAL_ONLY.add(expr)
     }
   }
-  const walk = (node: unknown, path: string, inTransform: boolean): void => {
+  const walk = (node: unknown, inTransform: boolean): void => {
     if (Array.isArray(node)) {
-      node.forEach((x, i) => walk(x, `${path}[${i}]`, inTransform))
+      for (let i = 0; i < node.length; i++) {
+        segs.push(i)
+        walk(node[i], inTransform)
+        segs.pop()
+      }
       return
     }
     if (!isObj(node)) return
-    for (const [k, v] of Object.entries(node)) {
-      const at = path === '' ? k : `${path}.${k}`
+    for (const k of Object.keys(node)) {
+      const v = node[k]
+      if (k === 'signals' && Array.isArray(v)) for (const sig of v) if (isObj(sig) && typeof sig.name === 'string') declared.add(sig.name)
+      if (k === 'signal' && inTransform && typeof v === 'string') declared.add(v)
+      segs.push(k)
       if (typeof v === 'string') {
         // (the `signal` of a data transform names the signal it publishes; an `expr` is a filter's or a formula's)
-        if ((k === 'signal' && !inTransform) || k === 'expr' || k === 'test' || k === 'update' || k === 'init') check(v, at)
+        if ((k === 'signal' && !inTransform) || k === 'expr' || k === 'test' || k === 'update' || k === 'init') check(v)
       } else if (k === 'filter' && Array.isArray(v) && typeof node.type === 'string') {
         // (the filters of an event stream)
-        for (const f of v) if (typeof f === 'string') check(f, at)
+        for (let i = 0; i < v.length; i++) {
+          const f = v[i]
+          if (typeof f === 'string') check(f)
+          else declaredSignals(f, declared)
+        }
       } else if (k === 'value' || k === 'default' || k === 'keyvals') {
-        // (a literal: `{expr: ...}` here is data a transform or a signal holds, as vega-lite writes it)
-      } else if (v !== null && typeof v === 'object' && !isRows(v)) walk(v, at, k === 'transform')
+        // (a literal: `{expr: ...}` here is data a transform or a signal holds, as vega-lite writes it; a signal it declares still counts)
+        if (v !== null && typeof v === 'object' && !isRows(v)) declaredSignals(v, declared)
+      } else if (v !== null && typeof v === 'object' && !isRows(v)) walk(v, k === 'transform')
+      segs.pop()
     }
   }
-  walk(out, '', false)
+  walk(out, false)
+  for (const r of reads) {
+    if (declared.has(r.name)) continue
+    let where = ''
+    for (const x of r.at) where = typeof x === 'number' ? `${where}[${x}]` : where === '' ? x : `${where}.${x}`
+    throw new VLCompileError(`${where}: the expression ${JSON.stringify(r.expr)} reads "${r.name}", which no parameter or signal declares (declare it in \`params\`)`)
+  }
 }
