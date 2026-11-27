@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 479 of 766 findings resolved (469 fixed, 8 already fixed on main, 2 disputed with evidence); 287 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 509 of 766 findings resolved (497 fixed, 9 already fixed on main, 3 disputed with evidence); 257 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -260,9 +260,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C211 | Medium | tests / conformance suites I | A throw in a dataset re-ranked past the marks: Vega draws the marks that read nothing late, Aster draws none | `packages/conformance/test/dataflow-failure-vs-vega.test.ts:213-233` | CONFIRMED (run; re-run by lead) |
 | C212 | Medium | tests / conformance suites II | `compare()` accepts any throw where vega-lite refuses (adds to C639 (vl-rest2-12)) | `packages/conformance/test/vl-composite-compare.ts:17-21` | CONFIRMED (run) |
 | C213 | Medium | tests / conformance suites II | `pickSpec` name normalisation makes two different compiled specs equal | `packages/conformance/test/vl-composite-pick.ts:5-6` | CONFIRMED (run) |
-| C214 | Medium | corpus / specs, range 5 | `vlx-geo-repeat-map-color-fields` draws zero shapes; the repeated colour fields do not exist on the rows | `packages/conformance/corpus/vlx-geo-repeat-map-color-fields.vl.json:5` | CONFIRMED (run; re-run by lead) |
-| C215 | Medium | corpus / specs, range 5 | `vlx-image-value-url` draws zero images; `url:{value}` and mark `opacity` are never rendered | `packages/conformance/corpus/vlx-image-value-url.vl.json:39` | CONFIRMED (run; re-run by lead) |
-| C216 | Medium | corpus / specs, range 5 | `vlx-hdr-label-expr` is inert in the oracle, and it is the only `labelExpr` in the corpus | `packages/conformance/corpus/vlx-hdr-label-expr.vl.json:130` | CONFIRMED (run) |
+| C214 | Medium | corpus / specs, range 5 | `vlx-geo-repeat-map-color-fields` draws zero shapes; the repeated colour fields do not exist on the rows | `packages/conformance/corpus/vlx-geo-repeat-map-color-fields.vl.json:5` | CONFIRMED (run; re-run by lead) → FIXED (#207) |
+| C215 | Medium | corpus / specs, range 5 | `vlx-image-value-url` draws zero images; `url:{value}` and mark `opacity` are never rendered | `packages/conformance/corpus/vlx-image-value-url.vl.json:39` | CONFIRMED (run; re-run by lead) → FIXED (#207) |
+| C216 | Medium | corpus / specs, range 5 | `vlx-hdr-label-expr` is inert in the oracle, and it is the only `labelExpr` in the corpus | `packages/conformance/corpus/vlx-hdr-label-expr.vl.json:130` | CONFIRMED (run) → FIXED (#207) |
 | C217 | Medium | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | The process-wide text measurer is keyed for guides only; kept marks keep bounds measured by the previous one | `packages/core/src/runtime.ts:1745` | CONFIRMED (run; re-run by lead) → FIXED (#188) |
 | C218 | Medium | leftovers / budgets, declarations, demo data, gallery lists | `translatePathData` gives wrong or `NaN` output for valid SVG path strings | `packages/core/src/dom.ts:122-172` | CONFIRMED (run; re-run by lead) → FIXED (#188) |
 | C219 | Medium | closure / conformance suites, line by line I | `firstDiff` skips any left-hand object it has met before, so the force comparison is blind to a wrong link endpoint and to node row order | `packages/conformance/test/force-hierarchy-gen.ts:46-47` | CONFIRMED (run) |
@@ -301,13 +301,13 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C252 | Medium | tests / core (incremental oracle, legacy copies I) | What the oracle's `compare` and generators cannot see (beyond C85 (docs-arch-3) / C625 (core-rt2-10)) | `packages/core/src/incremental-oracle.test.ts:555-573` | CONFIRMED (run) |
 | C253 | Medium | tests / core (incremental oracle, legacy copies I) | `incremental.test.ts` compares SVGs that do not depend on the transform under test | `packages/core/src/incremental.test.ts:95-117` | CONFIRMED (run; re-run by lead) |
 | C254 | Medium | tests / core (legacy copies II … path) | Input space: branches of the legacy copies the differential never executes, so the matching new code is never compared on them | `packages/core/src/geometry-differential.testlib.ts:211` | CONFIRMED (run) → FIXED (#200) |
-| C255 | Medium | corpus / specs, range 4 | Concat specs with `autosize: none` and no root size render into a 10 px canvas | `packages/conformance/corpus/vlx-geo-concat-explicit-projection-maps.vl.json:4` | CONFIRMED (run; re-run by lead) |
-| C256 | Medium | corpus / specs, range 4 | albersUsa's composite insets are never exercised by the corpus | `packages/conformance/corpus/vlx-geo-proj-albersusa.vl.json:201` | CONFIRMED (run; re-run by lead) |
-| C257 | Medium | corpus / specs, range 4 | `vlx-geo-fit-center-rotate` cannot fail if `center` and `rotate` are ignored | `packages/conformance/corpus/vlx-geo-fit-center-rotate.vl.json:191` | CONFIRMED (run) |
-| C258 | Medium | corpus / specs, range 6 | Five sort specs cannot fail if `sort` is ignored | `packages/conformance/corpus/vlx-sort-ascending.vl.json:121` | CONFIRMED (run; re-run by lead) |
-| C259 | Medium | corpus / specs, range 6 | UTC time-unit specs cannot be told from local time in any zone the gates use | `packages/conformance/corpus/vlx-timeunit-utc-month.vl.json:121` | CONFIRMED (run) |
-| C260 | Medium | corpus / specs, range 6 | `vlx-tr-loess-groupby` is the identity transform | `packages/conformance/corpus/vlx-tr-loess-groupby.vl.json:118-123` | CONFIRMED (run; re-run by lead) |
-| C261 | Medium | corpus / specs, range 6 | Selection consumers are unobservable in 10 `vlx-sel-*` specs | `packages/conformance/corpus/vlx-sel-layer-brush-filter.vl.json:80` | CONFIRMED (run) |
+| C255 | Medium | corpus / specs, range 4 | Concat specs with `autosize: none` and no root size render into a 10 px canvas | `packages/conformance/corpus/vlx-geo-concat-explicit-projection-maps.vl.json:4` | CONFIRMED (run; re-run by lead) → FIXED (#207) |
+| C256 | Medium | corpus / specs, range 4 | albersUsa's composite insets are never exercised by the corpus | `packages/conformance/corpus/vlx-geo-proj-albersusa.vl.json:201` | CONFIRMED (run; re-run by lead) → FIXED (#207) |
+| C257 | Medium | corpus / specs, range 4 | `vlx-geo-fit-center-rotate` cannot fail if `center` and `rotate` are ignored | `packages/conformance/corpus/vlx-geo-fit-center-rotate.vl.json:191` | CONFIRMED (run) → FIXED (#207) |
+| C258 | Medium | corpus / specs, range 6 | Five sort specs cannot fail if `sort` is ignored | `packages/conformance/corpus/vlx-sort-ascending.vl.json:121` | CONFIRMED (run; re-run by lead) → FIXED (#207) |
+| C259 | Medium | corpus / specs, range 6 | UTC time-unit specs cannot be told from local time in any zone the gates use | `packages/conformance/corpus/vlx-timeunit-utc-month.vl.json:121` | CONFIRMED (run) → FIXED (#207) |
+| C260 | Medium | corpus / specs, range 6 | `vlx-tr-loess-groupby` is the identity transform | `packages/conformance/corpus/vlx-tr-loess-groupby.vl.json:118-123` | CONFIRMED (run; re-run by lead) → FIXED (#207) |
+| C261 | Medium | corpus / specs, range 6 | Selection consumers are unobservable in 10 `vlx-sel-*` specs | `packages/conformance/corpus/vlx-sel-layer-brush-filter.vl.json:80` | CONFIRMED (run) → FIXED (#207) |
 | C262 | Medium | leftovers / budgets, declarations, demo data, gallery lists | Nothing guards the gallery ratchet files against being lowered; the gate compares a run to the files, never the files to their history | `packages/conformance/src/gallery/run.ts:51` | CONFIRMED (traced) → FIXED (#188) |
 | C263 | Medium | closure / gallery, sweeps, canvas helpers, corpus-tz | Both schema sweeps return at the first enum branch, so the other branches of a mixed property are never generated | `packages/conformance/src/sweeps/vega-schema.mjs:1410-1423` | CONFIRMED (run; re-run by lead) → FIXED (#205) |
 | C264 | Medium | gallery / official Vega-Lite examples II | The gallery gate cannot fail on what 66 of this lane's 313 specs are named for | `packages/conformance/src/gallery/static.ts:42` | CONFIRMED (run) |
@@ -376,7 +376,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C327 | Medium | corpus / specs, range 3 | Bin specs whose named parameter does not change the bins | `packages/conformance/corpus/vlx-bin-nice-false.vl.json:122` | CONFIRMED (run) → FIXED (#206) |
 | C328 | Medium | corpus / specs, range 3 | Three `config.scale` specs where the config has no effect in real Vega-Lite | `packages/conformance/corpus/vlx-cfgs-clamp.vl.json:129` | CONFIRMED (run) → FIXED (#206) |
 | C329 | Medium | corpus / specs, range 3 | Tooltip specs are invisible to the corpus gate | `packages/conformance/corpus/vlx-chan-tooltip-mark-true.vl.json:118` | CONFIRMED (run; re-run by lead) → FIXED (#206) |
-| C330 | Medium | corpus / specs, range 5 | 42 `vlx-invalid-<mark>-<mode>` specs are 15 distinct tests; the `*-domains` modes are never distinguished | `packages/conformance/corpus/vlx-invalid-point-break-paths-show-domains.vl.json:41` | CONFIRMED (run) |
+| C330 | Medium | corpus / specs, range 5 | 42 `vlx-invalid-<mark>-<mode>` specs are 15 distinct tests; the `*-domains` modes are never distinguished | `packages/conformance/corpus/vlx-invalid-point-break-paths-show-domains.vl.json:41` | CONFIRMED (run) → FIXED (#207) |
 | C331 | Medium | leftovers / budgets, declarations, demo data, gallery lists | React budget rows are the gzip of concatenated chunks and stop at the first `import()`; the "whole bundle" label is no longer true | `packages/benchmarks/scripts/budget.mjs:24` | CONFIRMED (run) → FIXED (#188) |
 | C332 | Medium | closure / gallery, sweeps, canvas helpers, corpus-tz | The Vega sweep never sweeps scale `reverse` or legend `type`; the skip reasons are false for those families | `packages/conformance/src/sweeps/vega-schema.mjs:939` | CONFIRMED (run) → FIXED (#205) |
 | C333 | Medium | core / scales, time, format, colour | unknown or misspelt scale properties are dropped silently | `packages/core/src/scales.ts:103-107` | CONFIRMED (run; re-run by lead) → FIXED (#196) |
@@ -522,8 +522,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C473 | Low | tests / conformance generators and case tables II | `differential-stats-random` checks Aster's row keys one-sidedly | `packages/conformance/scripts/differential-stats-random.test.mts:257-259` | CONFIRMED (run) |
 | C474 | Low | tests / conformance generators and case tables II | `differential-transforms-generated`: crash ceilings far above reality, message comparison skipped for real messages, and a dangling reference | `packages/conformance/scripts/differential-transforms-generated.test.mts:13` | CONFIRMED (run) |
 | C475 | Low | tests / conformance generators and case tables II | Decorative floors and non-differentials in the time files | `packages/conformance/scripts/differential-time-format.test.mts:166` | CONFIRMED (run) |
-| C476 | Low | corpus / specs, range 5 | specs whose named property is inert because of the chosen data or value | `packages/conformance/corpus/vlx-mark-order-false.vl.json:118` | CONFIRMED (run) |
-| C477 | Low | corpus / specs, range 5 | interaction properties that a static SVG cannot show | `packages/conformance/corpus/vlx-param-bind-checkbox.vl.json:138` | CONFIRMED (run) |
+| C476 | Low | corpus / specs, range 5 | specs whose named property is inert because of the chosen data or value | `packages/conformance/corpus/vlx-mark-order-false.vl.json:118` | CONFIRMED (run) → FIXED (#207) |
+| C477 | Low | corpus / specs, range 5 | interaction properties that a static SVG cannot show | `packages/conformance/corpus/vlx-param-bind-checkbox.vl.json:138` | CONFIRMED (run) → FIXED (#207) |
 | C478 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | A channel key omits the URL policy the mark key holds | `packages/core/src/runtime.ts:5119-5126` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
 | C479 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | The collision renamer in both schema generators produces duplicate names from the third collision on | `packages/conformance/src/sweeps/vega-schema.mjs:1509-1511` | CONFIRMED (run) → FIXED (#205) |
 | C480 | Low | closure / gallery lists, small recorded vectors | `intersect()` moves the box into every nested group without the bounds check Vega makes, so a group at a huge x loses later sibling hits | `packages/core/src/scene-intersect.ts:282-290` | CONFIRMED (run; re-run by lead) → FIXED (#189) |
@@ -561,13 +561,13 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C512 | Low | tests / core (incremental oracle, legacy copies I) | `incremental-regressions.test.ts` leaves `--expose-gc` set on the worker | `packages/core/src/incremental-regressions.test.ts:467-470` | CONFIRMED (traced) |
 | C513 | Low | tests / core (incremental oracle, legacy copies I) | The oracle's error comparison passes whenever both sides throw the same message | `packages/core/src/incremental-oracle.test.ts:721-725` | CONFIRMED (run) |
 | C514 | Low | tests / core (limits, loaders, locale, oracle vectors) | The clock inside `stack` and `window` answers 10–20 times past the budget; no test bounds it | `packages/core/src/transform-basic.ts:375` | CONFIRMED (run) → FIXED (#195) |
-| C515 | Low | corpus / specs, range 4 | The tooltip in `vlx-geo-geoshape-tooltip-href` is unobservable | `packages/conformance/corpus/vlx-geo-geoshape-tooltip-href.vl.json:198` | CONFIRMED (run) |
-| C516 | Low | corpus / specs, range 5 | the VL gate accepts oracle warnings, so accidental specs like C214 (corpus5-1)/-2 stay invisible | `packages/conformance/src/run-vl.ts:96-99` | CONFIRMED (run) |
-| C517 | Low | corpus / specs, range 6 | Window specs never display rank, row_number or lead | `packages/conformance/corpus/window-rank.vl.json:1` | CONFIRMED (run) |
-| C518 | Low | corpus / specs, range 6 | Transform parameters or outputs that nothing observes | `packages/conformance/corpus/vlx-tr-filter-valid-equal.vl.json:126` | CONFIRMED (run) |
-| C519 | Low | corpus / specs, range 6 | Three schema-invalid specs | `packages/conformance/corpus/vlx-sel-mv-concat-layer-child.vl.json:49` | CONFIRMED (run) |
-| C520 | Low | corpus / specs, range 6 | `wordcloud.vg.json` draws nothing (adds to C366 (harness-scripts-11)) | `packages/conformance/corpus/wordcloud.vg.json:1` | CONFIRMED (run) |
-| C521 | Low | corpus / specs, range 6 | Redundant projections in four selection specs | `packages/conformance/corpus/vlx-sel-interval-ordinal.vl.json:50` | CONFIRMED (run) |
+| C515 | Low | corpus / specs, range 4 | The tooltip in `vlx-geo-geoshape-tooltip-href` is unobservable | `packages/conformance/corpus/vlx-geo-geoshape-tooltip-href.vl.json:198` | CONFIRMED (run) → ALREADY FIXED (#207) |
+| C516 | Low | corpus / specs, range 5 | the VL gate accepts oracle warnings, so accidental specs like C214 (corpus5-1)/-2 stay invisible | `packages/conformance/src/run-vl.ts:96-99` | CONFIRMED (run) → FIXED (#207) |
+| C517 | Low | corpus / specs, range 6 | Window specs never display rank, row_number or lead | `packages/conformance/corpus/window-rank.vl.json:1` | CONFIRMED (run) → FIXED (#207) |
+| C518 | Low | corpus / specs, range 6 | Transform parameters or outputs that nothing observes | `packages/conformance/corpus/vlx-tr-filter-valid-equal.vl.json:126` | CONFIRMED (run) → FIXED (#207) |
+| C519 | Low | corpus / specs, range 6 | Three schema-invalid specs | `packages/conformance/corpus/vlx-sel-mv-concat-layer-child.vl.json:49` | CONFIRMED (run) → FIXED (#207) |
+| C520 | Low | corpus / specs, range 6 | `wordcloud.vg.json` draws nothing (adds to C366 (harness-scripts-11)) | `packages/conformance/corpus/wordcloud.vg.json:1` | CONFIRMED (run) → FIXED (#207) |
+| C521 | Low | corpus / specs, range 6 | Redundant projections in four selection specs | `packages/conformance/corpus/vlx-sel-interval-ordinal.vl.json:50` | CONFIRMED (run) → DISPUTED (#207) |
 | C522 | Low | leftovers / budgets, declarations, demo data, gallery lists | Budget rows built on a bare import print PASS at 0.00 kB when the import is shaken out; warnings are discarded; a `BUDGETS` key without an entry is never noticed | `packages/benchmarks/scripts/budget.mjs:465-479` | CONFIRMED (run) → FIXED (#188) |
 | C523 | Low | leftovers / budgets, declarations, demo data, gallery lists | A failing budget run leaves `packages/benchmarks/.tmp` in the working tree, and the path is not ignored | `packages/benchmarks/scripts/budget.mjs:678` | CONFIRMED (traced) → FIXED (#188) |
 | C524 | Low | leftovers / budgets, declarations, demo data, gallery lists | `bindSceneSignals` on a scene without `runtime`/`compiled` returns a dead binding and reports nothing | `packages/core/src/signals.ts:1801-1804` | CONFIRMED (run) → FIXED (#188) |
@@ -653,14 +653,14 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C604 | Low | corpus / specs, range 3 | Individual properties that are inert in otherwise effective specs | `packages/conformance/corpus/vlx-bin-anchor-base-minstep.vl.json:124` | CONFIRMED (run) → FIXED (#206) |
 | C605 | Low | corpus / specs, range 3 | Names that do not describe the spec | `packages/conformance/corpus/vlx-concat-in-facet-spacing.vl.json:114-120` | CONFIRMED (traced) → FIXED (#206) |
 | C606 | Low | corpus / specs, range 3 | `vlx-container-*` exercise only the no-container fallback in the Node gate | `packages/conformance/corpus/vlx-container-both.vl.json:113-114` | CONFIRMED (run) → DISPUTED (#206) |
-| C607 | Low | corpus / specs, range 4 | `vlx-geo-geoshape-config-view` tests an inert config | `packages/conformance/corpus/vlx-geo-geoshape-config-view.vl.json:8-10` | CONFIRMED (run) |
-| C608 | Low | corpus / specs, range 4 | `vlx-geo-explicit-clipped` clips nothing; two explicit-scale specs draw specks | `packages/conformance/corpus/vlx-geo-explicit-clipped.vl.json:191` | CONFIRMED (run) |
-| C609 | Low | corpus / specs, range 4 | `vlx-geo-explicit-translate-only` also sets `scale` | `packages/conformance/corpus/vlx-geo-explicit-translate-only.vl.json:191` | CONFIRMED (run) |
-| C610 | Low | corpus / specs, range 4 | Three specs are invalid against the Vega-Lite schema | `packages/conformance/corpus/vlx-geo-geoshape-config-projection-signal-expr.vl.json:18` | CONFIRMED (run) |
-| C611 | Low | corpus / specs, range 4 | Two names promise a feature the spec lacks | `packages/conformance/corpus/vlx-field-timeunit-dotted-facet.vl.json:140-150` | CONFIRMED (run) |
-| C612 | Low | corpus / specs, range 5 | properties vega-lite itself ignores, in specs not named as "ignored"/"dropped" | `packages/conformance/corpus/vlx-offs-theta2.vl.json:118` | CONFIRMED (run) |
-| C613 | Low | corpus / specs, range 5 | near-duplicates and an accidental spec inside the range | `packages/conformance/corpus/vlx-geo-repeat-layer-map.vl.json:67` | CONFIRMED (run) |
-| C614 | Low | corpus / specs, range 6 | Names that do not match content | `packages/conformance/corpus/vlx-sel-filter-interval.vl.json:45-56` | CONFIRMED (traced) |
+| C607 | Low | corpus / specs, range 4 | `vlx-geo-geoshape-config-view` tests an inert config | `packages/conformance/corpus/vlx-geo-geoshape-config-view.vl.json:8-10` | CONFIRMED (run) → FIXED (#207) |
+| C608 | Low | corpus / specs, range 4 | `vlx-geo-explicit-clipped` clips nothing; two explicit-scale specs draw specks | `packages/conformance/corpus/vlx-geo-explicit-clipped.vl.json:191` | CONFIRMED (run) → FIXED (#207) |
+| C609 | Low | corpus / specs, range 4 | `vlx-geo-explicit-translate-only` also sets `scale` | `packages/conformance/corpus/vlx-geo-explicit-translate-only.vl.json:191` | CONFIRMED (run) → FIXED (#207) |
+| C610 | Low | corpus / specs, range 4 | Three specs are invalid against the Vega-Lite schema | `packages/conformance/corpus/vlx-geo-geoshape-config-projection-signal-expr.vl.json:18` | CONFIRMED (run) → FIXED (#207) |
+| C611 | Low | corpus / specs, range 4 | Two names promise a feature the spec lacks | `packages/conformance/corpus/vlx-field-timeunit-dotted-facet.vl.json:140-150` | CONFIRMED (run) → FIXED (#207) |
+| C612 | Low | corpus / specs, range 5 | properties vega-lite itself ignores, in specs not named as "ignored"/"dropped" | `packages/conformance/corpus/vlx-offs-theta2.vl.json:118` | CONFIRMED (run) → FIXED (#207) |
+| C613 | Low | corpus / specs, range 5 | near-duplicates and an accidental spec inside the range | `packages/conformance/corpus/vlx-geo-repeat-layer-map.vl.json:67` | CONFIRMED (run) → FIXED (#207) |
+| C614 | Low | corpus / specs, range 6 | Names that do not match content | `packages/conformance/corpus/vlx-sel-filter-interval.vl.json:45-56` | CONFIRMED (traced) → FIXED (#207) |
 | C615 | Low | closure / conformance suites, line by line I | `vl-geo.test`: "the projection each geoshape / geopoint refers to" is compared as a sorted multiset | `packages/conformance/test/vl-geo.test.ts:58` | CONFIRMED (traced) |
 | C616 | Low | closure / conformance suites, line by line II | `scheme` on a colour `point` scale is applied although the table and vega-lite drop it | `packages/conformance/test/vl-scale-props.test.ts:47` | CONFIRMED (run; re-run by lead) |
 | C617 | Low | closure / conformance suites, line by line II | the "by a list of values" sort names values no field holds | `packages/conformance/test/vl-sort-channels.test.ts:26` | CONFIRMED (run) |
@@ -732,7 +732,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C683 | Low | tests / conformance suites II | corpus-tz: two inert specs and three uncovered zone behaviours | `packages/conformance/corpus-tz/enter-update.vg.json:1` | CONFIRMED (run) |
 | C684 | Low | corpus / specs, range 1 | Near-duplicate specs that differ only in data values | `packages/conformance/corpus/area-vl.vl.json:1` | CONFIRMED (traced) → FIXED (#206) |
 | C685 | Low | corpus / specs, range 2 | `$schema` hygiene | `packages/conformance/corpus/t-crossfilter.vg.json:1` | CONFIRMED (run) → FIXED (#206) |
-| C686 | Low | corpus / specs, range 4 | Lane boundary depends on sort collation | `packages/conformance/corpus/vlx-geo-proj-albers.vl.json:1` | CONFIRMED (run) |
+| C686 | Low | corpus / specs, range 4 | Lane boundary depends on sort collation | `packages/conformance/corpus/vlx-geo-proj-albers.vl.json:1` | CONFIRMED (run) → FIXED (#207) |
 | C687 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | Ten notice sections are outside the notices test; five licence texts cannot be checked in this repo | `scripts/notices.test.mjs:15` | CONFIRMED (traced) → FIXED (#188) |
 | C688 | Low | leftovers / budgets, declarations, demo data, gallery lists | `@aster-charts/core`'s declarations need the DOM lib, even for `renderSpec` alone | `packages/core/src/index.ts:1` | CONFIRMED (run) → FIXED (#188) |
 | C689 | Low | leftovers / budgets, declarations, demo data, gallery lists | No test reads `apps/demo/src/showcase/`; five of the fourteen specs are in no corpus and no gate | `apps/demo/src/showcase.tsx:22-26` | CONFIRMED (run) → FIXED (#188) |
@@ -798,7 +798,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C749 | Low | tests / conformance suites I | Two test headers say "Fails today"; both files pass | `packages/conformance/test/legend-domain-signal-vs-vega.test.ts:3-6` | CONFIRMED (run) |
 | C750 | Low | tests / conformance suites II | `vl-scale-forwarding` excludes fillOpacity / strokeOpacity on a premise that is no longer true | `packages/conformance/test/vl-scale-forwarding.test.ts:8` | CONFIRMED (run) |
 | C751 | Low | tests / conformance suites II | `vl-inline-data-sharing` header contradicts its assertions | `packages/conformance/test/vl-inline-data-sharing.test.ts:9-10` | CONFIRMED (run) |
-| C752 | Low | corpus / specs, range 5 | the one coarse-signature difference: Aster emits one `<clipPath>` where Vega emits two | `packages/conformance/corpus/vlx-sel-config-selection.vl.json:1` | CONFIRMED (run) |
+| C752 | Low | corpus / specs, range 5 | the one coarse-signature difference: Aster emits one `<clipPath>` where Vega emits two | `packages/conformance/corpus/vlx-sel-config-selection.vl.json:1` | CONFIRMED (run) → FIXED (#207) |
 | C753 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | ARCHITECTURE contradicts itself and the code on whether guides are kept | `docs/ARCHITECTURE.md:128` | CONFIRMED (run; re-run by lead) → FIXED (#188) |
 | C754 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | Reuse conditions the code enforces that ARCHITECTURE 117-193 and 556-565 omit, and two misplaced names | `docs/ARCHITECTURE.md:121` | CONFIRMED (traced) → FIXED (#188) |
 | C755 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | The time-grain-detector notice points at the wrong file, and the right file has no attribution | `THIRD_PARTY_NOTICES.md:942` | CONFIRMED (traced) → FIXED (#188) |
@@ -4006,6 +4006,7 @@ Direction: rank marks against the failed dataset (those reading nothing ranked a
 
 - **Location:** `packages/conformance/corpus/vlx-geo-repeat-map-color-fields.vl.json:5`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #207 (237df24e). vlx-geo-repeat-map-color-fields repeats properties.value / properties.other: 4 shapes drawn, no longer in corpus-no-items.json
 - **Area:** corpus / specs, range 5
 - **Lane ID / scripts:** `corpus5-1` — `corpus5/`
 
@@ -4020,6 +4021,7 @@ Direction: rank marks against the failed dataset (those reading nothing ranked a
 
 - **Location:** `packages/conformance/corpus/vlx-image-value-url.vl.json:39`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #207 (d5ac92e1). vlx-image-value-url plots y: 3 images at opacity 0.5 (deleting opacity changes the SVG); no longer in corpus-no-items.json
 - **Area:** corpus / specs, range 5
 - **Lane ID / scripts:** `corpus5-2` — `corpus5/`
 
@@ -4035,6 +4037,7 @@ Direction: rank marks against the failed dataset (those reading nothing ranked a
 
 - **Location:** `packages/conformance/corpus/vlx-hdr-label-expr.vl.json:130`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #207 (d5ac92e1). the inert spec is pinned as vlx-hdr-label-expr-upstream-precedence; vlx-hdr-label-expr-upper, vlx-axis-label-expr and vlx-legend-label-expr are new and bite
 - **Area:** corpus / specs, range 5
 - **Lane ID / scripts:** `corpus5-3` — `corpus5/`
 
@@ -5434,6 +5437,7 @@ All CONFIRMED-TRACE; current values measured by script where given.
 
 - **Location:** `packages/conformance/corpus/vlx-mark-order-false.vl.json:118`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #207 (f9f36afb,237df24e,d5ac92e1). order false on unsorted rows, clipAngle 12, set2, reflectY true bite; color shared bites against independent; count only bites on a quantize scale (vlx-scale-color-scheme-quantize-count added); the ordinal count is kept and cannot bite (vega ignores it there)
 - **Area:** corpus / specs, range 5
 - **Lane ID / scripts:** `corpus5-6` — `corpus5/`
 
@@ -5451,6 +5455,7 @@ Deleting the property leaves the oracle SVG byte-identical (`inert.mjs`), althou
 
 - **Location:** `packages/conformance/corpus/vlx-param-bind-checkbox.vl.json:138`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #207 (02fcf0f6). vl-selection-structure.test.ts now reads every spec that declares a param or a selection (100): dropping bind from the emitted signals fails 10 tests including the three named specs
 - **Area:** corpus / specs, range 5
 - **Lane ID / scripts:** `corpus5-8` — `corpus5/`
 
@@ -7048,6 +7053,7 @@ For the lead: the whole-corpus list (54 groups) is in `render-identical-groups.t
 
 - **Location:** `packages/conformance/corpus/vlx-invalid-point-break-paths-show-domains.vl.json:41`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #207 (57b5824b). vega-lite collapses the modes at the mark, config.mark.invalid keeps two apart: those specs set the mode there; every spec has its own data; aliases say so in their description; corpus-identical.json holds no invalid group
 - **Area:** corpus / specs, range 5
 - **Lane ID / scripts:** `corpus5-4` — `corpus5/`
 
@@ -8107,6 +8113,7 @@ All from `inert.mjs` (deletion leaves the oracle's canonical SVG identical):
 
 - **Location:** `packages/conformance/corpus/vlx-geo-geoshape-config-view.vl.json:8-10`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #207 (237df24e). renamed vlx-geo-geoshape-config-view-ignored with its own fill and a description of the upstream behaviour
 - **Area:** corpus / specs, range 4
 - **Lane ID / scripts:** `corpus4-4` — `corpus4/`
 
@@ -8121,6 +8128,7 @@ All from `inert.mjs` (deletion leaves the oracle's canonical SVG identical):
 
 - **Location:** `packages/conformance/corpus/vlx-geo-explicit-clipped.vl.json:191`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #207 (237df24e). explicit-clipped scale 100 (crosses the clip rect), explicit-scale-only 120
 - **Area:** corpus / specs, range 4
 - **Lane ID / scripts:** `corpus4-5` — `corpus4/`
 
@@ -8138,6 +8146,7 @@ All from `inert.mjs` (deletion leaves the oracle's canonical SVG identical):
 
 - **Location:** `packages/conformance/corpus/vlx-geo-explicit-translate-only.vl.json:191`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #207 (237df24e). vlx-geo-explicit-translate-only has no scale
 - **Area:** corpus / specs, range 4
 - **Lane ID / scripts:** `corpus4-6` — `corpus4/`
 
@@ -8152,6 +8161,7 @@ All from `inert.mjs` (deletion leaves the oracle's canonical SVG identical):
 
 - **Location:** `packages/conformance/corpus/vlx-geo-geoshape-config-projection-signal-expr.vl.json:18`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #207 (237df24e). the three specs are named *-offschema-signal-element; the schema-valid {expr} forms are new specs
 - **Area:** corpus / specs, range 4
 - **Lane ID / scripts:** `corpus4-7` — `corpus4/`
 
@@ -8169,6 +8179,7 @@ All from `inert.mjs` (deletion leaves the oracle's canonical SVG identical):
 
 - **Location:** `packages/conformance/corpus/vlx-field-timeunit-dotted-facet.vl.json:140-150`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #207 (237df24e). the dotted-field spec has its facet; the geoshape spec has its joinaggregate
 - **Area:** corpus / specs, range 4
 - **Lane ID / scripts:** `corpus4-8` — `corpus4/`
 
@@ -8182,6 +8193,7 @@ All from `inert.mjs` (deletion leaves the oracle's canonical SVG identical):
 
 - **Location:** `packages/conformance/corpus/vlx-offs-theta2.vl.json:118`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #207 (d5ac92e1). theta2/radius2 offsets moved to explicit theta2/radius2 channels (they bite) and EXPOSE an engine defect: @aster-charts/vl drops them (REVEALED R3, left failing); minBandSize and line smooth specs renamed *-ignored, vlx-image-smooth-false added
 - **Area:** corpus / specs, range 5
 - **Lane ID / scripts:** `corpus5-7` — `corpus5/`
 
@@ -8196,6 +8208,7 @@ All from `inert.mjs` (deletion leaves the oracle's canonical SVG identical):
 
 - **Location:** `packages/conformance/corpus/vlx-geo-repeat-layer-map.vl.json:67`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #207 (f9f36afb,237df24e,d5ac92e1). order-channel-line sorts descending; repeat-layer-map repeats the longitude over lon/lon2; repeat-merged-data-per-field repeats two fields; resolve-concat-color-shared colours two fields
 - **Area:** corpus / specs, range 5
 - **Lane ID / scripts:** `corpus5-10` — `corpus5/`
 
@@ -8210,6 +8223,7 @@ All from `inert.mjs` (deletion leaves the oracle's canonical SVG identical):
 
 - **Location:** `packages/conformance/corpus/vlx-sel-filter-interval.vl.json:45-56`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #207 (02fcf0f6). filter-interval has its filter; domain-unionwith, timeunit-color-text and concat-union renamed for what they hold
 - **Area:** corpus / specs, range 6
 - **Lane ID / scripts:** `corpus6-7` — `corpus6/`
 
@@ -9389,6 +9403,7 @@ Direction: add those properties and path forms to `randomItems`, a clipped, fram
 
 - **Location:** `packages/conformance/corpus/vlx-geo-concat-explicit-projection-maps.vl.json:4`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #207 (6ef963f2,237df24e). 28 composite specs (all that drew items into a root <= 20 px) use autosize pad; a render scan of the whole corpus finds none left but the by-design autosize-none-padding-unsized.vg.json
 - **Area:** corpus / specs, range 4
 - **Lane ID / scripts:** `corpus4-1` — `corpus4/`
 
@@ -9449,6 +9464,7 @@ Direction: add those properties and path forms to `randomItems`, a clipped, fram
 
 - **Location:** `packages/conformance/corpus/vlx-geo-proj-albersusa.vl.json:201`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #207 (237df24e). vlx-geo-proj-albersusa and -points carry Alaska, Hawaii and Anchorage/Honolulu: swapping albersUsa for albers changes the SVG
 - **Area:** corpus / specs, range 4
 - **Lane ID / scripts:** `corpus4-2` — `corpus4/`
 
@@ -9477,6 +9493,7 @@ Direction: add those properties and path forms to `randomItems`, a clipped, fram
 
 - **Location:** `packages/conformance/corpus/vlx-geo-fit-center-rotate.vl.json:191`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #207 (237df24e). rotate [-5,-20,0] bites under the fit; vlx-geo-center-explicit-scale is new (centre bites under an explicit scale); centre under a fit stays absorbed by the fit, as vega does
 - **Area:** corpus / specs, range 4
 - **Lane ID / scripts:** `corpus4-3` — `corpus4/`
 
@@ -9494,6 +9511,7 @@ Direction: add those properties and path forms to `randomItems`, a clipped, fram
 
 - **Location:** `packages/conformance/corpus/vlx-sort-ascending.vl.json:121`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #207 (57b5824b). one dataset with distinct first-appearance, alphabetical, count and min/mean/sum/max orders; every sort deletes to a different SVG; ascending is the default and is renamed vlx-sort-ascending-explicit-default
 - **Area:** corpus / specs, range 6
 - **Lane ID / scripts:** `corpus6-1` — `corpus6/`
 
@@ -9519,6 +9537,7 @@ Direction: add those properties and path forms to `randomItems`, a clipped, fram
 
 - **Location:** `packages/conformance/corpus/vlx-timeunit-utc-month.vl.json:121`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #207 (3f64b161). the three utc specs have boundary timestamps; corpus-tz holds five boundary cases where local differs from utc under New_York and Kolkata (Aster matches vega in all three zones); the main corpus stays UTC-only and TESTING says so
 - **Area:** corpus / specs, range 6
 - **Lane ID / scripts:** `corpus6-2` — `corpus6/`
 
@@ -9537,6 +9556,7 @@ Direction: add those properties and path forms to `randomItems`, a clipped, fram
 
 - **Location:** `packages/conformance/corpus/vlx-tr-loess-groupby.vl.json:118-123`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #207 (f9f36afb). twelve points a group: removing the loess transform changes the SVG, bandwidth 0.8 differs from 0.5 and 1
 - **Area:** corpus / specs, range 6
 - **Lane ID / scripts:** `corpus6-3` — `corpus6/`
 
@@ -9553,6 +9573,7 @@ Direction: add those properties and path forms to `randomItems`, a clipped, fram
 
 - **Location:** `packages/conformance/corpus/vlx-sel-layer-brush-filter.vl.json:80`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #207 (02fcf0f6). every consumer in the finding's table now has an initial selection; each listed mutation (delete filter, and->or, drop not, swap/drop conditions, point size at p1) changes the oracle's SVG
 - **Area:** corpus / specs, range 6
 - **Lane ID / scripts:** `corpus6-4` — `corpus6/`
 
@@ -9860,6 +9881,7 @@ A scenario whose spec fails to evaluate on both sides is green at every step. Th
 
 - **Location:** `packages/conformance/corpus/vlx-geo-geoshape-tooltip-href.vl.json:198`
 - **Status:** CONFIRMED (run)
+- **Resolution:** ALREADY FIXED in #207 (f1dd19ca). a27's gate compares the tooltip of every item (run-vl.ts): the geoshape spec yields 4 tooltips and deleting encoding.tooltip yields 0 on both compilers (script scratch/fix-a28-corpus-b/tip.mts)
 - **Area:** corpus / specs, range 4
 - **Lane ID / scripts:** `corpus4-9` — `corpus4/`
 
@@ -9875,6 +9897,7 @@ A scenario whose spec fails to evaluate on both sides is green at every step. Th
 
 - **Location:** `packages/conformance/src/run-vl.ts:96-99`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #207 (755e2ebc,f1dd19ca). conformance-vl prints a note for each data warning the oracle raises itself; zero-item entries are refused by a27's corpus-no-items gate (no allow-list added); box-plot's Infinite extent is vega-lite's own intermediate and stays a note
 - **Area:** corpus / specs, range 5
 - **Lane ID / scripts:** `corpus5-9` — `corpus5/`
 
@@ -9889,6 +9912,7 @@ A scenario whose spec fails to evaluate on both sides is green at every step. Th
 
 - **Location:** `packages/conformance/corpus/window-rank.vl.json:1`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #207 (f9f36afb). window-rank has ties (rank, row_number, dense_rank differ); window-options draws rank, row_number and lead; vlx-tr-window has unsorted rows, a non-default frame and draws rk
 - **Area:** corpus / specs, range 6
 - **Lane ID / scripts:** `corpus6-5` — `corpus6/`
 
@@ -9904,6 +9928,7 @@ A scenario whose spec fails to evaluate on both sides is green at every step. Th
 
 - **Location:** `packages/conformance/corpus/vlx-tr-filter-valid-equal.vl.json:126`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #207 (f9f36afb). null v row, extent that moves the bins, n and max_y encoded, offset center, impute value 2; the stack-order-channel item is DISPUTED: sort ascending is not the default there (descending equals no order channel)
 - **Area:** corpus / specs, range 6
 - **Lane ID / scripts:** `corpus6-6` — `corpus6/`
 
@@ -9921,6 +9946,7 @@ A scenario whose spec fails to evaluate on both sides is green at every step. Th
 
 - **Location:** `packages/conformance/corpus/vlx-sel-mv-concat-layer-child.vl.json:49`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #207 (02fcf0f6,755e2ebc). stray height removed; the two default-as specs are off-schema on purpose and TESTING.md says so
 - **Area:** corpus / specs, range 6
 - **Lane ID / scripts:** `corpus6-8` — `corpus6/`
 
@@ -9934,6 +9960,7 @@ A scenario whose spec fails to evaluate on both sides is green at every step. Th
 
 - **Location:** `packages/conformance/corpus/wordcloud.vg.json:1`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #207 (755e2ebc). real vega's wordcloud needs a canvas the Node oracle lacks (TypeError in CloudLayout with words): renamed wordcloud-empty-data and kept in corpus-no-items.json with that reason; words are compared in Chromium by wordcloud-vs-vega.test.ts
 - **Area:** corpus / specs, range 6
 - **Lane ID / scripts:** `corpus6-9` — `corpus6/`
 
@@ -9947,6 +9974,7 @@ A scenario whose spec fails to evaluate on both sides is green at every step. Th
 
 - **Location:** `packages/conformance/corpus/vlx-sel-interval-ordinal.vl.json:50`
 - **Status:** CONFIRMED (run)
+- **Resolution:** DISPUTED in #207 (-). vega-lite's own compile is identical without encodings/fields (the projection is inferred from the init value): scratch/fix-a28-corpus-b/c521.mts; the finding asks for no change
 - **Area:** corpus / specs, range 6
 - **Lane ID / scripts:** `corpus6-11` — `corpus6/`
 
@@ -12472,6 +12500,7 @@ Both carry a "HANDOFF (lane 3 -> lane 7) … Fails today; belongs in packages/co
 
 - **Location:** `packages/conformance/corpus/vlx-sel-config-selection.vl.json:1`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #207 (755e2ebc). ARCHITECTURE.md 'Deviations from Vega' lists the shared clipPath and the pointer-events of a transparent hit mark
 - **Area:** corpus / specs, range 5
 - **Lane ID / scripts:** `corpus5-11` — `corpus5/`
 
@@ -14431,6 +14460,7 @@ Measured by rendering every spec with real Vega (and Aster) under different `TZ`
 
 - **Location:** `packages/conformance/corpus/vlx-geo-proj-albers.vl.json:1`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #207 (237df24e). vlx-geo-proj-albers is handled in this lane whatever the collation (its group with albersusa is resolved); no file between ranges is left unowned
 - **Area:** corpus / specs, range 4
 - **Lane ID / scripts:** `corpus4-10` — `corpus4/`
 
