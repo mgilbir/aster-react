@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 671 of 766 findings resolved (650 fixed, 18 already fixed on main, 3 disputed with evidence); 95 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 674 of 766 findings resolved (653 fixed, 18 already fixed on main, 3 disputed with evidence); 92 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -506,7 +506,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C457 | Low | tests / core (limits, loaders, locale, oracle vectors) | Two cache tests assert less than their titles and pass on a planted wrong implementation | `packages/core/src/limits.test.ts:190-196` | CONFIRMED (run) → FIXED (#195) |
 | C458 | Low | tests / core (limits, loaders, locale, oracle vectors) | `runtime.test.ts` still takes the "full" reference from the same compiled chart in about 20 tests | `packages/core/src/runtime.test.ts:45-95` | CONFIRMED (run) → FIXED (#195) |
 | C459 | Low | tests / core (limits, loaders, locale, oracle vectors) | `load-policy.test.ts` "cut off at maxBytes WHILE it streams" does not show the reader was cancelled | `packages/core/src/load-policy.test.ts:200-207` | CONFIRMED (run) → FIXED (#195) |
-| C460 | Low | tests / core (limits, loaders, locale, oracle vectors) | Smaller assertions that say less than their comments or titles | `packages/core/src/partial.test.ts:38` | CONFIRMED (traced) |
+| C460 | Low | tests / core (limits, loaders, locale, oracle vectors) | Smaller assertions that say less than their comments or titles | `packages/core/src/partial.test.ts:38` | CONFIRMED (traced) → FIXED (#217) |
 | C461 | Low | tests / core (text … url) | a typo in the format spec list makes 24 of 1008 cases the same throw | `packages/conformance/scripts/gen-vectors.mjs:506-511` | CONFIRMED (run) → FIXED (#190) |
 | C462 | Low | tests / core (text … url) | two timer tests pass under a planted bug | `packages/core/src/timer.test.ts:37-43` | CONFIRMED (run; re-run by lead) → FIXED (#190) |
 | C463 | Low | tests / core (text … url) | the per-projection loop in the geo concat test cannot fail | `packages/vl/test/geo.test.ts:205-207` | CONFIRMED (run) → FIXED (#190) |
@@ -549,7 +549,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C500 | Low | core / runtime: state, signals, reuse keys | A fractional or `NaN` `dataChanges` index blanks the chart or throws a bare TypeError | `packages/core/src/runtime.ts:950` | CONFIRMED (run) → FIXED (#201) |
 | C501 | Low | core / runtime: marks, encode, groups | A failed import of the pulse part is swallowed for the life of the page with no log | `packages/core/src/shell-setup.ts:20` | CONFIRMED (traced) |
 | C502 | Low | core / session, stream, limits | Stream bounds accept `NaN` | `packages/core/src/stream.ts:443-444` | CONFIRMED (run) → FIXED (#193) |
-| C503 | Low | core / session, stream, limits | A session's no-op evaluate still costs O(spec) | `packages/core/src/session.ts:345` | CONFIRMED (traced) |
+| C503 | Low | core / session, stream, limits | A session's no-op evaluate still costs O(spec) | `packages/core/src/session.ts:345` | CONFIRMED (traced) → FIXED (#217) |
 | C504 | Low | core / compiler, transforms | wrong-typed `width` / `padding` give garbage | `packages/core/src/compiler.ts:69-70` | CONFIRMED (run) → ALREADY FIXED (#194) |
 | C505 | Low | react / <Chart>, shells, SSR | `devicePixelRatio` is read through a store that never notifies | `packages/react/src/ChartCore.tsx:57` | CONFIRMED (traced) → FIXED (#198) |
 | C506 | Low | react / hooks, streams, workers | streams are not closed on unmount; `push` still answers `true` | `packages/react/src/useChartStream.ts:151-158` | CONFIRMED (run) → FIXED (#199) |
@@ -614,7 +614,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C565 | Low | conformance / scripts and gates | The geo generator keeps path marks fill-only for a defect "see the report" that the simple form no longer shows | `packages/conformance/scripts/geo-gen.mts:404-405` | CONFIRMED (run) → FIXED (#204) |
 | C566 | Low | tooling / gates, CI, release, benchmarks | `tsc` never cleans `dist`: this tree holds a built module that has no source | `scripts/bundle-shaking.test.mjs:24-27` | CONFIRMED (run) → FIXED (#187) |
 | C567 | Low | tooling / gates, CI, release, benchmarks | `readme-examples.test.mjs` keeps its own, already wrong, copy of the `exports` map | `scripts/readme-examples.test.mjs:39-46` | CONFIRMED (traced) → FIXED (#187) |
-| C568 | Low | tooling / gates, CI, release, benchmarks | Config hygiene that hides things (knip ignores, a core entry no export reaches, unusable root tsconfig, strict flags off) | `knip.json:4-7` | CONFIRMED (traced) |
+| C568 | Low | tooling / gates, CI, release, benchmarks | Config hygiene that hides things (knip ignores, a core entry no export reaches, unusable root tsconfig, strict flags off) | `knip.json:4-7` | CONFIRMED (traced) → FIXED (#217) |
 | C569 | Low | tests / core (a11y … curves) | `CanvasLike.fillText` declares a fourth parameter nobody passes; the recorder's multi-line exclusion is dead | `packages/core/src/canvas.ts:64` | CONFIRMED (traced) → FIXED (#190) |
 | C570 | Low | tests / core (a11y … curves) | Test files export functions that nothing imports | `packages/core/src/canvas-append-oracle.test.ts:32` | CONFIRMED (traced) → FIXED (#190) |
 | C571 | Low | tests / core (data … hit) | the no-parse guard sees one of three parsers, and its claim is false for non-finite geometry | `packages/core/src/geometry-no-parse.test.ts:13-17` | CONFIRMED (traced) → FIXED (#195) |
@@ -5186,6 +5186,7 @@ Direction: track the subpath start in `tracePath` and restore `cx`, `cy` on `Z`.
 
 - **Location:** `packages/core/src/partial.test.ts:38`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #217 (b7f86ce2). Dense and per-item append patches compared with a full render after in-place edits and unstamped items; five planted defects each fail Earlier work: #195.
 - **Area:** tests / core (limits, loaders, locale, oracle vectors)
 - **Lane ID / scripts:** `tests-core5-13` — `tests-core5/`
 
@@ -7537,6 +7538,7 @@ On this freshly built tree `packages/core/dist/svg-path.js` exists and `packages
 
 - **Location:** `knip.json:4-7`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #217 (7d910ee0). noImplicitReturns, noFallthroughCasesInSwitch, noUnusedParameters on in every package and the demo (every site fixed); exactOptionalPropertyTypes NOT enabled (372 errors, public types): see report Earlier work: #187.
 - **Area:** tooling / gates, CI, release, benchmarks
 - **Lane ID / scripts:** `tooling-22` — `tooling/`
 
@@ -9813,6 +9815,7 @@ Direction: validate once where pulses are normalised (`runtime.ts:949-960`) with
 
 - **Location:** `packages/core/src/session.ts:345`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #217 (ebab1ce3,ba0a74cd). Skeleton skipped only for a deep-frozen spec (WeakSet, checked once); content comparison otherwise, an edit in place is seen; frozen nested rows written once per array Earlier work: #193.
 - **Area:** core / session, stream, limits
 - **Lane ID / scripts:** `core-incr-21` — `core-incr/`
 
