@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 192 of 766 findings resolved (185 fixed, 6 already fixed on main, 1 disputed with evidence); 574 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 214 of 766 findings resolved (206 fixed, 7 already fixed on main, 1 disputed with evidence); 552 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -151,9 +151,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C102 | Medium | vl / composition | The repeated spec's `name` goes raw into signal names, scale names and expressions | `packages/vl/src/compile.ts:3192` | CONFIRMED (run; re-run by lead) |
 | C103 | Medium | vl / mark encoding | Titles are spliced into the tooltip object literal and the aria description with only `"` escaped | `packages/vl/src/compile.ts:7805` | CONFIRMED (run) |
 | C104 | Medium | tooling / gates, CI, release, benchmarks | the dependency boundary still has holes (continues C40) | `scripts/lib/scan-imports.mjs:70-83` | CONFIRMED (run; re-run by lead) → FIXED (#187) |
-| C105 | Medium | tests / core (data … hit) | the linearity guard for the untrusted-text readers accepts quadratic growth | `packages/core/src/expr-text.test.ts:33-37` | CONFIRMED (run) |
+| C105 | Medium | tests / core (data … hit) | the linearity guard for the untrusted-text readers accepts quadratic growth | `packages/core/src/expr-text.test.ts:33-37` | CONFIRMED (run) → FIXED (#195) |
 | C106 | Medium | tests / core (incremental oracle, legacy copies I) | Legacy and new DOM builders cache descriptors in the same `__domDesc` slot, so "old vs new" on reused items compares an object with itself | `packages/core/src/legacy-dom.testlib.ts:397-409` | CONFIRMED (run; re-run by lead) |
-| C107 | Medium | tests / core (limits, loaders, locale, oracle vectors) | Under any `limits` object, a spec that shares sub-objects makes the pre-flight walk exponential; the "spec size" ceiling only holds without limits | `packages/core/src/limits.ts:547-585` | CONFIRMED (run; re-run by lead) |
+| C107 | Medium | tests / core (limits, loaders, locale, oracle vectors) | Under any `limits` object, a spec that shares sub-objects makes the pre-flight walk exponential; the "spec size" ceiling only holds without limits | `packages/core/src/limits.ts:547-585` | CONFIRMED (run; re-run by lead) → ALREADY FIXED (#195) |
 | C108 | Medium | tests / core (render … stream) | Escape classes with no case in `sandbox.test.ts` (adds to C4 (core-signals-1), C18 (core-scale-1), C384 (core-expr-11), C285 (core-expr-10)) | `packages/core/src/signals.test.tsx:151-161` | CONFIRMED (run) |
 | C109 | Medium | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | vega-tooltip code is followed without a notice, and the notices test cannot see it | `packages/react/src/tooltip-content.ts:7-18` | CONFIRMED (run) → FIXED (#188) |
 | C110 | Medium | core / runtime: state, signals, reuse keys | An update whose re-encode throws is not the fresh scene | `packages/core/src/runtime.ts:5339-5400` | CONFIRMED (run) |
@@ -245,8 +245,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C196 | Medium | conformance / scripts and gates | Two React-gate assertions cannot fail for the reason they name | `packages/react/scripts/browser-interaction.mts:455` | CONFIRMED (traced) |
 | C197 | Medium | tooling / gates, CI, release, benchmarks | the nightly browser floors pass on missing measurements, and are loose where they do bite | `packages/benchmarks/src/browser-floors.ts:52-57` | CONFIRMED (run; re-run by lead) → FIXED (#187) |
 | C198 | Medium | tests / core (legacy copies II … path) | Product defect shared by legacy and new: a rect with a numeric-string `width`/`height` is drawn zero-size (Vega draws it), while the hit index still treats it as full-size | `packages/core/src/geometry.ts:670-671` | CONFIRMED (run; re-run by lead) |
-| C199 | Medium | tests / core (limits, loaders, locale, oracle vectors) | `okResult` passes when the attack child crashes, so the "still renders" halves of the ceiling tests cannot fail on an out-of-memory | `packages/core/src/limits-attacks.test.ts:392-395` | CONFIRMED (run; re-run by lead) |
-| C200 | Medium | tests / core (limits, loaders, locale, oracle vectors) | "sequence transform with only a time budget is cut off by the clock inside the loop" is stopped by the built-in ceiling, not the clock | `packages/core/src/limits-attacks.test.ts:28-33` | CONFIRMED (run; re-run by lead) |
+| C199 | Medium | tests / core (limits, loaders, locale, oracle vectors) | `okResult` passes when the attack child crashes, so the "still renders" halves of the ceiling tests cannot fail on an out-of-memory | `packages/core/src/limits-attacks.test.ts:392-395` | CONFIRMED (run; re-run by lead) → FIXED (#195) |
+| C200 | Medium | tests / core (limits, loaders, locale, oracle vectors) | "sequence transform with only a time budget is cut off by the clock inside the loop" is stopped by the built-in ceiling, not the clock | `packages/core/src/limits-attacks.test.ts:28-33` | CONFIRMED (run; re-run by lead) → FIXED (#195) |
 | C201 | Medium | tests / core (text … url) | "a clock that jumps forward does not make an interval fire a burst" never jumps, and with a real jump the interval does burst | `packages/core/src/timer.test.ts:108-119` | CONFIRMED (run; re-run by lead) → FIXED (#190) |
 | C202 | Medium | tests / core (text … url) | the `dsvFormatRow` vectors are recorded double-wrapped, and one pins a localised `Date#toString()` | `packages/conformance/scripts/gen-vectors.mjs:837-847` | CONFIRMED (run) → FIXED (#190) |
 | C203 | Medium | tests / core (text … url) | both topojson vector fixtures are malformed topologies; no vector covers a valid polygon | `packages/conformance/scripts/gen-vectors.mjs:633-678` | CONFIRMED (run) → FIXED (#190) |
@@ -384,9 +384,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C335 | Medium | tests / core (a11y … curves) | The parity recorder in `canvas.test.ts` is blind to eight kinds of paint difference and rejects a correct rotated symbol | `packages/core/src/canvas.test.ts:50-53` | CONFIRMED (run; re-run by lead) → FIXED (#190) |
 | C336 | Medium | tests / core (a11y … curves) | The paint recorder behind the append and same-pixels oracles cannot see text rotation, blend, dash offset, stroked text or images | `packages/core/src/canvas-record.testlib.ts:128` | CONFIRMED (run) → FIXED (#190) |
 | C337 | Medium | tests / core (a11y … curves) | `calendar.tz.test.ts` skips its zone checks under one of the three zones `pnpm test:tz` runs | `packages/core/src/calendar.tz.test.ts:38` | CONFIRMED (traced) → FIXED (#190) |
-| C338 | Medium | tests / core (data … hit) | "grid and linear modes agree across the vega corpus" compares the linear scan with itself | `packages/core/src/hit.test.ts:181-219` | CONFIRMED (run; re-run by lead) |
+| C338 | Medium | tests / core (data … hit) | "grid and linear modes agree across the vega corpus" compares the linear scan with itself | `packages/core/src/hit.test.ts:181-219` | CONFIRMED (run; re-run by lead) → FIXED (#195) |
 | C339 | Medium | tests / core (incremental oracle, legacy copies I) | The shrinker prints a "minimal" step list that does not reproduce a final-audit failure | `packages/core/src/incremental-oracle.test.ts:752` | CONFIRMED (traced) |
-| C340 | Medium | tests / core (limits, loaders, locale, oracle vectors) | The attack suite covers about half of the claims in `docs/LIMITS.md` | `docs/LIMITS.md:70-79` | CONFIRMED (run) |
+| C340 | Medium | tests / core (limits, loaders, locale, oracle vectors) | The attack suite covers about half of the claims in `docs/LIMITS.md` | `docs/LIMITS.md:70-79` | CONFIRMED (run) → FIXED (#195) |
 | C341 | Medium | tests / core (render … stream) | The stream property test passes against a stream that never flushes | `packages/core/src/stream.property.test.ts:284` | CONFIRMED (run; re-run by lead) |
 | C342 | Medium | tests / core (render … stream) | "named scheme/range/curve/projection/linkpath lookups ignore inherited names" runs no assertion and tries two of the five lookups | `packages/core/src/sandbox.test.ts:186-197` | CONFIRMED (run) |
 | C343 | Medium | tests / core (render … stream) | "two-argument toDate never calls its second argument" never reaches `toDate` | `packages/core/src/sandbox.test.ts:35-43` | CONFIRMED (run; re-run by lead) |
@@ -425,7 +425,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C376 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | The demo app mis-describes itself and models patterns a newcomer should not copy (no `<Suspense>`, ref-derived `dataChanges`, legacy brush props, stale hero figures) | `apps/demo/README.md:9` | CONFIRMED (traced) |
 | C377 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ARCHITECTURE statements about add-on detection the code contradicts ("cached per spec object", "no regular expression") | `docs/ARCHITECTURE.md:353` | CONFIRMED (traced) |
 | C378 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ARCHITECTURE repeats a stale corpus count (1060; actual 1063) and the guard's regex cannot match the sentence | `docs/ARCHITECTURE.md:577` | CONFIRMED (traced) |
-| C379 | Medium | tests / core (limits, loaders, locale, oracle vectors) | `docs/TESTING.md` says the default run pins `TZ=UTC`; it does not, and `locale-font-matrix.test.ts` fails off UTC | `docs/TESTING.md:143` | CONFIRMED (run; re-run by lead) |
+| C379 | Medium | tests / core (limits, loaders, locale, oracle vectors) | `docs/TESTING.md` says the default run pins `TZ=UTC`; it does not, and `locale-font-matrix.test.ts` fails off UTC | `docs/TESTING.md:143` | CONFIRMED (run; re-run by lead) → FIXED (#195) |
 | C380 | Medium | tests / conformance generators and case tables II | A derived dataset that opens with a sort re-orders its source in Vega; Aster does not, and the deviation is recorded only in a test comment | `packages/conformance/scripts/differential-sort-ties.test.mts:53-55` | CONFIRMED (run; re-run by lead) |
 | C381 | Medium | tests / conformance suites I | `docs/ERRORS.md:182` misdescribes what a throwing dataset transform leaves | `docs/ERRORS.md:182` | CONFIRMED (run; re-run by lead) |
 | C382 | Medium | leftovers / budgets, declarations, demo data, gallery lists | `SignalBindOptions.pick` TSDoc recommends `HitIndex.query`; that is not vega's `event.item` | `packages/core/src/signals.ts:164` | CONFIRMED (run; re-run by lead) → FIXED (#188) |
@@ -502,10 +502,10 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C453 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ARCHITECTURE "11 of 26" shaking-pattern count is stale | `docs/ARCHITECTURE.md:513` | CONFIRMED (traced) |
 | C454 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ARCHITECTURE classifies a `force` mark as one that "may draw" random numbers; ADR 0006 says force never reads the source | `docs/ARCHITECTURE.md:122` | CONFIRMED (traced) |
 | C455 | Low | tests / core (legacy copies II … path) | `tracePath` keeps a stale current point after `Z` (new and legacy): `H`, `V`, `S`, `T` and `A` after a close start from the wrong point | `packages/core/src/path-data.ts:498` | CONFIRMED (run) |
-| C456 | Low | tests / core (limits, loaders, locale, oracle vectors) | `pulse.test.ts` "incremental sorted window/stack matches a full re-derive" cannot see the window's output and has no stack | `packages/core/src/pulse.test.ts:88-106` | CONFIRMED (run) |
-| C457 | Low | tests / core (limits, loaders, locale, oracle vectors) | Two cache tests assert less than their titles and pass on a planted wrong implementation | `packages/core/src/limits.test.ts:190-196` | CONFIRMED (run) |
-| C458 | Low | tests / core (limits, loaders, locale, oracle vectors) | `runtime.test.ts` still takes the "full" reference from the same compiled chart in about 20 tests | `packages/core/src/runtime.test.ts:45-95` | CONFIRMED (run) |
-| C459 | Low | tests / core (limits, loaders, locale, oracle vectors) | `load-policy.test.ts` "cut off at maxBytes WHILE it streams" does not show the reader was cancelled | `packages/core/src/load-policy.test.ts:200-207` | CONFIRMED (run) |
+| C456 | Low | tests / core (limits, loaders, locale, oracle vectors) | `pulse.test.ts` "incremental sorted window/stack matches a full re-derive" cannot see the window's output and has no stack | `packages/core/src/pulse.test.ts:88-106` | CONFIRMED (run) → FIXED (#195) |
+| C457 | Low | tests / core (limits, loaders, locale, oracle vectors) | Two cache tests assert less than their titles and pass on a planted wrong implementation | `packages/core/src/limits.test.ts:190-196` | CONFIRMED (run) → FIXED (#195) |
+| C458 | Low | tests / core (limits, loaders, locale, oracle vectors) | `runtime.test.ts` still takes the "full" reference from the same compiled chart in about 20 tests | `packages/core/src/runtime.test.ts:45-95` | CONFIRMED (run) → FIXED (#195) |
+| C459 | Low | tests / core (limits, loaders, locale, oracle vectors) | `load-policy.test.ts` "cut off at maxBytes WHILE it streams" does not show the reader was cancelled | `packages/core/src/load-policy.test.ts:200-207` | CONFIRMED (run) → FIXED (#195) |
 | C460 | Low | tests / core (limits, loaders, locale, oracle vectors) | Smaller assertions that say less than their comments or titles | `packages/core/src/partial.test.ts:38` | CONFIRMED (traced) |
 | C461 | Low | tests / core (text … url) | a typo in the format spec list makes 24 of 1008 cases the same throw | `packages/conformance/scripts/gen-vectors.mjs:506-511` | CONFIRMED (run) → FIXED (#190) |
 | C462 | Low | tests / core (text … url) | two timer tests pass under a planted bug | `packages/core/src/timer.test.ts:37-43` | CONFIRMED (run; re-run by lead) → FIXED (#190) |
@@ -560,7 +560,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C511 | Low | tests / core (incremental oracle, legacy copies I) | Two stream tests assert less than their titles | `packages/core/src/incremental.test.ts:235-247` | CONFIRMED (traced) |
 | C512 | Low | tests / core (incremental oracle, legacy copies I) | `incremental-regressions.test.ts` leaves `--expose-gc` set on the worker | `packages/core/src/incremental-regressions.test.ts:467-470` | CONFIRMED (traced) |
 | C513 | Low | tests / core (incremental oracle, legacy copies I) | The oracle's error comparison passes whenever both sides throw the same message | `packages/core/src/incremental-oracle.test.ts:721-725` | CONFIRMED (run) |
-| C514 | Low | tests / core (limits, loaders, locale, oracle vectors) | The clock inside `stack` and `window` answers 10–20 times past the budget; no test bounds it | `packages/core/src/transform-basic.ts:375` | CONFIRMED (run) |
+| C514 | Low | tests / core (limits, loaders, locale, oracle vectors) | The clock inside `stack` and `window` answers 10–20 times past the budget; no test bounds it | `packages/core/src/transform-basic.ts:375` | CONFIRMED (run) → FIXED (#195) |
 | C515 | Low | corpus / specs, range 4 | The tooltip in `vlx-geo-geoshape-tooltip-href` is unobservable | `packages/conformance/corpus/vlx-geo-geoshape-tooltip-href.vl.json:198` | CONFIRMED (run) |
 | C516 | Low | corpus / specs, range 5 | the VL gate accepts oracle warnings, so accidental specs like C214 (corpus5-1)/-2 stay invisible | `packages/conformance/src/run-vl.ts:96-99` | CONFIRMED (run) |
 | C517 | Low | corpus / specs, range 6 | Window specs never display rank, row_number or lead | `packages/conformance/corpus/window-rank.vl.json:1` | CONFIRMED (run) |
@@ -617,12 +617,12 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C568 | Low | tooling / gates, CI, release, benchmarks | Config hygiene that hides things (knip ignores, a core entry no export reaches, unusable root tsconfig, strict flags off) | `knip.json:4-7` | CONFIRMED (traced) |
 | C569 | Low | tests / core (a11y … curves) | `CanvasLike.fillText` declares a fourth parameter nobody passes; the recorder's multi-line exclusion is dead | `packages/core/src/canvas.ts:64` | CONFIRMED (traced) → FIXED (#190) |
 | C570 | Low | tests / core (a11y … curves) | Test files export functions that nothing imports | `packages/core/src/canvas-append-oracle.test.ts:32` | CONFIRMED (traced) → FIXED (#190) |
-| C571 | Low | tests / core (data … hit) | the no-parse guard sees one of three parsers, and its claim is false for non-finite geometry | `packages/core/src/geometry-no-parse.test.ts:13-17` | CONFIRMED (traced) |
-| C572 | Low | tests / core (data … hit) | adds to C501 (core-rt3-18): a test pins that the fallback without the pulse part changes seeded random draws | `packages/core/src/engine-parts.test.ts:224-239` | CONFIRMED (traced) |
+| C571 | Low | tests / core (data … hit) | the no-parse guard sees one of three parsers, and its claim is false for non-finite geometry | `packages/core/src/geometry-no-parse.test.ts:13-17` | CONFIRMED (traced) → FIXED (#195) |
+| C572 | Low | tests / core (data … hit) | adds to C501 (core-rt3-18): a test pins that the fallback without the pulse part changes seeded random draws | `packages/core/src/engine-parts.test.ts:224-239` | CONFIRMED (traced) → FIXED (#195) |
 | C573 | Low | tests / core (incremental oracle, legacy copies I) | Oracle labels that lie, and the coverage assertions that pass on them | `packages/core/src/incremental-oracle.test.ts:225` | CONFIRMED (run; re-run by lead) |
 | C574 | Low | tests / core (legacy copies II … path) | The random scenes' "legend-like leaves" are never drawn: the generator builds a shape the renderers read as one zero-length `<line>` | `packages/core/src/geometry-scenes.testlib.ts:137-143` | CONFIRMED (run) |
 | C575 | Low | tests / core (legacy copies II … path) | Dead legacy code no test reaches | `packages/core/src/legacy-path-data.testlib.ts:196-254` | CONFIRMED (run) |
-| C576 | Low | tests / core (limits, loaders, locale, oracle vectors) | `oracle-vectors.test.ts` sets `process.env.TZ` per suite and never restores it | `packages/core/src/oracle-vectors.test.ts:266` | CONFIRMED (traced) |
+| C576 | Low | tests / core (limits, loaders, locale, oracle vectors) | `oracle-vectors.test.ts` sets `process.env.TZ` per suite and never restores it | `packages/core/src/oracle-vectors.test.ts:266` | CONFIRMED (traced) → FIXED (#195) |
 | C577 | Low | tests / core (text … url) | `vega-util.json` records `isDate(Date.now())`, so the recording is not reproducible | `packages/conformance/scripts/gen-vectors.mjs:223` | CONFIRMED (run) → ALREADY FIXED (#190) |
 | C578 | Low | tests / conformance differentials I | `chart-info.test.ts` says padding equals Vega's and never asserts it | `packages/conformance/src/chart-info.test.ts:36-41` | CONFIRMED (run) |
 | C579 | Low | tests / conformance differentials I | the `lineBreak` case cannot test `config.lineBreak` | `packages/conformance/src/guide-style-config-vs-vega.test.ts:84` | CONFIRMED (run) |
@@ -696,12 +696,12 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C647 | Low | tests / core (a11y … curves) | "writes zero attributes when the scene is unchanged" counts only `setAttribute` | `packages/core/src/dom.test.ts:91-119` | CONFIRMED (traced) → FIXED (#190) |
 | C648 | Low | tests / core (a11y … curves) | Loose or absent engagement floors in the generated oracles | `packages/core/src/canvas-append-oracle.test.ts:74` | CONFIRMED (run) → FIXED (#190) |
 | C649 | Low | tests / core (a11y … curves) | Module-level counter makes `discrete-scale-reuse` rows depend on which tests ran before | `packages/core/src/discrete-scale-reuse.test.ts:232-233` | CONFIRMED (traced) → FIXED (#190) |
-| C650 | Low | tests / core (data … hit) | the pixel-ratio half of a cache test compares the renderer with itself | `packages/core/src/geometry-cache.test.ts:152-156` | CONFIRMED (traced) |
-| C651 | Low | tests / core (data … hit) | the regex-screen test's "never run" check sees only `test()`, and "lets a safe one run" is never asserted | `packages/core/src/engine-parts.test.ts:78-92` | CONFIRMED (run) |
-| C652 | Low | tests / core (data … hit) | `intersect()` on non-finite scenes is excluded from the differential for a reason that only holds for the legacy copy | `packages/core/src/geometry-scenes.testlib.ts:122` | CONFIRMED (run) |
-| C653 | Low | tests / core (data … hit) | tests whose title claims more than they assert | `packages/core/src/expr-check.cache.test.ts:42-46` | CONFIRMED (traced) |
+| C650 | Low | tests / core (data … hit) | the pixel-ratio half of a cache test compares the renderer with itself | `packages/core/src/geometry-cache.test.ts:152-156` | CONFIRMED (traced) → FIXED (#195) |
+| C651 | Low | tests / core (data … hit) | the regex-screen test's "never run" check sees only `test()`, and "lets a safe one run" is never asserted | `packages/core/src/engine-parts.test.ts:78-92` | CONFIRMED (run) → FIXED (#195) |
+| C652 | Low | tests / core (data … hit) | `intersect()` on non-finite scenes is excluded from the differential for a reason that only holds for the legacy copy | `packages/core/src/geometry-scenes.testlib.ts:122` | CONFIRMED (run) → FIXED (#195) |
+| C653 | Low | tests / core (data … hit) | tests whose title claims more than they assert | `packages/core/src/expr-check.cache.test.ts:42-46` | CONFIRMED (traced) → FIXED (#195) |
 | C654 | Low | tests / core (incremental oracle, legacy copies I) | A mistyped oracle knob runs zero seeds and stays green | `packages/core/src/incremental-oracle.test.ts:1075-1078` | CONFIRMED (traced) |
-| C655 | Low | tests / core (limits, loaders, locale, oracle vectors) | A regex pattern over 1024 characters is reported as `maxStringLength 5000 > 1024`, and the test pins that wording | `packages/core/src/limits-attacks.test.ts:336-341` | CONFIRMED (run) |
+| C655 | Low | tests / core (limits, loaders, locale, oracle vectors) | A regex pattern over 1024 characters is reported as `maxStringLength 5000 > 1024`, and the test pins that wording | `packages/core/src/limits-attacks.test.ts:336-341` | CONFIRMED (run) → FIXED (#195) |
 | C656 | Low | tests / core (render … stream) | "absent signal named %s behaves exactly like any other absent signal" compares one validator message with itself | `packages/core/src/sandbox.test.ts:199-209` | CONFIRMED (run) |
 | C657 | Low | tests / core (render … stream) | The `render.ts` source guard misses attribute templates that have text before the interpolation | `packages/core/src/svg-escaping.test.ts:347-384` | CONFIRMED (traced) |
 | C658 | Low | tests / core (render … stream) | Titles that assert less than they say | `packages/core/src/scales.test.ts:170-180` | CONFIRMED (traced) |
@@ -781,8 +781,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C732 | Low | docs / README, API, ERRORS | "examples that are type-checked against the source" is gated for 2 of API.md's 18 blocks; ANIMATION.md's two blocks do not compile | `docs/API.md:3` | CONFIRMED (run) |
 | C733 | Low | docs / README, API, ERRORS | small drifts between TSDoc and docs | `packages/react/src/chart-types.ts:223` | CONFIRMED (traced) |
 | C734 | Low | tests / core (a11y … curves) | `dataset-reuse.test.ts` header describes a reference the generated walk does not use; `usable()` filters nothing | `packages/core/src/dataset-reuse.test.ts:11` | CONFIRMED (run) → FIXED (#190) |
-| C735 | Low | tests / core (data … hit) | a trail with a negative `size` throws a bare `Error` from every renderer and the hit index; not in `docs/ERRORS.md` | `packages/core/src/geometry-differential.testlib.ts:152-165` | CONFIRMED (run; re-run by lead) |
-| C736 | Low | tests / core (data … hit) | `hit-geometry.test.ts` documents mark types it does not test | `packages/core/src/hit-geometry.test.ts:8-9` | CONFIRMED (traced) |
+| C735 | Low | tests / core (data … hit) | a trail with a negative `size` throws a bare `Error` from every renderer and the hit index; not in `docs/ERRORS.md` | `packages/core/src/geometry-differential.testlib.ts:152-165` | CONFIRMED (run; re-run by lead) → FIXED (#195) |
+| C736 | Low | tests / core (data … hit) | `hit-geometry.test.ts` documents mark types it does not test | `packages/core/src/hit-geometry.test.ts:8-9` | CONFIRMED (traced) → FIXED (#195) |
 | C737 | Low | tests / core (incremental oracle, legacy copies I) | `installAllParts()` says "every part of the engine" and installs 17 of 18 | `packages/core/src/install-parts.testlib.ts:1-5` | CONFIRMED (traced) |
 | C738 | Low | tests / core (legacy copies II … path) | "A frozen copy … as it was on stack/3-expr" is not true of four of the copies | `packages/core/src/legacy-path-data.testlib.ts:51-56` | CONFIRMED (traced) |
 | C739 | Low | tests / core (legacy copies II … path) | Two descriptions in the differential say more than the code does | `packages/core/src/geometry-differential.test.ts:6` | CONFIRMED (traced) |
@@ -3542,6 +3542,7 @@ Direction: coerce as Vega does (`+w || 0`). The random scenes do feed numeric st
 
 - **Location:** `packages/core/src/limits-attacks.test.ts:392-395`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #195 (8c00693). Fixed: attack() reports reported/exitCode/signal and expectReturned requires a report, exit 0 and the value, so a child that aborted on the heap cap no longer passes as 'still renders'.
 - **Area:** tests / core (limits, loaders, locale, oracle vectors)
 - **Lane ID / scripts:** `tests-core5-2` — `tests-core5/`
 
@@ -3570,6 +3571,7 @@ Direction: coerce as Vega does (`+w || 0`). The random scenes do feed numeric st
 
 - **Location:** `packages/core/src/limits-attacks.test.ts:28-33`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #195 (4315dc3). Fixed: the sequence clock test runs below the rows ceiling on a virtual clock and requires 'maxTimeMs exceeded during sequence'.
 - **Area:** tests / core (limits, loaders, locale, oracle vectors)
 - **Lane ID / scripts:** `tests-core5-4` — `tests-core5/`
 
@@ -4967,6 +4969,7 @@ Direction: track the subpath start in `tracePath` and restore `cx`, `cy` on `Z`.
 
 - **Location:** `packages/core/src/pulse.test.ts:88-106`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #195 (97e7f53). Fixed: the sorted window/stack incremental test compares the rows each evaluation writes against a freshly compiled chart over generated changes.
 - **Area:** tests / core (limits, loaders, locale, oracle vectors)
 - **Lane ID / scripts:** `tests-core5-8` — `tests-core5/`
 
@@ -4982,6 +4985,7 @@ Direction: track the subpath start in `tracePath` and restore `cx`, `cy` on `Z`.
 
 - **Location:** `packages/core/src/limits.test.ts:190-196`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #195 (3a20960). Fixed: the flood test requires the oldest formatter rebuilt, the pluck test reads identity through three tables of names, recentlyUsed has a model test; FIFO and unbounded plants fail.
 - **Area:** tests / core (limits, loaders, locale, oracle vectors)
 - **Lane ID / scripts:** `tests-core5-9` — `tests-core5/`
 
@@ -4995,6 +4999,7 @@ Direction: track the subpath start in `tracePath` and restore `cx`, `cy` on `Z`.
 
 - **Location:** `packages/core/src/runtime.test.ts:45-95`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #195 (abea151). Fixed: every 'full re-derive' reference in runtime.test.ts is a freshly compiled chart, and real out-of-range/negative/NaN hints are tested; no product defect found.
 - **Area:** tests / core (limits, loaders, locale, oracle vectors)
 - **Lane ID / scripts:** `tests-core5-10` — `tests-core5/`
 
@@ -5010,6 +5015,7 @@ Direction: track the subpath start in `tracePath` and restore `cx`, `cy` on `Z`.
 
 - **Location:** `packages/core/src/load-policy.test.ts:200-207`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #195 (56823da). Fixed: the maxBytes test waits for the server's response to close and sending to stop; planted removal of reader.cancel and the load abort fails it.
 - **Area:** tests / core (limits, loaders, locale, oracle vectors)
 - **Lane ID / scripts:** `tests-core5-12` — `tests-core5/`
 
@@ -7331,6 +7337,7 @@ CONFIRMED-TRACE.
 
 - **Location:** `packages/core/src/geometry-no-parse.test.ts:13-17`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #195 (e5c598b). Fixed: the no-parse guard records parsePathData, svgPathCommands and drawnPathCommands, says 'for finite geometry', and pins that non-finite geometry only parses text holding NaN/Infinity.
 - **Area:** tests / core (data … hit)
 - **Lane ID / scripts:** `tests-core2-4` — `tests-core2/`
 
@@ -7348,6 +7355,7 @@ CONFIRMED-TRACE.
 
 - **Location:** `packages/core/src/engine-parts.test.ts:224-239`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #195 (912adcd c6fabac). Fixed: a dataset that may draw is refused (naming the pulse part) rather than derived in full when the part is missing under an injected random source; the test pins the refusal. Overlaps a08's C501 (the swallowed import).
 - **Area:** tests / core (data … hit)
 - **Lane ID / scripts:** `tests-core2-9` — `tests-core2/`
 
@@ -7422,6 +7430,7 @@ Direction: none needed if the copies are deleted with the differential, as their
 
 - **Location:** `packages/core/src/oracle-vectors.test.ts:266`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #195 (235ae4a). Fixed: each oracle-vector suite runs in its own zone (UTC when it records none) and restores the file's; a permanent case fails on the old behaviour.
 - **Area:** tests / core (limits, loaders, locale, oracle vectors)
 - **Lane ID / scripts:** `tests-core5-14` — `tests-core5/`
 
@@ -9618,6 +9627,7 @@ A scenario whose spec fails to evaluate on both sides is green at every step. Th
 
 - **Location:** `packages/core/src/transform-basic.ts:375`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #195 (211ef64). Fixed: copiedRows/writableRow/sortMetered/exprRowPass/walkPre/PostOrder and every per-row loop read the clock inside the pass; limits-clock.test.ts pins 39 transforms on a virtual clock and the CPU bound on 1M rows.
 - **Area:** tests / core (limits, loaders, locale, oracle vectors)
 - **Lane ID / scripts:** `tests-core5-6` — `tests-core5/`
 
@@ -10653,6 +10663,7 @@ Run with `node --max-old-space-size=400 $S/probe.mjs <name> nolimits`.
 
 - **Location:** `packages/core/src/expr-text.test.ts:33-37`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #195 (4f5c42e). Fixed: the linearity guard of the expression-text readers measures per-character cost growth above the timer's noise (bound 8x over 32x the size), with a permanent planted-quadratic case; the old guard passed a quadratic reader.
 - **Area:** tests / core (data … hit)
 - **Lane ID / scripts:** `tests-core2-2` — `tests-core2/`
 
@@ -10696,6 +10707,7 @@ The differential therefore cannot see a wrong descriptor on exactly the items it
 
 - **Location:** `packages/core/src/limits.ts:547-585`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** ALREADY FIXED in #195 (04c0854 f3aeaff). Fixed by a03's 04c0854 (checkSpecLimits counts visited nodes against HARD_MAX_SPEC_NODES); pinned here for no limits, {}, maxRows, maxItems+regex refuse, maxDepth and checkSpecLimits alone (40-level DAG); the pre-fix walk answered after 2.3-9 s at 24-26 levels.
 - **Area:** tests / core (limits, loaders, locale, oracle vectors)
 - **Lane ID / scripts:** `tests-core5-1` — `tests-core5/`
 
@@ -11377,6 +11389,7 @@ Direction: state "TypeScript needs `moduleResolution` `bundler`, `node16` or `no
 
 - **Location:** `docs/TESTING.md:143`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #195 (11b3012). Fixed: vitest.config.mjs pins TZ=UTC unless TZ is given (a pinned test checks it) and locale-font-matrix.test.ts holds under Madrid, Tokyo and Los Angeles.
 - **Area:** tests / core (limits, loaders, locale, oracle vectors)
 - **Lane ID / scripts:** `tests-core5-3` — `tests-core5/`
 
@@ -11922,6 +11935,7 @@ Status: **CONFIRMED-TRACE**.
 
 - **Location:** `packages/core/src/geometry-differential.testlib.ts:152-165`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #195 (e03b9ed). Fixed: Aster matches Vega (negative radius throws); named tests pin it, docs/ERRORS.md lists it, the generator keeps trail sizes non-negative and the differential bounds calls where both threw (4% to 0).
 - **Area:** tests / core (data … hit)
 - **Lane ID / scripts:** `tests-core2-5` — `tests-core2/`
 
@@ -11954,6 +11968,7 @@ Direction: keep one dedicated negative-size case and clamp the generator elsewhe
 
 - **Location:** `packages/core/src/hit-geometry.test.ts:8-9`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #195 (a108471). Fixed: projected shapes (shape + geoshape transform) join the painted-geometry oracle, images are checked against their box, and the table lists only existing marks.
 - **Area:** tests / core (data … hit)
 - **Lane ID / scripts:** `tests-core2-11` — `tests-core2/`
 
@@ -12695,6 +12710,7 @@ Users: `canvas-append-oracle.test.ts`, `canvas-same-pixels.test.ts`, `canvas-reg
 
 - **Location:** `packages/core/src/hit.test.ts:181-219`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #195 (0923f0f fdcd40c b938cad). Fixed: HitIndexOptions.strategy ('auto'|'scan'|'grid') lets the corpus test and the legacy differential build the grid by name; 348 scenes x 3 grids vs the scan, 13 531 probes, planted grid bugs fail.
 - **Area:** tests / core (data … hit)
 - **Lane ID / scripts:** `tests-core2-1` — `tests-core2/`
 
@@ -12737,6 +12753,7 @@ Two smaller effects:
 
 - **Location:** `docs/LIMITS.md:70-79`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #195 (211ef64 f3aeaff). Fixed: limits-claims.test.ts attacks the LIMITS.md claims no suite drove (items ceilings, spec size under every form, maxDepth, maxMarks, maxSvgLength, regex caps); the clock inside every transform pass is limits-clock.test.ts.
 - **Area:** tests / core (limits, loaders, locale, oracle vectors)
 - **Lane ID / scripts:** `tests-core5-5` — `tests-core5/`
 
@@ -13546,6 +13563,7 @@ Status: **CONFIRMED-RUN** — `$S/ws/misuse-core.mjs`, `$S/ws/misuse-oracle.mjs`
 
 - **Location:** `packages/core/src/geometry-cache.test.ts:152-156`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #195 (b938cad). Fixed: the dpr-3 case is compared with the legacy renderer at dpr 3 (and a second drawing), not with itself.
 - **Area:** tests / core (data … hit)
 - **Lane ID / scripts:** `tests-core2-6` — `tests-core2/`
 
@@ -13567,6 +13585,7 @@ expect(a.log).toEqual(b.log)
 
 - **Location:** `packages/core/src/engine-parts.test.ts:78-92`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #195 (044151b). Fixed: the regex-screen guard records the RegExp constructor and exec (replace/split included), and the safe-pattern half is asserted; finding refined: a literal is built at expression compile, never run.
 - **Area:** tests / core (data … hit)
 - **Lane ID / scripts:** `tests-core2-7` — `tests-core2/`
 
@@ -13583,6 +13602,7 @@ expect(a.log).toEqual(b.log)
 
 - **Location:** `packages/core/src/geometry-scenes.testlib.ts:122`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #195 (7426d91). Fixed: the comment names the legacy copy as the one that hangs, and the current sceneIntersect is tested on 400 non-finite scenes x 6 boxes (ends, only AsterLimitError).
 - **Area:** tests / core (data … hit)
 - **Lane ID / scripts:** `tests-core2-8` — `tests-core2/`
 
@@ -13603,6 +13623,7 @@ expect(a.log).toEqual(b.log)
 
 - **Location:** `packages/core/src/expr-check.cache.test.ts:42-46`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #195 (48e90c6). Fixed: the listed titles now assert what they say (cache size read, exact bounds, defined, logged RangeError and unlaid cells, limit-specific error, vega 6.3.1 values); gradient-entry's count is vega's 21, not the audit's 11.
 - **Area:** tests / core (data … hit)
 - **Lane ID / scripts:** `tests-core2-10` — `tests-core2/`
 
@@ -13641,6 +13662,7 @@ All **CONFIRMED-TRACE**.
 
 - **Location:** `packages/core/src/limits-attacks.test.ts:336-341`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #195 (67eb14a). Fixed: a pattern over the fixed 1024 cap is 'regexSafety: pattern length N > 1024 (the fixed cap ...)'; a maxStringLength below 1024 still lowers it and is named; LIMITS.md says so.
 - **Area:** tests / core (limits, loaders, locale, oracle vectors)
 - **Lane ID / scripts:** `tests-core5-11` — `tests-core5/`
 
