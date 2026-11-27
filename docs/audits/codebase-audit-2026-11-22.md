@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 759 of 766 findings resolved (733 fixed, 22 already fixed on main, 4 disputed with evidence); 7 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 762 of 766 findings resolved (736 fixed, 22 already fixed on main, 4 disputed with evidence); 4 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -119,7 +119,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C70 | High | gallery / official Vega-Lite examples II | After one legend click on the official `point_constant_legend_domain`, the legend loses its other entries; Vega keeps them | `packages/core/src/runtime.ts:4651-4658` | CONFIRMED (run; re-run by lead) → FIXED (#224) |
 | C71 | High | react / <Chart>, shells, SSR | Pan/zoom keys and double-click are taken from bound inputs inside the chart | `packages/react/src/ChartCore.tsx:1449-1475` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
 | C72 | High | react / hooks, streams, workers | `useChartWorker` loops on inline `data` / `signals` / `domainRaw` | `packages/react/src/worker.ts:458` | CONFIRMED (run; re-run by lead) → FIXED (#199) |
-| C73 | High | core / signal event loop, transitions | Data `on` triggers (`{trigger, insert \| remove \| toggle \| modify, values}`) and mark `on` triggers are checked for syntax and never run | `packages/core/src/spec-expressions.ts:289` | CONFIRMED (run; re-run by lead) |
+| C73 | High | core / signal event loop, transitions | Data `on` triggers (`{trigger, insert \| remove \| toggle \| modify, values}`) and mark `on` triggers are checked for syntax and never run | `packages/core/src/spec-expressions.ts:289` | CONFIRMED (run; re-run by lead) → FIXED (#225) |
 | C74 | High | conformance / harness | the lane leads were invisible because no static gate generates them | `packages/conformance/src/sweeps/vega-schema.mjs:899-902` | CONFIRMED (run; re-run by lead) → FIXED (#224) |
 | C75 | High | tests / core (incremental oracle, legacy copies I) | The oracle's default sweep reaches 33 of its 58 pipelines, and all four scenario families re-run the same ones | `packages/core/src/incremental-oracle.test.ts:150` | CONFIRMED (run; re-run by lead) → FIXED (#223) |
 | C76 | High | core / runtime: marks, encode, groups | `encode.hover` (and `exit`) are accepted and never applied | `packages/core/src/compiler.ts:768-772` | CONFIRMED (traced) → FIXED (#224) |
@@ -325,7 +325,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C276 | Medium | docs / README, API, ERRORS | `hydrateChart`: `tooltips` shows no tooltip and writes row JSON into the DOM; the result is undocumented | `packages/react/src/ssr.ts:26-27` | CONFIRMED (run) → FIXED (#220) |
 | C277 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | the configuration LIMITS.md recommends for untrusted specs disables signal-scoped reuse, kept builds, instance marks, kept group marks, channel re-encode, kept guides and scale-settings r… | `docs/ARCHITECTURE.md:125` | CONFIRMED (run; re-run by lead) → FIXED (#222) |
 | C278 | Medium | leftovers / budgets, declarations, demo data, gallery lists | `diffRows`' result is not assignable to `dataPulse` or `StreamBatch.pulse`, though API.md says to pass it | `docs/API.md:224-229` | CONFIRMED (run) → FIXED (#188) |
-| C279 | Medium | gallery / official Vega-Lite examples I | `interactive_line_brush_cursor`: the view's own `cursor` is dropped and the root group never takes the pointer | `packages/core/src/runtime.ts:2072-2084` | CONFIRMED (run; re-run by lead) |
+| C279 | Medium | gallery / official Vega-Lite examples I | `interactive_line_brush_cursor`: the view's own `cursor` is dropped and the root group never takes the pointer | `packages/core/src/runtime.ts:2072-2084` | CONFIRMED (run; re-run by lead) → FIXED (#225) |
 | C280 | Medium | core / runtime: state, signals, reuse keys | Registry epoch is in the named key but not the whole-context key | `packages/core/src/runtime.ts:2509` | CONFIRMED (run) → FIXED (#201) |
 | C281 | Medium | core / runtime: datasets, scales, fit | `maxGeneratedRows` is metered per pulse, so a session accepts appends a fresh evaluation rejects, then throws on the next signal change or resize | `packages/core/src/runtime.ts:4036-4045` | CONFIRMED (run; re-run by lead) → FIXED (#201) |
 | C282 | Medium | core / session, stream, limits | The session cache does not know the expression-function registry changed | `packages/core/src/session.ts:194-217` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
@@ -529,7 +529,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C480 | Low | closure / gallery lists, small recorded vectors | `intersect()` moves the box into every nested group without the bounds check Vega makes, so a group at a huge x loses later sibling hits | `packages/core/src/scene-intersect.ts:282-290` | CONFIRMED (run; re-run by lead) → FIXED (#189) |
 | C481 | Low | closure / raster fixtures I | the quarter-pixel test's pattern records that a grid repeats an earlier one, not which one | `packages/conformance/src/raster-vs-chromium.test.ts:54-59` | CONFIRMED (run; re-run by lead) → FIXED (#189) |
 | C482 | Low | closure / raster fixtures II | the engine's stroker puts a miter join on the vertices of a flattened curve, so a tight turn in a stroked curve grows a spike the browser does not draw; the baseline pins it | `packages/core/src/raster-stroke.ts:158-188` | CONFIRMED (run; re-run by lead) → FIXED (#216) |
-| C483 | Low | core / runtime: marks, encode, groups | Scoped derived signals are evaluated n rounds × n signals per group item | `packages/core/src/runtime.ts:6203-6210` | CONFIRMED (run) |
+| C483 | Low | core / runtime: marks, encode, groups | Scoped derived signals are evaluated n rounds × n signals per group item | `packages/core/src/runtime.ts:6203-6210` | CONFIRMED (run) → FIXED (#225) |
 | C484 | Low | core / session, stream, limits | Coalesce: a `push` made while `flush` runs is acknowledged and lost | `packages/core/src/stream.ts:514` | CONFIRMED (run) → FIXED (#193) |
 | C485 | Low | core / expressions, regex screen | A compiled expression with a stale registry epoch recompiles on every call (200k evaluations: 3 ms → 600–800 ms) | `packages/core/src/expression.ts:700-705` | CONFIRMED (run) → FIXED (#197) |
 | C486 | Low | core / layout transforms, rasterizer | `nest` recurses once per key | `packages/core/src/hierarchy-nest.ts:28-42` | CONFIRMED (run) → FIXED (#193) |
@@ -5765,6 +5765,7 @@ Direction: skip a group item whose bounds miss the box, as Vega does, and restor
 
 - **Location:** `packages/core/src/runtime.ts:6203-6210`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #225 (d4d7b7b1). Fixed: a scope's signals are evaluated once each in the dataflow's rank order; scope-signals-vs-vega (150 acyclic, 40 cyclic), bench:scope-signals (160 chained signals x 200 cells 333 -> 7.5 ms, control unchanged). Earlier work: #224.
 - **Area:** core / runtime: marks, encode, groups
 - **Lane ID / scripts:** `core-rt3-19` — `core-rt3/`
 
@@ -8866,6 +8867,7 @@ Direction: decide whether `tooltips` is public. If so, rename it for what it doe
 
 - **Location:** `packages/core/src/runtime.ts:2072-2084`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #225 (be7c23d1,22b5b77a). Fixed: the root encode's cursor is SceneRoot.frameCursor and the root frame is the hit index's first, pick-only entry; eight fixed-root-frame scenes of the pointer gate agree with vega's SVG and canvas pick on 28,000 points, unit tests over both indexes and the cursor tracker. Earlier work: #224.
 - **Area:** gallery / official Vega-Lite examples I
 - **Lane ID / scripts:** `gallery3-3` — `gallery3/`
 
@@ -9015,6 +9017,7 @@ Status: **CONFIRMED-RUN** `ax.mjs style`.
 
 - **Location:** `packages/core/src/spec-expressions.ts:289`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #225 (595a4fab,9821acd4). Fixed: a named mark's on triggers run in the event loop (modify/values write onto the mark's items through the host's log; the update set takes back its own channels), and a static force layout of a continued view goes on from its nodes as vega's simulation does; mark-triggers-vs-vega (80), force-continued-vs-vega (60), incremental shape; group marks' own items take no write (ROADMAP). Earlier work: #197, #224.
 - **Area:** core / signal event loop, transitions (also categories 1)
 - **Lane ID / scripts:** `core-signals-3` — `core-signals/`
 
