@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 401 of 766 findings resolved (393 fixed, 7 already fixed on main, 1 disputed with evidence); 365 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 423 of 766 findings resolved (415 fixed, 7 already fixed on main, 1 disputed with evidence); 343 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -110,8 +110,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C61 | High | conformance / harness | Aster receives the spec object the oracle has already written its answers onto | `packages/conformance/src/run-sweep.ts:201-202` | CONFIRMED (run; re-run by lead) |
 | C62 | High | conformance / harness | `scene-diff` compares nothing for marks inside a group mark | `packages/conformance/src/scene-diff.ts:172-183` | CONFIRMED (run; re-run by lead) |
 | C63 | High | conformance / harness | the label generator deletes inputs that expose a live, undocumented defect | `packages/conformance/src/label-cases.ts:192-195` | CONFIRMED (run; re-run by lead) |
-| C64 | High | conformance / scripts and gates | The `browser-conformance` gate cannot fail on a difference: the script never sets an exit code | `packages/conformance/scripts/browser-conformance.mts:134-141` | CONFIRMED (traced; lines re-read by lead) |
-| C65 | High | conformance / scripts and gates | The batch gate's corpus half compares a render with itself, and its tolerance passes dozens of missing marks | `packages/conformance/scripts/browser-svg-batch-parity.mts:34-36` | CONFIRMED (run; re-run by lead) |
+| C64 | High | conformance / scripts and gates | The `browser-conformance` gate cannot fail on a difference: the script never sets an exit code | `packages/conformance/scripts/browser-conformance.mts:134-141` | CONFIRMED (traced; lines re-read by lead) → FIXED (#204) |
+| C65 | High | conformance / scripts and gates | The batch gate's corpus half compares a render with itself, and its tolerance passes dozens of missing marks | `packages/conformance/scripts/browser-svg-batch-parity.mts:34-36` | CONFIRMED (run; re-run by lead) → FIXED (#204) |
 | C66 | High | tooling / gates, CI, release, benchmarks | a prerelease tag publishes as npm `latest` | `.github/workflows/release.yml:103` | CONFIRMED (traced; lines re-read by lead) → FIXED (#187) |
 | C67 | High | tests / core (legacy copies II … path) | The hit comparison names items by first-encounter order on each side, so "compared by item identity" does not hold: a wrong-item bug is invisible | `packages/core/src/geometry-differential.testlib.ts:181` | CONFIRMED (run; re-run by lead) → FIXED (#200) |
 | C68 | High | gallery / official Vega examples II | A signal that holds an event's `datum` is never identical to a row afterwards, so `reorderable-matrix` cannot highlight or reorder | `packages/core/src/runtime.ts:4106-4108` | CONFIRMED (run; re-run by lead) |
@@ -127,7 +127,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C78 | High | core / signal event loop, transitions | `config.events.view` / `.window` / `.selector` / `.timer` are ignored by the event loop | `packages/core/src/signals.ts:349-353` | CONFIRMED (run; re-run by lead) → FIXED (#197) |
 | C79 | High | vl / composition | `resolve` on a layer is validated for every channel and kind but mostly not implemented | `packages/vl/src/compile.ts:1056-1066` | CONFIRMED (run; re-run by lead) → FIXED (#202) |
 | C80 | High | vl / mark encoding | `config.style.<mark type>` is dropped from the emitted Vega config | `packages/vl/src/compile.ts:3747` | CONFIRMED (run; re-run by lead) |
-| C81 | High | conformance / scripts and gates | "Every place a Vega spec holds an expression" is not every place: 15 of 63 further sites disagree with `vega.parse` | `packages/conformance/scripts/expression-sites.mts:1-8` | CONFIRMED (run; re-run by lead) |
+| C81 | High | conformance / scripts and gates | "Every place a Vega spec holds an expression" is not every place: 15 of 63 further sites disagree with `vega.parse` | `packages/conformance/scripts/expression-sites.mts:1-8` | CONFIRMED (run; re-run by lead) → FIXED (#204) |
 | C82 | High | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | `import { ChartStream }` pulls the whole synchronous engine up front (244.4 vs 188.6 kB gzip); no budget row or shaking pattern covers it | `packages/react/src/ChartStream.tsx:23-26` | CONFIRMED (run; re-run by lead) |
 | C83 | High | vl / validate, optimize, predicates | The README says the "Throws" list is complete; at least nine schema-valid features are refused and not on it | `packages/vl/README.md:133-135` | CONFIRMED (run) → FIXED (#202) |
 | C84 | High | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ADR 0007 / ARCHITECTURE say "nothing loads asynchronously, the first paint is synchronous"; in a browser build a chart with a legend or time scale suspends first | `docs/adr/0007-svgchart-shell-over-lazy-loading.md:21-23` | CONFIRMED (run; re-run by lead) |
@@ -240,9 +240,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C191 | Medium | conformance / harness | label differential tolerates 15% and shares Aster's rasterizer with the oracle | `packages/conformance/src/label-generated-vs-vega.test.ts:110-115` | CONFIRMED (traced) |
 | C192 | Medium | conformance / harness | the canonicalizer's painted boxes are not conservative | `packages/conformance/src/normalize.ts:943-947` | CONFIRMED (run) |
 | C193 | Medium | conformance / harness | `conformance:diff` counts any throw as "skipped" | `packages/conformance/src/diff.ts:228-238` | CONFIRMED (traced) |
-| C194 | Medium | conformance / scripts and gates | The canvas tolerance passes a missing 5×5 mark, a recoloured 6×6 mark and a 7×7 mark moved by a pixel; nothing asks for ink | `packages/conformance/scripts/canvas-pixels.mts:11` | CONFIRMED (run; re-run by lead) |
-| C195 | Medium | conformance / scripts and gates | Phases 2–4 of the canvas gate count the path they exist to test but never require it to be taken | `packages/conformance/scripts/browser-canvas-append.mts:69-70` | CONFIRMED (traced) |
-| C196 | Medium | conformance / scripts and gates | Two React-gate assertions cannot fail for the reason they name | `packages/react/scripts/browser-interaction.mts:455` | CONFIRMED (traced) |
+| C194 | Medium | conformance / scripts and gates | The canvas tolerance passes a missing 5×5 mark, a recoloured 6×6 mark and a 7×7 mark moved by a pixel; nothing asks for ink | `packages/conformance/scripts/canvas-pixels.mts:11` | CONFIRMED (run; re-run by lead) → FIXED (#204) |
+| C195 | Medium | conformance / scripts and gates | Phases 2–4 of the canvas gate count the path they exist to test but never require it to be taken | `packages/conformance/scripts/browser-canvas-append.mts:69-70` | CONFIRMED (traced) → FIXED (#204) |
+| C196 | Medium | conformance / scripts and gates | Two React-gate assertions cannot fail for the reason they name | `packages/react/scripts/browser-interaction.mts:455` | CONFIRMED (traced) → FIXED (#204) |
 | C197 | Medium | tooling / gates, CI, release, benchmarks | the nightly browser floors pass on missing measurements, and are loose where they do bite | `packages/benchmarks/src/browser-floors.ts:52-57` | CONFIRMED (run; re-run by lead) → FIXED (#187) |
 | C198 | Medium | tests / core (legacy copies II … path) | Product defect shared by legacy and new: a rect with a numeric-string `width`/`height` is drawn zero-size (Vega draws it), while the hit index still treats it as full-size | `packages/core/src/geometry.ts:670-671` | CONFIRMED (run; re-run by lead) → FIXED (#200) |
 | C199 | Medium | tests / core (limits, loaders, locale, oracle vectors) | `okResult` passes when the attack child crashes, so the "still renders" halves of the ceiling tests cannot fail on an out-of-memory | `packages/core/src/limits-attacks.test.ts:392-395` | CONFIRMED (run; re-run by lead) → FIXED (#195) |
@@ -276,7 +276,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C227 | Medium | gallery / official Vega-Lite examples II | A `select` bind whose options are arrays renders "undefined" seven times and writes `undefined` | `packages/react/src/ChartCore.tsx:190-192` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
 | C228 | Medium | core / SVG, DOM patcher, canvas, a11y | A throw mid-paint leaves the context's save stack, transform and clip behind | `packages/core/src/canvas.ts:134-157` | CONFIRMED (run) → FIXED (#191) |
 | C229 | Medium | core / hit index, bounds, geometry | A retained index reads the engine's live items array, so after an append it reports items of a later scene | `packages/core/src/hit.ts:831` | CONFIRMED (run) → FIXED (#200) |
-| C230 | Medium | conformance / scripts and gates | Several gates pass on zero cases | `packages/conformance/scripts/fuzz.mts:119` | CONFIRMED (traced) |
+| C230 | Medium | conformance / scripts and gates | Several gates pass on zero cases | `packages/conformance/scripts/fuzz.mts:119` | CONFIRMED (traced) → FIXED (#204) |
 | C231 | Medium | tooling / gates, CI, release, benchmarks | a partial publish cannot be finished by the workflow, and exact pins make version skew costly | `.github/workflows/release.yml:99-104` | CONFIRMED (traced) → FIXED (#187) |
 | C232 | Medium | core / runtime: state, signals, reuse keys | An unknown name in a change hint is trusted | `packages/core/src/runtime.ts:962-967` | CONFIRMED (run) → FIXED (#201) |
 | C233 | Medium | core / session, stream, limits | Numeric limits are not validated | `packages/core/src/limits.ts:108-111` | CONFIRMED (run) → FIXED (#193) |
@@ -294,9 +294,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C245 | Medium | vl / validate, optimize, predicates | The gate checks key names, not value types, so type-confused or `null` values compile to a chart that differs from vega-lite's instead of being refused | `packages/vl/src/validate.ts:153` | CONFIRMED (run) → FIXED (#203) |
 | C246 | Medium | vl / composite marks, selections, transforms | unknown errorbar / errorband `extent` or `center` values silently compile to IQR around the median | `packages/vl/src/composite-marks.ts:314-328` | CONFIRMED (run) |
 | C247 | Medium | conformance / harness | `conformance-vl` passes when it runs nothing; four corpus gates have no count floor | `packages/conformance/src/run-vl.ts:126` | CONFIRMED (run; re-run by lead) |
-| C248 | Medium | conformance / scripts and gates | No browser gate pans, zooms or brushes `<Chart>` over a time (or band/point) scale | `packages/react/scripts/browser-interaction.mts:153-174` | CONFIRMED (traced) |
-| C249 | Medium | conformance / scripts and gates | Whole feature classes are outside every generator | `packages/conformance/scripts/fuzz.mts:41-106` | CONFIRMED (traced) |
-| C250 | Medium | conformance / scripts and gates | A third of the generated gradient entries is dropped by a bare `catch`, uncounted | `packages/conformance/scripts/browser-canvas-parity.mts:226-234` | CONFIRMED (run) |
+| C248 | Medium | conformance / scripts and gates | No browser gate pans, zooms or brushes `<Chart>` over a time (or band/point) scale | `packages/react/scripts/browser-interaction.mts:153-174` | CONFIRMED (traced) → FIXED (#204) |
+| C249 | Medium | conformance / scripts and gates | Whole feature classes are outside every generator | `packages/conformance/scripts/fuzz.mts:41-106` | CONFIRMED (traced) → FIXED (#204) |
+| C250 | Medium | conformance / scripts and gates | A third of the generated gradient entries is dropped by a bare `catch`, uncounted | `packages/conformance/scripts/browser-canvas-parity.mts:226-234` | CONFIRMED (run) → FIXED (#204) |
 | C251 | Medium | tooling / gates, CI, release, benchmarks | no time bound on a gate, on the CI jobs or on the release jobs | `scripts/gates.mjs:144` | CONFIRMED (traced) → FIXED (#187) |
 | C252 | Medium | tests / core (incremental oracle, legacy copies I) | What the oracle's `compare` and generators cannot see (beyond C85 (docs-arch-3) / C625 (core-rt2-10)) | `packages/core/src/incremental-oracle.test.ts:555-573` | CONFIRMED (run) |
 | C253 | Medium | tests / core (incremental oracle, legacy copies I) | `incremental.test.ts` compares SVGs that do not depend on the transform under test | `packages/core/src/incremental.test.ts:95-117` | CONFIRMED (run; re-run by lead) |
@@ -348,7 +348,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C299 | Medium | vl / validate, optimize, predicates | The rename cannot tell compiler-written expressions from the user's, and is asymmetric about which keys it rewrites | `packages/vl/src/embed.ts:71-93` | CONFIRMED (run) → FIXED (#202) |
 | C300 | Medium | vl / composite marks, selections, transforms | a dotted `as` is refused for `calculate` but accepted for `aggregate`, then read as a nested path | `packages/vl/src/transforms.ts:268` | CONFIRMED (run) |
 | C301 | Medium | conformance / harness | sweep skip tables carry reasons that are no longer true | `packages/conformance/src/sweeps/vega-lite-schema.mjs:1-9` | CONFIRMED (traced) |
-| C302 | Medium | conformance / scripts and gates | Why no gate caught `in` throwing and `/g` regexes alternating | `packages/conformance/scripts/differential-expression-engine-gen.test.mts:107-111` | CONFIRMED (run) |
+| C302 | Medium | conformance / scripts and gates | Why no gate caught `in` throwing and `/g` regexes alternating | `packages/conformance/scripts/differential-expression-engine-gen.test.mts:107-111` | CONFIRMED (run) → FIXED (#204) |
 | C303 | Medium | tooling / gates, CI, release, benchmarks | the `typecheck` gate skips about 160 test files and all runner scripts, and they hold real type errors | `packages/vl/tsconfig.json:1` | CONFIRMED (run) → FIXED (#187) |
 | C304 | Medium | tooling / gates, CI, release, benchmarks | the benchmark's `aster` and `asterDom` embeds are the same configuration | `packages/benchmarks/src/embeds.tsx:60-63` | CONFIRMED (traced; lines re-read by lead) → FIXED (#187) |
 | C305 | Medium | tooling / gates, CI, release, benchmarks | `ci.yml` runs on every pull request although the convention is CI on `main` only | `.github/workflows/ci.yml:3-7` | CONFIRMED (traced) → FIXED (#187) |
@@ -411,8 +411,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C362 | Medium | core / geo | "matches d3-geo/vega bit for bit" has undocumented exceptions; "No state outlives a call" is not what the code does | `docs/ARCHITECTURE.md:328` | CONFIRMED (run) → FIXED (#196) |
 | C363 | Medium | react / <Chart>, shells, SSR | ADRs 0002/0003/0007 and TSDoc contradict the code (lazy loading, canvas event loop, `interactive` default) | `docs/adr/0007-svgchart-shell-over-lazy-loading.md:21` | CONFIRMED (traced) → FIXED (#198) |
 | C364 | Medium | vl / validate, optimize, predicates | "compiling reads none of [the rows], so it costs the same for 3 rows as for 6,000" is false on three paths | `packages/vl/README.md:41-43` | CONFIRMED (run) → FIXED (#202) |
-| C365 | Medium | conformance / scripts and gates | The header says `intersect()` is also checked "from a group item's `mark`"; the third argument is never passed | `packages/conformance/scripts/browser-intersect.mts:8` | CONFIRMED (traced) |
-| C366 | Medium | conformance / scripts and gates | The wordcloud case the matrix skips is run by no gate, though the docs say `conformance:browser` runs it | `packages/conformance/scripts/transform-matrix.mts:161` | CONFIRMED (traced) |
+| C365 | Medium | conformance / scripts and gates | The header says `intersect()` is also checked "from a group item's `mark`"; the third argument is never passed | `packages/conformance/scripts/browser-intersect.mts:8` | CONFIRMED (traced) → FIXED (#204) |
+| C366 | Medium | conformance / scripts and gates | The wordcloud case the matrix skips is run by no gate, though the docs say `conformance:browser` runs it | `packages/conformance/scripts/transform-matrix.mts:161` | CONFIRMED (traced) → FIXED (#204) |
 | C367 | Medium | tooling / gates, CI, release, benchmarks | the documented release steps do not push the tag | `docs/RELEASE.md:55-57` | CONFIRMED (run; re-run by lead) → FIXED (#187) |
 | C368 | Medium | tooling / gates, CI, release, benchmarks | PERFORMANCE.md's bundle table disagrees with the budgets in code (continues D2) | `docs/PERFORMANCE.md:341` | CONFIRMED (traced) → FIXED (#187) |
 | C369 | Medium | tooling / gates, CI, release, benchmarks | the stated contributor Node version cannot run the test suite | `CONTRIBUTING.md:3-5` | CONFIRMED (traced) → FIXED (#187) |
@@ -491,8 +491,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C442 | Low | vl / validate, optimize, predicates | smaller compile differences found in passing | `packages/vl/src/compile.ts:4268-4270` | CONFIRMED (run) |
 | C443 | Low | vl / composite marks, selections, transforms | stacked area with a colour domain imputes by the sort index too [compile.ts] | `packages/vl/src/composite.ts:255-262` | CONFIRMED (run) |
 | C444 | Low | vl / composite marks, selections, transforms | a `detail` list with a time-unit entry changes a composite's ARIA description | `packages/vl/src/composite-marks.ts:123-153` | CONFIRMED (run) |
-| C445 | Low | conformance / scripts and gates | The vector codec loses invalid Dates (replayed as the epoch); the "interior" mesh vector records exterior arcs | `packages/conformance/scripts/gen-vectors.mjs:53` | CONFIRMED (traced) |
-| C446 | Low | conformance / scripts and gates | Several differentials count any Aster throw as agreement when Vega logged an error | `packages/conformance/scripts/differential-field-paths.test.mts:203-214` | CONFIRMED (traced) |
+| C445 | Low | conformance / scripts and gates | The vector codec loses invalid Dates (replayed as the epoch); the "interior" mesh vector records exterior arcs | `packages/conformance/scripts/gen-vectors.mjs:53` | CONFIRMED (traced) → FIXED (#204) |
+| C446 | Low | conformance / scripts and gates | Several differentials count any Aster throw as agreement when Vega logged an error | `packages/conformance/scripts/differential-field-paths.test.mts:203-214` | CONFIRMED (traced) → FIXED (#204) |
 | C447 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ARCHITECTURE/ROADMAP/ADR name files and symbols that moved (`svg-path.ts`, `renderGroup`, `exprRows`, `SEED`/`lcg`) | `docs/ARCHITECTURE.md:373` | CONFIRMED (traced) |
 | C448 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | The side-effects table omits `lean-signals-full.js`, `lean-all.js`, react `all.js` | `docs/ARCHITECTURE.md:495-507` | CONFIRMED (traced) |
 | C449 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | CHANGELOG 0.4.2 sizes exceed the last recorded budget measures; headroom is 0.1 kB against the +0.5 rule | `CHANGELOG.md:43-44` | CONFIRMED (traced) |
@@ -554,7 +554,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C505 | Low | react / <Chart>, shells, SSR | `devicePixelRatio` is read through a store that never notifies | `packages/react/src/ChartCore.tsx:57` | CONFIRMED (traced) → FIXED (#198) |
 | C506 | Low | react / hooks, streams, workers | streams are not closed on unmount; `push` still answers `true` | `packages/react/src/useChartStream.ts:151-158` | CONFIRMED (run) → FIXED (#199) |
 | C507 | Low | conformance / harness | no per-spec time bound in the Node runners | `packages/conformance/src/run.ts:58-74` | CONFIRMED (traced) |
-| C508 | Low | conformance / scripts and gates | `gallery-fetch` has no fetch timeout, and `--regenerate` prints `ok` over a mismatching cache | `packages/conformance/scripts/gallery-fetch.mts:27` | CONFIRMED (traced) |
+| C508 | Low | conformance / scripts and gates | `gallery-fetch` has no fetch timeout, and `--regenerate` prints `ok` over a mismatching cache | `packages/conformance/scripts/gallery-fetch.mts:27` | CONFIRMED (traced) → FIXED (#204) |
 | C509 | Low | tooling / gates, CI, release, benchmarks | `verify-publish` never checks the `browser` export targets | `scripts/verify-publish.mjs:102` | CONFIRMED (traced) → FIXED (#187) |
 | C510 | Low | tests / core (incremental oracle, legacy copies I) | `incremental-regressions.test.ts` "chain of superseded scenes" feeds false append pulses on two of its three appends | `packages/core/src/incremental-regressions.test.ts:449-459` | CONFIRMED (run) |
 | C511 | Low | tests / core (incremental oracle, legacy copies I) | Two stream tests assert less than their titles | `packages/core/src/incremental.test.ts:235-247` | CONFIRMED (traced) |
@@ -610,8 +610,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C561 | Low | vl / mark encoding | Mark-encoding hygiene: unreachable `startAngle`/`endAngle` pass-through, duplicated shape/size writes, leftover no-ops | `packages/vl/src/compile.ts:6915` | CONFIRMED (traced) |
 | C562 | Low | vl / validate, optimize, predicates | dead code and drift in `validate.ts` (CONFIRMED-TRACE) | `packages/vl/src/timeunit.ts:12` | CONFIRMED (traced) → FIXED (#202) |
 | C563 | Low | vl / composite marks, selections, transforms | dead branches and misplaced comments | `packages/vl/src/composite-marks.ts:56-61` | CONFIRMED (traced) |
-| C564 | Low | conformance / scripts and gates | One gate, two builds of the engine | `packages/conformance/scripts/browser-canvas-parity.mts:241-247` | CONFIRMED (traced) |
-| C565 | Low | conformance / scripts and gates | The geo generator keeps path marks fill-only for a defect "see the report" that the simple form no longer shows | `packages/conformance/scripts/geo-gen.mts:404-405` | CONFIRMED (run) |
+| C564 | Low | conformance / scripts and gates | One gate, two builds of the engine | `packages/conformance/scripts/browser-canvas-parity.mts:241-247` | CONFIRMED (traced) → FIXED (#204) |
+| C565 | Low | conformance / scripts and gates | The geo generator keeps path marks fill-only for a defect "see the report" that the simple form no longer shows | `packages/conformance/scripts/geo-gen.mts:404-405` | CONFIRMED (run) → FIXED (#204) |
 | C566 | Low | tooling / gates, CI, release, benchmarks | `tsc` never cleans `dist`: this tree holds a built module that has no source | `scripts/bundle-shaking.test.mjs:24-27` | CONFIRMED (run) → FIXED (#187) |
 | C567 | Low | tooling / gates, CI, release, benchmarks | `readme-examples.test.mjs` keeps its own, already wrong, copy of the `exports` map | `scripts/readme-examples.test.mjs:39-46` | CONFIRMED (traced) → FIXED (#187) |
 | C568 | Low | tooling / gates, CI, release, benchmarks | Config hygiene that hides things (knip ignores, a core entry no export reaches, unusable root tsconfig, strict flags off) | `knip.json:4-7` | CONFIRMED (traced) |
@@ -686,7 +686,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C637 | Low | vl / validate, optimize, predicates | Validation error messages: no suggestion for near-misses, misleading config text, missing spec paths | `packages/vl/src/validate.ts:517` | CONFIRMED (run) → FIXED (#202) |
 | C638 | Low | vl / validate, optimize, predicates | Test gaps: no negative merge tests in `optimize`, no `Object.prototype` assertion | `packages/vl/test/optimize-reads.test.ts:1` | CONFIRMED (traced) → FIXED (#202) |
 | C639 | Low | vl / composite marks, selections, transforms | raw `TypeError`s instead of `VLCompileError`s | `packages/vl/src/composite-marks.ts:390` | CONFIRMED (run) |
-| C640 | Low | conformance / scripts and gates | Undocumented environment switches (one changes the verdict), raw TypeErrors in `gallery-triage`, fixed scratch paths | `packages/conformance/scripts/browser-signals.mts:1009` | CONFIRMED (traced) |
+| C640 | Low | conformance / scripts and gates | Undocumented environment switches (one changes the verdict), raw TypeErrors in `gallery-triage`, fixed scratch paths | `packages/conformance/scripts/browser-signals.mts:1009` | CONFIRMED (traced) → FIXED (#204) |
 | C641 | Low | tooling / gates, CI, release, benchmarks | the `incremental-append` gate has no test that it can fail | `packages/benchmarks/src/incremental.bench.tsx:36-38` | CONFIRMED (traced) → FIXED (#187) |
 | C642 | Low | tooling / gates, CI, release, benchmarks | `pnpm check -- --only browser` is accepted, then "no gates selected" | `scripts/gates.mjs:121-135` | CONFIRMED (traced) → FIXED (#187) |
 | C643 | Low | tooling / gates, CI, release, benchmarks | onboarding gaps (following README and CONTRIBUTING literally) | `CONTRIBUTING.md:1-44` | CONFIRMED (traced) → FIXED (#187) |
@@ -769,9 +769,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C720 | Low | vl / validate, optimize, predicates | Comment says `"a'b"` "keeps its name"; it throws, as vega-lite does | `packages/vl/src/names.ts:116` | CONFIRMED (run) → FIXED (#202) |
 | C721 | Low | conformance / harness | What the canonicalizer drops beyond what its header lists (root ARIA, `<title>`/`<desc>`, `pointer-events`, shape class) | `packages/conformance/src/normalize.ts:682` | CONFIRMED (run) |
 | C722 | Low | conformance / harness | `docs/TESTING.md` counts are stale ("319 files" vs 465 collected) and the scene-differential claims do not hold | `docs/TESTING.md:161` | CONFIRMED (run) |
-| C723 | Low | conformance / scripts and gates | `a11y-parity` header claims mark labels are compared for existence; no line reads a mark node | `packages/conformance/scripts/a11y-parity.mts:4-6` | CONFIRMED (traced) |
-| C724 | Low | conformance / scripts and gates | `fuzz.mts` header says the nightly "leaves a committed, replayable artifact"; it uploads a workflow artifact and commits nothing | `packages/conformance/scripts/fuzz.mts:6-8` | CONFIRMED (traced) |
-| C725 | Low | conformance / scripts and gates | Gate script header comments: garbled, inverted or missing the build prerequisite | `packages/conformance/scripts/browser-canvas-parity.mts:17-18` | CONFIRMED (traced) |
+| C723 | Low | conformance / scripts and gates | `a11y-parity` header claims mark labels are compared for existence; no line reads a mark node | `packages/conformance/scripts/a11y-parity.mts:4-6` | CONFIRMED (traced) → FIXED (#204) |
+| C724 | Low | conformance / scripts and gates | `fuzz.mts` header says the nightly "leaves a committed, replayable artifact"; it uploads a workflow artifact and commits nothing | `packages/conformance/scripts/fuzz.mts:6-8` | CONFIRMED (traced) → FIXED (#204) |
+| C725 | Low | conformance / scripts and gates | Gate script header comments: garbled, inverted or missing the build prerequisite | `packages/conformance/scripts/browser-canvas-parity.mts:17-18` | CONFIRMED (traced) → FIXED (#204) |
 | C726 | Low | tooling / gates, CI, release, benchmarks | RUNBOOK's environment table is wrong about `NODE_ENV` and misses two variables | `docs/RUNBOOK.md:172` | CONFIRMED (run) → FIXED (#187) |
 | C727 | Low | tooling / gates, CI, release, benchmarks | benchmarks README and a bench header | `packages/benchmarks/README.md:24` | CONFIRMED (traced) → FIXED (#187) |
 | C728 | Low | docs / README, API, ERRORS | ERRORS.md documents messages a spec can no longer produce, and an incomplete phase list | `docs/ERRORS.md:393-395` | CONFIRMED (run) |
@@ -1919,6 +1919,7 @@ Measures are keyed by `as` only (`:221`: `if (!measures.has(String(as))) measure
 
 - **Location:** `packages/conformance/scripts/browser-conformance.mts:134-141`
 - **Status:** CONFIRMED (traced; lines re-read by lead)
+- **Resolution:** FIXED in #204 (712e105,f42d87a,b5425f2). Fixed: browser-conformance reports to runGate (exit owned by the harness, zero-case and floor 1063, page errors fail); gate-self-test.test.mjs refuses any gate script that sets its own exit code and plants a difference in every conformance gate.
 - **Area:** conformance / scripts and gates (also categories 5)
 - **Lane ID / scripts:** `harness-scripts-1` — `harness-scripts/`
 
@@ -1943,6 +1944,7 @@ The file ends by printing the failures:
 
 - **Location:** `packages/conformance/scripts/browser-svg-batch-parity.mts:34-36`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #204 (860e237). Fixed: the vacuous corpus half is replaced by 13 generated entries of 511 to 100k symbols, each asserting batching (or not), equal sub-path counts and pixels under a locality/ink comparison at the measured envelope (ratio 0.01, mean 0.6, local 7).
 - **Area:** conformance / scripts and gates (also categories 7)
 - **Lane ID / scripts:** `harness-scripts-2` — `harness-scripts/`
 
@@ -3511,6 +3513,7 @@ CONFIRMED-RUN. Whether real VL's omission is itself a VL bug is for the vl lane.
 
 - **Location:** `packages/conformance/scripts/canvas-pixels.mts:11`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #204 (860e237). Fixed: one comparePixels for every pixel gate adds an 8x8 locality limit measured per browser (Chromium 7, Firefox 6, WebKit 13) and an ink-on-both-sides rule; blank-vs-blank is counted apart, and network images are served so image marks are compared offline.
 - **Area:** conformance / scripts and gates (also categories 7)
 - **Lane ID / scripts:** `harness-scripts-4` — `harness-scripts/`
 
@@ -3534,6 +3537,7 @@ blank vs blank: null   hasInk: false
 
 - **Location:** `packages/conformance/scripts/browser-canvas-append.mts:69-70`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #204 (860e237). Fixed: the append, dirty and symbol phases report per scenario and floor append-path frames (309), frames painted nothing for (414), symbol cases with ink (528) and Path2D-route cases (432), with the plain route required to take none.
 - **Area:** conformance / scripts and gates
 - **Lane ID / scripts:** `harness-scripts-5` — `harness-scripts/`
 
@@ -3550,6 +3554,7 @@ blank vs blank: null   hasInk: false
 
 - **Location:** `packages/react/scripts/browser-interaction.mts:455`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #204 (b08838f). Fixed: tooltip checks compare the rows exactly, and pointer capture requires the view-change count to grow during the out-of-element leg (the drag is judged by what it adds after the wheel).
 - **Area:** conformance / scripts and gates
 - **Lane ID / scripts:** `harness-scripts-12` — `harness-scripts/`
 
@@ -4927,6 +4932,7 @@ DateTime parts other than month, day and quarter are spliced into the expression
 
 - **Location:** `packages/conformance/scripts/gen-vectors.mjs:53`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #204 (a591a15). Fixed: one vector codec encodes a Date's time with the number codec, so an invalid Date replays as one; interior and outer meshes are recorded from real topojson-client; a round-trip and mesh test was added.
 - **Area:** conformance / scripts and gates
 - **Lane ID / scripts:** `harness-scripts-17` — `harness-scripts/`
 
@@ -4939,6 +4945,7 @@ DateTime parts other than month, day and quarter are spliced into the expression
 
 - **Location:** `packages/conformance/scripts/differential-field-paths.test.mts:203-214`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #204 (d561194). Fixed: attempt() records the error name and message, the field-path differential requires vega's message, and a one-sided fitWidth/fitHeight build failure is a difference.
 - **Area:** conformance / scripts and gates
 - **Lane ID / scripts:** `harness-scripts-18` — `harness-scripts/`
 
@@ -5626,6 +5633,7 @@ Direction: skip a group item whose bounds miss the box, as Vega does, and restor
 
 - **Location:** `packages/conformance/scripts/fuzz.mts:119`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #204 (712e105,7536de3,bf74b19,2a9e7b7,b5425f2,c30bc22). Fixed: runGate fails every gate that compared nothing (a --filter typo included), validates numeric flags (--seeds abc exits 2), fixes the replay summary, and floors each gate's compared counters; gate-self-test runs each narrowed to nothing.
 - **Area:** conformance / scripts and gates (also categories 8)
 - **Lane ID / scripts:** `harness-scripts-9` — `harness-scripts/`
 
@@ -5972,6 +5980,7 @@ Status: **CONFIRMED-RUN** `t21.mjs`.
 
 - **Location:** `packages/conformance/scripts/expression-sites.mts:1-8`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #204 (749682a,a3c4d6d). Fixed: the 63 untabled sites are compared with vega.parse and the header no longer claims completeness; 14 differ on this base (REVEALED to a04, fixed in 7b4fa17), and the fail-on-uncovered-schema-position generator is a04's 04188f5, so stack a04 first.
 - **Area:** conformance / scripts and gates (also categories 7)
 - **Lane ID / scripts:** `harness-scripts-3` — `harness-scripts/`
 
@@ -6391,6 +6400,7 @@ Spec `vega/zoomable-world-map.vg.json:32` (`copy('projection')`), `:40`, `:47`, 
 
 - **Location:** `packages/conformance/scripts/differential-expression-engine-gen.test.mts:107-111`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #204 (749682a). Fixed: the engine generator draws every operator (in, instanceof, bitwise, shifts, != !== > <=, unary), stateful g/y regex literals over 12 rows, and a generated encode differential that reads item; it fails on this base for C32/C125/C31 (fixed by a04 36c5d6b/fcae061/bdd4896: stack a04 first).
 - **Area:** conformance / scripts and gates (also categories 7)
 - **Lane ID / scripts:** `harness-scripts-6` — `harness-scripts/`
 
@@ -7369,6 +7379,7 @@ Status: **CONFIRMED-RUN** `t19.mjs`.
 
 - **Location:** `packages/conformance/scripts/browser-canvas-parity.mts:241-247`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #204 (712e105). Fixed: runGate refuses to run a gate whose packages' dist is older than their compiled sources (dist-fresh.mjs); the canvas phases read src by design and phase 1 reads dist, which is now checked fresh.
 - **Area:** conformance / scripts and gates
 - **Lane ID / scripts:** `harness-scripts-14` — `harness-scripts/`
 
@@ -7382,6 +7393,7 @@ Status: **CONFIRMED-RUN** `t19.mjs`.
 
 - **Location:** `packages/conformance/scripts/geo-gen.mts:404-405`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #204 (bb1f806). Fixed: the geo generator strokes its path marks too; the geo differentials pass, so the restriction hid nothing.
 - **Area:** conformance / scripts and gates (also categories 7)
 - **Lane ID / scripts:** `harness-scripts-19` — `harness-scripts/`
 
@@ -9168,6 +9180,7 @@ The README contract is "renders like vega-lite, or throws". For these schema-inv
 
 - **Location:** `packages/react/scripts/browser-interaction.mts:153-174`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #204 (b08838f,2a9e7b7,9022205). Fixed: the React gate pans, zooms and brushes <Chart> over time, utc and log scales (svg, canvas, SvgChart interaction), and the selections gate adds a temporal bind:scales case; 15 React checks fail on this base (C44/C155, fixed by a12 28331f3: stack a12 first).
 - **Area:** conformance / scripts and gates
 - **Lane ID / scripts:** `harness-scripts-7` — `harness-scripts/`
 
@@ -9182,6 +9195,7 @@ The README contract is "renders like vega-lite, or throws". For these schema-inv
 
 - **Location:** `packages/conformance/scripts/fuzz.mts:41-106`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #204 (f439560). Fixed: the fuzzer gains a scene space (nesting, enter+update channel splits, item and mark zindex, colour objects, keys including duplicates, transforms, legends) and states what each space samples; 179/200 scene seeds differ, all from C27/C28/C118/C120 and an enter/update split, REVEALED to a08 (nightly fuzz red until then).
 - **Area:** conformance / scripts and gates
 - **Lane ID / scripts:** `harness-scripts-8` — `harness-scripts/`
 
@@ -9198,6 +9212,7 @@ The README contract is "renders like vega-lite, or throws". For these schema-inv
 
 - **Location:** `packages/conformance/scripts/browser-canvas-parity.mts:226-234`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #204 (860e237). Fixed: the gradients vega refuses (46) are compared for the refusal (same message), the unpaintable kinds (25) are counted and named, and both are floored instead of being dropped by a bare catch.
 - **Area:** conformance / scripts and gates
 - **Lane ID / scripts:** `harness-scripts-13` — `harness-scripts/`
 
@@ -9686,6 +9701,7 @@ Direction: validate once where pulses are normalised (`runtime.ts:949-960`) with
 
 - **Location:** `packages/conformance/scripts/gallery-fetch.mts:27`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #204 (78051a5). Fixed: each gallery fetch has a 30 s AbortSignal deadline within its retries, and --regenerate writes what it hashes and fails on any verifyCache problem; a stub-server test was added.
 - **Area:** conformance / scripts and gates
 - **Lane ID / scripts:** `harness-scripts-20` — `harness-scripts/`
 
@@ -11305,6 +11321,7 @@ Measured with `perf.mjs` at 400,000 rows:
 
 - **Location:** `packages/conformance/scripts/browser-intersect.mts:8`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #204 (cc9350b,64f205d,f42d87a). Fixed: intersect() searches the mark node it is handed (unit.mark, item().mark, group().mark, the root mark) and refuses an item as vega does; the intersect gate compares all of these with vega (27710 cases) and keeps vega's and Aster's errors apart.
 - **Area:** conformance / scripts and gates
 - **Lane ID / scripts:** `harness-scripts-10` — `harness-scripts/`
 
@@ -11318,6 +11335,7 @@ Measured with `perf.mjs` at 400,000 rows:
 
 - **Location:** `packages/conformance/scripts/transform-matrix.mts:161`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #204 (7536de3). Fixed: transform-matrix runs the wordcloud case in Chromium through the gallery's inline runner (vega and <Chart> on one seeded stream) instead of skipping it, so the result is 76/76.
 - **Area:** conformance / scripts and gates
 - **Lane ID / scripts:** `harness-scripts-11` — `harness-scripts/`
 
@@ -11914,6 +11932,7 @@ None is a known Aster difference; they bound what "canonical SVG equal" means. C
 
 - **Location:** `packages/conformance/scripts/a11y-parity.mts:4-6`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #204 (7536de3). Fixed: the a11y-parity header says what is compared (guide captions; mark nodes are not), and the captions compared are floored so empty lists cannot count as coverage.
 - **Area:** conformance / scripts and gates
 - **Lane ID / scripts:** `harness-scripts-15` — `harness-scripts/`
 
@@ -11923,6 +11942,7 @@ Header: "Mark labels are compared only for existence". No line reads a mark node
 
 - **Location:** `packages/conformance/scripts/fuzz.mts:6-8`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #204 (7536de3,f439560). Fixed: the fuzz header says the nightly uploads an artifact and commits nothing, that there is no shrinking, and what space each generator samples.
 - **Area:** conformance / scripts and gates
 - **Lane ID / scripts:** `harness-scripts-16` — `harness-scripts/`
 
@@ -11932,6 +11952,7 @@ Header says the nightly "leaves a committed, replayable artifact"; it uploads a 
 
 - **Location:** `packages/conformance/scripts/browser-canvas-parity.mts:17-18`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #204 (860e237,f42d87a,b08838f,a591a15). Fixed: the canvas-parity fourth-phase sentence, 'run above' (now below), the gen-vectors orphaned comment, and the Run: lines of the browser gates now name the pnpm build prerequisite.
 - **Area:** conformance / scripts and gates
 - **Lane ID / scripts:** `harness-scripts-22` — `harness-scripts/`
 
@@ -13590,6 +13611,7 @@ Status: **CONFIRMED-RUN** `t14-composite.mjs "repeat in transform"`.
 
 - **Location:** `packages/conformance/scripts/browser-signals.mts:1009`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #204 (860e237,2a9e7b7,e3f8639,a3c4d6d). Fixed: SIG_PRINT became --print-vega; SEL_NOFRESH (verdict-changing) was removed; PICK_DEBUG/SEL_*/ABORT_* are documented and the ABORT_* narrowing is refused; gallery-triage exits 2 with usage; dead code is removed; the batch count bug is gone with the rewrite; scratch dirs are per run.
 - **Area:** conformance / scripts and gates
 - **Lane ID / scripts:** `harness-scripts-21` — `harness-scripts/`
 
