@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 762 of 766 findings resolved (736 fixed, 22 already fixed on main, 4 disputed with evidence); 4 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 763 of 766 findings resolved (737 fixed, 22 already fixed on main, 4 disputed with evidence); 3 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -251,7 +251,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C202 | Medium | tests / core (text … url) | the `dsvFormatRow` vectors are recorded double-wrapped, and one pins a localised `Date#toString()` | `packages/conformance/scripts/gen-vectors.mjs:837-847` | CONFIRMED (run) → FIXED (#190) |
 | C203 | Medium | tests / core (text … url) | both topojson vector fixtures are malformed topologies; no vector covers a valid polygon | `packages/conformance/scripts/gen-vectors.mjs:633-678` | CONFIRMED (run) → FIXED (#190) |
 | C204 | Medium | tests / conformance differentials I | Vega rewrites shared inline rows, so the time-legend and one error-semantics differential cannot see a missing `format.parse` or transform on Aster's side | `packages/conformance/src/guides-layout-vs-vega.test.ts:34-36` | CONFIRMED (run; re-run by lead) → ALREADY FIXED (#215) |
-| C205 | Medium | tests / conformance differentials I | mark `role` values where Aster differs from Vega are excluded from the ARIA matrix or judged on structure only | `packages/conformance/src/aria-guides-vs-vega.test.ts:112-116` | CONFIRMED (run; re-run by lead) |
+| C205 | Medium | tests / conformance differentials I | mark `role` values where Aster differs from Vega are excluded from the ARIA matrix or judged on structure only | `packages/conformance/src/aria-guides-vs-vega.test.ts:112-116` | CONFIRMED (run; re-run by lead) → FIXED (#228) |
 | C206 | Medium | tests / conformance differentials II | canonicalizer collapses NBSP and all Unicode spaces as if they were XML whitespace | `packages/conformance/src/normalize.ts:469-470` | CONFIRMED (run; re-run by lead) → FIXED (#215) |
 | C207 | Medium | tests / conformance differentials II | "stack keeps the input row order" shares its rows with Vega, which writes `y0`/`y1` onto them first | `packages/conformance/src/renderer-vs-vega.test.ts:33-35` | CONFIRMED (run; re-run by lead) → ALREADY FIXED (#215) |
 | C208 | Medium | tests / conformance differentials II | raster fixtures: loose hand tolerances and a self-recorded baseline that accepts large disagreement (adds to C191 (harness-src-5)) | `packages/conformance/src/raster-vs-chromium.test.ts:43-47` | CONFIRMED (run) → FIXED (#216) |
@@ -3802,6 +3802,7 @@ planted bug on a FRESH spec, diffs: 12
 
 - **Location:** `packages/conformance/src/aria-guides-vs-vega.test.ts:112-116`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #228 (e2e2e817,a527bf5a,b06aa1b5,742ea309). Fixed: (b) a frame/scope layout and any encode over a late scale are ranked among the late operators, and an operator that fails before them leaves the late scales unevaluated (bare marks, entry-less legends, caption-less guides, half-built axes refused), in the view and in group items, plus the role layout of a group item; (a) a group mark with a guide role is refused with a SpecParseError (vega draws it by scenegraph slot, per row count); mark-role-config-vs-vega generates 6,000 charts a run, the last expected-differences entry, the Deviations rows and the ROADMAP entry are gone. Earlier work: #215, #224, #225.
 - **Area:** tests / conformance differentials I
 - **Lane ID / scripts:** `tests-confsrc1-2` — `tests-confsrc1/`
 
