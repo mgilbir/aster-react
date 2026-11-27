@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 272 of 766 findings resolved (264 fixed, 7 already fixed on main, 1 disputed with evidence); 494 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 299 of 766 findings resolved (291 fixed, 7 already fixed on main, 1 disputed with evidence); 467 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -89,11 +89,11 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C40 | High | core / signal event loop, transitions | Per-owner state (`{signal}`-handler memory, between/throttle/debounce state, timer streams) is keyed by text (`<scope>\|<index>:<name>:<i>:<JSON events>`), not by chart | `packages/core/src/signals.ts:254` | CONFIRMED (run; re-run by lead) → FIXED (#197) |
 | C41 | High | core / axes, legends, titles | `config.locale` is silently ignored | `packages/core/src/runtime.ts:8022` | CONFIRMED (run; re-run by lead) → FIXED (#194) |
 | C42 | High | core / geo | a fitted projection goes stale for every consumer whose own rows did not change | `packages/core/src/runtime.ts:2116` | CONFIRMED (run; re-run by lead) |
-| C43 | High | react / <Chart>, shells, SSR | `incremental={false}` renders a blank chart for any dense symbol mark | `packages/react/src/ChartCore.tsx:754` | CONFIRMED (run; re-run by lead) |
-| C44 | High | react / <Chart>, shells, SSR | Wheel/pinch zoom and the interval brush skip `time` / `utc` scales | `packages/react/src/ChartCore.tsx:1130-1131` | CONFIRMED (run; re-run by lead) |
-| C45 | High | react / <Chart>, shells, SSR | React hydration keeps the server's picture when the client scene differs | `packages/react/src/ChartCore.tsx:745-768` | CONFIRMED (run) |
-| C46 | High | react / <Chart>, shells, SSR | A chart that mounts in its error state never measures its container and has no wheel zoom after it recovers | `packages/react/src/ChartCore.tsx:462-482` | CONFIRMED (run; re-run by lead) |
-| C47 | High | react / <Chart>, shells, SSR | A Vega-Lite compile error is thrown out of render; `onError` and the error state never see it | `packages/react/src/ChartCore.tsx:361` | CONFIRMED (run; re-run by lead) |
+| C43 | High | react / <Chart>, shells, SSR | `incremental={false}` renders a blank chart for any dense symbol mark | `packages/react/src/ChartCore.tsx:754` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
+| C44 | High | react / <Chart>, shells, SSR | Wheel/pinch zoom and the interval brush skip `time` / `utc` scales | `packages/react/src/ChartCore.tsx:1130-1131` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
+| C45 | High | react / <Chart>, shells, SSR | React hydration keeps the server's picture when the client scene differs | `packages/react/src/ChartCore.tsx:745-768` | CONFIRMED (run) → FIXED (#198) |
+| C46 | High | react / <Chart>, shells, SSR | A chart that mounts in its error state never measures its container and has no wheel zoom after it recovers | `packages/react/src/ChartCore.tsx:462-482` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
+| C47 | High | react / <Chart>, shells, SSR | A Vega-Lite compile error is thrown out of render; `onError` and the error state never see it | `packages/react/src/ChartCore.tsx:361` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
 | C48 | High | react / hooks, streams, workers | failed `useSpecData` load refetches forever | `packages/react/src/useChart.ts:129-134` | CONFIRMED (run; re-run by lead) |
 | C49 | High | react / hooks, streams, workers | push before the start effect is accepted, then dropped | `packages/react/src/useChartWorkerStream.ts:259-260` | CONFIRMED (run; re-run by lead) |
 | C50 | High | react / hooks, streams, workers | `useSpecData` cache keyed on identity never settles for inline inputs | `packages/react/src/useChart.ts:102-111` | CONFIRMED (run; re-run by lead) |
@@ -117,7 +117,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C68 | High | gallery / official Vega examples II | A signal that holds an event's `datum` is never identical to a row afterwards, so `reorderable-matrix` cannot highlight or reorder | `packages/core/src/runtime.ts:4106-4108` | CONFIRMED (run; re-run by lead) |
 | C69 | High | gallery / official Vega-Lite examples I | `interactive_crossfilter`: a unit inside a `layer` bins after its own transforms; vega-lite bins before them, so any brush re-bins and re-scales the charts | `packages/vl/src/compile.ts:4296-4298` | CONFIRMED (run; re-run by lead) |
 | C70 | High | gallery / official Vega-Lite examples II | After one legend click on the official `point_constant_legend_domain`, the legend loses its other entries; Vega keeps them | `packages/core/src/runtime.ts:4651-4658` | CONFIRMED (run; re-run by lead) |
-| C71 | High | react / <Chart>, shells, SSR | Pan/zoom keys and double-click are taken from bound inputs inside the chart | `packages/react/src/ChartCore.tsx:1449-1475` | CONFIRMED (run; re-run by lead) |
+| C71 | High | react / <Chart>, shells, SSR | Pan/zoom keys and double-click are taken from bound inputs inside the chart | `packages/react/src/ChartCore.tsx:1449-1475` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
 | C72 | High | react / hooks, streams, workers | `useChartWorker` loops on inline `data` / `signals` / `domainRaw` | `packages/react/src/worker.ts:458` | CONFIRMED (run; re-run by lead) |
 | C73 | High | core / signal event loop, transitions | Data `on` triggers (`{trigger, insert \| remove \| toggle \| modify, values}`) and mark `on` triggers are checked for syntax and never run | `packages/core/src/spec-expressions.ts:289` | CONFIRMED (run; re-run by lead) |
 | C74 | High | conformance / harness | the lane leads were invisible because no static gate generates them | `packages/conformance/src/sweeps/vega-schema.mjs:899-902` | CONFIRMED (run; re-run by lead) |
@@ -146,7 +146,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C97 | Medium | core / SVG, DOM patcher, canvas, a11y | The `cursor` channel / signal is handed to the host as any text, `url(https://…)` included | `packages/core/src/cursor.ts:24-36` | CONFIRMED (run) → FIXED (#191) |
 | C98 | Medium | core / hit index, bounds, geometry | The parse caches are module-level and bounded by 4096 entries, not by size | `packages/core/src/path-data.ts:130-141` | CONFIRMED (run) |
 | C99 | Medium | core / signal event loop, transitions | A `modify` that feeds itself is bounded only by the call stack; `maxTimeMs` and `maxRows` do not stop it | `packages/core/src/signals.ts:678-695` | CONFIRMED (run) → FIXED (#197) |
-| C100 | Medium | react / <Chart>, shells, SSR | `data` rows are not validated at the React boundary | `packages/react/src/ChartCore.tsx:585-586` | CONFIRMED (run) |
+| C100 | Medium | react / <Chart>, shells, SSR | `data` rows are not validated at the React boundary | `packages/react/src/ChartCore.tsx:585-586` | CONFIRMED (run) → FIXED (#198) |
 | C101 | Medium | react / hooks, streams, workers | `validateDataChanges` accepts `undefined` and holes | `packages/react/src/dataChanges.ts:49-50` | CONFIRMED (run) |
 | C102 | Medium | vl / composition | The repeated spec's `name` goes raw into signal names, scale names and expressions | `packages/vl/src/compile.ts:3192` | CONFIRMED (run; re-run by lead) |
 | C103 | Medium | vl / mark encoding | Titles are spliced into the tooltip object literal and the aria description with only `"` escaped | `packages/vl/src/compile.ts:7805` | CONFIRMED (run) |
@@ -201,9 +201,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C152 | Medium | core / geo | sphere `geoBounds` throws on an empty ring where d3/Vega answer | `packages/core/src/geo-sphere-measures.ts:200-204` | CONFIRMED (run) → FIXED (#196) |
 | C153 | Medium | core / geo | a projection parameter whose signal throws is swallowed; the map is drawn with defaults | `packages/core/src/runtime.ts:1167-1176` | CONFIRMED (run) → FIXED (#196) |
 | C154 | Medium | core / geo | `graticule`: inverted extents, `precision: 0` and string precision differ from Vega | `packages/core/src/transform.ts:608-615` | CONFIRMED (run; re-run by lead) → FIXED (#196) |
-| C155 | Medium | react / <Chart>, shells, SSR | Pan and zoom treat every continuous scale as linear | `packages/react/src/interaction.ts:225-255` | CONFIRMED (run) |
-| C156 | Medium | react / <Chart>, shells, SSR | Radio-bound signals of two charts on one page share a native radio group | `packages/react/src/ChartCore.tsx:251` | CONFIRMED (run; re-run by lead) |
-| C157 | Medium | react / <Chart>, shells, SSR | `onError` fires twice for one failing evaluation when `signals` is passed | `packages/react/src/ChartCore.tsx:626-629` | CONFIRMED (run) |
+| C155 | Medium | react / <Chart>, shells, SSR | Pan and zoom treat every continuous scale as linear | `packages/react/src/interaction.ts:225-255` | CONFIRMED (run) → FIXED (#198) |
+| C156 | Medium | react / <Chart>, shells, SSR | Radio-bound signals of two charts on one page share a native radio group | `packages/react/src/ChartCore.tsx:251` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
+| C157 | Medium | react / <Chart>, shells, SSR | `onError` fires twice for one failing evaluation when `signals` is passed | `packages/react/src/ChartCore.tsx:626-629` | CONFIRMED (run) → FIXED (#198) |
 | C158 | Medium | react / hooks, streams, workers | no-Worker fallback during add-on load reorders or drops a parked push | `packages/react/src/useChartWorkerStream.ts:208-212` | CONFIRMED (run) |
 | C159 | Medium | react / hooks, streams, workers | `close()` leaves `scheduled` (rAF) and `paused` set for a rebuilt stream | `packages/react/src/useChartStream.ts:206-219` | CONFIRMED (run) |
 | C160 | Medium | react / hooks, streams, workers | one throw from `post` on the queued path silences the worker for good | `packages/react/src/worker.ts:716-724` | CONFIRMED (run) |
@@ -273,7 +273,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C224 | Medium | closure / conformance suites, line by line II | an explicit `scale.reverse` on a discrete `theta` or `radius` is deleted | `packages/vl/src/compile.ts:5272-5273` | CONFIRMED (run; re-run by lead) |
 | C225 | Medium | gallery / official Vega examples I | A numeric top-level `width`/`height` beats the spec's own `width`/`height` signal `update`; vega/horizon-graph renders a wrong frame for any non-default `layers` given as `signals` (adds … | `packages/core/src/runtime.ts:870` | CONFIRMED (run; re-run by lead) |
 | C226 | Medium | gallery / official Vega-Lite examples I | `bar_axis_orient`: an `axis.orient: {expr}` does not drive the label alignment; with "top" the rotated labels point into the plot | `packages/vl/src/compile.ts:5878-5892` | CONFIRMED (run; re-run by lead) |
-| C227 | Medium | gallery / official Vega-Lite examples II | A `select` bind whose options are arrays renders "undefined" seven times and writes `undefined` | `packages/react/src/ChartCore.tsx:190-192` | CONFIRMED (run; re-run by lead) |
+| C227 | Medium | gallery / official Vega-Lite examples II | A `select` bind whose options are arrays renders "undefined" seven times and writes `undefined` | `packages/react/src/ChartCore.tsx:190-192` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
 | C228 | Medium | core / SVG, DOM patcher, canvas, a11y | A throw mid-paint leaves the context's save stack, transform and clip behind | `packages/core/src/canvas.ts:134-157` | CONFIRMED (run) → FIXED (#191) |
 | C229 | Medium | core / hit index, bounds, geometry | A retained index reads the engine's live items array, so after an append it reports items of a later scene | `packages/core/src/hit.ts:831` | CONFIRMED (run) |
 | C230 | Medium | conformance / scripts and gates | Several gates pass on zero cases | `packages/conformance/scripts/fuzz.mts:119` | CONFIRMED (traced) |
@@ -289,7 +289,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C240 | Medium | core / layout transforms, rasterizer | Assigning holes to outer rings is quadratic and unmetered | `packages/core/src/contour.ts:202-205` | CONFIRMED (run) → FIXED (#193) |
 | C241 | Medium | core / SVG, DOM patcher, canvas, a11y | The accessible tree has no overall bound | `packages/core/src/a11y.ts:416` | CONFIRMED (run) → FIXED (#191) |
 | C242 | Medium | core / geo | geo work is outside every limit | `packages/core/src/geo-resample.ts:17` | CONFIRMED (run) → FIXED (#196) |
-| C243 | Medium | react / <Chart>, shells, SSR | A controlled `view` reaches the scales unvalidated | `packages/react/src/ChartCore.tsx:522-525` | CONFIRMED (run) |
+| C243 | Medium | react / <Chart>, shells, SSR | A controlled `view` reaches the scales unvalidated | `packages/react/src/ChartCore.tsx:522-525` | CONFIRMED (run) → FIXED (#198) |
 | C244 | Medium | react / hooks, streams, workers | no deadline; a silent worker leaves `pending: true` forever | `packages/react/src/worker.ts:272-292` | CONFIRMED (run; re-run by lead) |
 | C245 | Medium | vl / validate, optimize, predicates | The gate checks key names, not value types, so type-confused or `null` values compile to a chart that differs from vega-lite's instead of being refused | `packages/vl/src/validate.ts:153` | CONFIRMED (run) |
 | C246 | Medium | vl / composite marks, selections, transforms | unknown errorbar / errorband `extent` or `center` values silently compile to IQR around the median | `packages/vl/src/composite-marks.ts:314-328` | CONFIRMED (run) |
@@ -338,10 +338,10 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C289 | Medium | core / SVG, DOM patcher, canvas, a11y | The tree's `label`/`description` read scene fields nothing writes; a spec's `description` is lost | `packages/core/src/a11y.ts:461-462` | CONFIRMED (run) → FIXED (#191) |
 | C290 | Medium | core / signal event loop, transitions | `{scale}` event sources never fire for a host that replaces its element, even with `owner` | `packages/core/src/signals.ts:1385-1386` | CONFIRMED (run; re-run by lead) → FIXED (#197) |
 | C291 | Medium | core / geo | dead and stale pieces around the add-on boundary | `packages/core/src/registry.ts:30` | CONFIRMED (traced) → FIXED (#196) |
-| C292 | Medium | react / <Chart>, shells, SSR | `signals` is compared by identity | `packages/react/src/ChartCore.tsx:805-807` | CONFIRMED (run) |
-| C293 | Medium | react / <Chart>, shells, SSR | Selection props disagree with each other | `packages/react/src/ChartCore.tsx:1075-1077` | CONFIRMED (run) |
-| C294 | Medium | react / <Chart>, shells, SSR | `style.width` / `height` / `position` are overridden whenever the a11y tree is on (the default) | `packages/react/src/ChartCore.tsx:1643-1646` | CONFIRMED (run) |
-| C295 | Medium | react / <Chart>, shells, SSR | Bound inputs: `bind.labels` is ignored; a `number` input cannot be cleared | `packages/react/src/ChartCore.tsx:188-196` | CONFIRMED (run; re-run by lead) |
+| C292 | Medium | react / <Chart>, shells, SSR | `signals` is compared by identity | `packages/react/src/ChartCore.tsx:805-807` | CONFIRMED (run) → FIXED (#198) |
+| C293 | Medium | react / <Chart>, shells, SSR | Selection props disagree with each other | `packages/react/src/ChartCore.tsx:1075-1077` | CONFIRMED (run) → FIXED (#198) |
+| C294 | Medium | react / <Chart>, shells, SSR | `style.width` / `height` / `position` are overridden whenever the a11y tree is on (the default) | `packages/react/src/ChartCore.tsx:1643-1646` | CONFIRMED (run) → FIXED (#198) |
+| C295 | Medium | react / <Chart>, shells, SSR | Bound inputs: `bind.labels` is ignored; a `number` input cannot be cleared | `packages/react/src/ChartCore.tsx:188-196` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
 | C296 | Medium | react / hooks, streams, workers | stream hooks read `limits` once; a later change is ignored | `packages/react/src/useChartStream.ts:113-126` | CONFIRMED (run) |
 | C297 | Medium | vl / mark encoding | A named style is honoured for paint only | `packages/vl/src/compile.ts:6267-6274` | CONFIRMED (run; re-run by lead) |
 | C298 | Medium | vl / mark encoding | Config precedence differs from vega-lite | `packages/vl/src/compile.ts:6563-6565` | CONFIRMED (run) |
@@ -409,7 +409,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C360 | Medium | gallery / official Vega examples II | `vega/projections` is counted as passing on both paths while both engines fail on it | `packages/conformance/src/gallery/static.ts:47-48` | CONFIRMED (run; re-run by lead) |
 | C361 | Medium | core / layout transforms, rasterizer | "`label.ts` places labels as vega-label does" omits two known limits, and neither is in "Deviations from Vega" | `docs/ARCHITECTURE.md:342` | CONFIRMED (traced) → FIXED (#193) |
 | C362 | Medium | core / geo | "matches d3-geo/vega bit for bit" has undocumented exceptions; "No state outlives a call" is not what the code does | `docs/ARCHITECTURE.md:328` | CONFIRMED (run) → FIXED (#196) |
-| C363 | Medium | react / <Chart>, shells, SSR | ADRs 0002/0003/0007 and TSDoc contradict the code (lazy loading, canvas event loop, `interactive` default) | `docs/adr/0007-svgchart-shell-over-lazy-loading.md:21` | CONFIRMED (traced) |
+| C363 | Medium | react / <Chart>, shells, SSR | ADRs 0002/0003/0007 and TSDoc contradict the code (lazy loading, canvas event loop, `interactive` default) | `docs/adr/0007-svgchart-shell-over-lazy-loading.md:21` | CONFIRMED (traced) → FIXED (#198) |
 | C364 | Medium | vl / validate, optimize, predicates | "compiling reads none of [the rows], so it costs the same for 3 rows as for 6,000" is false on three paths | `packages/vl/README.md:41-43` | CONFIRMED (run) |
 | C365 | Medium | conformance / scripts and gates | The header says `intersect()` is also checked "from a group item's `mark`"; the third argument is never passed | `packages/conformance/scripts/browser-intersect.mts:8` | CONFIRMED (traced) |
 | C366 | Medium | conformance / scripts and gates | The wordcloud case the matrix skips is run by no gate, though the docs say `conformance:browser` runs it | `packages/conformance/scripts/transform-matrix.mts:161` | CONFIRMED (traced) |
@@ -435,7 +435,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C386 | Low | core / layout transforms, rasterizer | `spirals[spiralName]` is a plain-object lookup | `packages/core/src/wordcloud.ts:457-458` | CONFIRMED (run) → FIXED (#193) |
 | C387 | Low | core / SVG, DOM patcher, canvas, a11y | A gradient's own `id` shares the id space of clip paths | `packages/core/src/svg-defs.ts:82` | CONFIRMED (run) → FIXED (#191) |
 | C388 | Low | core / signal event loop, transitions | A timer of an element that was never in the document has no self-stop | `packages/core/src/signals.ts:1037-1045` | CONFIRMED (run) → FIXED (#197) |
-| C389 | Low | react / <Chart>, shells, SSR | An a11y node id goes into a selector unescaped | `packages/react/src/ChartCore.tsx:1379` | CONFIRMED (run) |
+| C389 | Low | react / <Chart>, shells, SSR | An a11y node id goes into a selector unescaped | `packages/react/src/ChartCore.tsx:1379` | CONFIRMED (run) → FIXED (#198) |
 | C390 | Low | vl / composite marks, selections, transforms | `quotedRef` is a second, weaker field escaper (continues C37) | `packages/vl/src/composite-marks.ts:17` | CONFIRMED (run) |
 | C391 | Low | tests / core (limits, loaders, locale, oracle vectors) | A URL refused for embedded credentials is echoed, password included, in the error message and `.url` | `packages/core/src/url-policy.ts:20-21` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
 | C392 | Low | corpus / specs, range 2 | `image.vg.json` points at a third-party host | `packages/conformance/corpus/image.vg.json:1` | CONFIRMED (traced) |
@@ -534,10 +534,10 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C485 | Low | core / expressions, regex screen | A compiled expression with a stale registry epoch recompiles on every call (200k evaluations: 3 ms → 600–800 ms) | `packages/core/src/expression.ts:700-705` | CONFIRMED (run) → FIXED (#197) |
 | C486 | Low | core / layout transforms, rasterizer | `nest` recurses once per key | `packages/core/src/hierarchy-nest.ts:28-42` | CONFIRMED (run) → FIXED (#193) |
 | C487 | Low | core / signal event loop, transitions | Transition player: `duration: Infinity` requests frames forever; a throwing first `paint` escapes `draw()`; NaN easing paints NaN | `packages/core/src/transition.ts:717` | CONFIRMED (run) → FIXED (#197) |
-| C488 | Low | react / <Chart>, shells, SSR | Wheel zoom ignores `deltaMode` | `packages/react/src/ChartCore.tsx:1153` | CONFIRMED (run; re-run by lead) |
-| C489 | Low | react / <Chart>, shells, SSR | A handle kept past unmount still calls the host's listeners | `packages/react/src/ChartCore.tsx:1609-1618` | CONFIRMED (run; re-run by lead) |
-| C490 | Low | react / <Chart>, shells, SSR | The persisted selection rectangle is neither clipped nor checked | `packages/react/src/interaction.ts:167-203` | CONFIRMED (run) |
-| C491 | Low | react / <Chart>, shells, SSR | A brush-only chart cannot be brushed by touch | `packages/react/src/ChartCore.tsx:1645` | PLAUSIBLE |
+| C488 | Low | react / <Chart>, shells, SSR | Wheel zoom ignores `deltaMode` | `packages/react/src/ChartCore.tsx:1153` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
+| C489 | Low | react / <Chart>, shells, SSR | A handle kept past unmount still calls the host's listeners | `packages/react/src/ChartCore.tsx:1609-1618` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
+| C490 | Low | react / <Chart>, shells, SSR | The persisted selection rectangle is neither clipped nor checked | `packages/react/src/interaction.ts:167-203` | CONFIRMED (run) → FIXED (#198) |
+| C491 | Low | react / <Chart>, shells, SSR | A brush-only chart cannot be brushed by touch | `packages/react/src/ChartCore.tsx:1645` | PLAUSIBLE → FIXED (#198) |
 | C492 | Low | react / hooks, streams, workers | `mergeBatches` is quadratic in pushes per tick | `packages/react/src/batches.ts:18-21` | CONFIRMED (run) |
 | C493 | Low | vl / composition | `compile` has no depth or cycle guard | `packages/vl/src/compile.ts:134-141` | CONFIRMED (run) |
 | C494 | Low | vl / composite marks, selections, transforms | `stack` `as` with one name is emitted as written | `packages/vl/src/transforms.ts:327` | CONFIRMED (run) |
@@ -551,7 +551,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C502 | Low | core / session, stream, limits | Stream bounds accept `NaN` | `packages/core/src/stream.ts:443-444` | CONFIRMED (run) → FIXED (#193) |
 | C503 | Low | core / session, stream, limits | A session's no-op evaluate still costs O(spec) | `packages/core/src/session.ts:345` | CONFIRMED (traced) |
 | C504 | Low | core / compiler, transforms | wrong-typed `width` / `padding` give garbage | `packages/core/src/compiler.ts:69-70` | CONFIRMED (run) → ALREADY FIXED (#194) |
-| C505 | Low | react / <Chart>, shells, SSR | `devicePixelRatio` is read through a store that never notifies | `packages/react/src/ChartCore.tsx:57` | CONFIRMED (traced) |
+| C505 | Low | react / <Chart>, shells, SSR | `devicePixelRatio` is read through a store that never notifies | `packages/react/src/ChartCore.tsx:57` | CONFIRMED (traced) → FIXED (#198) |
 | C506 | Low | react / hooks, streams, workers | streams are not closed on unmount; `push` still answers `true` | `packages/react/src/useChartStream.ts:151-158` | CONFIRMED (run) |
 | C507 | Low | conformance / harness | no per-spec time bound in the Node runners | `packages/conformance/src/run.ts:58-74` | CONFIRMED (traced) |
 | C508 | Low | conformance / scripts and gates | `gallery-fetch` has no fetch timeout, and `--regenerate` prints `ok` over a mismatching cache | `packages/conformance/scripts/gallery-fetch.mts:27` | CONFIRMED (traced) |
@@ -580,7 +580,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C531 | Low | core / loading, URL policy, add-ons | A `{signal}` url resolves against top-level spec defaults only (no group scope, no host signals, no reload) | `packages/core/src/addon-load.ts:389-403` | CONFIRMED (run) |
 | C532 | Low | core / hit index, bounds, geometry | `createPointMapper().map` returns raw client coordinates when there is no element yet | `packages/core/src/pointer.ts:59` | CONFIRMED (traced) |
 | C533 | Low | core / axes, legends, titles | `clip` and `blend` set through `encode.axis` / `encode.legend` / `encode.entries` are dropped | `packages/core/src/guide-axis.ts:324` | CONFIRMED (run; re-run by lead) → FIXED (#194) |
-| C534 | Low | react / <Chart>, shells, SSR | The exported helpers need `PositionalScales`, which a host cannot obtain | `packages/react/src/index.ts:62-79` | CONFIRMED (traced) |
+| C534 | Low | react / <Chart>, shells, SSR | The exported helpers need `PositionalScales`, which a host cannot obtain | `packages/react/src/index.ts:62-79` | CONFIRMED (traced) → FIXED (#198) |
 | C535 | Low | vl / scales, stacking, guides | `axis.style` is emitted as a raw Vega `style`; vega-lite resolves `config.style.<name>` into axis properties | `packages/vl/src/compile.ts:5906-5910` | CONFIRMED (run) |
 | C536 | Low | vl / mark encoding | `mark.ariaRole` is dropped; vega-lite encodes it | `packages/vl/src/compile.ts:6915` | CONFIRMED (run) |
 | C537 | Low | conformance / harness | `--print-passing` rewrites the baseline in the run that found the regression | `packages/conformance/src/gallery/run.ts:147-152` | CONFIRMED (traced) |
@@ -600,7 +600,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C551 | Low | core / SVG, DOM patcher, canvas, a11y | Canvas event tables are plain-object lookups by event type; two `fontString` implementations disagree | `packages/core/src/canvas-events.ts:135` | CONFIRMED (traced) → FIXED (#191) |
 | C552 | Low | core / hit index, bounds, geometry | Dead axis-bounds code with a title-length nudge; wrong comment about `shape: "point"`; unbounded "short" side list | `packages/core/src/bounds.ts:784-853` | CONFIRMED (run) |
 | C553 | Low | core / axes, legends, titles | `guide-model.ts` and the runtime disagree with Vega on what is parsed in 5 of 1018 probes (`axis.grid`, `config.axis.labelBound`) | `packages/core/src/guide-model.ts:50` | CONFIRMED (run) → FIXED (#194) |
-| C554 | Low | react / <Chart>, shells, SSR | The error state drops `className` and `ariaLabel` | `packages/react/src/ChartCore.tsx:1637` | CONFIRMED (run) |
+| C554 | Low | react / <Chart>, shells, SSR | The error state drops `className` and `ariaLabel` | `packages/react/src/ChartCore.tsx:1637` | CONFIRMED (run) → FIXED (#198) |
 | C555 | Low | react / hooks, streams, workers | one worker `error` event fails every hook sharing the worker | `packages/react/src/worker.ts:300-303` | CONFIRMED (traced) |
 | C556 | Low | vl / composition | Composition hygiene: discarded `firstY`, `resolve.scale` parsed three times, bare-prefix `cellPrefixed`, misplaced doc comment | `packages/vl/src/compile.ts:1085` | CONFIRMED (traced) |
 | C557 | Low | vl / scales, stacking, guides | `config.fieldTitle: "plain"` titles a count axis `__count` (the synthetic source name leaks) | `packages/vl/src/compile.ts:3496-3500` | CONFIRMED (run) |
@@ -676,8 +676,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C627 | Low | core / loading, URL policy, add-ons | `loadAddons(["nope"])` throws synchronously instead of rejecting | `packages/core/src/addons.ts:545-565` | CONFIRMED (run) → FIXED (#192) |
 | C628 | Low | core / compiler, transforms | Test gaps: no object-form field parameter, no hostile raster grid, no mark `type` test, thin `dotbin` cases | `packages/conformance/scripts/transform-cases.mjs:1` | CONFIRMED (traced) → FIXED (#194) |
 | C629 | Low | core / signal event loop, transitions | Handler shapes the loop rejects (`encode` updates, empty `merge`, invalid CSS source) are logged on every bind instead of refused once | `packages/core/src/signals.ts:1178` | CONFIRMED (run) → FIXED (#197) |
-| C630 | Low | react / <Chart>, shells, SSR | Size props are not validated | `packages/react/src/ChartCore.tsx:462-482` | CONFIRMED (run) |
-| C631 | Low | react / <Chart>, shells, SSR | Test gaps: no `incremental={false}` render, no time/log pan-zoom, `select` unused, hydration tested in one process only | `packages/react/src/Chart.ssr.test.tsx:47-52` | CONFIRMED (traced) |
+| C630 | Low | react / <Chart>, shells, SSR | Size props are not validated | `packages/react/src/ChartCore.tsx:462-482` | CONFIRMED (run) → FIXED (#198) |
+| C631 | Low | react / <Chart>, shells, SSR | Test gaps: no `incremental={false}` render, no time/log pan-zoom, `select` unused, hydration tested in one process only | `packages/react/src/Chart.ssr.test.tsx:47-52` | CONFIRMED (traced) → FIXED (#198) |
 | C632 | Low | react / hooks, streams, workers | `useChartStream().flush()` with nothing queued sets state every call | `packages/react/src/useChartStream.ts:178-189` | CONFIRMED (run) |
 | C633 | Low | vl / composition | `width: Infinity`/`NaN` reports "…got null" (the value is printed through `JSON.stringify`) | `packages/vl/src/validate.ts:153` | CONFIRMED (traced) |
 | C634 | Low | vl / scales, stacking, guides | `{repeat}` inside a repeated spec's `transform` fails validation with a message that does not mention repeat | `packages/vl/src/validate.ts:1165` | CONFIRMED (run) |
@@ -1450,6 +1450,7 @@ Direction: either honour it (a per-chart `Locale` built at compile time and thre
 
 - **Location:** `packages/react/src/ChartCore.tsx:754`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #198 (3e4b8d1). Fixed: only the incremental path batches dense marks; incremental={false} renders per-item string markup; Chart.incremental-dense covers every incremental x denseMarks pair through mount/update/spec change.
 - **Area:** react / <Chart>, shells, SSR
 - **Lane ID / scripts:** `react-chart-1` — `react-chart/`
 
@@ -1464,6 +1465,7 @@ Direction: either honour it (a per-chart `Locale` built at compile time and thre
 
 - **Location:** `packages/react/src/ChartCore.tsx:1130-1131`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #198 (28331f3). Fixed: inverted Date values are coerced to ms in wheel/pinch anchors and the brush; time/utc pan/zoom/brush equal Vega-Lite bind:"scales" in vega (conformance/react-panzoom-vs-vega).
 - **Area:** react / <Chart>, shells, SSR
 - **Lane ID / scripts:** `react-chart-2` — `react-chart/`
 
@@ -1480,6 +1482,7 @@ Direction: either honour it (a per-chart `Locale` built at compile time and thre
 
 - **Location:** `packages/react/src/ChartCore.tsx:745-768`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #198 (3e4b8d1 750187f 959cf8b). Fixed: the hydration commit patches the adopted svg to the client scene and remounts the a11y overlay/bound inputs (each keyed on its own, so re-renders never duplicate a row of inputs: 959cf8b); tested with server markup from another time zone (child process) and another text measurer.
 - **Area:** react / <Chart>, shells, SSR (also categories 7)
 - **Lane ID / scripts:** `react-chart-4` — `react-chart/`
 
@@ -1496,6 +1499,7 @@ Direction: either honour it (a per-chart `Locale` built at compile time and thre
 
 - **Location:** `packages/react/src/ChartCore.tsx:462-482`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #198 (f75cbb0). Fixed: the error state is drawn inside the chart's element, which persists through error and recovery, so measurement and wheel stay bound (Chart.error-channel recovery test).
 - **Area:** react / <Chart>, shells, SSR (also categories 5)
 - **Lane ID / scripts:** `react-chart-5` — `react-chart/`
 
@@ -1514,6 +1518,7 @@ Direction: either honour it (a per-chart `Locale` built at compile time and thre
 
 - **Location:** `packages/react/src/ChartCore.tsx:361`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #198 (f75cbb0 9fbf1ae). Fixed: specs are normalized inside the guarded evaluation (normalizeSpecResult) for <Chart>, <SvgChart>, useChart, stream hooks and components; VL compile errors, missing /vl, non-object specs and rejected spec promises reach the error state/onError once; bundle-shaking react-novl asserts it (no throw, error state, onError) and that no compiler module is bundled.
 - **Area:** react / <Chart>, shells, SSR (also categories 3)
 - **Lane ID / scripts:** `react-chart-6` — `react-chart/`
 
@@ -2900,6 +2905,7 @@ Direction: one deep `objectProperty` resolver for axis and legend `values` and `
 
 - **Location:** `packages/react/src/interaction.ts:225-255`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #198 (28331f3 40ae9db 6471d4c). Fixed: pan/zoom/keyboard move each scale as Vega-Lite bind:"scales" does (log, pow, symlog in their space; linear, sqrt, time, utc linearly) through core's one scale-space implementation (internal lean entry), equal to vega-util bit for bit and to vega for real events, sqrt included.
 - **Area:** react / <Chart>, shells, SSR
 - **Lane ID / scripts:** `react-chart-8` — `react-chart/`
 
@@ -2913,6 +2919,7 @@ Direction: one deep `objectProperty` resolver for axis and legend `values` and `
 
 - **Location:** `packages/react/src/ChartCore.tsx:251`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #198 (2d95532 750187f). Fixed: radio groups are named with the chart's useId; conformance test checks two charts on one page.
 - **Area:** react / <Chart>, shells, SSR
 - **Lane ID / scripts:** `react-chart-11` — `react-chart/`
 
@@ -2925,6 +2932,7 @@ Direction: one deep `objectProperty` resolver for axis and legend `values` and `
 
 - **Location:** `packages/react/src/ChartCore.tsx:626-629`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #198 (f75cbb0). Fixed: signals are merged at read time (no post-commit effect re-evaluation) and onError is reported once per error entered (StrictMode and re-renders included).
 - **Area:** react / <Chart>, shells, SSR
 - **Lane ID / scripts:** `react-chart-12` — `react-chart/`
 
@@ -4222,6 +4230,7 @@ Source line not traced (found by render); revealed by `packages/conformance/test
 
 - **Location:** `packages/react/src/ChartCore.tsx:190-192`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #198 (2d95532 f97895c). Fixed: select options of any type (arrays, null, booleans) are labelled as vega labels them and written back as themselves; differential vs vega-view bind (conformance/react-binds-vs-vega), with the a11y tree on and off, controls re-found before every edit, and Vega-Lite selections bound to inputs.
 - **Area:** gallery / official Vega-Lite examples II
 - **Lane ID / scripts:** `gallery4-3` — `gallery4/`
 
@@ -5492,6 +5501,7 @@ Direction: skip a group item whose bounds miss the box, as Vega does, and restor
 
 - **Location:** `packages/react/src/ChartCore.tsx:1449-1475`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #198 (4816311). Fixed: one isOwnControl predicate guards pointerdown, wheel, keydown and dblclick, so keys/double-clicks in bound inputs are the inputs'.
 - **Area:** react / <Chart>, shells, SSR
 - **Lane ID / scripts:** `react-chart-3` — `react-chart/`
 
@@ -5661,6 +5671,7 @@ CONFIRMED-RUN.
 
 - **Location:** `packages/react/src/ChartCore.tsx:1153`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #198 (28331f3 40ae9db). Fixed: the wheel stretch is Vega-Lite's 1.001^(deltaY*16^deltaMode) with or without a modifier key (differential includes Ctrl+wheel); no preventDefault when nothing can zoom.
 - **Area:** react / <Chart>, shells, SSR
 - **Lane ID / scripts:** `react-chart-18` — `react-chart/`
 
@@ -5670,6 +5681,7 @@ CONFIRMED-RUN.
 
 - **Location:** `packages/react/src/ChartCore.tsx:1609-1618`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #198 (4816311). Fixed: a handle kept past unmount is inert (no notifications, null scene/svg/info/view).
 - **Area:** react / <Chart>, shells, SSR
 - **Lane ID / scripts:** `react-chart-20` — `react-chart/`
 
@@ -5679,6 +5691,7 @@ CONFIRMED-RUN.
 
 - **Location:** `packages/react/src/interaction.ts:167-203`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #198 (4816311). Fixed: the persisted rectangle is clipped to the plot and invalid intervals are reported and not drawn.
 - **Area:** react / <Chart>, shells, SSR
 - **Lane ID / scripts:** `react-chart-21` — `react-chart/`
 
@@ -5688,6 +5701,7 @@ CONFIRMED-RUN.
 
 - **Location:** `packages/react/src/ChartCore.tsx:1645`
 - **Status:** PLAUSIBLE
+- **Resolution:** FIXED in #198 (4816311). Fixed: touch-action none whenever the chart takes drags (brush or pan), host style still wins.
 - **Area:** react / <Chart>, shells, SSR
 - **Lane ID / scripts:** `react-chart-25` — `react-chart/`
 
@@ -6154,6 +6168,7 @@ Spec `vega/zoomable-world-map.vg.json:32` (`copy('projection')`), `:40`, `:47`, 
 
 - **Location:** `packages/react/src/ChartCore.tsx:805-807`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #198 (f75cbb0 4b56baa ceef5d4). Fixed: signals is controlled by content with latest-writer-wins and release on removal (DECISIONS Q19), checked against an independent model over 60 generated sequences; the event loop's whole signal set reaches the evaluation (unreported pins included), checked against vega by signal-dataflow-vs-vega.
 - **Area:** react / <Chart>, shells, SSR (also categories 4)
 - **Lane ID / scripts:** `react-chart-7` — `react-chart/`
 
@@ -6168,6 +6183,7 @@ Spec `vega/zoomable-world-map.vg.json:32` (`copy('projection')`), `:40`, `:47`, 
 
 - **Location:** `packages/react/src/ChartCore.tsx:1075-1077`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #198 (4816311). Fixed: select counts as a selection prop, a click reporting onSelect(null) clears the drawn interval, and a controlled brush={null} wins.
 - **Area:** react / <Chart>, shells, SSR (also categories 4)
 - **Lane ID / scripts:** `react-chart-9` — `react-chart/`
 
@@ -6181,6 +6197,7 @@ Spec `vega/zoomable-world-map.vg.json:32` (`copy('projection')`), `:40`, `:47`, 
 
 - **Location:** `packages/react/src/ChartCore.tsx:1643-1646`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #198 (4816311 3e4b8d1). Fixed: the host style is applied last; tested with a11y, panZoom and brush on.
 - **Area:** react / <Chart>, shells, SSR (also categories 8)
 - **Lane ID / scripts:** `react-chart-10` — `react-chart/`
 
@@ -6192,6 +6209,7 @@ Spec `vega/zoomable-world-map.vg.json:32` (`copy('projection')`), `:40`, `:47`, 
 
 - **Location:** `packages/react/src/ChartCore.tsx:188-196`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #198 (2d95532 f97895c). Fixed: bind.labels, generic input types with safe attributes, string values from number fields (cleared = ""), null select values, mid-range sliders and debounce follow vega-view; bind.element not honoured and reported (security, LIMITS.md); react-binds-vs-vega also runs with the a11y tree on and on Vega-Lite bound selections.
 - **Area:** react / <Chart>, shells, SSR
 - **Lane ID / scripts:** `react-chart-14` — `react-chart/`
 
@@ -7158,6 +7176,7 @@ Status: **CONFIRMED-RUN** — `m1.out`, `repro.mjs` "G10".
 
 - **Location:** `packages/react/src/ChartCore.tsx:1637`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #198 (f75cbb0). Fixed: the error state keeps className, style and ariaLabel (it is inside the chart's element).
 - **Area:** react / <Chart>, shells, SSR
 - **Lane ID / scripts:** `react-chart-19` — `react-chart/`
 
@@ -8649,6 +8668,7 @@ Status: **CONFIRMED-RUN** — `repro.mjs` "G8", `e1.out` (`*/clip`, `*/blend`).
 
 - **Location:** `packages/react/src/index.ts:62-79`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #198 (28331f3). Fixed: positionalScales and PositionalScales are exported; helpers take the live scale; cursorZoom is the zoom the component uses.
 - **Area:** react / <Chart>, shells, SSR (also categories 8)
 - **Lane ID / scripts:** `react-chart-22` — `react-chart/`
 
@@ -8993,6 +9013,7 @@ No workflow sets `ASTER_ORACLE_SEEDS` (grep: only the test, `RUNBOOK.md`, `ARCHI
 
 - **Location:** `packages/react/src/ChartCore.tsx:522-525`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #198 (4816311). Fixed: controlled view/brush/interval axes are checked (two finite, different numbers), reported once via onError and left out.
 - **Area:** react / <Chart>, shells, SSR
 - **Lane ID / scripts:** `react-chart-15` — `react-chart/`
 
@@ -9548,6 +9569,7 @@ Direction: validate once where pulses are normalised (`runtime.ts:949-960`) with
 
 - **Location:** `packages/react/src/ChartCore.tsx:57`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #198 (3e4b8d1). Fixed: devicePixelRatio is a store that listens to the resolution media query (addEventListener or addListener).
 - **Area:** react / <Chart>, shells, SSR
 - **Lane ID / scripts:** `react-chart-24` — `react-chart/`
 
@@ -10635,6 +10657,7 @@ Run with `node --max-old-space-size=400 $S/probe.mjs <name> nolimits`.
 
 - **Location:** `packages/react/src/ChartCore.tsx:585-586`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #198 (f75cbb0). Fixed: data is checked at the boundary (useDataInput): undefined rows = not given, any other non-array is a TypeError naming the dataset in the error state.
 - **Area:** react / <Chart>, shells, SSR (also categories 8)
 - **Lane ID / scripts:** `react-chart-13` — `react-chart/`
 
@@ -10889,6 +10912,7 @@ A timer of an element that was never in the document has no self-stop (`wasConne
 
 - **Location:** `packages/react/src/ChartCore.tsx:1379`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #198 (4816311). Fixed: moveA11yFocus escapes the node id with CSS.escape like the other sites.
 - **Area:** react / <Chart>, shells, SSR
 - **Lane ID / scripts:** `react-chart-17` — `react-chart/`
 
@@ -11152,6 +11176,7 @@ Direction: say "a resolver that applies the `browser` condition" instead of "a b
 
 - **Location:** `docs/adr/0007-svgchart-shell-over-lazy-loading.md:21`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #198 (3ee088d 28331f3). Fixed: ADRs 0002/0003/0007, ARCHITECTURE, API.md and the interactive/maxZoom TSDoc amended to the code.
 - **Area:** react / <Chart>, shells, SSR
 - **Lane ID / scripts:** `react-chart-16` — `react-chart/`
 
@@ -13348,6 +13373,7 @@ CONFIRMED-RUN.
 
 - **Location:** `packages/react/src/ChartCore.tsx:462-482`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #198 (f75cbb0). Fixed: width/height that are not finite >= 0 numbers or 'container' put the chart in its error state with a TypeError.
 - **Area:** react / <Chart>, shells, SSR
 - **Lane ID / scripts:** `react-chart-26` — `react-chart/`
 
@@ -13357,6 +13383,7 @@ CONFIRMED-RUN.
 
 - **Location:** `packages/react/src/Chart.ssr.test.tsx:47-52`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #198 (3e4b8d1 28331f3 4816311 de9ba6b). Fixed: tests for incremental={false}, time/utc/log pan-zoom-brush, the select prop, cross-process hydration, and png on <SvgChart>.
 - **Area:** react / <Chart>, shells, SSR
 - **Lane ID / scripts:** `react-chart-27` — `react-chart/`
 
