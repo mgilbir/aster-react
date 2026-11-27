@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 165 of 766 findings resolved (163 fixed, 1 already fixed on main, 1 disputed with evidence); 601 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 192 of 766 findings resolved (185 fixed, 6 already fixed on main, 1 disputed with evidence); 574 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -61,7 +61,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C12 | High | core / loading, URL policy, add-ons | A wide csv header plus many empty lines allocates `columns × rows` cells before any limit is read | `packages/core/src/dsv.ts:166-167` | CONFIRMED (run; re-run by lead) → FIXED (#192) |
 | C13 | High | core / loading, URL policy, add-ons | The default "non-public hosts are denied" rule lets dotless and internal names through (`http://metadata/`, `*.svc`, `.lan`, `.corp`) and four IPv6 forms | `packages/core/src/addon-load.ts:181-201` | CONFIRMED (run; re-run by lead) → FIXED (#192) |
 | C14 | High | core / loading, URL policy, add-ons | `loadSpecData(spec, {limits})` evaluates the spec's signal expressions with no limits | `packages/core/src/addon-load.ts:389-415` | CONFIRMED (run; re-run by lead) → FIXED (#192) |
-| C15 | High | core / compiler, transforms | `heatmap` over a data-supplied grid loops without bound; ceilings and `limits` do not stop it | `packages/core/src/raster-transforms.ts:183-205` | CONFIRMED (run; re-run by lead) |
+| C15 | High | core / compiler, transforms | `heatmap` over a data-supplied grid loops without bound; ceilings and `limits` do not stop it | `packages/core/src/raster-transforms.ts:183-205` | CONFIRMED (run; re-run by lead) → ALREADY FIXED (#194) |
 | C16 | High | core / layout transforms, rasterizer | A tiny `strokeDash` on a mark that `label` draws kills the process | `packages/core/src/raster-stroke.ts:75` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
 | C17 | High | core / layout transforms, rasterizer | `isocontour` sizes its scan by the `width`/`height` a data row carries, not by `values.length` | `packages/core/src/contour.ts:179-192` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
 | C18 | High | core / scales, time, format, colour | spec text reaches the `Function` constructor | `packages/core/src/scales.ts:103-107` | CONFIRMED (run; re-run by lead) |
@@ -81,13 +81,13 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C32 | High | core / expressions, regex screen | A regex literal with `g` or `y` is a single shared `RegExp`, so `test` advances `lastIndex` from row to row | `packages/core/src/expr-interpreter.ts:445-448` | CONFIRMED (run; re-run by lead) |
 | C33 | High | core / loading, URL policy, add-ons | `format: {type:'topojson', feature: X}` throws a raw `TypeError` when `X` is a single geometry rather than a `GeometryCollection` | `packages/core/src/addon-load.ts:52-55` | CONFIRMED (run; re-run by lead) → FIXED (#192) |
 | C34 | High | core / loading, URL policy, add-ons | Mesh `format.filter` (`'interior'` / `'exterior'`) is ignored, and the mesh row has a different shape from vega's | `packages/core/src/addon-load.ts:56-58` | CONFIRMED (run; re-run by lead) → FIXED (#192) |
-| C35 | High | core / compiler, transforms | object-form field parameters are accepted and silently mis-read by almost every transform | `packages/core/src/row-keys.ts:35-36` | CONFIRMED (run; re-run by lead) |
-| C36 | High | core / compiler, transforms | `padding`, `background`, `autosize` as `{signal}` are ignored or stringified | `packages/core/src/compiler.ts:59` | CONFIRMED (run; re-run by lead) |
+| C35 | High | core / compiler, transforms | object-form field parameters are accepted and silently mis-read by almost every transform | `packages/core/src/row-keys.ts:35-36` | CONFIRMED (run; re-run by lead) → FIXED (#194) |
+| C36 | High | core / compiler, transforms | `padding`, `background`, `autosize` as `{signal}` are ignored or stringified | `packages/core/src/compiler.ts:59` | CONFIRMED (run; re-run by lead) → ALREADY FIXED (#194) |
 | C37 | High | core / SVG, DOM patcher, canvas, a11y | Canvas symbol batching changes the picture for translucent, blended or filled-and-stroked overlapping symbols | `packages/core/src/canvas.ts:1123-1178` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
 | C38 | High | core / SVG, DOM patcher, canvas, a11y | A per-call text-metrics provider is not in force when the scene is serialised | `packages/core/src/index.ts:107-124` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
 | C39 | High | core / hit index, bounds, geometry | A canvas-mode hit index throws on a scene that crossed a structured clone and has an axis or legend | `packages/core/src/bounds.ts:783` | CONFIRMED (run; re-run by lead) |
 | C40 | High | core / signal event loop, transitions | Per-owner state (`{signal}`-handler memory, between/throttle/debounce state, timer streams) is keyed by text (`<scope>\|<index>:<name>:<i>:<JSON events>`), not by chart | `packages/core/src/signals.ts:254` | CONFIRMED (run; re-run by lead) |
-| C41 | High | core / axes, legends, titles | `config.locale` is silently ignored | `packages/core/src/runtime.ts:8022` | CONFIRMED (run; re-run by lead) |
+| C41 | High | core / axes, legends, titles | `config.locale` is silently ignored | `packages/core/src/runtime.ts:8022` | CONFIRMED (run; re-run by lead) → FIXED (#194) |
 | C42 | High | core / geo | a fitted projection goes stale for every consumer whose own rows did not change | `packages/core/src/runtime.ts:2116` | CONFIRMED (run; re-run by lead) |
 | C43 | High | react / <Chart>, shells, SSR | `incremental={false}` renders a blank chart for any dense symbol mark | `packages/react/src/ChartCore.tsx:754` | CONFIRMED (run; re-run by lead) |
 | C44 | High | react / <Chart>, shells, SSR | Wheel/pinch zoom and the interval brush skip `time` / `utc` scales | `packages/react/src/ChartCore.tsx:1130-1131` | CONFIRMED (run; re-run by lead) |
@@ -137,8 +137,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C88 | Medium | core / session, stream, limits | Spec-controlled amplification with no ceiling when no `limits` are given | `packages/core/src/arr.ts:50` | CONFIRMED (run) → FIXED (#193) |
 | C89 | Medium | core / expressions, regex screen | `sequence()` with a count ≥ 2^32 skips the built-in ceiling and then wraps via `count \| 0` | `packages/core/src/expression.ts:33-40` | CONFIRMED (run) |
 | C90 | Medium | core / loading, URL policy, add-ons | A mesh geometry naming a huge arc index makes `arcsOf` scan a sparse array from 0 to that index | `packages/core/src/topojson.ts:202-209` | CONFIRMED (run) → FIXED (#192) |
-| C91 | Medium | core / compiler, transforms | `aggregate` `cross: true` builds the whole product before any limit is checked | `packages/core/src/transform-agg.ts:586-604` | CONFIRMED (run) |
-| C92 | Medium | core / compiler, transforms | `regression` `poly` with a large `order` is unmetered | `packages/core/src/curve-fits.ts:220-231` | CONFIRMED (run) |
+| C91 | Medium | core / compiler, transforms | `aggregate` `cross: true` builds the whole product before any limit is checked | `packages/core/src/transform-agg.ts:586-604` | CONFIRMED (run) → ALREADY FIXED (#194) |
+| C92 | Medium | core / compiler, transforms | `regression` `poly` with a large `order` is unmetered | `packages/core/src/curve-fits.ts:220-231` | CONFIRMED (run) → ALREADY FIXED (#194) |
 | C93 | Medium | core / layout transforms, rasterizer | `label` meters only its occupancy bitmap; the canvases and loops around it are unbounded | `packages/core/src/label.ts:168-171` | CONFIRMED (run) → FIXED (#193) |
 | C94 | Medium | core / layout transforms, rasterizer | A round join or cap of a very wide stroke builds millions of points per disk | `packages/core/src/raster-stroke.ts:101-106` | CONFIRMED (run) → FIXED (#193) |
 | C95 | Medium | core / layout transforms, rasterizer | The word cloud's board is `(size[0] >> 5) * size[1]` int32 with no meter (450 MB accepted under `maxRows: 1000`) | `packages/core/src/wordcloud.ts:298-300` | CONFIRMED (run) → FIXED (#193) |
@@ -174,9 +174,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C125 | Medium | core / expressions, regex screen | `in` (and `instanceof`) parses, passes the compile check, and throws at evaluation; Vega evaluates it | `packages/core/src/expr-interpreter.ts:262-265` | CONFIRMED (run; re-run by lead) |
 | C126 | Medium | core / expressions, regex screen | Several expression sites are not read by the compile-time walk | `packages/core/src/spec-expressions.ts:248-279` | CONFIRMED (run) |
 | C127 | Medium | core / loading, URL policy, add-ons | The add-on detector misses expressions the engine evaluates | `packages/core/src/addons.ts:73` | CONFIRMED (run) → FIXED (#192) |
-| C128 | Medium | core / compiler, transforms | `config.style.<marktype>` applies to every mark of that type | `packages/core/src/compiler.ts:647-648` | CONFIRMED (run; re-run by lead) |
-| C129 | Medium | core / compiler, transforms | an update-only mark loses every spatial default from config and styles | `packages/core/src/compiler.ts:705-712` | CONFIRMED (run) |
-| C130 | Medium | core / compiler, transforms | `dotbin` diverges on missing values, `step: 0`, truthy `smooth`, and never publishes its `signal` | `packages/core/src/transform-extra.ts:385` | CONFIRMED (run) |
+| C128 | Medium | core / compiler, transforms | `config.style.<marktype>` applies to every mark of that type | `packages/core/src/compiler.ts:647-648` | CONFIRMED (run; re-run by lead) → FIXED (#194) |
+| C129 | Medium | core / compiler, transforms | an update-only mark loses every spatial default from config and styles | `packages/core/src/compiler.ts:705-712` | CONFIRMED (run) → FIXED (#194) |
+| C130 | Medium | core / compiler, transforms | `dotbin` diverges on missing values, `step: 0`, truthy `smooth`, and never publishes its `signal` | `packages/core/src/transform-extra.ts:385` | CONFIRMED (run) → FIXED (#194) |
 | C131 | Medium | core / layout transforms, rasterizer | Sort ties in the hierarchy layouts follow row position; Vega follows tuple id | `packages/core/src/hierarchy-layout.ts:47-53` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
 | C132 | Medium | core / scales, time, format, colour | calendar intervals that never return | `packages/core/src/time.ts:116-134` | CONFIRMED (run) |
 | C133 | Medium | core / scales, time, format, colour | `{signal: "true" \| "false" \| "null"}` in a scale property is refused as `Unrecognized signal name` | `packages/core/src/scale-domain.ts:53-64` | CONFIRMED (run; re-run by lead) |
@@ -193,8 +193,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C144 | Medium | core / signal event loop, transitions | The reorder walk has no visited set, and its step bound (`ORDER_LIMIT`) is reported as a cycle | `packages/core/src/signal-propagation.ts:47` | CONFIRMED (run; re-run by lead) |
 | C145 | Medium | core / signal event loop, transitions | A handler cycle that Vega refuses is logged on every bind and then run | `packages/core/src/signals.ts:1345` | CONFIRMED (run) |
 | C146 | Medium | core / signal event loop, transitions | Retargeting a running transition to a scene that draws like its start jumps | `packages/core/src/transition.ts:772-781` | CONFIRMED (run) |
-| C147 | Medium | core / axes, legends, titles | `config.legend.layout` signals are never resolved | `packages/core/src/compiler.ts:140` | CONFIRMED (run; re-run by lead) |
-| C148 | Medium | core / axes, legends, titles | nested signals in axis `values` and in `tickCount` objects are not read | `packages/core/src/guide-model.ts:12` | CONFIRMED (run; re-run by lead) |
+| C147 | Medium | core / axes, legends, titles | `config.legend.layout` signals are never resolved | `packages/core/src/compiler.ts:140` | CONFIRMED (run; re-run by lead) → FIXED (#194) |
+| C148 | Medium | core / axes, legends, titles | nested signals in axis `values` and in `tickCount` objects are not read | `packages/core/src/guide-model.ts:12` | CONFIRMED (run; re-run by lead) → FIXED (#194) |
 | C149 | Medium | core / geo | `geoshape` without a projection uses a second path writer that disagrees with the engine and with Vega | `packages/core/src/transform.ts:279-284` | CONFIRMED (run; re-run by lead) |
 | C150 | Medium | core / geo | a group mark's shape clip clips to the group rectangle | `packages/core/src/runtime.ts:6136-6156` | CONFIRMED (run; re-run by lead) |
 | C151 | Medium | core / geo | a group's own dataset cannot use the group's own projection | `packages/core/src/transform-extra.ts:438-440` | CONFIRMED (run; re-run by lead) |
@@ -284,7 +284,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C235 | Medium | core / loading, URL policy, add-ons | `timeoutMs`, `maxTimeMs` and `signal` depend on the `fetch` honouring `init.signal` | `packages/core/src/addon-load.ts:260-273` | CONFIRMED (run) → FIXED (#192) |
 | C236 | Medium | core / loading, URL policy, add-ons | No cap on the number of url datasets, no total-bytes budget, no de-duplication | `packages/core/src/addon-load.ts:516-531` | CONFIRMED (run) → FIXED (#192) |
 | C237 | Medium | core / loading, URL policy, add-ons | `LoadOptions` numbers are not validated | `packages/core/src/addon-load.ts:509-513` | CONFIRMED (run) → FIXED (#192) |
-| C238 | Medium | core / compiler, transforms | unknown or missing mark `type` is compiled and rendered silently | `packages/core/src/compiler.ts:760-761` | CONFIRMED (run; re-run by lead) |
+| C238 | Medium | core / compiler, transforms | unknown or missing mark `type` is compiled and rendered silently | `packages/core/src/compiler.ts:760-761` | CONFIRMED (run; re-run by lead) → FIXED (#194) |
 | C239 | Medium | core / layout transforms, rasterizer | The force simulation's own loops are outside `maxTimeMs` | `packages/core/src/force-layout.ts:493` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
 | C240 | Medium | core / layout transforms, rasterizer | Assigning holes to outer rings is quadratic and unmetered | `packages/core/src/contour.ts:202-205` | CONFIRMED (run) → FIXED (#193) |
 | C241 | Medium | core / SVG, DOM patcher, canvas, a11y | The accessible tree has no overall bound | `packages/core/src/a11y.ts:416` | CONFIRMED (run) → FIXED (#191) |
@@ -450,8 +450,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C401 | Low | core / session, stream, limits | `modify`: a `toggle` that is an array is inserted as one tuple | `packages/core/src/modify.ts:101` | CONFIRMED (traced) → FIXED (#193) |
 | C402 | Low | core / loading, URL policy, add-ons | raw errors for malformed input (all CONFIRMED-RUN) | `packages/core/src/topojson.ts:124-126` | CONFIRMED (traced) → FIXED (#192) |
 | C403 | Low | core / loading, URL policy, add-ons | `format.parse` is applied to the Topology object before decoding, so `parse: "auto"` reports the object as not found | `packages/core/src/addon-load.ts:42-45` | CONFIRMED (run) → FIXED (#192) |
-| C404 | Low | core / compiler, transforms | `pie` uses `??` where Vega uses `\|\|` | `packages/core/src/transform-extra.ts:283` | CONFIRMED (run) |
-| C405 | Low | core / compiler, transforms | `applyTransforms` charges `maxGeneratedRows` once per later step | `packages/core/src/transform.ts:164-165` | CONFIRMED (traced) |
+| C404 | Low | core / compiler, transforms | `pie` uses `??` where Vega uses `\|\|` | `packages/core/src/transform-extra.ts:283` | CONFIRMED (run) → FIXED (#194) |
+| C405 | Low | core / compiler, transforms | `applyTransforms` charges `maxGeneratedRows` once per later step | `packages/core/src/transform.ts:164-165` | CONFIRMED (traced) → FIXED (#194) |
 | C406 | Low | core / layout transforms, rasterizer | A data-dependent pack failure aborts the whole chart | `packages/core/src/circle-pack.ts:198` | CONFIRMED (run) → FIXED (#193) |
 | C407 | Low | core / layout transforms, rasterizer | `voronoi` with a non-finite `size` silently uses the default ±1e5 extent (Vega logs `invalid bounds`) | `packages/core/src/transform.ts:420-428` | CONFIRMED (run) → FIXED (#193) |
 | C408 | Low | core / scales, time, format, colour | an unused `sequential` scale with `range: []` makes `renderSpec` throw a raw TypeError | `packages/core/src/scale-warped.ts:237-240` | CONFIRMED (run) |
@@ -467,10 +467,10 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C418 | Low | core / hit index, bounds, geometry | Bounds drift from `vega.boundMark` on three uncommon item shapes | `packages/core/src/bounds.ts:286-289` | CONFIRMED (run) |
 | C419 | Low | core / signal event loop, transitions | The selection unit-count cache is trusted on `(length, first, last)`; replacing a middle tuple in place leaves stale counts | `packages/core/src/selections.ts:104-111` | CONFIRMED (run) |
 | C420 | Low | core / signal event loop, transitions | With `op` not a literal `intersect`, Vega requires every tuple to match; Aster always combines per unit | `packages/core/src/selections.ts:117-141` | CONFIRMED (run) |
-| C421 | Low | core / axes, legends, titles | non-standard `tickCount` values | `packages/core/src/runtime.ts:7971` | CONFIRMED (run; re-run by lead) |
-| C422 | Low | core / axes, legends, titles | a legend's ARIA caption says "titled '…'" where Vega's does not | `packages/core/src/runtime.ts:1966` | CONFIRMED (run; re-run by lead) |
-| C423 | Low | core / axes, legends, titles | a `null` / `undefined` line in a text array prints as "null" / "undefined" | `packages/core/src/render.ts:623` | CONFIRMED (run; re-run by lead) |
-| C424 | Low | core / axes, legends, titles | What the guide differentials cannot see (Vega-refused specs skip Aster, logs are not compared, three tests count nothing) | `packages/conformance/src/guide-compare.ts:33-36` | CONFIRMED (traced) |
+| C421 | Low | core / axes, legends, titles | non-standard `tickCount` values | `packages/core/src/runtime.ts:7971` | CONFIRMED (run; re-run by lead) → FIXED (#194) |
+| C422 | Low | core / axes, legends, titles | a legend's ARIA caption says "titled '…'" where Vega's does not | `packages/core/src/runtime.ts:1966` | CONFIRMED (run; re-run by lead) → FIXED (#194) |
+| C423 | Low | core / axes, legends, titles | a `null` / `undefined` line in a text array prints as "null" / "undefined" | `packages/core/src/render.ts:623` | CONFIRMED (run; re-run by lead) → FIXED (#194) |
+| C424 | Low | core / axes, legends, titles | What the guide differentials cannot see (Vega-refused specs skip Aster, logs are not compared, three tests count nothing) | `packages/conformance/src/guide-compare.ts:33-36` | CONFIRMED (traced) → FIXED (#194) |
 | C425 | Low | core / geo | a shape item with no geometry is written with `d=""` where Vega writes no `d` | `packages/core/src/geo.ts:103-105` | CONFIRMED (run) |
 | C426 | Low | vl / composition | `autosize: "fit"` with a step-sized width is not narrowed | `packages/vl/src/compile.ts:843` | CONFIRMED (run) |
 | C427 | Low | vl / composition | Top-level chrome: `usermeta` dropped, empty-text title emitted, `background: null` becomes white, `title: 42` drawn | `packages/vl/src/compile.ts:1392-1411` | CONFIRMED (run) |
@@ -550,7 +550,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C501 | Low | core / runtime: marks, encode, groups | A failed import of the pulse part is swallowed for the life of the page with no log | `packages/core/src/shell-setup.ts:20` | CONFIRMED (traced) |
 | C502 | Low | core / session, stream, limits | Stream bounds accept `NaN` | `packages/core/src/stream.ts:443-444` | CONFIRMED (run) → FIXED (#193) |
 | C503 | Low | core / session, stream, limits | A session's no-op evaluate still costs O(spec) | `packages/core/src/session.ts:345` | CONFIRMED (traced) |
-| C504 | Low | core / compiler, transforms | wrong-typed `width` / `padding` give garbage | `packages/core/src/compiler.ts:69-70` | CONFIRMED (run) |
+| C504 | Low | core / compiler, transforms | wrong-typed `width` / `padding` give garbage | `packages/core/src/compiler.ts:69-70` | CONFIRMED (run) → ALREADY FIXED (#194) |
 | C505 | Low | react / <Chart>, shells, SSR | `devicePixelRatio` is read through a store that never notifies | `packages/react/src/ChartCore.tsx:57` | CONFIRMED (traced) |
 | C506 | Low | react / hooks, streams, workers | streams are not closed on unmount; `push` still answers `true` | `packages/react/src/useChartStream.ts:151-158` | CONFIRMED (run) |
 | C507 | Low | conformance / harness | no per-spec time bound in the Node runners | `packages/conformance/src/run.ts:58-74` | CONFIRMED (traced) |
@@ -579,7 +579,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C530 | Low | core / expressions, regex screen | `guardArgs` exempts any function whose name starts with `is`, host-registered ones included | `packages/core/src/expr-interpreter.ts:331` | CONFIRMED (traced) |
 | C531 | Low | core / loading, URL policy, add-ons | A `{signal}` url resolves against top-level spec defaults only (no group scope, no host signals, no reload) | `packages/core/src/addon-load.ts:389-403` | CONFIRMED (run) |
 | C532 | Low | core / hit index, bounds, geometry | `createPointMapper().map` returns raw client coordinates when there is no element yet | `packages/core/src/pointer.ts:59` | CONFIRMED (traced) |
-| C533 | Low | core / axes, legends, titles | `clip` and `blend` set through `encode.axis` / `encode.legend` / `encode.entries` are dropped | `packages/core/src/guide-axis.ts:324` | CONFIRMED (run; re-run by lead) |
+| C533 | Low | core / axes, legends, titles | `clip` and `blend` set through `encode.axis` / `encode.legend` / `encode.entries` are dropped | `packages/core/src/guide-axis.ts:324` | CONFIRMED (run; re-run by lead) → FIXED (#194) |
 | C534 | Low | react / <Chart>, shells, SSR | The exported helpers need `PositionalScales`, which a host cannot obtain | `packages/react/src/index.ts:62-79` | CONFIRMED (traced) |
 | C535 | Low | vl / scales, stacking, guides | `axis.style` is emitted as a raw Vega `style`; vega-lite resolves `config.style.<name>` into axis properties | `packages/vl/src/compile.ts:5906-5910` | CONFIRMED (run) |
 | C536 | Low | vl / mark encoding | `mark.ariaRole` is dropped; vega-lite encodes it | `packages/vl/src/compile.ts:6915` | CONFIRMED (run) |
@@ -590,16 +590,16 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C541 | Low | core / runtime: marks, encode, groups | The instance-mark diff misses a nested change that the top-level path sees | `packages/core/src/runtime.ts:5653-5654` | CONFIRMED (run) |
 | C542 | Low | core / runtime: marks, encode, groups | Leaf marks fall back to `enter`; group marks do not | `packages/core/src/runtime.ts:5322` | CONFIRMED (traced) |
 | C543 | Low | core / loading, URL policy, add-ons | Process-global mutable tables are public API (`withdrawFunctions`, writable `dataFormatRegistry`, `typeParsers`) | `packages/core/src/addons.ts:54-56` | CONFIRMED (traced) |
-| C544 | Low | core / compiler, transforms | a transform `signal` is declared for every transform but set by five | `packages/core/src/transform.ts:245-248` | CONFIRMED (run) |
-| C545 | Low | core / compiler, transforms | Dead or misleading code in `compiler.ts` (unused `scales` parameter, `bar`/`tick` mark types, "never aliases the spec") | `packages/core/src/compiler.ts:604` | CONFIRMED (traced) |
-| C546 | Low | core / compiler, transforms | `__proto__` as an output name is guarded in `formula` only | `packages/core/src/transform.ts:225` | CONFIRMED (run) |
+| C544 | Low | core / compiler, transforms | a transform `signal` is declared for every transform but set by five | `packages/core/src/transform.ts:245-248` | CONFIRMED (run) → FIXED (#194) |
+| C545 | Low | core / compiler, transforms | Dead or misleading code in `compiler.ts` (unused `scales` parameter, `bar`/`tick` mark types, "never aliases the spec") | `packages/core/src/compiler.ts:604` | CONFIRMED (traced) → FIXED (#194) |
+| C546 | Low | core / compiler, transforms | `__proto__` as an output name is guarded in `formula` only | `packages/core/src/transform.ts:225` | CONFIRMED (run) → FIXED (#194) |
 | C547 | Low | core / layout transforms, rasterizer | `byType.circle` paints a `circle` marktype nothing produces (dead code) | `packages/core/src/label-draw.ts:117-124` | PLAUSIBLE → DISPUTED (#193) |
 | C548 | Low | core / scales, time, format, colour | dead second "default locale" in the engines | `packages/core/src/format.ts:432` | CONFIRMED (traced) |
 | C549 | Low | core / scales, time, format, colour | `CONTINUOUS_TYPES` is a hand list that disagrees with the registry | `packages/core/src/scales.ts:33-34` | CONFIRMED (traced) |
 | C550 | Low | core / SVG, DOM patcher, canvas, a11y | A non-numeric `angle` is written escaped by the DOM builder | `packages/core/src/render.ts:1119-1122` | CONFIRMED (run) → FIXED (#191) |
 | C551 | Low | core / SVG, DOM patcher, canvas, a11y | Canvas event tables are plain-object lookups by event type; two `fontString` implementations disagree | `packages/core/src/canvas-events.ts:135` | CONFIRMED (traced) → FIXED (#191) |
 | C552 | Low | core / hit index, bounds, geometry | Dead axis-bounds code with a title-length nudge; wrong comment about `shape: "point"`; unbounded "short" side list | `packages/core/src/bounds.ts:784-853` | CONFIRMED (run) |
-| C553 | Low | core / axes, legends, titles | `guide-model.ts` and the runtime disagree with Vega on what is parsed in 5 of 1018 probes (`axis.grid`, `config.axis.labelBound`) | `packages/core/src/guide-model.ts:50` | CONFIRMED (run) |
+| C553 | Low | core / axes, legends, titles | `guide-model.ts` and the runtime disagree with Vega on what is parsed in 5 of 1018 probes (`axis.grid`, `config.axis.labelBound`) | `packages/core/src/guide-model.ts:50` | CONFIRMED (run) → FIXED (#194) |
 | C554 | Low | react / <Chart>, shells, SSR | The error state drops `className` and `ariaLabel` | `packages/react/src/ChartCore.tsx:1637` | CONFIRMED (run) |
 | C555 | Low | react / hooks, streams, workers | one worker `error` event fails every hook sharing the worker | `packages/react/src/worker.ts:300-303` | CONFIRMED (traced) |
 | C556 | Low | vl / composition | Composition hygiene: discarded `firstY`, `resolve.scale` parsed three times, bare-prefix `cellPrefixed`, misplaced doc comment | `packages/vl/src/compile.ts:1085` | CONFIRMED (traced) |
@@ -674,7 +674,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C625 | Low | core / runtime: datasets, scales, fit | Test gaps: the incremental oracle generates no text-less text mark, failing step, nested cross-dataset read or pulse under `limits` | `packages/core/src/incremental-oracle.test.ts:196-208` | CONFIRMED (traced) |
 | C626 | Low | core / loading, URL policy, add-ons | An unknown `format.type` (`"jsno"`) is reported as "load the addon first", also with the add-on loaded | `packages/core/src/data-format.ts:116-119` | CONFIRMED (run) → FIXED (#192) |
 | C627 | Low | core / loading, URL policy, add-ons | `loadAddons(["nope"])` throws synchronously instead of rejecting | `packages/core/src/addons.ts:545-565` | CONFIRMED (run) → FIXED (#192) |
-| C628 | Low | core / compiler, transforms | Test gaps: no object-form field parameter, no hostile raster grid, no mark `type` test, thin `dotbin` cases | `packages/conformance/scripts/transform-cases.mjs:1` | CONFIRMED (traced) |
+| C628 | Low | core / compiler, transforms | Test gaps: no object-form field parameter, no hostile raster grid, no mark `type` test, thin `dotbin` cases | `packages/conformance/scripts/transform-cases.mjs:1` | CONFIRMED (traced) → FIXED (#194) |
 | C629 | Low | core / signal event loop, transitions | Handler shapes the loop rejects (`encode` updates, empty `merge`, invalid CSS source) are logged on every bind instead of refused once | `packages/core/src/signals.ts:1178` | CONFIRMED (run) |
 | C630 | Low | react / <Chart>, shells, SSR | Size props are not validated | `packages/react/src/ChartCore.tsx:462-482` | CONFIRMED (run) |
 | C631 | Low | react / <Chart>, shells, SSR | Test gaps: no `incremental={false}` render, no time/log pan-zoom, `select` unused, hydration tested in one process only | `packages/react/src/Chart.ssr.test.tsx:47-52` | CONFIRMED (traced) |
@@ -755,7 +755,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C706 | Low | core / expressions, regex screen | ERRORS.md says `toString`/`constructor` "are signals everywhere, as upstream"; `compileChart` refuses them | `docs/ERRORS.md:244` | CONFIRMED (run) |
 | C707 | Low | core / expressions, regex screen | Small drift: nesting limit is effectively 500, `prevented()` bypasses the logger, ARCHITECTURE function table incomplete | `packages/core/src/expr-parser.ts:630` | CONFIRMED (traced) |
 | C708 | Low | core / loading, URL policy, add-ons | docs and tests that disagree with the code (CONFIRMED-TRACE) | `packages/core/src/addon-load.ts:76-77` | CONFIRMED (traced) → FIXED (#192) |
-| C709 | Low | core / compiler, transforms | ARCHITECTURE statements the code contradicts | `docs/ARCHITECTURE.md:322` | CONFIRMED (traced) |
+| C709 | Low | core / compiler, transforms | ARCHITECTURE statements the code contradicts | `docs/ARCHITECTURE.md:322` | CONFIRMED (traced) → FIXED (#194) |
 | C710 | Low | core / scales, time, format, colour | the "Scales" section and file headers describe the layout before the split | `docs/ARCHITECTURE.md:523` | CONFIRMED (traced) |
 | C711 | Low | core / scales, time, format, colour | deviations table omits other resolved `{signal}` positions | `docs/ARCHITECTURE.md:593` | CONFIRMED (run) |
 | C712 | Low | core / SVG, DOM patcher, canvas, a11y | Docs and comments: `renderGroup` named for the wrong file; "neither side owns a list" while `dom.ts` hand-writes four | `docs/ARCHITECTURE.md:545` | CONFIRMED (traced) → FIXED (#191) |
@@ -763,7 +763,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C714 | Low | core / hit index, bounds, geometry | An area with `interpolate: "bundle"` draws; Vega throws `output.areaStart is not a function` | `packages/core/src/curves.ts:63-81` | CONFIRMED (run) |
 | C715 | Low | core / signal event loop, transitions | API.md says the item is "read from the DOM … where mark names are not available"; with a picker the DOM is never consulted | `docs/API.md:552` | CONFIRMED (traced) |
 | C716 | Low | core / signal event loop, transitions | ANIMATION.md omits `theta` from what moves | `docs/ANIMATION.md:69-71` | CONFIRMED (traced) |
-| C717 | Low | core / axes, legends, titles | stale comments and duplicated tables | `packages/core/src/guide-encode.ts:231-235` | CONFIRMED (traced) |
+| C717 | Low | core / axes, legends, titles | stale comments and duplicated tables | `packages/core/src/guide-encode.ts:231-235` | CONFIRMED (traced) → FIXED (#194) |
 | C718 | Low | react / hooks, streams, workers | stale comments, docs and test gaps | `packages/react/src/useChart.ts:113-115` | CONFIRMED (traced) |
 | C719 | Low | vl / mark encoding | Test gaps in `vl-compiler-parity`: no rounded stack in a facet, no `config.style.<mark>`, no two-channel invalid, no conditional format | `packages/conformance/test/vl-compiler-parity.test.ts:705` | CONFIRMED (traced) |
 | C720 | Low | vl / validate, optimize, predicates | Comment says `"a'b"` "keeps its name"; it throws, as vega-lite does | `packages/vl/src/names.ts:116` | CONFIRMED (run) |
@@ -1270,6 +1270,7 @@ Direction: bind the item under construction into the encode frame (`EntryScope.i
 
 - **Location:** `packages/core/src/row-keys.ts:35-36`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #194 (3b859f2,8077d40). Fixed: every transform parameter is resolved from the definition table (param-resolve.ts): {expr,as}, {field,as}, comparator {expr}, nested {signal}; differential over every field/computed/comparator param x every form vs vega.
 - **Area:** core / compiler, transforms (also categories 4)
 - **Lane ID / scripts:** `core-xform-1` — `core-xform/`
 
@@ -1284,6 +1285,7 @@ Direction: bind the item under construction into the encode frame (`EntryScope.i
 
 - **Location:** `packages/core/src/compiler.ts:59`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** ALREADY FIXED in #194 (c4785a0,7a75534). Fixed on origin/main by c4785a0/068cf70 (view properties are view signals); the audit's padding/background/autosize signal forms are pinned in view-signals-vs-vega.
 - **Area:** core / compiler, transforms (also categories 4)
 - **Lane ID / scripts:** `core-xform-3` — `core-xform/`
 
@@ -1387,6 +1389,7 @@ Direction: bind the item under construction into the encode frame (`EntryScope.i
 
 - **Location:** `packages/core/src/runtime.ts:8022`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #194 (3e906ae). Fixed: config.locale is a per-chart locale read by axes, legends, captions, expression format functions and data parsing; @aster-charts/vl passes it through.
 - **Area:** core / axes, legends, titles (also categories 5, 8)
 - **Lane ID / scripts:** `core-guides-2` — `core-guides/`
 
@@ -2375,6 +2378,7 @@ Direction: `boundTypedMark(new Bounds(), { marktype: mark.type, items: [it] })` 
 
 - **Location:** `packages/core/src/compiler.ts:647-648`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #194 (f38ed6d). Fixed: a mark takes only the styles it names (vega's applyDefaults); config.style.<marktype> no longer applies implicitly.
 - **Area:** core / compiler, transforms (also categories 7)
 - **Lane ID / scripts:** `core-xform-4` — `core-xform/`
 
@@ -2387,6 +2391,7 @@ Direction: `boundTypedMark(new Bounds(), { marktype: mark.type, items: [it] })` 
 
 - **Location:** `packages/core/src/compiler.ts:705-712`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #194 (f38ed6d,d694eb6,d12c1f5). Fixed: defaults land in enter (signals in update) and spatial channels are adjusted per encode set (spatial.ts), the root frame included; 400 generated marks vs vega.
 - **Area:** core / compiler, transforms
 - **Lane ID / scripts:** `core-xform-8` — `core-xform/`
 
@@ -2399,6 +2404,7 @@ Direction: `boundTypedMark(new Bounds(), { marktype: mark.type, items: [it] })` 
 
 - **Location:** `packages/core/src/transform-extra.ts:385`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #194 (3b859f2,24efcee). Fixed: dotbin rewritten on vega's semantics (autostep over vega-util extent, step ||, truthy smooth, vega group keys, NaN ties, published signal); 300 generated dotbins vs vega.
 - **Area:** core / compiler, transforms
 - **Lane ID / scripts:** `core-xform-9` — `core-xform/`
 
@@ -2700,6 +2706,7 @@ if (IDENTIFIER.test(reference) && !EXPRESSION_CONSTANTS.has(reference)) raise(`U
 
 - **Location:** `packages/core/src/compiler.ts:140`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #194 (ddf7215). Fixed: config.legend.layout resolved per evaluation through vega's objectProperty (signals at any depth or whole), and part of the kept-placement key.
 - **Area:** core / axes, legends, titles (also categories 3)
 - **Lane ID / scripts:** `core-guides-4` — `core-guides/`
 
@@ -2724,6 +2731,7 @@ Direction: resolve the layout object per evaluation, include the signals it name
 
 - **Location:** `packages/core/src/guide-model.ts:12`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #194 (ddf7215). Fixed: axis and legend values / tickCount read through one objectProperty resolver; guides re-lay out when the host writes those signals.
 - **Area:** core / axes, legends, titles (also categories 3)
 - **Lane ID / scripts:** `core-guides-5` — `core-guides/`
 
@@ -4315,6 +4323,7 @@ Source line not traced (found by render); revealed by `packages/conformance/test
 
 - **Location:** `packages/core/src/transform-extra.ts:283`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #194 (24efcee). Fixed: pie reads startAngle || 0 as vega's Pie; 200 generated pies vs vega.
 - **Area:** core / compiler, transforms
 - **Lane ID / scripts:** `core-xform-14` — `core-xform/`
 
@@ -4324,6 +4333,7 @@ Source line not traced (found by render); revealed by `packages/conformance/test
 
 - **Location:** `packages/core/src/transform.ts:164-165`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #194 (24efcee). Fixed: applyTransforms charges each step for the rows it made beyond its own input, once; pinned by a limits test.
 - **Area:** core / compiler, transforms
 - **Lane ID / scripts:** `core-xform-16` — `core-xform/`
 
@@ -4523,6 +4533,7 @@ With `op` not a literal `'intersect'` in the spec, Vega builds no unit index and
 
 - **Location:** `packages/core/src/runtime.ts:7971`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #194 (ddf7215). Fixed: axis ticks follow vega's AxisTicks with scale.ts tickCount for both guides (unknown interval -> default ticks, boolean/zero counts, step 0).
 - **Area:** core / axes, legends, titles (also categories 3, 8)
 - **Lane ID / scripts:** `core-guides-6` — `core-guides/`
 
@@ -4541,6 +4552,7 @@ Direction: one `tickCount` resolution (the one in `scale.ts`) for both guides; d
 
 - **Location:** `packages/core/src/runtime.ts:1966`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #194 (21c7738). Fixed: the legend caption's title is the legend's own spec title, and a null title text quotes nothing, as vega-scenegraph.
 - **Area:** core / axes, legends, titles
 - **Lane ID / scripts:** `core-guides-7` — `core-guides/`
 
@@ -4557,6 +4569,7 @@ Status: **CONFIRMED-RUN** — `repro.mjs` "G7".
 
 - **Location:** `packages/core/src/render.ts:623`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #194 (21c7738). Fixed: text lines go through vega's textLines/textValue in the one description feeding SVG, DOM and canvas (null/undefined lines are empty).
 - **Area:** core / axes, legends, titles
 - **Lane ID / scripts:** `core-guides-9` — `core-guides/`
 
@@ -4569,6 +4582,7 @@ Status: **CONFIRMED-RUN** — `repro.mjs` "G9", `d2.mts`.
 
 - **Location:** `packages/conformance/src/guide-compare.ts:33-36`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #194 (a0b2e64). Fixed: compareToVega runs Aster on vega-refused specs and compares logged errors; the fit/seed tests count what they compare; the harness has self-tests (vega warnings are still not compared: Aster emits none).
 - **Area:** core / axes, legends, titles
 - **Lane ID / scripts:** `core-guides-12` — `core-guides/`
 
@@ -6992,6 +7006,7 @@ Process-global mutable tables are public API: `withdrawFunctions` (a test seam) 
 
 - **Location:** `packages/core/src/transform.ts:245-248`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #194 (922cc44,15aedd9,1425d14). Fixed: a transform signal is bound to vega's operator value where it is data (rows returned/added, pie values, counter, bin accessor data, null); vega internal state is an opaque stable object (documented deviation).
 - **Area:** core / compiler, transforms (also categories 4)
 - **Lane ID / scripts:** `core-xform-12` — `core-xform/`
 
@@ -7001,6 +7016,7 @@ Process-global mutable tables are public API: `withdrawFunctions` (a test seam) 
 
 - **Location:** `packages/core/src/compiler.ts:604`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #194 (4ac294b). Fixed: dead whitelists and parameter removed, subtitle kept as lines/signal, the aliasing comment corrected (bar/tick types went with C238/C128).
 - **Area:** core / compiler, transforms
 - **Lane ID / scripts:** `core-xform-17` — `core-xform/`
 
@@ -7010,6 +7026,7 @@ Process-global mutable tables are public API: `withdrawFunctions` (a test seam) 
 
 - **Location:** `packages/core/src/transform.ts:225`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #194 (b5f8d84). Fixed: a formula output named __proto__ is written as every other transform output (vega's assignment) on a copy; 12 transforms vs vega, Object.prototype untouched.
 - **Area:** core / compiler, transforms
 - **Lane ID / scripts:** `core-xform-18` — `core-xform/`
 
@@ -7086,6 +7103,7 @@ Process-global mutable tables are public API: `withdrawFunctions` (a test seam) 
 
 - **Location:** `packages/core/src/guide-model.ts:50`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #194 (ddf7215). Fixed: axis grid drawn for any truthy value unevaluated; config-held guide data parameters parsed; unknown legend orient laid out at the origin, empty orient is right.
 - **Area:** core / axes, legends, titles
 - **Lane ID / scripts:** `core-guides-10` — `core-guides/`
 
@@ -8569,6 +8587,7 @@ A `{signal}` url resolves against top-level spec defaults only.
 
 - **Location:** `packages/core/src/guide-axis.ts:324`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #194 (21c7738). Fixed: a group item's blend is on its background, and an axis's / legend's clip and blend through encode are drawn, in the string, DOM and canvas renderers.
 - **Area:** core / axes, legends, titles
 - **Lane ID / scripts:** `core-guides-8` — `core-guides/`
 
@@ -8837,6 +8856,7 @@ No workflow sets `ASTER_ORACLE_SEEDS` (grep: only the test, `RUNBOOK.md`, `ARCHI
 
 - **Location:** `packages/core/src/compiler.ts:760-761`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #194 (b49c26a,7f01e3d,1425d14). Fixed: a mark type vega does not draw (unknown, circle, bar, geoshape, missing...) is a SpecParseError with vega's text, from the one mark-type list the event selector shares; list-written types refused as a documented deviation.
 - **Area:** core / compiler, transforms (also categories 8)
 - **Lane ID / scripts:** `core-xform-10` — `core-xform/`
 
@@ -9471,6 +9491,7 @@ Direction: validate once where pulses are normalised (`runtime.ts:949-960`) with
 
 - **Location:** `packages/core/src/compiler.ts:69-70`
 - **Status:** CONFIRMED (run)
+- **Resolution:** ALREADY FIXED in #194 (068cf70,7a75534). Fixed on origin/main (sizes and paddings read as vega-view reads them); null and string widths and string paddings pinned vs vega; a non-numeric string size (vega: NaN document) is a documented deviation.
 - **Area:** core / compiler, transforms
 - **Lane ID / scripts:** `core-xform-13` — `core-xform/`
 
@@ -10167,6 +10188,7 @@ Direction: put the ceiling where the count becomes values, not in one caller. Th
 
 - **Location:** `packages/core/src/raster-transforms.ts:183-205`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** ALREADY FIXED in #194 (04c0854,f665b4c). Bounded by lane a03's allotted heatmap window (04c0854); the audit's 0-wide, NaN-wide, negative-wide and x1=x2 grids are pinned under every limits form in limits-sites.test.ts.
 - **Area:** core / compiler, transforms
 - **Lane ID / scripts:** `core-xform-2` — `core-xform/`
 
@@ -10409,6 +10431,7 @@ Run with `node --max-old-space-size=400 $S/probe.mjs <name> nolimits`.
 
 - **Location:** `packages/core/src/transform-agg.ts:586-604`
 - **Status:** CONFIRMED (run)
+- **Resolution:** ALREADY FIXED in #194 (04c0854,f665b4c). Bounded by lane a03 (the cross product allotted before it is built); the 3x70 and 3x150 crosses are pinned under every limits form.
 - **Area:** core / compiler, transforms
 - **Lane ID / scripts:** `core-xform-6` — `core-xform/`
 
@@ -10421,6 +10444,7 @@ Run with `node --max-old-space-size=400 $S/probe.mjs <name> nolimits`.
 
 - **Location:** `packages/core/src/curve-fits.ts:220-231`
 - **Status:** CONFIRMED (run)
+- **Resolution:** ALREADY FIXED in #194 (04c0854,f665b4c). Bounded by lane a03 (regression order ceiling and ticks); order 2000 and order 500 over 600 rows are pinned under every limits form.
 - **Area:** core / compiler, transforms
 - **Lane ID / scripts:** `core-xform-7` — `core-xform/`
 
@@ -11525,6 +11549,7 @@ Status: **CONFIRMED-TRACE**.
 
 - **Location:** `docs/ARCHITECTURE.md:322`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #194 (f38ed6d). Fixed: ARCHITECTURE's config section (config.view, styles by name, per-set defaults) and the transforms' mutation statement say what the code does.
 - **Area:** core / compiler, transforms
 - **Lane ID / scripts:** `core-xform-15` — `core-xform/`
 
@@ -11614,6 +11639,7 @@ The doc says "Without it, or when it finds nothing, the item is read from the DO
 
 - **Location:** `packages/core/src/guide-encode.ts:231-235`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #194 (4ac294b,8077d40). Fixed: swapped/stale comments corrected; legendType and the legend channel list have one definition; axis config precedence (written three times) pinned by an agreement test.
 - **Area:** core / axes, legends, titles (also categories 3)
 - **Lane ID / scripts:** `core-guides-11` — `core-guides/`
 
@@ -13221,6 +13247,7 @@ An unknown `format.type` (`'jsno'`, `'CSV'`) is reported as `this spec reads "js
 
 - **Location:** `packages/conformance/scripts/transform-cases.mjs:1`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #194 (3b859f2,b49c26a,24efcee,f665b4c). Fixed: tests now cover object-form field params for every transform, mark types, hostile raster grids under every limits form, and generated dotbin/pie cases.
 - **Area:** core / compiler, transforms
 - **Lane ID / scripts:** `core-xform-19` — `core-xform/`
 
