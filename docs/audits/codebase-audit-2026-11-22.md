@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 676 of 766 findings resolved (655 fixed, 18 already fixed on main, 3 disputed with evidence); 90 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 706 of 766 findings resolved (683 fixed, 19 already fixed on main, 4 disputed with evidence); 60 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -128,9 +128,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C79 | High | vl / composition | `resolve` on a layer is validated for every channel and kind but mostly not implemented | `packages/vl/src/compile.ts:1056-1066` | CONFIRMED (run; re-run by lead) → FIXED (#202) |
 | C80 | High | vl / mark encoding | `config.style.<mark type>` is dropped from the emitted Vega config | `packages/vl/src/compile.ts:3747` | CONFIRMED (run; re-run by lead) → FIXED (#209) |
 | C81 | High | conformance / scripts and gates | "Every place a Vega spec holds an expression" is not every place: 15 of 63 further sites disagree with `vega.parse` | `packages/conformance/scripts/expression-sites.mts:1-8` | CONFIRMED (run; re-run by lead) → FIXED (#204) |
-| C82 | High | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | `import { ChartStream }` pulls the whole synchronous engine up front (244.4 vs 188.6 kB gzip); no budget row or shaking pattern covers it | `packages/react/src/ChartStream.tsx:23-26` | CONFIRMED (run; re-run by lead) |
+| C82 | High | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | `import { ChartStream }` pulls the whole synchronous engine up front (244.4 vs 188.6 kB gzip); no budget row or shaking pattern covers it | `packages/react/src/ChartStream.tsx:23-26` | CONFIRMED (run; re-run by lead) → FIXED (#220) |
 | C83 | High | vl / validate, optimize, predicates | The README says the "Throws" list is complete; at least nine schema-valid features are refused and not on it | `packages/vl/README.md:133-135` | CONFIRMED (run) → FIXED (#202) |
-| C84 | High | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ADR 0007 / ARCHITECTURE say "nothing loads asynchronously, the first paint is synchronous"; in a browser build a chart with a legend or time scale suspends first | `docs/adr/0007-svgchart-shell-over-lazy-loading.md:21-23` | CONFIRMED (run; re-run by lead) |
+| C84 | High | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ADR 0007 / ARCHITECTURE say "nothing loads asynchronously, the first paint is synchronous"; in a browser build a chart with a legend or time scale suspends first | `docs/adr/0007-svgchart-shell-over-lazy-loading.md:21-23` | CONFIRMED (run; re-run by lead) → FIXED (#220) |
 | C85 | High | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | The incremental guarantee ("deep-equals a freshly compiled chart") is not what the oracle checks for any spec with `identifier` (every Vega-Lite point selection) | `packages/core/src/incremental-oracle.test.ts:718` | CONFIRMED (traced; lines re-read by lead) |
 | C86 | High | tests / conformance suites II | `ASTER_ONLY` is run by no test, and its stated reason for the nested-field exclusion is false | `packages/conformance/test/vl-composite-matrix-cases.ts:373-392` | CONFIRMED (run; re-run by lead) → FIXED (#214) |
 | C87 | Medium | core / runtime: marks, encode, groups | A group item's `datum` is the spec's own inline row object | `packages/core/src/runtime.ts:5873` | CONFIRMED (run) |
@@ -320,9 +320,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C271 | Medium | core / signal event loop, transitions | An `owner` that is not a DOM node kills the timers it was meant to keep | `packages/core/src/signals.ts:1040-1045` | CONFIRMED (run) → FIXED (#197) |
 | C272 | Medium | react / hooks, streams, workers | `<ChartStream>` / `<ChartWorkerStream>` accept `random` and never pass it to the stream | `packages/react/src/ChartStream.tsx:238-249` | CONFIRMED (traced) → FIXED (#199) |
 | C273 | Medium | vl / mark encoding | `mark.url` on an image mark is silently dropped, so nothing renders | `packages/vl/src/compile.ts:7854-7857` | CONFIRMED (run) → FIXED (#209) |
-| C274 | Medium | docs / README, API, ERRORS | the README's first React chart does not draw at the spec's `width`/`height` | `README.md:83-109` | CONFIRMED (run) |
-| C275 | Medium | docs / README, API, ERRORS | `ChartStreamHandle.flush/pending/pulse/stats` are typed `() => unknown` | `packages/react/src/ChartStream.tsx:42-45` | CONFIRMED (run) |
-| C276 | Medium | docs / README, API, ERRORS | `hydrateChart`: `tooltips` shows no tooltip and writes row JSON into the DOM; the result is undocumented | `packages/react/src/ssr.ts:26-27` | CONFIRMED (run) |
+| C274 | Medium | docs / README, API, ERRORS | the README's first React chart does not draw at the spec's `width`/`height` | `README.md:83-109` | CONFIRMED (run) → ALREADY FIXED (#220) |
+| C275 | Medium | docs / README, API, ERRORS | `ChartStreamHandle.flush/pending/pulse/stats` are typed `() => unknown` | `packages/react/src/ChartStream.tsx:42-45` | CONFIRMED (run) → FIXED (#220) |
+| C276 | Medium | docs / README, API, ERRORS | `hydrateChart`: `tooltips` shows no tooltip and writes row JSON into the DOM; the result is undocumented | `packages/react/src/ssr.ts:26-27` | CONFIRMED (run) → FIXED (#220) |
 | C277 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | the configuration LIMITS.md recommends for untrusted specs disables signal-scoped reuse, kept builds, instance marks, kept group marks, channel re-encode, kept guides and scale-settings r… | `docs/ARCHITECTURE.md:125` | CONFIRMED (run; re-run by lead) |
 | C278 | Medium | leftovers / budgets, declarations, demo data, gallery lists | `diffRows`' result is not assignable to `dataPulse` or `StreamBatch.pulse`, though API.md says to pass it | `docs/API.md:224-229` | CONFIRMED (run) → FIXED (#188) |
 | C279 | Medium | gallery / official Vega-Lite examples I | `interactive_line_brush_cursor`: the view's own `cursor` is dropped and the root group never takes the pointer | `packages/core/src/runtime.ts:2072-2084` | CONFIRMED (run; re-run by lead) |
@@ -352,7 +352,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C303 | Medium | tooling / gates, CI, release, benchmarks | the `typecheck` gate skips about 160 test files and all runner scripts, and they hold real type errors | `packages/vl/tsconfig.json:1` | CONFIRMED (run) → FIXED (#187) |
 | C304 | Medium | tooling / gates, CI, release, benchmarks | the benchmark's `aster` and `asterDom` embeds are the same configuration | `packages/benchmarks/src/embeds.tsx:60-63` | CONFIRMED (traced; lines re-read by lead) → FIXED (#187) |
 | C305 | Medium | tooling / gates, CI, release, benchmarks | `ci.yml` runs on every pull request although the convention is CI on `main` only | `.github/workflows/ci.yml:3-7` | CONFIRMED (traced) → FIXED (#187) |
-| C306 | Medium | docs / README, API, ERRORS | an undeclared dataset name in `data` is silently ignored (Vega throws) | `docs/API.md:358-359` | CONFIRMED (run; re-run by lead) |
+| C306 | Medium | docs / README, API, ERRORS | an undeclared dataset name in `data` is silently ignored (Vega throws) | `docs/API.md:358-359` | CONFIRMED (run; re-run by lead) → FIXED (#220) |
 | C307 | Medium | tests / core (incremental oracle, legacy copies I) | The three legacy testlibs are not "frozen copies", share modules with the code they check, and leave the view-sizing bounds uncompared | `packages/core/src/legacy-bounds.testlib.ts:1-3` | CONFIRMED (traced) |
 | C308 | Medium | tests / core (legacy copies II … path) | For `path` marks the legacy hit, intersect and label painter call the new reader: the old-vs-new comparison is new-vs-new | `packages/core/src/legacy-hit.testlib.ts:39` | CONFIRMED (run) → FIXED (#200) |
 | C309 | Medium | tests / core (legacy copies II … path) | The first-pass defects are present, identically, in the legacy copies: the differential is green because both sides are wrong the same way | `packages/core/src/legacy-hit.testlib.ts:460-473` | CONFIRMED (run) |
@@ -417,14 +417,14 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C368 | Medium | tooling / gates, CI, release, benchmarks | PERFORMANCE.md's bundle table disagrees with the budgets in code (continues D2) | `docs/PERFORMANCE.md:341` | CONFIRMED (traced) → FIXED (#187) |
 | C369 | Medium | tooling / gates, CI, release, benchmarks | the stated contributor Node version cannot run the test suite | `CONTRIBUTING.md:3-5` | CONFIRMED (traced) → FIXED (#187) |
 | C370 | Medium | tooling / gates, CI, release, benchmarks | PERFORMANCE.md measurements cannot be reproduced from the repository | `docs/PERFORMANCE.md:4-6` | CONFIRMED (traced) → FIXED (#187) |
-| C371 | Medium | docs / README, API, ERRORS | TypeScript `moduleResolution` requirement is nowhere stated | `README.md:9-30` | CONFIRMED (run; re-run by lead) |
-| C372 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | Fourteen engine deviations confirmed by other lanes appear in no deviation list; INTERACTION.md claims the opposite for pan/zoom on log/time scales | `docs/ARCHITECTURE.md:583-612` | CONFIRMED (traced) |
-| C373 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | CHANGELOG 0.4.0/0.4.1 files behaviour-breaking changes under Fixed or Performance with no migration note | `CHANGELOG.md:98-105` | CONFIRMED (traced) |
-| C374 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ADRs whose text the code has left | `docs/adr/0002-interaction-as-react-state.md:45-48` | CONFIRMED (traced) |
-| C375 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ARCHITECTURE package map and entry table do not match the import graph (lean entries missing, dynamic imports drawn as static, `/png` `/transition` `/all` omitted) | `docs/ARCHITECTURE.md:21-60` | CONFIRMED (traced) |
-| C376 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | The demo app mis-describes itself and models patterns a newcomer should not copy (no `<Suspense>`, ref-derived `dataChanges`, legacy brush props, stale hero figures) | `apps/demo/README.md:9` | CONFIRMED (traced) |
-| C377 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ARCHITECTURE statements about add-on detection the code contradicts ("cached per spec object", "no regular expression") | `docs/ARCHITECTURE.md:353` | CONFIRMED (traced) |
-| C378 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ARCHITECTURE repeats a stale corpus count (1060; actual 1063) and the guard's regex cannot match the sentence | `docs/ARCHITECTURE.md:577` | CONFIRMED (traced) |
+| C371 | Medium | docs / README, API, ERRORS | TypeScript `moduleResolution` requirement is nowhere stated | `README.md:9-30` | CONFIRMED (run; re-run by lead) → FIXED (#220) |
+| C372 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | Fourteen engine deviations confirmed by other lanes appear in no deviation list; INTERACTION.md claims the opposite for pan/zoom on log/time scales | `docs/ARCHITECTURE.md:583-612` | CONFIRMED (traced) → FIXED (#220) |
+| C373 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | CHANGELOG 0.4.0/0.4.1 files behaviour-breaking changes under Fixed or Performance with no migration note | `CHANGELOG.md:98-105` | CONFIRMED (traced) → FIXED (#220) |
+| C374 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ADRs whose text the code has left | `docs/adr/0002-interaction-as-react-state.md:45-48` | CONFIRMED (traced) → FIXED (#220) |
+| C375 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ARCHITECTURE package map and entry table do not match the import graph (lean entries missing, dynamic imports drawn as static, `/png` `/transition` `/all` omitted) | `docs/ARCHITECTURE.md:21-60` | CONFIRMED (traced) → FIXED (#220) |
+| C376 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | The demo app mis-describes itself and models patterns a newcomer should not copy (no `<Suspense>`, ref-derived `dataChanges`, legacy brush props, stale hero figures) | `apps/demo/README.md:9` | CONFIRMED (traced) → FIXED (#220) |
+| C377 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ARCHITECTURE statements about add-on detection the code contradicts ("cached per spec object", "no regular expression") | `docs/ARCHITECTURE.md:353` | CONFIRMED (traced) → FIXED (#220) |
+| C378 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ARCHITECTURE repeats a stale corpus count (1060; actual 1063) and the guard's regex cannot match the sentence | `docs/ARCHITECTURE.md:577` | CONFIRMED (traced) → FIXED (#220) |
 | C379 | Medium | tests / core (limits, loaders, locale, oracle vectors) | `docs/TESTING.md` says the default run pins `TZ=UTC`; it does not, and `locale-font-matrix.test.ts` fails off UTC | `docs/TESTING.md:143` | CONFIRMED (run; re-run by lead) → FIXED (#195) |
 | C380 | Medium | tests / conformance generators and case tables II | A derived dataset that opens with a sort re-orders its source in Vega; Aster does not, and the deviation is recorded only in a test comment | `packages/conformance/scripts/differential-sort-ties.test.mts:53-55` | CONFIRMED (run; re-run by lead) → FIXED (#213) |
 | C381 | Medium | tests / conformance suites I | `docs/ERRORS.md:182` misdescribes what a throwing dataset transform leaves | `docs/ERRORS.md:182` | CONFIRMED (run; re-run by lead) → FIXED (#214) |
@@ -493,14 +493,14 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C444 | Low | vl / composite marks, selections, transforms | a `detail` list with a time-unit entry changes a composite's ARIA description | `packages/vl/src/composite-marks.ts:123-153` | CONFIRMED (run) → FIXED (#211) |
 | C445 | Low | conformance / scripts and gates | The vector codec loses invalid Dates (replayed as the epoch); the "interior" mesh vector records exterior arcs | `packages/conformance/scripts/gen-vectors.mjs:53` | CONFIRMED (traced) → FIXED (#204) |
 | C446 | Low | conformance / scripts and gates | Several differentials count any Aster throw as agreement when Vega logged an error | `packages/conformance/scripts/differential-field-paths.test.mts:203-214` | CONFIRMED (traced) → FIXED (#204) |
-| C447 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ARCHITECTURE/ROADMAP/ADR name files and symbols that moved (`svg-path.ts`, `renderGroup`, `exprRows`, `SEED`/`lcg`) | `docs/ARCHITECTURE.md:373` | CONFIRMED (traced) |
-| C448 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | The side-effects table omits `lean-signals-full.js`, `lean-all.js`, react `all.js` | `docs/ARCHITECTURE.md:495-507` | CONFIRMED (traced) |
-| C449 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | CHANGELOG 0.4.2 sizes exceed the last recorded budget measures; headroom is 0.1 kB against the +0.5 rule | `CHANGELOG.md:43-44` | CONFIRMED (traced) |
-| C450 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ROADMAP staleness ("Met (0.1.0)", "no PDF/PNG workstream", recorded vectors) and open items it does not list | `docs/ROADMAP.md:138` | CONFIRMED (traced) |
-| C451 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ADR 0008 names `loadAddons` where the spec-taking function is `loadAddonsFor`; "remembered for the page's lifetime" holds only for the React layer | `docs/adr/0008-addons-load-themselves-through-suspense.md:16` | CONFIRMED (traced) |
-| C452 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | `apps/demo/.wrangler/` is not in `.gitignore` | `.gitignore:1` | CONFIRMED (traced) |
-| C453 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ARCHITECTURE "11 of 26" shaking-pattern count is stale | `docs/ARCHITECTURE.md:513` | CONFIRMED (traced) |
-| C454 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ARCHITECTURE classifies a `force` mark as one that "may draw" random numbers; ADR 0006 says force never reads the source | `docs/ARCHITECTURE.md:122` | CONFIRMED (traced) |
+| C447 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ARCHITECTURE/ROADMAP/ADR name files and symbols that moved (`svg-path.ts`, `renderGroup`, `exprRows`, `SEED`/`lcg`) | `docs/ARCHITECTURE.md:373` | CONFIRMED (traced) → FIXED (#220) |
+| C448 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | The side-effects table omits `lean-signals-full.js`, `lean-all.js`, react `all.js` | `docs/ARCHITECTURE.md:495-507` | CONFIRMED (traced) → FIXED (#220) |
+| C449 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | CHANGELOG 0.4.2 sizes exceed the last recorded budget measures; headroom is 0.1 kB against the +0.5 rule | `CHANGELOG.md:43-44` | CONFIRMED (traced) → DISPUTED (#220) |
+| C450 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ROADMAP staleness ("Met (0.1.0)", "no PDF/PNG workstream", recorded vectors) and open items it does not list | `docs/ROADMAP.md:138` | CONFIRMED (traced) → FIXED (#220) |
+| C451 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ADR 0008 names `loadAddons` where the spec-taking function is `loadAddonsFor`; "remembered for the page's lifetime" holds only for the React layer | `docs/adr/0008-addons-load-themselves-through-suspense.md:16` | CONFIRMED (traced) → FIXED (#220) |
+| C452 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | `apps/demo/.wrangler/` is not in `.gitignore` | `.gitignore:1` | CONFIRMED (traced) → FIXED (#220) |
+| C453 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ARCHITECTURE "11 of 26" shaking-pattern count is stale | `docs/ARCHITECTURE.md:513` | CONFIRMED (traced) → FIXED (#220) |
+| C454 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ARCHITECTURE classifies a `force` mark as one that "may draw" random numbers; ADR 0006 says force never reads the source | `docs/ARCHITECTURE.md:122` | CONFIRMED (traced) → FIXED (#220) |
 | C455 | Low | tests / core (legacy copies II … path) | `tracePath` keeps a stale current point after `Z` (new and legacy): `H`, `V`, `S`, `T` and `A` after a close start from the wrong point | `packages/core/src/path-data.ts:498` | CONFIRMED (run) → FIXED (#200) |
 | C456 | Low | tests / core (limits, loaders, locale, oracle vectors) | `pulse.test.ts` "incremental sorted window/stack matches a full re-derive" cannot see the window's output and has no stack | `packages/core/src/pulse.test.ts:88-106` | CONFIRMED (run) → FIXED (#195) |
 | C457 | Low | tests / core (limits, loaders, locale, oracle vectors) | Two cache tests assert less than their titles and pass on a planted wrong implementation | `packages/core/src/limits.test.ts:190-196` | CONFIRMED (run) → FIXED (#195) |
@@ -690,8 +690,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C641 | Low | tooling / gates, CI, release, benchmarks | the `incremental-append` gate has no test that it can fail | `packages/benchmarks/src/incremental.bench.tsx:36-38` | CONFIRMED (traced) → FIXED (#187) |
 | C642 | Low | tooling / gates, CI, release, benchmarks | `pnpm check -- --only browser` is accepted, then "no gates selected" | `scripts/gates.mjs:121-135` | CONFIRMED (traced) → FIXED (#187) |
 | C643 | Low | tooling / gates, CI, release, benchmarks | onboarding gaps (following README and CONTRIBUTING literally) | `CONTRIBUTING.md:1-44` | CONFIRMED (traced) → FIXED (#187) |
-| C644 | Low | docs / README, API, ERRORS | raw `TypeError`s on simple misuse, where `renderSpec` has a proper message | `docs/ERRORS.md:58-59` | CONFIRMED (run) |
-| C645 | Low | docs / README, API, ERRORS | silently accepted misconfiguration (JS callers; TypeScript catches the literal forms) | `packages/react/src/ChartCore.tsx:432` | CONFIRMED (run) |
+| C644 | Low | docs / README, API, ERRORS | raw `TypeError`s on simple misuse, where `renderSpec` has a proper message | `docs/ERRORS.md:58-59` | CONFIRMED (run) → FIXED (#220) |
+| C645 | Low | docs / README, API, ERRORS | silently accepted misconfiguration (JS callers; TypeScript catches the literal forms) | `packages/react/src/ChartCore.tsx:432` | CONFIRMED (run) → FIXED (#220) |
 | C646 | Low | tests / core (a11y … curves) | Test titles that assert less than they say | `packages/core/src/canvas-regressions.test.ts:68-80` | CONFIRMED (traced) → FIXED (#190) |
 | C647 | Low | tests / core (a11y … curves) | "writes zero attributes when the scene is unchanged" counts only `setAttribute` | `packages/core/src/dom.test.ts:91-119` | CONFIRMED (traced) → FIXED (#190) |
 | C648 | Low | tests / core (a11y … curves) | Loose or absent engagement floors in the generated oracles | `packages/core/src/canvas-append-oracle.test.ts:74` | CONFIRMED (run) → FIXED (#190) |
@@ -774,12 +774,12 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C725 | Low | conformance / scripts and gates | Gate script header comments: garbled, inverted or missing the build prerequisite | `packages/conformance/scripts/browser-canvas-parity.mts:17-18` | CONFIRMED (traced) → FIXED (#204) |
 | C726 | Low | tooling / gates, CI, release, benchmarks | RUNBOOK's environment table is wrong about `NODE_ENV` and misses two variables | `docs/RUNBOOK.md:172` | CONFIRMED (run) → FIXED (#187) |
 | C727 | Low | tooling / gates, CI, release, benchmarks | benchmarks README and a bench header | `packages/benchmarks/README.md:24` | CONFIRMED (traced) → FIXED (#187) |
-| C728 | Low | docs / README, API, ERRORS | ERRORS.md documents messages a spec can no longer produce, and an incomplete phase list | `docs/ERRORS.md:393-395` | CONFIRMED (run) |
-| C729 | Low | docs / README, API, ERRORS | user-facing errors ERRORS.md does not list, and its own rule about prefixes | `docs/ERRORS.md:4-5` | CONFIRMED (run) |
-| C730 | Low | docs / README, API, ERRORS | type names API.md tells the reader to use that cannot be imported (continues D15 for types) | `docs/API.md:465` | CONFIRMED (run) |
-| C731 | Low | docs / README, API, ERRORS | entry-point inventories still incomplete (continues D10) | `README.md:202-203` | CONFIRMED (traced) |
-| C732 | Low | docs / README, API, ERRORS | "examples that are type-checked against the source" is gated for 2 of API.md's 18 blocks; ANIMATION.md's two blocks do not compile | `docs/API.md:3` | CONFIRMED (run) |
-| C733 | Low | docs / README, API, ERRORS | small drifts between TSDoc and docs | `packages/react/src/chart-types.ts:223` | CONFIRMED (traced) |
+| C728 | Low | docs / README, API, ERRORS | ERRORS.md documents messages a spec can no longer produce, and an incomplete phase list | `docs/ERRORS.md:393-395` | CONFIRMED (run) → FIXED (#220) |
+| C729 | Low | docs / README, API, ERRORS | user-facing errors ERRORS.md does not list, and its own rule about prefixes | `docs/ERRORS.md:4-5` | CONFIRMED (run) → FIXED (#220) |
+| C730 | Low | docs / README, API, ERRORS | type names API.md tells the reader to use that cannot be imported (continues D15 for types) | `docs/API.md:465` | CONFIRMED (run) → FIXED (#220) |
+| C731 | Low | docs / README, API, ERRORS | entry-point inventories still incomplete (continues D10) | `README.md:202-203` | CONFIRMED (traced) → FIXED (#220) |
+| C732 | Low | docs / README, API, ERRORS | "examples that are type-checked against the source" is gated for 2 of API.md's 18 blocks; ANIMATION.md's two blocks do not compile | `docs/API.md:3` | CONFIRMED (run) → FIXED (#220) |
+| C733 | Low | docs / README, API, ERRORS | small drifts between TSDoc and docs | `packages/react/src/chart-types.ts:223` | CONFIRMED (traced) → FIXED (#220) |
 | C734 | Low | tests / core (a11y … curves) | `dataset-reuse.test.ts` header describes a reference the generated walk does not use; `usable()` filters nothing | `packages/core/src/dataset-reuse.test.ts:11` | CONFIRMED (run) → FIXED (#190) |
 | C735 | Low | tests / core (data … hit) | a trail with a negative `size` throws a bare `Error` from every renderer and the hit index; not in `docs/ERRORS.md` | `packages/core/src/geometry-differential.testlib.ts:152-165` | CONFIRMED (run; re-run by lead) → FIXED (#195) |
 | C736 | Low | tests / core (data … hit) | `hit-geometry.test.ts` documents mark types it does not test | `packages/core/src/hit-geometry.test.ts:8-9` | CONFIRMED (traced) → FIXED (#195) |
@@ -5020,6 +5020,7 @@ DateTime parts other than month, day and quarter are spliced into the expression
 
 - **Location:** `docs/ARCHITECTURE.md:373`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #220 (862a3d07). Fixed: svg-path.ts -> path-data.ts, exprRows in expression.ts, SEED/lcg in row-keys.ts, geoshape in the mark list, transform-signal-outputs-vs-vega test name; docs-claims resolves every backticked source file of ARCHITECTURE, ROADMAP and the ADRs.
 - **Area:** docs / ARCHITECTURE, ADRs, CHANGELOG, demo
 - **Lane ID / scripts:** `docs-arch-13` — `docs-arch/`
 
@@ -5035,6 +5036,7 @@ DateTime parts other than month, day and quarter are spliced into the expression
 
 - **Location:** `docs/ARCHITECTURE.md:495-507`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #220 (862a3d07). Fixed: lean-signals-full.js, lean-all.js and react all.js are in the side-effects table; docs-claims compares the table with both manifests in both directions.
 - **Area:** docs / ARCHITECTURE, ADRs, CHANGELOG, demo
 - **Lane ID / scripts:** `docs-arch-14` — `docs-arch/`
 
@@ -5044,6 +5046,7 @@ DateTime parts other than month, day and quarter are spliced into the expression
 
 - **Location:** `CHANGELOG.md:43-44`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** DISPUTED in #220 (862a3d07). CHANGELOG.md is the lead's and its 0.4.2 sentence is the release's own measurement of its tree; ceilings are reset once, on final code, by the lead's budget commit (DECISIONS 2026-11-24), and the only current-size docs (PERFORMANCE table, API, READMEs) are tied to the budget rows by perf-docs.test (extended to ANIMATION.md).
 - **Area:** docs / ARCHITECTURE, ADRs, CHANGELOG, demo
 - **Lane ID / scripts:** `docs-arch-15` — `docs-arch/`
 
@@ -5053,6 +5056,7 @@ DateTime parts other than month, day and quarter are spliced into the expression
 
 - **Location:** `docs/ROADMAP.md:138`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #220 (862a3d07). Fixed: ROADMAP version, method, definition-of-done items 3/4/6/7 follow the code and ADRs 0009/0010/0013, open items added (identifier oracle reference, limits and reuse, worker shells carry the whole engine, raster-edges top-anchored quad walking and curve-subdivision re-calibration with the -14% / 22 drawings numbers); version tied to package.json by docs-claims.
 - **Area:** docs / ARCHITECTURE, ADRs, CHANGELOG, demo
 - **Lane ID / scripts:** `docs-arch-16` — `docs-arch/`
 
@@ -5066,6 +5070,7 @@ DateTime parts other than month, day and quarter are spliced into the expression
 
 - **Location:** `docs/adr/0008-addons-load-themselves-through-suspense.md:16`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #220 (862a3d07). Fixed: ADR 0008 names loadAddonsFor and says the remembered failure is the React layer's.
 - **Area:** docs / ARCHITECTURE, ADRs, CHANGELOG, demo
 - **Lane ID / scripts:** `docs-arch-17` — `docs-arch/`
 
@@ -5075,6 +5080,7 @@ DateTime parts other than month, day and quarter are spliced into the expression
 
 - **Location:** `.gitignore:1`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #220 (862a3d07). Fixed: apps/demo/.wrangler/ in .gitignore, checked by docs-claims.
 - **Area:** docs / ARCHITECTURE, ADRs, CHANGELOG, demo
 - **Lane ID / scripts:** `docs-arch-18` — `docs-arch/`
 
@@ -5084,6 +5090,7 @@ DateTime parts other than month, day and quarter are spliced into the expression
 
 - **Location:** `docs/ARCHITECTURE.md:513`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #220 (862a3d07). Fixed: the '11 of 26' count is removed (scripts/bundle-shaking.test.mjs asserts the names).
 - **Area:** docs / ARCHITECTURE, ADRs, CHANGELOG, demo
 - **Lane ID / scripts:** `docs-arch-19` — `docs-arch/`
 
@@ -5093,6 +5100,7 @@ DateTime parts other than month, day and quarter are spliced into the expression
 
 - **Location:** `docs/ARCHITECTURE.md:122`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #220 (862a3d07). Fixed: ARCHITECTURE says a force never reads the injected source (ADR 0006), only a word cloud may draw.
 - **Area:** docs / ARCHITECTURE, ADRs, CHANGELOG, demo
 - **Lane ID / scripts:** `docs-arch-20` — `docs-arch/`
 
@@ -6086,6 +6094,7 @@ Status: **CONFIRMED-RUN** `t21.mjs`.
 
 - **Location:** `packages/react/src/ChartStream.tsx:23-26`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #220 (277c8459 862a3d07). Fixed: <ChartWorkerStream> is its own module (stream-shared.ts holds what both shells share), so import { ChartStream } keeps the on-demand engine (279.1 -> 225.3 kB gzip up front, <Chart> 214.8; no legend/aggregate/time/colour part); pattern react-chartstream pins it and fails with the worker shell planted back; the worker hooks still import the barrel by design (they run the whole engine in the worker), documented in ADR 0011 and the package map.
 - **Area:** docs / ARCHITECTURE, ADRs, CHANGELOG, demo (also categories 4, 7)
 - **Lane ID / scripts:** `docs-arch-1` — `docs-arch/`
 
@@ -6555,6 +6564,7 @@ Spec `vega/zoomable-world-map.vg.json:32` (`copy('projection')`), `:40`, `:47`, 
 
 - **Location:** `docs/API.md:358-359`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #220 (c1a3df3c 862a3d07). Fixed: host data naming a dataset no top-level dataset declares, or a list instead of a record, is a TypeError naming the declared datasets (as vega's view.data throws), for renderSpec/evaluateChart/sessions/streams and via onError in React; 4 tests that passed rows under undeclared names updated (they pinned the accepted-and-ignored behaviour); docs in API.md/ERRORS.md.
 - **Area:** docs / README, API, ERRORS (also categories 5, 8)
 - **Lane ID / scripts:** `docs-api-4` — `docs-api/`
 
@@ -8725,6 +8735,7 @@ Direction: forward `random` into `initial`, as `logger` is (`ChartStream.tsx:247
 
 - **Location:** `README.md:83-109`
 - **Status:** CONFIRMED (run)
+- **Resolution:** ALREADY FIXED in #220 (cbf0b4f2 862a3d07). Already fixed by a12 (Q11: README paragraph 'The chart is the size its spec makes it', API.md size text); new test draws the README's own first spec (read from README.md) at 400 x 300 plus padding in a 900 x 600 element on all three variants and checks the README sentence.
 - **Area:** docs / README, API, ERRORS (also categories 7)
 - **Lane ID / scripts:** `docs-api-3` — `docs-api/`
 
@@ -8754,6 +8765,7 @@ Direction: add one short "Size" paragraph next to the README example and at the 
 
 - **Location:** `packages/react/src/ChartStream.tsx:42-45`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #220 (73fdee33). Fixed: ChartStreamHandle is typed as useChartStream's functions (StreamFlush | null, DataPulse, StreamStats), <ChartWorkerStream> has ChartWorkerStreamHandle with the worker hook's shapes; Chart.types.test.ts pins both (typecheck fails with a member typed unknown; seen); API.md says so.
 - **Area:** docs / README, API, ERRORS
 - **Lane ID / scripts:** `docs-api-7` — `docs-api/`
 
@@ -8772,6 +8784,7 @@ Direction: two handle types (`ChartStreamHandle`, `ChartWorkerStreamHandle`) wit
 
 - **Location:** `packages/react/src/ssr.ts:26-27`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #220 (17a9f314 862a3d07). Fixed (Q20): hydrateChart's tooltips option removed (it only wrote data-datum that nothing binds); HydrateChartOptions = RuntimeInput, HydratedChart documented as a one-shot patch (own session, no update/dispose), API.md says Vega-Lite needs /vl; test asserts no data-datum and the type has no tooltips.
 - **Area:** docs / README, API, ERRORS (also categories 7)
 - **Lane ID / scripts:** `docs-api-9` — `docs-api/`
 
@@ -11356,6 +11369,7 @@ README: "The list is what `compile` refuses today … a feature that vega-lite s
 
 - **Location:** `docs/adr/0007-svgchart-shell-over-lazy-loading.md:21-23`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #220 (862a3d07). Fixed in the documents, not the code: parts-on-demand (a Suspense fallback for a chart that needs a part) is the deliberate, budget-gated design of 0.4.0/0.4.1 (react-lean and react-lean-all patterns assert it; /all and preloadParts are the synchronous way), so ADR 0011 records it, ADRs 0003/0007/0008, ARCHITECTURE and API/READMEs say the first paint is synchronous only where nothing needs loading and that 'a browser build' is any resolver applying the browser condition (node --conditions=browser, jsdom jest, edge), with the remedy; docs-claims pins the wording. This departs from the brief's preference for the code and is the lead's to confirm.
 - **Area:** docs / ARCHITECTURE, ADRs, CHANGELOG, demo (also categories 4)
 - **Lane ID / scripts:** `docs-arch-2` — `docs-arch/`
 
@@ -11625,6 +11639,7 @@ Direction: the D2 direction still stands (one generated source). Short term, fix
 
 - **Location:** `README.md:9-30`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #220 (862a3d07). Fixed: README, core and react READMEs state the moduleResolution requirement; docs-claims ties it to the manifests having subpath exports and no typesVersions.
 - **Area:** docs / README, API, ERRORS (also categories 8)
 - **Lane ID / scripts:** `docs-api-2` — `docs-api/`
 
@@ -11644,6 +11659,7 @@ Direction: state "TypeScript needs `moduleResolution` `bundler`, `node16` or `no
 
 - **Location:** `docs/ARCHITECTURE.md:583-612`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #220 (862a3d07). Fixed (the table and its tie): every difference a gate still holds (expected-differences.mjs, label-1006, the geometry gate) has a deviations row citing its case, and docs-claims fails on an uncited held case or a row citing a fixed one, so the table cannot drift again; re-checked on this base: the pan/zoom-on-log/time claim (a12, true now), signal cycles / init latching / regex literal / toNumber (a04, a15) are fixed by their lanes; the other items of the audit's list (encode.hover and item zindex wait on a08; Q6 'implement' decisions) get a row only if their owning lane leaves them as a held difference, which the new test then forces.
 - **Area:** docs / ARCHITECTURE, ADRs, CHANGELOG, demo
 - **Lane ID / scripts:** `docs-arch-5` — `docs-arch/`
 
@@ -11673,6 +11689,7 @@ Direction: state "TypeScript needs `moduleResolution` `bundler`, `node16` or `no
 
 - **Location:** `CHANGELOG.md:98-105`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #220 (862a3d07). Fixed in the fragment: migration notes for the five 0.4.0/0.4.1 breaking changes are in lanes/a30-docs/CHANGELOG.md (CHANGELOG.md itself is the lead's).
 - **Area:** docs / ARCHITECTURE, ADRs, CHANGELOG, demo
 - **Lane ID / scripts:** `docs-arch-7` — `docs-arch/`
 
@@ -11688,6 +11705,7 @@ Direction: state "TypeScript needs `moduleResolution` `bundler`, `node16` or `no
 
 - **Location:** `docs/adr/0002-interaction-as-react-state.md:45-48`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #220 (862a3d07). Fixed: ADRs 0001 (ports, oracle versions), 0002 (canvas binds the event loop), 0003, 0004 (budget rows and the entry points no row imports, tied by test), 0006 (row-keys.ts), 0007, 0008, 0010 (regex 'refuse', ROADMAP wording) amended; missing ADRs written: 0011 engine parts, 0012 exact hit test and tooltip decisions, 0013 PNG.
 - **Area:** docs / ARCHITECTURE, ADRs, CHANGELOG, demo
 - **Lane ID / scripts:** `docs-arch-8` — `docs-arch/`
 
@@ -11704,6 +11722,7 @@ Direction: state "TypeScript needs `moduleResolution` `bundler`, `node16` or `no
 
 - **Location:** `docs/ARCHITECTURE.md:21-60`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #220 (862a3d07). Fixed: package map redrawn from the import graph (lean entries, dynamic imports dotted, /png /transition /all /lean in the tables); docs-claims computes the value importers of core/dom, core/addons and the barrel and checks the caption names them, and the entry lists of ARCHITECTURE, API.md, README and the core README against the exports maps; lifecycle sentence says specNeeds.
 - **Area:** docs / ARCHITECTURE, ADRs, CHANGELOG, demo
 - **Lane ID / scripts:** `docs-arch-9` — `docs-arch/`
 
@@ -11717,6 +11736,7 @@ Direction: state "TypeScript needs `moduleResolution` `bundler`, `node16` or `no
 
 - **Location:** `apps/demo/README.md:9`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #220 (862a3d07). Fixed: demo README/VegaPane describe the compilers correctly, every <Chart>/<ChartStream> is under a Suspense boundary, dataChanges is made where the rows are, the brush card uses the spec's own parameter, the width=0 pattern is gone, stale comment fixed, the header states no measured figure; docs-claims checks the Suspense coverage by AST, no digits in the hero, no ref-derived dataChanges.
 - **Area:** docs / ARCHITECTURE, ADRs, CHANGELOG, demo (also categories 8)
 - **Lane ID / scripts:** `docs-arch-10` — `docs-arch/`
 
@@ -11738,6 +11758,7 @@ Direction: state "TypeScript needs `moduleResolution` `bundler`, `node16` or `no
 
 - **Location:** `docs/ARCHITECTURE.md:353`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #220 (862a3d07). Fixed: ARCHITECTURE no longer says 'cached per spec object' or 'no regular expression' (the walk is per call, the hook caches, one small regex for date: patterns) and names the optional colour read of the pulse path.
 - **Area:** docs / ARCHITECTURE, ADRs, CHANGELOG, demo
 - **Lane ID / scripts:** `docs-arch-11` — `docs-arch/`
 
@@ -11750,6 +11771,7 @@ Direction: state "TypeScript needs `moduleResolution` `bundler`, `node16` or `no
 
 - **Location:** `docs/ARCHITECTURE.md:577`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #220 (862a3d07). Fixed: the stale count is gone and the docs-counts guard now matches 'of the 1060 specs' (pattern test added).
 - **Area:** docs / ARCHITECTURE, ADRs, CHANGELOG, demo
 - **Lane ID / scripts:** `docs-arch-12` — `docs-arch/`
 
@@ -12181,6 +12203,7 @@ Header says the nightly "leaves a committed, replayable artifact"; it uploads a 
 
 - **Location:** `docs/ERRORS.md:393-395`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #220 (862a3d07). Fixed: the circular-data and stratify-key rows are re-scoped to what a spec can produce (compile-time SpecParseError, as vega), the phase list says 'for example' and lists the phases found.
 - **Area:** docs / README, API, ERRORS
 - **Lane ID / scripts:** `docs-api-12` — `docs-api/`
 
@@ -12198,6 +12221,7 @@ Direction: delete or re-scope the two rows, and say "for example" before the pha
 
 - **Location:** `docs/ERRORS.md:4-5`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #220 (862a3d07). Fixed: ERRORS.md lists every [aster] stem the sources throw (39 were missing) and the prefix rule says 'most' and names the vega-worded exceptions incl. defaultLocale; docs-claims fails on a thrown stem the document lacks.
 - **Area:** docs / README, API, ERRORS
 - **Lane ID / scripts:** `docs-api-13` — `docs-api/`
 
@@ -12229,6 +12253,7 @@ Direction: a generated or test-guarded list of `[aster]` message stems against E
 
 - **Location:** `docs/API.md:465`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #220 (862a3d07 17a9f314). Fixed: ScaleContext, TransformContext and ChartStreamInput are exported; every exported type of every entry (about 90 were undocumented) is named in API.md 'Exported types'; api-docs-coverage now checks exported types and that no type API.md names is unreachable (fails with the ScaleContext export removed; seen).
 - **Area:** docs / README, API, ERRORS (also categories 4)
 - **Lane ID / scripts:** `docs-api-14` — `docs-api/`
 
@@ -12261,6 +12286,7 @@ Direction: export the four types or stop naming them; extend the API coverage te
 
 - **Location:** `README.md:202-203`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #220 (862a3d07). Fixed: README and the core README list /transition, /png, /all and say /lean* is internal; docs-claims compares every entry list with the exports maps.
 - **Area:** docs / README, API, ERRORS
 - **Lane ID / scripts:** `docs-api-15` — `docs-api/`
 
@@ -12277,6 +12303,7 @@ Status: **CONFIRMED-TRACE**.
 
 - **Location:** `docs/API.md:3`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #220 (862a3d07). Fixed: docs-examples.test.mjs type-checks every ts/tsx block of every document other than README (shared scripts/lib/doc-blocks.mjs resolves through exports, so the README gate no longer bypasses them); ANIMATION's two blocks and API.md's evaluateChart block now compile; the unneeded cast in the react README is gone.
 - **Area:** docs / README, API, ERRORS
 - **Lane ID / scripts:** `docs-api-17` — `docs-api/`
 
@@ -12295,6 +12322,7 @@ Direction: run the extraction over every doc with `ts`/`tsx` fences, resolving t
 
 - **Location:** `packages/react/src/chart-types.ts:223`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #220 (862a3d07). Fixed: renderTooltip and useChartStream TSDoc follow the docs, the interactive TSDoc was already right, ANIMATION's transition size is tied to the budget table by perf-docs.test.
 - **Area:** docs / README, API, ERRORS
 - **Lane ID / scripts:** `docs-api-18` — `docs-api/`
 
@@ -13892,6 +13920,7 @@ CONFIRMED-TRACE.
 
 - **Location:** `docs/ERRORS.md:58-59`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #220 (c1a3df3c 862a3d07). Fixed: ChartSession.evaluate(null), createChartStream(null) and evaluateChart(spec) throw named [aster] errors (shared guards in spec-guards.ts, no compiler import), a partial logger is completed from the console; misuse.test.ts (15 of 16 cases failed with the old sources checked out); ERRORS.md says so.
 - **Area:** docs / README, API, ERRORS
 - **Lane ID / scripts:** `docs-api-11` — `docs-api/`
 
@@ -13918,6 +13947,7 @@ Direction: apply the `compileChart` shape check at the three other doors, and to
 
 - **Location:** `packages/react/src/ChartCore.tsx:432`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #220 (c1a3df3c 17a9f314 7953a36b). Fixed: <Chart renderer> that is no renderer is reported once and draws SVG (3 variants, fails without the report), stream policy/capacity/maxQueuedRows/batch keys refused, unknown mark type already refused as vega does, limits typos/NaN already refused (7953a36b); documented in API.md and ERRORS.md.
 - **Area:** docs / README, API, ERRORS
 - **Lane ID / scripts:** `docs-api-16` — `docs-api/`
 
