@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 706 of 766 findings resolved (683 fixed, 19 already fixed on main, 4 disputed with evidence); 60 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 709 of 766 findings resolved (686 fixed, 19 already fixed on main, 4 disputed with evidence); 57 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -76,7 +76,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C27 | High | core / runtime: marks, encode, groups | Vega's colour-object encode is silently dropped | `packages/core/src/runtime.ts:6957-6964` | CONFIRMED (run; re-run by lead) |
 | C28 | High | core / runtime: marks, encode, groups | The per-item `zindex` channel does not reorder painting | `packages/core/src/runtime.ts:5597-5616` | CONFIRMED (run; re-run by lead) |
 | C29 | High | core / session, stream, limits | `limits: { maxGeneratedRows }` alone removes the `rows` ceiling for `density` / `quantile` | `packages/core/src/limits.ts:460-463` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
-| C30 | High | core / session, stream, limits | A rejected evaluation or flush leaves its rows in the last good scene's datasets and runtime | `packages/core/src/incremental-engine.ts:128-148` | CONFIRMED (run; re-run by lead) |
+| C30 | High | core / session, stream, limits | A rejected evaluation or flush leaves its rows in the last good scene's datasets and runtime | `packages/core/src/incremental-engine.ts:128-148` | CONFIRMED (run; re-run by lead) → FIXED (#222) |
 | C31 | High | core / expressions, regex screen | `item` is always `undefined` in the engine's expressions, including encode `signal` expressions where Vega binds the scenegraph item | `packages/core/src/expr-interpreter.ts:573-574` | CONFIRMED (run; re-run by lead) → FIXED (#197) |
 | C32 | High | core / expressions, regex screen | A regex literal with `g` or `y` is a single shared `RegExp`, so `test` advances `lastIndex` from row to row | `packages/core/src/expr-interpreter.ts:445-448` | CONFIRMED (run; re-run by lead) → FIXED (#197) |
 | C33 | High | core / loading, URL policy, add-ons | `format: {type:'topojson', feature: X}` throws a raw `TypeError` when `X` is a single geometry rather than a `GeometryCollection` | `packages/core/src/addon-load.ts:52-55` | CONFIRMED (run; re-run by lead) → FIXED (#192) |
@@ -114,7 +114,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C65 | High | conformance / scripts and gates | The batch gate's corpus half compares a render with itself, and its tolerance passes dozens of missing marks | `packages/conformance/scripts/browser-svg-batch-parity.mts:34-36` | CONFIRMED (run; re-run by lead) → FIXED (#204) |
 | C66 | High | tooling / gates, CI, release, benchmarks | a prerelease tag publishes as npm `latest` | `.github/workflows/release.yml:103` | CONFIRMED (traced; lines re-read by lead) → FIXED (#187) |
 | C67 | High | tests / core (legacy copies II … path) | The hit comparison names items by first-encounter order on each side, so "compared by item identity" does not hold: a wrong-item bug is invisible | `packages/core/src/geometry-differential.testlib.ts:181` | CONFIRMED (run; re-run by lead) → FIXED (#200) |
-| C68 | High | gallery / official Vega examples II | A signal that holds an event's `datum` is never identical to a row afterwards, so `reorderable-matrix` cannot highlight or reorder | `packages/core/src/runtime.ts:4106-4108` | CONFIRMED (run; re-run by lead) |
+| C68 | High | gallery / official Vega examples II | A signal that holds an event's `datum` is never identical to a row afterwards, so `reorderable-matrix` cannot highlight or reorder | `packages/core/src/runtime.ts:4106-4108` | CONFIRMED (run; re-run by lead) → FIXED (#222) |
 | C69 | High | gallery / official Vega-Lite examples I | `interactive_crossfilter`: a unit inside a `layer` bins after its own transforms; vega-lite bins before them, so any brush re-bins and re-scales the charts | `packages/vl/src/compile.ts:4296-4298` | CONFIRMED (run; re-run by lead) → ALREADY FIXED (#211) |
 | C70 | High | gallery / official Vega-Lite examples II | After one legend click on the official `point_constant_legend_domain`, the legend loses its other entries; Vega keeps them | `packages/core/src/runtime.ts:4651-4658` | CONFIRMED (run; re-run by lead) |
 | C71 | High | react / <Chart>, shells, SSR | Pan/zoom keys and double-click are taken from bound inputs inside the chart | `packages/react/src/ChartCore.tsx:1449-1475` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
@@ -323,7 +323,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C274 | Medium | docs / README, API, ERRORS | the README's first React chart does not draw at the spec's `width`/`height` | `README.md:83-109` | CONFIRMED (run) → ALREADY FIXED (#220) |
 | C275 | Medium | docs / README, API, ERRORS | `ChartStreamHandle.flush/pending/pulse/stats` are typed `() => unknown` | `packages/react/src/ChartStream.tsx:42-45` | CONFIRMED (run) → FIXED (#220) |
 | C276 | Medium | docs / README, API, ERRORS | `hydrateChart`: `tooltips` shows no tooltip and writes row JSON into the DOM; the result is undocumented | `packages/react/src/ssr.ts:26-27` | CONFIRMED (run) → FIXED (#220) |
-| C277 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | the configuration LIMITS.md recommends for untrusted specs disables signal-scoped reuse, kept builds, instance marks, kept group marks, channel re-encode, kept guides and scale-settings r… | `docs/ARCHITECTURE.md:125` | CONFIRMED (run; re-run by lead) |
+| C277 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | the configuration LIMITS.md recommends for untrusted specs disables signal-scoped reuse, kept builds, instance marks, kept group marks, channel re-encode, kept guides and scale-settings r… | `docs/ARCHITECTURE.md:125` | CONFIRMED (run; re-run by lead) → FIXED (#222) |
 | C278 | Medium | leftovers / budgets, declarations, demo data, gallery lists | `diffRows`' result is not assignable to `dataPulse` or `StreamBatch.pulse`, though API.md says to pass it | `docs/API.md:224-229` | CONFIRMED (run) → FIXED (#188) |
 | C279 | Medium | gallery / official Vega-Lite examples I | `interactive_line_brush_cursor`: the view's own `cursor` is dropped and the root group never takes the pointer | `packages/core/src/runtime.ts:2072-2084` | CONFIRMED (run; re-run by lead) |
 | C280 | Medium | core / runtime: state, signals, reuse keys | Registry epoch is in the named key but not the whole-context key | `packages/core/src/runtime.ts:2509` | CONFIRMED (run) → FIXED (#201) |
@@ -1143,6 +1143,7 @@ Direction: one helper for "this dataset holds the rows it held" (`sameRows` or `
 
 - **Location:** `packages/core/src/incremental-engine.ts:128-148`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #222 (c56ec2bc 4d37e4f9). Kept guarantee, replaced mechanism: no per-append copy of published rows; earlier scenes (datasetsOfScene and the scene runtime's data()) read their rows through the history journal; scene-datasets.test.ts unchanged and green. Earlier work: #193.
 - **Area:** core / session, stream, limits (also categories 7)
 - **Lane ID / scripts:** `core-incr-3` — `core-incr/`
 
@@ -2018,6 +2019,7 @@ Direction: use one `ids` map for both sides, as `:210` does, or compare `t.item`
 
 - **Location:** `packages/core/src/runtime.ts:4106-4108`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #222 (9184881 4d43dd95 9868f07c 6e0769e5). Fixed: a pipeline whose step reads a field that it or a later step writes starts from the tuples the committed evaluation left and reruns exactly the steps vega reruns, for every tuple-keeping step type (formula, bin, timeunit, window, joinaggregate, lookup, stack, pie, dotbin, linkpath, voronoi, collect, extent, identifier) and for source-derived datasets (vega's Relay); matrix and drag family through both event loops, type family vs vega; remaining row: a filter in such a pipeline and stream appends (vega's ADD/REM tuple pulses not modelled), the filter case asserted to still differ. Earlier work: #201.
 - **Area:** gallery / official Vega examples II
 - **Lane ID / scripts:** `gallery2-1` — `gallery2/`
 
@@ -8808,6 +8810,7 @@ Direction: decide whether `tooltips` is public. If so, rename it for what it doe
 
 - **Location:** `docs/ARCHITECTURE.md:125`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #222 (f0c9f66b). Fixed for scales and top-level marks made whole: kept under the same limits and charged their recorded cumulative counts (session == fresh accept/refuse over generated budgets, limits-reuse.test.ts); partial reuse (spliced items, channels, census advance, builds, guides, instance marks) still re-made under limits (LIMITS.md, ROADMAP). Earlier work: #220.
 - **Area:** docs / ARCHITECTURE, ADRs, CHANGELOG, demo (also categories 7)
 - **Lane ID / scripts:** `docs-arch-4` — `docs-arch/`
 
