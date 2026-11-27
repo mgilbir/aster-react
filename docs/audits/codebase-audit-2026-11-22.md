@@ -4,6 +4,10 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
+<!-- resolution-progress -->
+**Resolution progress:** 23 of 766 findings resolved (23 fixed, 0 already fixed on main, 0 disputed with evidence); 743 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+<!-- /resolution-progress -->
+
 ## Bottom line
 
 The ports are good and the glue is not. Every owned re-implementation that has a live differential against its upstream (scales, formats, time, colour, curves, path parsing, geo projection and clipping, hierarchy/force/voronoi/contour numerics, the event-selector grammar, selection tests, guide layout) came back equal to Vega/d3 over several hundred thousand generated cases run by this audit. The defects sit in four places those differentials do not reach:
@@ -108,7 +112,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C63 | High | conformance / harness | the label generator deletes inputs that expose a live, undocumented defect | `packages/conformance/src/label-cases.ts:192-195` | CONFIRMED (run; re-run by lead) |
 | C64 | High | conformance / scripts and gates | The `browser-conformance` gate cannot fail on a difference: the script never sets an exit code | `packages/conformance/scripts/browser-conformance.mts:134-141` | CONFIRMED (traced; lines re-read by lead) |
 | C65 | High | conformance / scripts and gates | The batch gate's corpus half compares a render with itself, and its tolerance passes dozens of missing marks | `packages/conformance/scripts/browser-svg-batch-parity.mts:34-36` | CONFIRMED (run; re-run by lead) |
-| C66 | High | tooling / gates, CI, release, benchmarks | a prerelease tag publishes as npm `latest` | `.github/workflows/release.yml:103` | CONFIRMED (traced; lines re-read by lead) |
+| C66 | High | tooling / gates, CI, release, benchmarks | a prerelease tag publishes as npm `latest` | `.github/workflows/release.yml:103` | CONFIRMED (traced; lines re-read by lead) → FIXED (#187) |
 | C67 | High | tests / core (legacy copies II … path) | The hit comparison names items by first-encounter order on each side, so "compared by item identity" does not hold: a wrong-item bug is invisible | `packages/core/src/geometry-differential.testlib.ts:181` | CONFIRMED (run; re-run by lead) |
 | C68 | High | gallery / official Vega examples II | A signal that holds an event's `datum` is never identical to a row afterwards, so `reorderable-matrix` cannot highlight or reorder | `packages/core/src/runtime.ts:4106-4108` | CONFIRMED (run; re-run by lead) |
 | C69 | High | gallery / official Vega-Lite examples I | `interactive_crossfilter`: a unit inside a `layer` bins after its own transforms; vega-lite bins before them, so any brush re-bins and re-scales the charts | `packages/vl/src/compile.ts:4296-4298` | CONFIRMED (run; re-run by lead) |
@@ -146,7 +150,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C101 | Medium | react / hooks, streams, workers | `validateDataChanges` accepts `undefined` and holes | `packages/react/src/dataChanges.ts:49-50` | CONFIRMED (run) |
 | C102 | Medium | vl / composition | The repeated spec's `name` goes raw into signal names, scale names and expressions | `packages/vl/src/compile.ts:3192` | CONFIRMED (run; re-run by lead) |
 | C103 | Medium | vl / mark encoding | Titles are spliced into the tooltip object literal and the aria description with only `"` escaped | `packages/vl/src/compile.ts:7805` | CONFIRMED (run) |
-| C104 | Medium | tooling / gates, CI, release, benchmarks | the dependency boundary still has holes (continues C40) | `scripts/lib/scan-imports.mjs:70-83` | CONFIRMED (run; re-run by lead) |
+| C104 | Medium | tooling / gates, CI, release, benchmarks | the dependency boundary still has holes (continues C40) | `scripts/lib/scan-imports.mjs:70-83` | CONFIRMED (run; re-run by lead) → FIXED (#187) |
 | C105 | Medium | tests / core (data … hit) | the linearity guard for the untrusted-text readers accepts quadratic growth | `packages/core/src/expr-text.test.ts:33-37` | CONFIRMED (run) |
 | C106 | Medium | tests / core (incremental oracle, legacy copies I) | Legacy and new DOM builders cache descriptors in the same `__domDesc` slot, so "old vs new" on reused items compares an object with itself | `packages/core/src/legacy-dom.testlib.ts:397-409` | CONFIRMED (run; re-run by lead) |
 | C107 | Medium | tests / core (limits, loaders, locale, oracle vectors) | Under any `limits` object, a spec that shares sub-objects makes the pre-flight walk exponential; the "spec size" ceiling only holds without limits | `packages/core/src/limits.ts:547-585` | CONFIRMED (run; re-run by lead) |
@@ -239,7 +243,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C194 | Medium | conformance / scripts and gates | The canvas tolerance passes a missing 5×5 mark, a recoloured 6×6 mark and a 7×7 mark moved by a pixel; nothing asks for ink | `packages/conformance/scripts/canvas-pixels.mts:11` | CONFIRMED (run; re-run by lead) |
 | C195 | Medium | conformance / scripts and gates | Phases 2–4 of the canvas gate count the path they exist to test but never require it to be taken | `packages/conformance/scripts/browser-canvas-append.mts:69-70` | CONFIRMED (traced) |
 | C196 | Medium | conformance / scripts and gates | Two React-gate assertions cannot fail for the reason they name | `packages/react/scripts/browser-interaction.mts:455` | CONFIRMED (traced) |
-| C197 | Medium | tooling / gates, CI, release, benchmarks | the nightly browser floors pass on missing measurements, and are loose where they do bite | `packages/benchmarks/src/browser-floors.ts:52-57` | CONFIRMED (run; re-run by lead) |
+| C197 | Medium | tooling / gates, CI, release, benchmarks | the nightly browser floors pass on missing measurements, and are loose where they do bite | `packages/benchmarks/src/browser-floors.ts:52-57` | CONFIRMED (run; re-run by lead) → FIXED (#187) |
 | C198 | Medium | tests / core (legacy copies II … path) | Product defect shared by legacy and new: a rect with a numeric-string `width`/`height` is drawn zero-size (Vega draws it), while the hit index still treats it as full-size | `packages/core/src/geometry.ts:670-671` | CONFIRMED (run; re-run by lead) |
 | C199 | Medium | tests / core (limits, loaders, locale, oracle vectors) | `okResult` passes when the attack child crashes, so the "still renders" halves of the ceiling tests cannot fail on an out-of-memory | `packages/core/src/limits-attacks.test.ts:392-395` | CONFIRMED (run; re-run by lead) |
 | C200 | Medium | tests / core (limits, loaders, locale, oracle vectors) | "sequence transform with only a time budget is cut off by the clock inside the loop" is stopped by the built-in ceiling, not the clock | `packages/core/src/limits-attacks.test.ts:28-33` | CONFIRMED (run; re-run by lead) |
@@ -273,7 +277,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C228 | Medium | core / SVG, DOM patcher, canvas, a11y | A throw mid-paint leaves the context's save stack, transform and clip behind | `packages/core/src/canvas.ts:134-157` | CONFIRMED (run) |
 | C229 | Medium | core / hit index, bounds, geometry | A retained index reads the engine's live items array, so after an append it reports items of a later scene | `packages/core/src/hit.ts:831` | CONFIRMED (run) |
 | C230 | Medium | conformance / scripts and gates | Several gates pass on zero cases | `packages/conformance/scripts/fuzz.mts:119` | CONFIRMED (traced) |
-| C231 | Medium | tooling / gates, CI, release, benchmarks | a partial publish cannot be finished by the workflow, and exact pins make version skew costly | `.github/workflows/release.yml:99-104` | CONFIRMED (traced) |
+| C231 | Medium | tooling / gates, CI, release, benchmarks | a partial publish cannot be finished by the workflow, and exact pins make version skew costly | `.github/workflows/release.yml:99-104` | CONFIRMED (traced) → FIXED (#187) |
 | C232 | Medium | core / runtime: state, signals, reuse keys | An unknown name in a change hint is trusted | `packages/core/src/runtime.ts:962-967` | CONFIRMED (run) |
 | C233 | Medium | core / session, stream, limits | Numeric limits are not validated | `packages/core/src/limits.ts:108-111` | CONFIRMED (run) |
 | C234 | Medium | core / expressions, regex screen | `maxStringLength` and `maxGeneratedBytes` meter only `pad` and number-format width | `packages/core/src/expression.ts:205-216` | CONFIRMED (run) |
@@ -293,7 +297,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C248 | Medium | conformance / scripts and gates | No browser gate pans, zooms or brushes `<Chart>` over a time (or band/point) scale | `packages/react/scripts/browser-interaction.mts:153-174` | CONFIRMED (traced) |
 | C249 | Medium | conformance / scripts and gates | Whole feature classes are outside every generator | `packages/conformance/scripts/fuzz.mts:41-106` | CONFIRMED (traced) |
 | C250 | Medium | conformance / scripts and gates | A third of the generated gradient entries is dropped by a bare `catch`, uncounted | `packages/conformance/scripts/browser-canvas-parity.mts:226-234` | CONFIRMED (run) |
-| C251 | Medium | tooling / gates, CI, release, benchmarks | no time bound on a gate, on the CI jobs or on the release jobs | `scripts/gates.mjs:144` | CONFIRMED (traced) |
+| C251 | Medium | tooling / gates, CI, release, benchmarks | no time bound on a gate, on the CI jobs or on the release jobs | `scripts/gates.mjs:144` | CONFIRMED (traced) → FIXED (#187) |
 | C252 | Medium | tests / core (incremental oracle, legacy copies I) | What the oracle's `compare` and generators cannot see (beyond C85 (docs-arch-3) / C625 (core-rt2-10)) | `packages/core/src/incremental-oracle.test.ts:555-573` | CONFIRMED (run) |
 | C253 | Medium | tests / core (incremental oracle, legacy copies I) | `incremental.test.ts` compares SVGs that do not depend on the transform under test | `packages/core/src/incremental.test.ts:95-117` | CONFIRMED (run; re-run by lead) |
 | C254 | Medium | tests / core (legacy copies II … path) | Input space: branches of the legacy copies the differential never executes, so the matching new code is never compared on them | `packages/core/src/geometry-differential.testlib.ts:211` | CONFIRMED (run) |
@@ -345,9 +349,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C300 | Medium | vl / composite marks, selections, transforms | a dotted `as` is refused for `calculate` but accepted for `aggregate`, then read as a nested path | `packages/vl/src/transforms.ts:268` | CONFIRMED (run) |
 | C301 | Medium | conformance / harness | sweep skip tables carry reasons that are no longer true | `packages/conformance/src/sweeps/vega-lite-schema.mjs:1-9` | CONFIRMED (traced) |
 | C302 | Medium | conformance / scripts and gates | Why no gate caught `in` throwing and `/g` regexes alternating | `packages/conformance/scripts/differential-expression-engine-gen.test.mts:107-111` | CONFIRMED (run) |
-| C303 | Medium | tooling / gates, CI, release, benchmarks | the `typecheck` gate skips about 160 test files and all runner scripts, and they hold real type errors | `packages/vl/tsconfig.json:1` | CONFIRMED (run) |
-| C304 | Medium | tooling / gates, CI, release, benchmarks | the benchmark's `aster` and `asterDom` embeds are the same configuration | `packages/benchmarks/src/embeds.tsx:60-63` | CONFIRMED (traced; lines re-read by lead) |
-| C305 | Medium | tooling / gates, CI, release, benchmarks | `ci.yml` runs on every pull request although the convention is CI on `main` only | `.github/workflows/ci.yml:3-7` | CONFIRMED (traced) |
+| C303 | Medium | tooling / gates, CI, release, benchmarks | the `typecheck` gate skips about 160 test files and all runner scripts, and they hold real type errors | `packages/vl/tsconfig.json:1` | CONFIRMED (run) → FIXED (#187) |
+| C304 | Medium | tooling / gates, CI, release, benchmarks | the benchmark's `aster` and `asterDom` embeds are the same configuration | `packages/benchmarks/src/embeds.tsx:60-63` | CONFIRMED (traced; lines re-read by lead) → FIXED (#187) |
+| C305 | Medium | tooling / gates, CI, release, benchmarks | `ci.yml` runs on every pull request although the convention is CI on `main` only | `.github/workflows/ci.yml:3-7` | CONFIRMED (traced) → FIXED (#187) |
 | C306 | Medium | docs / README, API, ERRORS | an undeclared dataset name in `data` is silently ignored (Vega throws) | `docs/API.md:358-359` | CONFIRMED (run; re-run by lead) |
 | C307 | Medium | tests / core (incremental oracle, legacy copies I) | The three legacy testlibs are not "frozen copies", share modules with the code they check, and leave the view-sizing bounds uncompared | `packages/core/src/legacy-bounds.testlib.ts:1-3` | CONFIRMED (traced) |
 | C308 | Medium | tests / core (legacy copies II … path) | For `path` marks the legacy hit, intersect and label painter call the new reader: the old-vs-new comparison is new-vs-new | `packages/core/src/legacy-hit.testlib.ts:39` | CONFIRMED (run) |
@@ -409,10 +413,10 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C364 | Medium | vl / validate, optimize, predicates | "compiling reads none of [the rows], so it costs the same for 3 rows as for 6,000" is false on three paths | `packages/vl/README.md:41-43` | CONFIRMED (run) |
 | C365 | Medium | conformance / scripts and gates | The header says `intersect()` is also checked "from a group item's `mark`"; the third argument is never passed | `packages/conformance/scripts/browser-intersect.mts:8` | CONFIRMED (traced) |
 | C366 | Medium | conformance / scripts and gates | The wordcloud case the matrix skips is run by no gate, though the docs say `conformance:browser` runs it | `packages/conformance/scripts/transform-matrix.mts:161` | CONFIRMED (traced) |
-| C367 | Medium | tooling / gates, CI, release, benchmarks | the documented release steps do not push the tag | `docs/RELEASE.md:55-57` | CONFIRMED (run; re-run by lead) |
-| C368 | Medium | tooling / gates, CI, release, benchmarks | PERFORMANCE.md's bundle table disagrees with the budgets in code (continues D2) | `docs/PERFORMANCE.md:341` | CONFIRMED (traced) |
-| C369 | Medium | tooling / gates, CI, release, benchmarks | the stated contributor Node version cannot run the test suite | `CONTRIBUTING.md:3-5` | CONFIRMED (traced) |
-| C370 | Medium | tooling / gates, CI, release, benchmarks | PERFORMANCE.md measurements cannot be reproduced from the repository | `docs/PERFORMANCE.md:4-6` | CONFIRMED (traced) |
+| C367 | Medium | tooling / gates, CI, release, benchmarks | the documented release steps do not push the tag | `docs/RELEASE.md:55-57` | CONFIRMED (run; re-run by lead) → FIXED (#187) |
+| C368 | Medium | tooling / gates, CI, release, benchmarks | PERFORMANCE.md's bundle table disagrees with the budgets in code (continues D2) | `docs/PERFORMANCE.md:341` | CONFIRMED (traced) → FIXED (#187) |
+| C369 | Medium | tooling / gates, CI, release, benchmarks | the stated contributor Node version cannot run the test suite | `CONTRIBUTING.md:3-5` | CONFIRMED (traced) → FIXED (#187) |
+| C370 | Medium | tooling / gates, CI, release, benchmarks | PERFORMANCE.md measurements cannot be reproduced from the repository | `docs/PERFORMANCE.md:4-6` | CONFIRMED (traced) → FIXED (#187) |
 | C371 | Medium | docs / README, API, ERRORS | TypeScript `moduleResolution` requirement is nowhere stated | `README.md:9-30` | CONFIRMED (run; re-run by lead) |
 | C372 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | Fourteen engine deviations confirmed by other lanes appear in no deviation list; INTERACTION.md claims the opposite for pan/zoom on log/time scales | `docs/ARCHITECTURE.md:583-612` | CONFIRMED (traced) |
 | C373 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | CHANGELOG 0.4.0/0.4.1 files behaviour-breaking changes under Fixed or Performance with no migration note | `CHANGELOG.md:98-105` | CONFIRMED (traced) |
@@ -537,9 +541,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C492 | Low | react / hooks, streams, workers | `mergeBatches` is quadratic in pushes per tick | `packages/react/src/batches.ts:18-21` | CONFIRMED (run) |
 | C493 | Low | vl / composition | `compile` has no depth or cycle guard | `packages/vl/src/compile.ts:134-141` | CONFIRMED (run) |
 | C494 | Low | vl / composite marks, selections, transforms | `stack` `as` with one name is emitted as written | `packages/vl/src/transforms.ts:327` | CONFIRMED (run) |
-| C495 | Low | tooling / gates, CI, release, benchmarks | `pnpm build` rebuilds `@aster-charts/react` a second time, concurrently with a build that reads it | `apps/demo/package.json:8` | PLAUSIBLE |
-| C496 | Low | tooling / gates, CI, release, benchmarks | `check-bundle-shaking --only <typo>` passes with zero patterns | `scripts/check-bundle-shaking.mjs:42-43` | CONFIRMED (traced) |
-| C497 | Low | tooling / gates, CI, release, benchmarks | `pnpm test:tz <misspelt zone>` runs in UTC and reports "all zones passed" | `scripts/test-tz.mjs:34-45` | CONFIRMED (run) |
+| C495 | Low | tooling / gates, CI, release, benchmarks | `pnpm build` rebuilds `@aster-charts/react` a second time, concurrently with a build that reads it | `apps/demo/package.json:8` | PLAUSIBLE → FIXED (#187) |
+| C496 | Low | tooling / gates, CI, release, benchmarks | `check-bundle-shaking --only <typo>` passes with zero patterns | `scripts/check-bundle-shaking.mjs:42-43` | CONFIRMED (traced) → FIXED (#187) |
+| C497 | Low | tooling / gates, CI, release, benchmarks | `pnpm test:tz <misspelt zone>` runs in UTC and reports "all zones passed" | `scripts/test-tz.mjs:34-45` | CONFIRMED (run) → FIXED (#187) |
 | C498 | Low | tests / conformance differentials II | `projection-scope-vs-vega` empties the module-level `sphere` dataset for every later test | `packages/conformance/src/projection-scope-vs-vega.test.ts:54-58` | CONFIRMED (traced) |
 | C499 | Low | leftovers / budgets, declarations, demo data, gallery lists | The locale setters accept `undefined` by type, throw a raw `TypeError`, and `defaultLocale(def, undefined)` leaves the process-wide default half replaced | `packages/core/src/locale.ts:151-153` | CONFIRMED (run; re-run by lead) |
 | C500 | Low | core / runtime: state, signals, reuse keys | A fractional or `NaN` `dataChanges` index blanks the chart or throws a bare TypeError | `packages/core/src/runtime.ts:950` | CONFIRMED (run) |
@@ -551,7 +555,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C506 | Low | react / hooks, streams, workers | streams are not closed on unmount; `push` still answers `true` | `packages/react/src/useChartStream.ts:151-158` | CONFIRMED (run) |
 | C507 | Low | conformance / harness | no per-spec time bound in the Node runners | `packages/conformance/src/run.ts:58-74` | CONFIRMED (traced) |
 | C508 | Low | conformance / scripts and gates | `gallery-fetch` has no fetch timeout, and `--regenerate` prints `ok` over a mismatching cache | `packages/conformance/scripts/gallery-fetch.mts:27` | CONFIRMED (traced) |
-| C509 | Low | tooling / gates, CI, release, benchmarks | `verify-publish` never checks the `browser` export targets | `scripts/verify-publish.mjs:102` | CONFIRMED (traced) |
+| C509 | Low | tooling / gates, CI, release, benchmarks | `verify-publish` never checks the `browser` export targets | `scripts/verify-publish.mjs:102` | CONFIRMED (traced) → FIXED (#187) |
 | C510 | Low | tests / core (incremental oracle, legacy copies I) | `incremental-regressions.test.ts` "chain of superseded scenes" feeds false append pulses on two of its three appends | `packages/core/src/incremental-regressions.test.ts:449-459` | CONFIRMED (run) |
 | C511 | Low | tests / core (incremental oracle, legacy copies I) | Two stream tests assert less than their titles | `packages/core/src/incremental.test.ts:235-247` | CONFIRMED (traced) |
 | C512 | Low | tests / core (incremental oracle, legacy copies I) | `incremental-regressions.test.ts` leaves `--expose-gc` set on the worker | `packages/core/src/incremental-regressions.test.ts:467-470` | CONFIRMED (traced) |
@@ -608,8 +612,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C563 | Low | vl / composite marks, selections, transforms | dead branches and misplaced comments | `packages/vl/src/composite-marks.ts:56-61` | CONFIRMED (traced) |
 | C564 | Low | conformance / scripts and gates | One gate, two builds of the engine | `packages/conformance/scripts/browser-canvas-parity.mts:241-247` | CONFIRMED (traced) |
 | C565 | Low | conformance / scripts and gates | The geo generator keeps path marks fill-only for a defect "see the report" that the simple form no longer shows | `packages/conformance/scripts/geo-gen.mts:404-405` | CONFIRMED (run) |
-| C566 | Low | tooling / gates, CI, release, benchmarks | `tsc` never cleans `dist`: this tree holds a built module that has no source | `scripts/bundle-shaking.test.mjs:24-27` | CONFIRMED (run) |
-| C567 | Low | tooling / gates, CI, release, benchmarks | `readme-examples.test.mjs` keeps its own, already wrong, copy of the `exports` map | `scripts/readme-examples.test.mjs:39-46` | CONFIRMED (traced) |
+| C566 | Low | tooling / gates, CI, release, benchmarks | `tsc` never cleans `dist`: this tree holds a built module that has no source | `scripts/bundle-shaking.test.mjs:24-27` | CONFIRMED (run) → FIXED (#187) |
+| C567 | Low | tooling / gates, CI, release, benchmarks | `readme-examples.test.mjs` keeps its own, already wrong, copy of the `exports` map | `scripts/readme-examples.test.mjs:39-46` | CONFIRMED (traced) → FIXED (#187) |
 | C568 | Low | tooling / gates, CI, release, benchmarks | Config hygiene that hides things (knip ignores, a core entry no export reaches, unusable root tsconfig, strict flags off) | `knip.json:4-7` | CONFIRMED (traced) |
 | C569 | Low | tests / core (a11y … curves) | `CanvasLike.fillText` declares a fourth parameter nobody passes; the recorder's multi-line exclusion is dead | `packages/core/src/canvas.ts:64` | CONFIRMED (traced) |
 | C570 | Low | tests / core (a11y … curves) | Test files export functions that nothing imports | `packages/core/src/canvas-append-oracle.test.ts:32` | CONFIRMED (traced) |
@@ -683,9 +687,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C638 | Low | vl / validate, optimize, predicates | Test gaps: no negative merge tests in `optimize`, no `Object.prototype` assertion | `packages/vl/test/optimize-reads.test.ts:1` | CONFIRMED (traced) |
 | C639 | Low | vl / composite marks, selections, transforms | raw `TypeError`s instead of `VLCompileError`s | `packages/vl/src/composite-marks.ts:390` | CONFIRMED (run) |
 | C640 | Low | conformance / scripts and gates | Undocumented environment switches (one changes the verdict), raw TypeErrors in `gallery-triage`, fixed scratch paths | `packages/conformance/scripts/browser-signals.mts:1009` | CONFIRMED (traced) |
-| C641 | Low | tooling / gates, CI, release, benchmarks | the `incremental-append` gate has no test that it can fail | `packages/benchmarks/src/incremental.bench.tsx:36-38` | CONFIRMED (traced) |
-| C642 | Low | tooling / gates, CI, release, benchmarks | `pnpm check -- --only browser` is accepted, then "no gates selected" | `scripts/gates.mjs:121-135` | CONFIRMED (traced) |
-| C643 | Low | tooling / gates, CI, release, benchmarks | onboarding gaps (following README and CONTRIBUTING literally) | `CONTRIBUTING.md:1-44` | CONFIRMED (traced) |
+| C641 | Low | tooling / gates, CI, release, benchmarks | the `incremental-append` gate has no test that it can fail | `packages/benchmarks/src/incremental.bench.tsx:36-38` | CONFIRMED (traced) → FIXED (#187) |
+| C642 | Low | tooling / gates, CI, release, benchmarks | `pnpm check -- --only browser` is accepted, then "no gates selected" | `scripts/gates.mjs:121-135` | CONFIRMED (traced) → FIXED (#187) |
+| C643 | Low | tooling / gates, CI, release, benchmarks | onboarding gaps (following README and CONTRIBUTING literally) | `CONTRIBUTING.md:1-44` | CONFIRMED (traced) → FIXED (#187) |
 | C644 | Low | docs / README, API, ERRORS | raw `TypeError`s on simple misuse, where `renderSpec` has a proper message | `docs/ERRORS.md:58-59` | CONFIRMED (run) |
 | C645 | Low | docs / README, API, ERRORS | silently accepted misconfiguration (JS callers; TypeScript catches the literal forms) | `packages/react/src/ChartCore.tsx:432` | CONFIRMED (run) |
 | C646 | Low | tests / core (a11y … curves) | Test titles that assert less than they say | `packages/core/src/canvas-regressions.test.ts:68-80` | CONFIRMED (traced) |
@@ -768,8 +772,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C723 | Low | conformance / scripts and gates | `a11y-parity` header claims mark labels are compared for existence; no line reads a mark node | `packages/conformance/scripts/a11y-parity.mts:4-6` | CONFIRMED (traced) |
 | C724 | Low | conformance / scripts and gates | `fuzz.mts` header says the nightly "leaves a committed, replayable artifact"; it uploads a workflow artifact and commits nothing | `packages/conformance/scripts/fuzz.mts:6-8` | CONFIRMED (traced) |
 | C725 | Low | conformance / scripts and gates | Gate script header comments: garbled, inverted or missing the build prerequisite | `packages/conformance/scripts/browser-canvas-parity.mts:17-18` | CONFIRMED (traced) |
-| C726 | Low | tooling / gates, CI, release, benchmarks | RUNBOOK's environment table is wrong about `NODE_ENV` and misses two variables | `docs/RUNBOOK.md:172` | CONFIRMED (run) |
-| C727 | Low | tooling / gates, CI, release, benchmarks | benchmarks README and a bench header | `packages/benchmarks/README.md:24` | CONFIRMED (traced) |
+| C726 | Low | tooling / gates, CI, release, benchmarks | RUNBOOK's environment table is wrong about `NODE_ENV` and misses two variables | `docs/RUNBOOK.md:172` | CONFIRMED (run) → FIXED (#187) |
+| C727 | Low | tooling / gates, CI, release, benchmarks | benchmarks README and a bench header | `packages/benchmarks/README.md:24` | CONFIRMED (traced) → FIXED (#187) |
 | C728 | Low | docs / README, API, ERRORS | ERRORS.md documents messages a spec can no longer produce, and an incomplete phase list | `docs/ERRORS.md:393-395` | CONFIRMED (run) |
 | C729 | Low | docs / README, API, ERRORS | user-facing errors ERRORS.md does not list, and its own rule about prefixes | `docs/ERRORS.md:4-5` | CONFIRMED (run) |
 | C730 | Low | docs / README, API, ERRORS | type names API.md tells the reader to use that cannot be imported (continues D15 for types) | `docs/API.md:465` | CONFIRMED (run) |
@@ -1926,6 +1930,7 @@ The file ends by printing the failures:
 
 - **Location:** `.github/workflows/release.yml:103`
 - **Status:** CONFIRMED (traced; lines re-read by lead)
+- **Resolution:** FIXED in #187 (118b16a). release-publish.mjs passes --tag next/latest from the version; tested for 18 forms against a fake npm
 - **Area:** tooling / gates, CI, release, benchmarks (also categories 5)
 - **Lane ID / scripts:** `tooling-1` — `tooling/`
 
@@ -3466,6 +3471,7 @@ blank vs blank: null   hasInk: false
 
 - **Location:** `packages/benchmarks/src/browser-floors.ts:52-57`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #187 (2fe9114,13b00fa). every field validated, partners/rows required, faster-vega comparison, heap nightly; 227 tests
 - **Area:** tooling / gates, CI, release, benchmarks (also categories 5)
 - **Lane ID / scripts:** `tooling-7` — `tooling/`
 
@@ -5486,6 +5492,7 @@ Direction: skip a group item whose bounds miss the box, as Vega does, and restor
 
 - **Location:** `.github/workflows/release.yml:99-104`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #187 (118b16a). idempotent publish script, RELEASE.md recovery and lockstep rationale (Q21)
 - **Area:** tooling / gates, CI, release, benchmarks (also categories 5)
 - **Lane ID / scripts:** `tooling-5` — `tooling/`
 
@@ -5642,6 +5649,7 @@ CONFIRMED-RUN.
 
 - **Location:** `apps/demo/package.json:8`
 - **Status:** PLAUSIBLE
+- **Resolution:** FIXED in #187 (2440a29). demo build is vite build
 - **Area:** tooling / gates, CI, release, benchmarks
 - **Lane ID / scripts:** `tooling-14` — `tooling/`
 
@@ -5653,6 +5661,7 @@ CONFIRMED-RUN.
 
 - **Location:** `scripts/check-bundle-shaking.mjs:42-43`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #187 (2fe9114). --only/--bundler validated, per-pid scratch dir
 - **Area:** tooling / gates, CI, release, benchmarks
 - **Lane ID / scripts:** `tooling-18` — `tooling/`
 
@@ -5664,6 +5673,7 @@ CONFIRMED-RUN.
 
 - **Location:** `scripts/test-tz.mjs:34-45`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #187 (2fe9114). zone checked with Intl before running
 - **Area:** tooling / gates, CI, release, benchmarks
 - **Lane ID / scripts:** `tooling-19` — `tooling/`
 
@@ -6223,6 +6233,7 @@ Spec `vega/zoomable-world-map.vg.json:32` (`copy('projection')`), `:40`, `:47`, 
 
 - **Location:** `packages/vl/tsconfig.json:1`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #187 (2440a29). tests and scripts in typecheck includes, 45 errors fixed, coverage test over git ls-files
 - **Area:** tooling / gates, CI, release, benchmarks (also categories 8)
 - **Lane ID / scripts:** `tooling-4` — `tooling/`
 
@@ -6240,6 +6251,7 @@ Spec `vega/zoomable-world-map.vg.json:32` (`copy('projection')`), `:40`, `:47`, 
 
 - **Location:** `packages/benchmarks/src/embeds.tsx:60-63`
 - **Status:** CONFIRMED (traced; lines re-read by lead)
+- **Resolution:** FIXED in #187 (fa2ed6d). aster=incremental false, asterDom=true explicit, probe test; exposed and fixed blank string-mode dense charts
 - **Area:** tooling / gates, CI, release, benchmarks (also categories 7)
 - **Lane ID / scripts:** `tooling-6` — `tooling/`
 
@@ -6254,6 +6266,7 @@ Spec `vega/zoomable-world-map.vg.json:32` (`copy('projection')`), `:40`, `:47`, 
 
 - **Location:** `.github/workflows/ci.yml:3-7`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #187 (a7b4374). ci.yml triggers on push to main only, tested
 - **Area:** tooling / gates, CI, release, benchmarks
 - **Lane ID / scripts:** `tooling-11` — `tooling/`
 
@@ -7180,6 +7193,7 @@ The generator keeps path marks fill-only because of an Aster defect ("see the re
 
 - **Location:** `scripts/bundle-shaking.test.mjs:24-27`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #187 (50b953e). build cleans dist; budget refuses orphans
 - **Area:** tooling / gates, CI, release, benchmarks
 - **Lane ID / scripts:** `tooling-15` — `tooling/`
 
@@ -7191,6 +7205,7 @@ On this freshly built tree `packages/core/dist/svg-path.js` exists and `packages
 
 - **Location:** `scripts/readme-examples.test.mjs:39-46`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #187 (13b00fa). paths built from manifests exports
 - **Area:** tooling / gates, CI, release, benchmarks
 - **Lane ID / scripts:** `tooling-21` — `tooling/`
 
@@ -8955,6 +8970,7 @@ The README contract is "renders like vega-lite, or throws". For these schema-inv
 
 - **Location:** `scripts/gates.mjs:144`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #187 (a7b4374). per-gate deadline with process-group kill; timeout-minutes on all jobs, tested
 - **Area:** tooling / gates, CI, release, benchmarks
 - **Lane ID / scripts:** `tooling-10` — `tooling/`
 
@@ -9434,6 +9450,7 @@ Direction: validate once where pulses are normalised (`runtime.ts:949-960`) with
 
 - **Location:** `scripts/verify-publish.mjs:102`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #187 (13b00fa). all export leaves required; browser-condition bundle from tarballs
 - **Area:** tooling / gates, CI, release, benchmarks
 - **Lane ID / scripts:** `tooling-17` — `tooling/`
 
@@ -10496,6 +10513,7 @@ Run with `node --max-old-space-size=400 $S/probe.mjs <name> nolimits`.
 
 - **Location:** `scripts/lib/scan-imports.mjs:70-83`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #187 (1ada289). scanner+classifier+manifest+files checks cover all 7 audit cases; generated table tests
 - **Area:** tooling / gates, CI, release, benchmarks
 - **Lane ID / scripts:** `tooling-3` — `tooling/`
 
@@ -11011,6 +11029,7 @@ Measured with `perf.mjs` at 400,000 rows:
 
 - **Location:** `docs/RELEASE.md:55-57`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #187 (118b16a). tag pushed by name, PR flow; test runs documented commands against a bare remote
 - **Area:** tooling / gates, CI, release, benchmarks
 - **Lane ID / scripts:** `tooling-2` — `tooling/`
 
@@ -11026,6 +11045,7 @@ Measured with `perf.mjs` at 400,000 rows:
 
 - **Location:** `docs/PERFORMANCE.md:341`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #187 (50b953e). table tied to BUDGETS by perf-docs.test.mjs; API.md, README, d.ts comments fixed (bench numbers measured 2026-11-23)
 - **Area:** tooling / gates, CI, release, benchmarks
 - **Lane ID / scripts:** `tooling-8` — `tooling/`
 
@@ -11066,6 +11086,7 @@ Direction: the D2 direction still stands (one generated source). Short term, fix
 
 - **Location:** `CONTRIBUTING.md:3-5`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #187 (a7b4374). engines/.nvmrc/docs equal jsdom range; Node 20 dist smoke test (ran on 20.20.2)
 - **Area:** tooling / gates, CI, release, benchmarks (also categories 8)
 - **Lane ID / scripts:** `tooling-9` — `tooling/`
 
@@ -11081,6 +11102,7 @@ Direction: the D2 direction still stands (one generated source). Short term, fix
 
 - **Location:** `docs/PERFORMANCE.md:4-6`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #187 (50b953e). seven probes committed under benchmarks/scripts/probes and smoke-tested
 - **Area:** tooling / gates, CI, release, benchmarks
 - **Lane ID / scripts:** `tooling-12` — `tooling/`
 
@@ -11602,6 +11624,7 @@ Header says the nightly "leaves a committed, replayable artifact"; it uploads a 
 
 - **Location:** `docs/RUNBOOK.md:172`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #187 (2fe9114). RUNBOOK corrected; test requires every process.env name documented
 - **Area:** tooling / gates, CI, release, benchmarks
 - **Lane ID / scripts:** `tooling-16` — `tooling/`
 
@@ -11613,6 +11636,7 @@ Header says the nightly "leaves a committed, replayable artifact"; it uploads a 
 
 - **Location:** `packages/benchmarks/README.md:24`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #187 (50b953e). README bench description, transform.bench fresh rows per run
 - **Area:** tooling / gates, CI, release, benchmarks
 - **Lane ID / scripts:** `tooling-23` — `tooling/`
 
@@ -13228,6 +13252,7 @@ Status: **CONFIRMED-RUN** `t14-composite.mjs "repeat in transform"`.
 
 - **Location:** `packages/benchmarks/src/incremental.bench.tsx:36-38`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #187 (50b953e). overrides validated, --min-dense added, incremental-gate.test.mjs requires exit 1
 - **Area:** tooling / gates, CI, release, benchmarks
 - **Lane ID / scripts:** `tooling-13` — `tooling/`
 
@@ -13239,6 +13264,7 @@ The header says the overrides `--min-append=`, `--min-replace=`, `--min-dom=` an
 
 - **Location:** `scripts/gates.mjs:121-135`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #187 (a7b4374). --only matches tags
 - **Area:** tooling / gates, CI, release, benchmarks
 - **Lane ID / scripts:** `tooling-20` — `tooling/`
 
@@ -13250,6 +13276,7 @@ The header says the overrides `--min-append=`, `--min-replace=`, `--min-dom=` an
 
 - **Location:** `CONTRIBUTING.md:1-44`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #187 (a7b4374). CONTRIBUTING/README state needs, build before test, playwright step
 - **Area:** tooling / gates, CI, release, benchmarks
 - **Lane ID / scripts:** `tooling-24` — `tooling/`
 
