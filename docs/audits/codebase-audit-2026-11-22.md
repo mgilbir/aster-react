@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 675 of 766 findings resolved (654 fixed, 18 already fixed on main, 3 disputed with evidence); 91 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 676 of 766 findings resolved (655 fixed, 18 already fixed on main, 3 disputed with evidence); 90 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -488,7 +488,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C439 | Low | vl / mark encoding | `mark.shape: {expr}` does not reach the legend symbols | `packages/vl/src/compile.ts:8633-8639` | CONFIRMED (run) → FIXED (#209) |
 | C440 | Low | vl / mark encoding | The same time-unit field on x and y with `bandPosition` on one draws nothing | `packages/vl/src/compile.ts:7282-7290` | CONFIRMED (run) → FIXED (#209) |
 | C441 | Low | vl / validate, optimize, predicates | DateTime parts other than month/day/quarter are spliced into the predicate expression unchecked | `packages/vl/src/predicate.ts:55-67` | CONFIRMED (traced) → FIXED (#202) |
-| C442 | Low | vl / validate, optimize, predicates | smaller compile differences found in passing | `packages/vl/src/compile.ts:4268-4270` | CONFIRMED (run) |
+| C442 | Low | vl / validate, optimize, predicates | smaller compile differences found in passing | `packages/vl/src/compile.ts:4268-4270` | CONFIRMED (run) → FIXED (#219) |
 | C443 | Low | vl / composite marks, selections, transforms | stacked area with a colour domain imputes by the sort index too [compile.ts] | `packages/vl/src/composite.ts:255-262` | CONFIRMED (run) → FIXED (#211) |
 | C444 | Low | vl / composite marks, selections, transforms | a `detail` list with a time-unit entry changes a composite's ARIA description | `packages/vl/src/composite-marks.ts:123-153` | CONFIRMED (run) → FIXED (#211) |
 | C445 | Low | conformance / scripts and gates | The vector codec loses invalid Dates (replayed as the epoch); the "interior" mesh vector records exterior arcs | `packages/conformance/scripts/gen-vectors.mjs:53` | CONFIRMED (traced) → FIXED (#204) |
@@ -4943,6 +4943,7 @@ DateTime parts other than month, day and quarter are spliced into the expression
 
 - **Location:** `packages/vl/src/compile.ts:4268-4270`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #219 (see contributing PRs). Prototype-member names refused where vega-lite is wrong; {expr} kept literal where the schema takes any value and read as a signal at every ExprRef position; the typeless cornerRadius stack group and escaped-backslash fields match vega-lite; the last diverging ExprRef positions (scheme, paddings, datum, composite props) closed here. Earlier work: #202, #203.
 - **Area:** vl / validate, optimize, predicates
 - **Lane ID / scripts:** `vl-rest1-19` — `vl-rest1/`
 
