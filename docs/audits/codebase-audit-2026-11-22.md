@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 116 of 766 findings resolved (115 fixed, 1 already fixed on main, 0 disputed with evidence); 650 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 133 of 766 findings resolved (132 fixed, 1 already fixed on main, 0 disputed with evidence); 633 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -58,9 +58,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C9 | High | core / session, stream, limits | A legend's `tickCount` has no built-in ceiling | `packages/core/src/guide-legend.ts:90-92` | CONFIRMED (run; re-run by lead) |
 | C10 | High | core / expressions, regex screen | The static regex screen never terminates on a pattern containing `\u{` with no closing brace | `packages/core/src/regex-screen.ts:204` | CONFIRMED (run; re-run by lead) |
 | C11 | High | core / expressions, regex screen | The screen passes valid patterns it misreads and catastrophic shapes just outside its rules | `packages/core/src/regex-screen.ts:160` | CONFIRMED (run; re-run by lead) |
-| C12 | High | core / loading, URL policy, add-ons | A wide csv header plus many empty lines allocates `columns × rows` cells before any limit is read | `packages/core/src/dsv.ts:166-167` | CONFIRMED (run; re-run by lead) |
-| C13 | High | core / loading, URL policy, add-ons | The default "non-public hosts are denied" rule lets dotless and internal names through (`http://metadata/`, `*.svc`, `.lan`, `.corp`) and four IPv6 forms | `packages/core/src/addon-load.ts:181-201` | CONFIRMED (run; re-run by lead) |
-| C14 | High | core / loading, URL policy, add-ons | `loadSpecData(spec, {limits})` evaluates the spec's signal expressions with no limits | `packages/core/src/addon-load.ts:389-415` | CONFIRMED (run; re-run by lead) |
+| C12 | High | core / loading, URL policy, add-ons | A wide csv header plus many empty lines allocates `columns × rows` cells before any limit is read | `packages/core/src/dsv.ts:166-167` | CONFIRMED (run; re-run by lead) → FIXED (#192) |
+| C13 | High | core / loading, URL policy, add-ons | The default "non-public hosts are denied" rule lets dotless and internal names through (`http://metadata/`, `*.svc`, `.lan`, `.corp`) and four IPv6 forms | `packages/core/src/addon-load.ts:181-201` | CONFIRMED (run; re-run by lead) → FIXED (#192) |
+| C14 | High | core / loading, URL policy, add-ons | `loadSpecData(spec, {limits})` evaluates the spec's signal expressions with no limits | `packages/core/src/addon-load.ts:389-415` | CONFIRMED (run; re-run by lead) → FIXED (#192) |
 | C15 | High | core / compiler, transforms | `heatmap` over a data-supplied grid loops without bound; ceilings and `limits` do not stop it | `packages/core/src/raster-transforms.ts:183-205` | CONFIRMED (run; re-run by lead) |
 | C16 | High | core / layout transforms, rasterizer | A tiny `strokeDash` on a mark that `label` draws kills the process | `packages/core/src/raster-stroke.ts:75` | CONFIRMED (run; re-run by lead) |
 | C17 | High | core / layout transforms, rasterizer | `isocontour` sizes its scan by the `width`/`height` a data row carries, not by `values.length` | `packages/core/src/contour.ts:179-192` | CONFIRMED (run; re-run by lead) |
@@ -79,8 +79,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C30 | High | core / session, stream, limits | A rejected evaluation or flush leaves its rows in the last good scene's datasets and runtime | `packages/core/src/incremental-engine.ts:128-148` | CONFIRMED (run; re-run by lead) |
 | C31 | High | core / expressions, regex screen | `item` is always `undefined` in the engine's expressions, including encode `signal` expressions where Vega binds the scenegraph item | `packages/core/src/expr-interpreter.ts:573-574` | CONFIRMED (run; re-run by lead) |
 | C32 | High | core / expressions, regex screen | A regex literal with `g` or `y` is a single shared `RegExp`, so `test` advances `lastIndex` from row to row | `packages/core/src/expr-interpreter.ts:445-448` | CONFIRMED (run; re-run by lead) |
-| C33 | High | core / loading, URL policy, add-ons | `format: {type:'topojson', feature: X}` throws a raw `TypeError` when `X` is a single geometry rather than a `GeometryCollection` | `packages/core/src/addon-load.ts:52-55` | CONFIRMED (run; re-run by lead) |
-| C34 | High | core / loading, URL policy, add-ons | Mesh `format.filter` (`'interior'` / `'exterior'`) is ignored, and the mesh row has a different shape from vega's | `packages/core/src/addon-load.ts:56-58` | CONFIRMED (run; re-run by lead) |
+| C33 | High | core / loading, URL policy, add-ons | `format: {type:'topojson', feature: X}` throws a raw `TypeError` when `X` is a single geometry rather than a `GeometryCollection` | `packages/core/src/addon-load.ts:52-55` | CONFIRMED (run; re-run by lead) → FIXED (#192) |
+| C34 | High | core / loading, URL policy, add-ons | Mesh `format.filter` (`'interior'` / `'exterior'`) is ignored, and the mesh row has a different shape from vega's | `packages/core/src/addon-load.ts:56-58` | CONFIRMED (run; re-run by lead) → FIXED (#192) |
 | C35 | High | core / compiler, transforms | object-form field parameters are accepted and silently mis-read by almost every transform | `packages/core/src/row-keys.ts:35-36` | CONFIRMED (run; re-run by lead) |
 | C36 | High | core / compiler, transforms | `padding`, `background`, `autosize` as `{signal}` are ignored or stringified | `packages/core/src/compiler.ts:59` | CONFIRMED (run; re-run by lead) |
 | C37 | High | core / SVG, DOM patcher, canvas, a11y | Canvas symbol batching changes the picture for translucent, blended or filled-and-stroked overlapping symbols | `packages/core/src/canvas.ts:1123-1178` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
@@ -136,7 +136,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C87 | Medium | core / runtime: marks, encode, groups | A group item's `datum` is the spec's own inline row object | `packages/core/src/runtime.ts:5873` | CONFIRMED (run) |
 | C88 | Medium | core / session, stream, limits | Spec-controlled amplification with no ceiling when no `limits` are given | `packages/core/src/arr.ts:50` | CONFIRMED (run) |
 | C89 | Medium | core / expressions, regex screen | `sequence()` with a count ≥ 2^32 skips the built-in ceiling and then wraps via `count \| 0` | `packages/core/src/expression.ts:33-40` | CONFIRMED (run) |
-| C90 | Medium | core / loading, URL policy, add-ons | A mesh geometry naming a huge arc index makes `arcsOf` scan a sparse array from 0 to that index | `packages/core/src/topojson.ts:202-209` | CONFIRMED (run) |
+| C90 | Medium | core / loading, URL policy, add-ons | A mesh geometry naming a huge arc index makes `arcsOf` scan a sparse array from 0 to that index | `packages/core/src/topojson.ts:202-209` | CONFIRMED (run) → FIXED (#192) |
 | C91 | Medium | core / compiler, transforms | `aggregate` `cross: true` builds the whole product before any limit is checked | `packages/core/src/transform-agg.ts:586-604` | CONFIRMED (run) |
 | C92 | Medium | core / compiler, transforms | `regression` `poly` with a large `order` is unmetered | `packages/core/src/curve-fits.ts:220-231` | CONFIRMED (run) |
 | C93 | Medium | core / layout transforms, rasterizer | `label` meters only its occupancy bitmap; the canvases and loops around it are unbounded | `packages/core/src/label.ts:168-171` | CONFIRMED (run) |
@@ -173,7 +173,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C124 | Medium | core / session, stream, limits | An injected `random` shared by charts: tape sites are keyed by name only | `packages/core/src/random-tape.ts:33-37` | CONFIRMED (run; re-run by lead) |
 | C125 | Medium | core / expressions, regex screen | `in` (and `instanceof`) parses, passes the compile check, and throws at evaluation; Vega evaluates it | `packages/core/src/expr-interpreter.ts:262-265` | CONFIRMED (run; re-run by lead) |
 | C126 | Medium | core / expressions, regex screen | Several expression sites are not read by the compile-time walk | `packages/core/src/spec-expressions.ts:248-279` | CONFIRMED (run) |
-| C127 | Medium | core / loading, URL policy, add-ons | The add-on detector misses expressions the engine evaluates | `packages/core/src/addons.ts:73` | CONFIRMED (run) |
+| C127 | Medium | core / loading, URL policy, add-ons | The add-on detector misses expressions the engine evaluates | `packages/core/src/addons.ts:73` | CONFIRMED (run) → FIXED (#192) |
 | C128 | Medium | core / compiler, transforms | `config.style.<marktype>` applies to every mark of that type | `packages/core/src/compiler.ts:647-648` | CONFIRMED (run; re-run by lead) |
 | C129 | Medium | core / compiler, transforms | an update-only mark loses every spatial default from config and styles | `packages/core/src/compiler.ts:705-712` | CONFIRMED (run) |
 | C130 | Medium | core / compiler, transforms | `dotbin` diverges on missing values, `step: 0`, truthy `smooth`, and never publishes its `signal` | `packages/core/src/transform-extra.ts:385` | CONFIRMED (run) |
@@ -281,9 +281,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C232 | Medium | core / runtime: state, signals, reuse keys | An unknown name in a change hint is trusted | `packages/core/src/runtime.ts:962-967` | CONFIRMED (run) |
 | C233 | Medium | core / session, stream, limits | Numeric limits are not validated | `packages/core/src/limits.ts:108-111` | CONFIRMED (run) |
 | C234 | Medium | core / expressions, regex screen | `maxStringLength` and `maxGeneratedBytes` meter only `pad` and number-format width | `packages/core/src/expression.ts:205-216` | CONFIRMED (run) |
-| C235 | Medium | core / loading, URL policy, add-ons | `timeoutMs`, `maxTimeMs` and `signal` depend on the `fetch` honouring `init.signal` | `packages/core/src/addon-load.ts:260-273` | CONFIRMED (run) |
-| C236 | Medium | core / loading, URL policy, add-ons | No cap on the number of url datasets, no total-bytes budget, no de-duplication | `packages/core/src/addon-load.ts:516-531` | CONFIRMED (run) |
-| C237 | Medium | core / loading, URL policy, add-ons | `LoadOptions` numbers are not validated | `packages/core/src/addon-load.ts:509-513` | CONFIRMED (run) |
+| C235 | Medium | core / loading, URL policy, add-ons | `timeoutMs`, `maxTimeMs` and `signal` depend on the `fetch` honouring `init.signal` | `packages/core/src/addon-load.ts:260-273` | CONFIRMED (run) → FIXED (#192) |
+| C236 | Medium | core / loading, URL policy, add-ons | No cap on the number of url datasets, no total-bytes budget, no de-duplication | `packages/core/src/addon-load.ts:516-531` | CONFIRMED (run) → FIXED (#192) |
+| C237 | Medium | core / loading, URL policy, add-ons | `LoadOptions` numbers are not validated | `packages/core/src/addon-load.ts:509-513` | CONFIRMED (run) → FIXED (#192) |
 | C238 | Medium | core / compiler, transforms | unknown or missing mark `type` is compiled and rendered silently | `packages/core/src/compiler.ts:760-761` | CONFIRMED (run; re-run by lead) |
 | C239 | Medium | core / layout transforms, rasterizer | The force simulation's own loops are outside `maxTimeMs` | `packages/core/src/force-layout.ts:493` | CONFIRMED (run; re-run by lead) |
 | C240 | Medium | core / layout transforms, rasterizer | Assigning holes to outer rings is quadratic and unmetered | `packages/core/src/contour.ts:202-205` | CONFIRMED (run) |
@@ -314,7 +314,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C265 | Medium | core / runtime: state, signals, reuse keys | In-place change of a host signal is noticed or not depending on an undocumented bound | `packages/core/src/fingerprint.ts:36-37` | CONFIRMED (run) |
 | C266 | Medium | core / runtime: datasets, scales, fit | The documented remedy "pass a new array" fails for mutate-then-`[...rows]`: the diff sees the same row objects and the dev warning does not fire | `packages/core/src/row-watch.ts:145` | CONFIRMED (run) |
 | C267 | Medium | core / session, stream, limits | `session.change()` keeps the last data but silently drops the last size and signals | `packages/core/src/session.ts:415-418` | CONFIRMED (run; re-run by lead) |
-| C268 | Medium | core / loading, URL policy, add-ons | In a browser no redirect hop is vetted before it is requested, and `maxRedirects` is not enforced; the docs promise both | `packages/core/src/addon-load.ts:336-341` | CONFIRMED (run) |
+| C268 | Medium | core / loading, URL policy, add-ons | In a browser no redirect hop is vetted before it is requested, and `maxRedirects` is not enforced; the docs promise both | `packages/core/src/addon-load.ts:336-341` | CONFIRMED (run) → FIXED (#192) |
 | C269 | Medium | core / layout transforms, rasterizer | `method: 'resquarify'` is accepted but always lays out as `squarify` after an update | `packages/core/src/treemap-tiling.ts:160-182` | CONFIRMED (run; re-run by lead) |
 | C270 | Medium | core / signal event loop, transitions | `setSignal` forces, and accepts any name | `packages/core/src/signals.ts:1402-1406` | CONFIRMED (run) |
 | C271 | Medium | core / signal event loop, transitions | An `owner` that is not a DOM node kills the timers it was meant to keep | `packages/core/src/signals.ts:1040-1045` | CONFIRMED (run) |
@@ -333,7 +333,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C284 | Medium | core / expressions, regex screen | `limits.regex: 'refuse'` does not see expressions in the view's own `layout` and `encode` | `packages/core/src/spec-expressions.ts:222-231` | CONFIRMED (run) |
 | C285 | Medium | core / expressions, regex screen | The interpreter-shaped entry points have a weaker sandbox than the file header states, and only tests use them | `packages/core/src/expr-interpreter.ts:14-20` | CONFIRMED (traced) |
 | C286 | Medium | core / loading, URL policy, add-ons | `baseURL` is WHATWG-resolved for data and the policy check, but string-prefixed for the drawn image | `packages/core/src/url-policy.ts:159-169` | CONFIRMED (run) → FIXED (#191) |
-| C287 | Medium | core / loading, URL policy, add-ons | The data format is inferred from the url extension, which vega does not do, and from the post-redirect URL | `packages/core/src/addon-load.ts:365-371` | CONFIRMED (run) |
+| C287 | Medium | core / loading, URL policy, add-ons | The data format is inferred from the url extension, which vega does not do, and from the post-redirect URL | `packages/core/src/addon-load.ts:365-371` | CONFIRMED (run) → FIXED (#192) |
 | C288 | Medium | core / scales, time, format, colour | a scale `type` in the wrong case is accepted and silently built wrong | `packages/core/src/scales.ts:59` | CONFIRMED (run; re-run by lead) |
 | C289 | Medium | core / SVG, DOM patcher, canvas, a11y | The tree's `label`/`description` read scene fields nothing writes; a spec's `description` is lost | `packages/core/src/a11y.ts:461-462` | CONFIRMED (run) → FIXED (#191) |
 | C290 | Medium | core / signal event loop, transitions | `{scale}` event sources never fire for a host that replaces its element, even with `owner` | `packages/core/src/signals.ts:1385-1386` | CONFIRMED (run; re-run by lead) |
@@ -448,8 +448,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C399 | Low | core / session, stream, limits | An explicit pulse whose `from` repeats an index is trusted, not re-derived | `packages/core/src/stream.ts:346-367` | CONFIRMED (run) |
 | C400 | Low | core / session, stream, limits | `rowsEqual` calls `{ a: undefined }` and `{ b: undefined }` equal | `packages/core/src/pulse.ts:144-151` | CONFIRMED (run; re-run by lead) |
 | C401 | Low | core / session, stream, limits | `modify`: a `toggle` that is an array is inserted as one tuple | `packages/core/src/modify.ts:101` | CONFIRMED (traced) |
-| C402 | Low | core / loading, URL policy, add-ons | raw errors for malformed input (all CONFIRMED-RUN) | `packages/core/src/topojson.ts:124-126` | CONFIRMED (traced) |
-| C403 | Low | core / loading, URL policy, add-ons | `format.parse` is applied to the Topology object before decoding, so `parse: "auto"` reports the object as not found | `packages/core/src/addon-load.ts:42-45` | CONFIRMED (run) |
+| C402 | Low | core / loading, URL policy, add-ons | raw errors for malformed input (all CONFIRMED-RUN) | `packages/core/src/topojson.ts:124-126` | CONFIRMED (traced) → FIXED (#192) |
+| C403 | Low | core / loading, URL policy, add-ons | `format.parse` is applied to the Topology object before decoding, so `parse: "auto"` reports the object as not found | `packages/core/src/addon-load.ts:42-45` | CONFIRMED (run) → FIXED (#192) |
 | C404 | Low | core / compiler, transforms | `pie` uses `??` where Vega uses `\|\|` | `packages/core/src/transform-extra.ts:283` | CONFIRMED (run) |
 | C405 | Low | core / compiler, transforms | `applyTransforms` charges `maxGeneratedRows` once per later step | `packages/core/src/transform.ts:164-165` | CONFIRMED (traced) |
 | C406 | Low | core / layout transforms, rasterizer | A data-dependent pack failure aborts the whole chart | `packages/core/src/circle-pack.ts:198` | CONFIRMED (run) |
@@ -672,8 +672,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C623 | Low | closure / vega-time vectors I | `date` and `day` record the same 88 results twice, while the third alias `dayofyear` is never recorded | `packages/conformance/scripts/gen-vectors.mjs:320` | CONFIRMED (run) → FIXED (#189) |
 | C624 | Low | gallery / official Vega examples II | The static oracle is one dataflow run ahead of Vega's first frame; `time-units` differs by 1 px at two widget values | `packages/conformance/src/gallery/oracle.ts:39-41` | CONFIRMED (run) |
 | C625 | Low | core / runtime: datasets, scales, fit | Test gaps: the incremental oracle generates no text-less text mark, failing step, nested cross-dataset read or pulse under `limits` | `packages/core/src/incremental-oracle.test.ts:196-208` | CONFIRMED (traced) |
-| C626 | Low | core / loading, URL policy, add-ons | An unknown `format.type` (`"jsno"`) is reported as "load the addon first", also with the add-on loaded | `packages/core/src/data-format.ts:116-119` | CONFIRMED (run) |
-| C627 | Low | core / loading, URL policy, add-ons | `loadAddons(["nope"])` throws synchronously instead of rejecting | `packages/core/src/addons.ts:545-565` | CONFIRMED (run) |
+| C626 | Low | core / loading, URL policy, add-ons | An unknown `format.type` (`"jsno"`) is reported as "load the addon first", also with the add-on loaded | `packages/core/src/data-format.ts:116-119` | CONFIRMED (run) → FIXED (#192) |
+| C627 | Low | core / loading, URL policy, add-ons | `loadAddons(["nope"])` throws synchronously instead of rejecting | `packages/core/src/addons.ts:545-565` | CONFIRMED (run) → FIXED (#192) |
 | C628 | Low | core / compiler, transforms | Test gaps: no object-form field parameter, no hostile raster grid, no mark `type` test, thin `dotbin` cases | `packages/conformance/scripts/transform-cases.mjs:1` | CONFIRMED (traced) |
 | C629 | Low | core / signal event loop, transitions | Handler shapes the loop rejects (`encode` updates, empty `merge`, invalid CSS source) are logged on every bind instead of refused once | `packages/core/src/signals.ts:1178` | CONFIRMED (run) |
 | C630 | Low | react / <Chart>, shells, SSR | Size props are not validated | `packages/react/src/ChartCore.tsx:462-482` | CONFIRMED (run) |
@@ -754,7 +754,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C705 | Low | core / session, stream, limits | Stale statements in the docs | `docs/LIMITS.md:236-240` | CONFIRMED (run) |
 | C706 | Low | core / expressions, regex screen | ERRORS.md says `toString`/`constructor` "are signals everywhere, as upstream"; `compileChart` refuses them | `docs/ERRORS.md:244` | CONFIRMED (run) |
 | C707 | Low | core / expressions, regex screen | Small drift: nesting limit is effectively 500, `prevented()` bypasses the logger, ARCHITECTURE function table incomplete | `packages/core/src/expr-parser.ts:630` | CONFIRMED (traced) |
-| C708 | Low | core / loading, URL policy, add-ons | docs and tests that disagree with the code (CONFIRMED-TRACE) | `packages/core/src/addon-load.ts:76-77` | CONFIRMED (traced) |
+| C708 | Low | core / loading, URL policy, add-ons | docs and tests that disagree with the code (CONFIRMED-TRACE) | `packages/core/src/addon-load.ts:76-77` | CONFIRMED (traced) → FIXED (#192) |
 | C709 | Low | core / compiler, transforms | ARCHITECTURE statements the code contradicts | `docs/ARCHITECTURE.md:322` | CONFIRMED (traced) |
 | C710 | Low | core / scales, time, format, colour | the "Scales" section and file headers describe the layout before the split | `docs/ARCHITECTURE.md:523` | CONFIRMED (traced) |
 | C711 | Low | core / scales, time, format, colour | deviations table omits other resolved `{signal}` positions | `docs/ARCHITECTURE.md:593` | CONFIRMED (run) |
@@ -1238,6 +1238,7 @@ Direction: bind the item under construction into the encode frame (`EntryScope.i
 
 - **Location:** `packages/core/src/addon-load.ts:52-55`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #192 (1b246a4). Fixed: a single-geometry topojson feature is one Feature row (features ?? [feature]); differential vs vega.read over vega-datasets and 300 generated topologies.
 - **Area:** core / loading, URL policy, add-ons
 - **Lane ID / scripts:** `core-load-3` — `core-load/`
 
@@ -1253,6 +1254,7 @@ Direction: bind the item under construction into the encode frame (`EntryScope.i
 
 - **Location:** `packages/core/src/addon-load.ts:56-58`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #192 (1b246a4). Fixed: mesh honours filter interior/exterior (unknown filter = none, as vega) and the row is the MultiLineString itself; same differential.
 - **Area:** core / loading, URL policy, add-ons (also categories 4)
 - **Lane ID / scripts:** `core-load-4` — `core-load/`
 
@@ -2353,6 +2355,7 @@ Direction: `boundTypedMark(new Bounds(), { marktype: mark.type, items: [it] })` 
 
 - **Location:** `packages/core/src/addons.ts:73`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #192 (66e6dd0). Fixed: the detector walk is keyed on (object, key), reads value subtrees and trigger values; tested against the engine at 26 sites x {top, group} and over every key order.
 - **Area:** core / loading, URL policy, add-ons (also categories 3)
 - **Lane ID / scripts:** `core-load-12` — `core-load/`
 
@@ -4281,6 +4284,7 @@ Source line not traced (found by render); revealed by `packages/conformance/test
 
 - **Location:** `packages/core/src/topojson.ts:124-126`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #192 (f6cc37e 66e6dd0 1b246a4 7908eb8). Fixed: malformed topologies are [aster] topojson errors; an unparseable Location is an AsterUrlError; planLoads runs assertSpecDepth (deep/cyclic = AsterLimitError); cyclic events no longer hit JSON.stringify.
 - **Area:** core / loading, URL policy, add-ons (also categories 8)
 - **Lane ID / scripts:** `core-load-16` — `core-load/`
 
@@ -4293,6 +4297,7 @@ Source line not traced (found by render); revealed by `packages/conformance/test
 
 - **Location:** `packages/core/src/addon-load.ts:42-45`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #192 (1b246a4). Fixed: the topojson reader no longer applies parse to the Topology; readData applies it to the decoded features, as vega-loader (same differential, parse auto and typed).
 - **Area:** core / loading, URL policy, add-ons
 - **Lane ID / scripts:** `core-load-17` — `core-load/`
 
@@ -6000,6 +6005,7 @@ Direction: one accounting rule: the pulse path charges what a run from scratch w
 
 - **Location:** `packages/core/src/addon-load.ts:365-371`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #192 (1b246a4). Fixed: extension inference removed (DECISIONS Q9/Q12); the format is format.type, json by default; differential vs a vega View over 7 extensions x 3 bodies x 4 formats.
 - **Area:** core / loading, URL policy, add-ons (also categories 7)
 - **Lane ID / scripts:** `core-load-13` — `core-load/`
 
@@ -8273,6 +8279,7 @@ Direction: say "new rows" in the docs; let the watch fingerprint sampled rows wh
 
 - **Location:** `packages/core/src/addon-load.ts:336-341`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #192 (1b246a4). Fixed: an opaque (browser) redirect is refused instead of re-fetched with follow, a self-followed redirect is refused, every hop is vetted before it is requested and maxRedirects counted; chain tests over lengths 0-7 x maxRedirects x private hop.
 - **Area:** core / loading, URL policy, add-ons (also categories 7)
 - **Lane ID / scripts:** `core-load-8` — `core-load/`
 
@@ -8764,6 +8771,7 @@ No workflow sets `ASTER_ORACLE_SEEDS` (grep: only the test, `RUNBOOK.md`, `ARCHI
 
 - **Location:** `packages/core/src/addon-load.ts:260-273`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #192 (1b246a4). Fixed: every await in the loader (allow hook, fetch, text, each read, semaphore wait) is raced against one abort and a late value is never taken; 6 stall points x 3 stoppers all end in time.
 - **Area:** core / loading, URL policy, add-ons
 - **Lane ID / scripts:** `core-load-9` — `core-load/`
 
@@ -8782,6 +8790,7 @@ No workflow sets `ASTER_ORACLE_SEEDS` (grep: only the test, `RUNBOOK.md`, `ARCHI
 
 - **Location:** `packages/core/src/addon-load.ts:516-531`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #192 (1b246a4). Fixed: one request per url per call, new maxRequests (100, hops included) and maxTotalBytes (50 MiB, summed over datasets); 20000 datasets on one url = 1 request.
 - **Area:** core / loading, URL policy, add-ons (also categories 6)
 - **Lane ID / scripts:** `core-load-10` — `core-load/`
 
@@ -8794,6 +8803,7 @@ No workflow sets `ASTER_ORACLE_SEEDS` (grep: only the test, `RUNBOOK.md`, `ARCHI
 
 - **Location:** `packages/core/src/addon-load.ts:509-513`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #192 (1b246a4 e777574). Fixed: every LoadOptions value is validated once (types, integer ranges) with a TypeError before anything is planned or requested.
 - **Area:** core / loading, URL policy, add-ons (also categories 8)
 - **Lane ID / scripts:** `core-load-14` — `core-load/`
 
@@ -10081,6 +10091,7 @@ Direction: put the ceiling where the count becomes values, not in one caller. Th
 
 - **Location:** `packages/core/src/dsv.ts:166-167`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #192 (c9849c4). Fixed: the csv reader budgets each row before making it (maxRows, clock) and the cells it fills in for missing fields (maxGeneratedRows, else new HARD_CAPS.filledCells 1e6), inline and loaded; r07 2000x20000 now refused in 73 ms (+3 MB), was 6.5 s / +1979 MB.
 - **Area:** core / loading, URL policy, add-ons
 - **Lane ID / scripts:** `core-load-2` — `core-load/`
 
@@ -10098,6 +10109,7 @@ Direction: put the ceiling where the count becomes values, not in one caller. Th
 
 - **Location:** `packages/core/src/addon-load.ts:181-201`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #192 (7c770de 1e9141b). Fixed: load-host.ts reads the host via the URL parser and refuses dotless names, special/private-use suffixes, non-global IPv4 blocks and all IPv6 outside 2000::/3 (mapped/NAT64/6to4 by embedded IPv4); differential vs Node BlockList over generated addresses; DNS left as a documented limit with rebinding evidence.
 - **Area:** core / loading, URL policy, add-ons
 - **Lane ID / scripts:** `core-load-5` — `core-load/`
 
@@ -10116,6 +10128,7 @@ Direction: put the ceiling where the count becomes values, not in one caller. Th
 
 - **Location:** `packages/core/src/addon-load.ts:389-415`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #192 (1b246a4). Fixed: {signal} urls are evaluated inside withLimits (call's remaining maxTimeMs), only the signals the url reads, and AsterLimitError is not swallowed; r13 now refused in 2 ms, was 22.8 s.
 - **Area:** core / loading, URL policy, add-ons (also categories 3)
 - **Lane ID / scripts:** `core-load-6` — `core-load/`
 
@@ -10357,6 +10370,7 @@ Run with `node --max-old-space-size=400 $S/probe.mjs <name> nolimits`.
 
 - **Location:** `packages/core/src/topojson.ts:202-209`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #192 (f6cc37e 8894443 7908eb8 e6f5feb). Fixed: arc indices are validated (integer, in range) before they size a table or read an arc, in both feature and mesh; arc 3e8 is an [aster] topojson error in 17 ms, was 8.2 s.
 - **Area:** core / loading, URL policy, add-ons
 - **Lane ID / scripts:** `core-load-7` — `core-load/`
 
@@ -11466,6 +11480,7 @@ Status: **CONFIRMED-TRACE**.
 
 - **Location:** `packages/core/src/addon-load.ts:76-77`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #192 (1b246a4 1e9141b). Fixed: TSDoc on same-origin/allow and on the return value corrected, the off-origin test now shows a public url needs allow, the signal-url test declares its signal.
 - **Area:** core / loading, URL policy, add-ons
 - **Lane ID / scripts:** `core-load-18` — `core-load/`
 
@@ -13154,6 +13169,7 @@ Status: **CONFIRMED-TRACE** (generator skim and greps; the tests were not read i
 
 - **Location:** `packages/core/src/data-format.ts:116-119`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #192 (06a1a21). Fixed: an unregistered type that is not a load add-on format is "[aster] Unknown data format type: X" (vega's message), checked against vega.read for 8 types.
 - **Area:** core / loading, URL policy, add-ons
 - **Lane ID / scripts:** `core-load-15` — `core-load/`
 
@@ -13163,6 +13179,7 @@ An unknown `format.type` (`'jsno'`, `'CSV'`) is reported as `this spec reads "js
 
 - **Location:** `packages/core/src/addons.ts:545-565`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #192 (66e6dd0). Fixed: loadAddons validates every name first and rejects with a TypeError before importing anything.
 - **Area:** core / loading, URL policy, add-ons
 - **Lane ID / scripts:** `core-load-19` — `core-load/`
 
