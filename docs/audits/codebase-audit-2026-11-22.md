@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 400 of 766 findings resolved (392 fixed, 7 already fixed on main, 1 disputed with evidence); 366 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 401 of 766 findings resolved (393 fixed, 7 already fixed on main, 1 disputed with evidence); 365 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -291,7 +291,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C242 | Medium | core / geo | geo work is outside every limit | `packages/core/src/geo-resample.ts:17` | CONFIRMED (run) → FIXED (#196) |
 | C243 | Medium | react / <Chart>, shells, SSR | A controlled `view` reaches the scales unvalidated | `packages/react/src/ChartCore.tsx:522-525` | CONFIRMED (run) → FIXED (#198) |
 | C244 | Medium | react / hooks, streams, workers | no deadline; a silent worker leaves `pending: true` forever | `packages/react/src/worker.ts:272-292` | CONFIRMED (run; re-run by lead) → FIXED (#199) |
-| C245 | Medium | vl / validate, optimize, predicates | The gate checks key names, not value types, so type-confused or `null` values compile to a chart that differs from vega-lite's instead of being refused | `packages/vl/src/validate.ts:153` | CONFIRMED (run) |
+| C245 | Medium | vl / validate, optimize, predicates | The gate checks key names, not value types, so type-confused or `null` values compile to a chart that differs from vega-lite's instead of being refused | `packages/vl/src/validate.ts:153` | CONFIRMED (run) → FIXED (#203) |
 | C246 | Medium | vl / composite marks, selections, transforms | unknown errorbar / errorband `extent` or `center` values silently compile to IQR around the median | `packages/vl/src/composite-marks.ts:314-328` | CONFIRMED (run) |
 | C247 | Medium | conformance / harness | `conformance-vl` passes when it runs nothing; four corpus gates have no count floor | `packages/conformance/src/run-vl.ts:126` | CONFIRMED (run; re-run by lead) |
 | C248 | Medium | conformance / scripts and gates | No browser gate pans, zooms or brushes `<Chart>` over a time (or band/point) scale | `packages/react/scripts/browser-interaction.mts:153-174` | CONFIRMED (traced) |
@@ -9123,6 +9123,7 @@ No workflow sets `ASTER_ORACLE_SEEDS` (grep: only the test, `RUNBOOK.md`, `ARCHI
 
 - **Location:** `packages/vl/src/validate.ts:153`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #203 (18a33a7,42276b6,b40ebe8,3736ca6). Fixed (T3): every value is held to a table generated at build time from the pinned vega-lite 6.4.3 JSON schema (scripts/schema-table.mjs -> src/schema-table.ts, regeneration test); a value the schema forbids is refused by its path, replacing 1289b99's hand checks; config keys are checked strictly, spec keys stay with validate.ts + the consumption check; 17 EXTENSIONS (forms vega-lite reads beyond its schema, each pinned by a vega-lite differential and an example) stay accepted. Mutation differential (audit mutate2 bases): schema-invalid inputs drawn differently from vega-lite or failing 76 -> 0; tests vl/test/schema-table.test.ts (independent schema oracle, 20k+ mutations) and conformance/test/vl-schema-values.test.ts. The disputed layer-child width/height stays accepted (vega-lite honours it). Earlier work: #202.
 - **Area:** vl / validate, optimize, predicates (also categories 8)
 - **Lane ID / scripts:** `vl-rest1-7` — `vl-rest1/`
 
