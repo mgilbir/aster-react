@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 299 of 766 findings resolved (291 fixed, 7 already fixed on main, 1 disputed with evidence); 467 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 316 of 766 findings resolved (308 fixed, 7 already fixed on main, 1 disputed with evidence); 450 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -94,9 +94,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C45 | High | react / <Chart>, shells, SSR | React hydration keeps the server's picture when the client scene differs | `packages/react/src/ChartCore.tsx:745-768` | CONFIRMED (run) → FIXED (#198) |
 | C46 | High | react / <Chart>, shells, SSR | A chart that mounts in its error state never measures its container and has no wheel zoom after it recovers | `packages/react/src/ChartCore.tsx:462-482` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
 | C47 | High | react / <Chart>, shells, SSR | A Vega-Lite compile error is thrown out of render; `onError` and the error state never see it | `packages/react/src/ChartCore.tsx:361` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
-| C48 | High | react / hooks, streams, workers | failed `useSpecData` load refetches forever | `packages/react/src/useChart.ts:129-134` | CONFIRMED (run; re-run by lead) |
-| C49 | High | react / hooks, streams, workers | push before the start effect is accepted, then dropped | `packages/react/src/useChartWorkerStream.ts:259-260` | CONFIRMED (run; re-run by lead) |
-| C50 | High | react / hooks, streams, workers | `useSpecData` cache keyed on identity never settles for inline inputs | `packages/react/src/useChart.ts:102-111` | CONFIRMED (run; re-run by lead) |
+| C48 | High | react / hooks, streams, workers | failed `useSpecData` load refetches forever | `packages/react/src/useChart.ts:129-134` | CONFIRMED (run; re-run by lead) → FIXED (#199) |
+| C49 | High | react / hooks, streams, workers | push before the start effect is accepted, then dropped | `packages/react/src/useChartWorkerStream.ts:259-260` | CONFIRMED (run; re-run by lead) → FIXED (#199) |
+| C50 | High | react / hooks, streams, workers | `useSpecData` cache keyed on identity never settles for inline inputs | `packages/react/src/useChart.ts:102-111` | CONFIRMED (run; re-run by lead) → FIXED (#199) |
 | C51 | High | vl / composition | Layer bin merging merges across unrelated sources and across differently filtered pipelines | `packages/vl/src/compile.ts:976-1009` | CONFIRMED (run; re-run by lead) |
 | C52 | High | vl / composition | A wrapped facet ignores most of `header` and all of `config.headerFacet` | `packages/vl/src/compile.ts:2283-2314` | CONFIRMED (run) |
 | C53 | High | vl / scales, stacking, guides | Two different binnings of one field: the aggregate groups by only the last one | `packages/vl/src/compile.ts:4176` | CONFIRMED (run; re-run by lead) |
@@ -118,12 +118,12 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C69 | High | gallery / official Vega-Lite examples I | `interactive_crossfilter`: a unit inside a `layer` bins after its own transforms; vega-lite bins before them, so any brush re-bins and re-scales the charts | `packages/vl/src/compile.ts:4296-4298` | CONFIRMED (run; re-run by lead) |
 | C70 | High | gallery / official Vega-Lite examples II | After one legend click on the official `point_constant_legend_domain`, the legend loses its other entries; Vega keeps them | `packages/core/src/runtime.ts:4651-4658` | CONFIRMED (run; re-run by lead) |
 | C71 | High | react / <Chart>, shells, SSR | Pan/zoom keys and double-click are taken from bound inputs inside the chart | `packages/react/src/ChartCore.tsx:1449-1475` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
-| C72 | High | react / hooks, streams, workers | `useChartWorker` loops on inline `data` / `signals` / `domainRaw` | `packages/react/src/worker.ts:458` | CONFIRMED (run; re-run by lead) |
+| C72 | High | react / hooks, streams, workers | `useChartWorker` loops on inline `data` / `signals` / `domainRaw` | `packages/react/src/worker.ts:458` | CONFIRMED (run; re-run by lead) → FIXED (#199) |
 | C73 | High | core / signal event loop, transitions | Data `on` triggers (`{trigger, insert \| remove \| toggle \| modify, values}`) and mark `on` triggers are checked for syntax and never run | `packages/core/src/spec-expressions.ts:289` | CONFIRMED (run; re-run by lead) |
 | C74 | High | conformance / harness | the lane leads were invisible because no static gate generates them | `packages/conformance/src/sweeps/vega-schema.mjs:899-902` | CONFIRMED (run; re-run by lead) |
 | C75 | High | tests / core (incremental oracle, legacy copies I) | The oracle's default sweep reaches 33 of its 58 pipelines, and all four scenario families re-run the same ones | `packages/core/src/incremental-oracle.test.ts:150` | CONFIRMED (run; re-run by lead) |
 | C76 | High | core / runtime: marks, encode, groups | `encode.hover` (and `exit`) are accepted and never applied | `packages/core/src/compiler.ts:768-772` | CONFIRMED (traced) |
-| C77 | High | react / hooks, streams, workers | worker-stream backpressure bounds one tick, not the worker | `packages/react/src/useChartWorkerStream.ts:238-252` | CONFIRMED (run; re-run by lead) |
+| C77 | High | react / hooks, streams, workers | worker-stream backpressure bounds one tick, not the worker | `packages/react/src/useChartWorkerStream.ts:238-252` | CONFIRMED (run; re-run by lead) → FIXED (#199) |
 | C78 | High | core / signal event loop, transitions | `config.events.view` / `.window` / `.selector` / `.timer` are ignored by the event loop | `packages/core/src/signals.ts:349-353` | CONFIRMED (run; re-run by lead) → FIXED (#197) |
 | C79 | High | vl / composition | `resolve` on a layer is validated for every channel and kind but mostly not implemented | `packages/vl/src/compile.ts:1056-1066` | CONFIRMED (run; re-run by lead) |
 | C80 | High | vl / mark encoding | `config.style.<mark type>` is dropped from the emitted Vega config | `packages/vl/src/compile.ts:3747` | CONFIRMED (run; re-run by lead) |
@@ -147,7 +147,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C98 | Medium | core / hit index, bounds, geometry | The parse caches are module-level and bounded by 4096 entries, not by size | `packages/core/src/path-data.ts:130-141` | CONFIRMED (run) |
 | C99 | Medium | core / signal event loop, transitions | A `modify` that feeds itself is bounded only by the call stack; `maxTimeMs` and `maxRows` do not stop it | `packages/core/src/signals.ts:678-695` | CONFIRMED (run) → FIXED (#197) |
 | C100 | Medium | react / <Chart>, shells, SSR | `data` rows are not validated at the React boundary | `packages/react/src/ChartCore.tsx:585-586` | CONFIRMED (run) → FIXED (#198) |
-| C101 | Medium | react / hooks, streams, workers | `validateDataChanges` accepts `undefined` and holes | `packages/react/src/dataChanges.ts:49-50` | CONFIRMED (run) |
+| C101 | Medium | react / hooks, streams, workers | `validateDataChanges` accepts `undefined` and holes | `packages/react/src/dataChanges.ts:49-50` | CONFIRMED (run) → FIXED (#199) |
 | C102 | Medium | vl / composition | The repeated spec's `name` goes raw into signal names, scale names and expressions | `packages/vl/src/compile.ts:3192` | CONFIRMED (run; re-run by lead) |
 | C103 | Medium | vl / mark encoding | Titles are spliced into the tooltip object literal and the aria description with only `"` escaped | `packages/vl/src/compile.ts:7805` | CONFIRMED (run) |
 | C104 | Medium | tooling / gates, CI, release, benchmarks | the dependency boundary still has holes (continues C40) | `scripts/lib/scan-imports.mjs:70-83` | CONFIRMED (run; re-run by lead) → FIXED (#187) |
@@ -204,9 +204,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C155 | Medium | react / <Chart>, shells, SSR | Pan and zoom treat every continuous scale as linear | `packages/react/src/interaction.ts:225-255` | CONFIRMED (run) → FIXED (#198) |
 | C156 | Medium | react / <Chart>, shells, SSR | Radio-bound signals of two charts on one page share a native radio group | `packages/react/src/ChartCore.tsx:251` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
 | C157 | Medium | react / <Chart>, shells, SSR | `onError` fires twice for one failing evaluation when `signals` is passed | `packages/react/src/ChartCore.tsx:626-629` | CONFIRMED (run) → FIXED (#198) |
-| C158 | Medium | react / hooks, streams, workers | no-Worker fallback during add-on load reorders or drops a parked push | `packages/react/src/useChartWorkerStream.ts:208-212` | CONFIRMED (run) |
-| C159 | Medium | react / hooks, streams, workers | `close()` leaves `scheduled` (rAF) and `paused` set for a rebuilt stream | `packages/react/src/useChartStream.ts:206-219` | CONFIRMED (run) |
-| C160 | Medium | react / hooks, streams, workers | one throw from `post` on the queued path silences the worker for good | `packages/react/src/worker.ts:716-724` | CONFIRMED (run) |
+| C158 | Medium | react / hooks, streams, workers | no-Worker fallback during add-on load reorders or drops a parked push | `packages/react/src/useChartWorkerStream.ts:208-212` | CONFIRMED (run) → FIXED (#199) |
+| C159 | Medium | react / hooks, streams, workers | `close()` leaves `scheduled` (rAF) and `paused` set for a rebuilt stream | `packages/react/src/useChartStream.ts:206-219` | CONFIRMED (run) → FIXED (#199) |
+| C160 | Medium | react / hooks, streams, workers | one throw from `post` on the queued path silences the worker for good | `packages/react/src/worker.ts:716-724` | CONFIRMED (run) → FIXED (#199) |
 | C161 | Medium | vl / composition | A layer child's `width`/`height` (number or `{step}`) is ignored | `packages/vl/src/compile.ts:783-784` | CONFIRMED (run; re-run by lead) |
 | C162 | Medium | vl / composition | An inner view's `title` is dropped | `packages/vl/src/compile.ts:1409` | CONFIRMED (run; re-run by lead) |
 | C163 | Medium | vl / composition | Independent y axes have their orient forced | `packages/vl/src/compile.ts:1156-1160` | CONFIRMED (run; re-run by lead) |
@@ -290,7 +290,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C241 | Medium | core / SVG, DOM patcher, canvas, a11y | The accessible tree has no overall bound | `packages/core/src/a11y.ts:416` | CONFIRMED (run) → FIXED (#191) |
 | C242 | Medium | core / geo | geo work is outside every limit | `packages/core/src/geo-resample.ts:17` | CONFIRMED (run) → FIXED (#196) |
 | C243 | Medium | react / <Chart>, shells, SSR | A controlled `view` reaches the scales unvalidated | `packages/react/src/ChartCore.tsx:522-525` | CONFIRMED (run) → FIXED (#198) |
-| C244 | Medium | react / hooks, streams, workers | no deadline; a silent worker leaves `pending: true` forever | `packages/react/src/worker.ts:272-292` | CONFIRMED (run; re-run by lead) |
+| C244 | Medium | react / hooks, streams, workers | no deadline; a silent worker leaves `pending: true` forever | `packages/react/src/worker.ts:272-292` | CONFIRMED (run; re-run by lead) → FIXED (#199) |
 | C245 | Medium | vl / validate, optimize, predicates | The gate checks key names, not value types, so type-confused or `null` values compile to a chart that differs from vega-lite's instead of being refused | `packages/vl/src/validate.ts:153` | CONFIRMED (run) |
 | C246 | Medium | vl / composite marks, selections, transforms | unknown errorbar / errorband `extent` or `center` values silently compile to IQR around the median | `packages/vl/src/composite-marks.ts:314-328` | CONFIRMED (run) |
 | C247 | Medium | conformance / harness | `conformance-vl` passes when it runs nothing; four corpus gates have no count floor | `packages/conformance/src/run-vl.ts:126` | CONFIRMED (run; re-run by lead) |
@@ -318,7 +318,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C269 | Medium | core / layout transforms, rasterizer | `method: 'resquarify'` is accepted but always lays out as `squarify` after an update | `packages/core/src/treemap-tiling.ts:160-182` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
 | C270 | Medium | core / signal event loop, transitions | `setSignal` forces, and accepts any name | `packages/core/src/signals.ts:1402-1406` | CONFIRMED (run) → FIXED (#197) |
 | C271 | Medium | core / signal event loop, transitions | An `owner` that is not a DOM node kills the timers it was meant to keep | `packages/core/src/signals.ts:1040-1045` | CONFIRMED (run) → FIXED (#197) |
-| C272 | Medium | react / hooks, streams, workers | `<ChartStream>` / `<ChartWorkerStream>` accept `random` and never pass it to the stream | `packages/react/src/ChartStream.tsx:238-249` | CONFIRMED (traced) |
+| C272 | Medium | react / hooks, streams, workers | `<ChartStream>` / `<ChartWorkerStream>` accept `random` and never pass it to the stream | `packages/react/src/ChartStream.tsx:238-249` | CONFIRMED (traced) → FIXED (#199) |
 | C273 | Medium | vl / mark encoding | `mark.url` on an image mark is silently dropped, so nothing renders | `packages/vl/src/compile.ts:7854-7857` | CONFIRMED (run) |
 | C274 | Medium | docs / README, API, ERRORS | the README's first React chart does not draw at the spec's `width`/`height` | `README.md:83-109` | CONFIRMED (run) |
 | C275 | Medium | docs / README, API, ERRORS | `ChartStreamHandle.flush/pending/pulse/stats` are typed `() => unknown` | `packages/react/src/ChartStream.tsx:42-45` | CONFIRMED (run) |
@@ -342,7 +342,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C293 | Medium | react / <Chart>, shells, SSR | Selection props disagree with each other | `packages/react/src/ChartCore.tsx:1075-1077` | CONFIRMED (run) → FIXED (#198) |
 | C294 | Medium | react / <Chart>, shells, SSR | `style.width` / `height` / `position` are overridden whenever the a11y tree is on (the default) | `packages/react/src/ChartCore.tsx:1643-1646` | CONFIRMED (run) → FIXED (#198) |
 | C295 | Medium | react / <Chart>, shells, SSR | Bound inputs: `bind.labels` is ignored; a `number` input cannot be cleared | `packages/react/src/ChartCore.tsx:188-196` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
-| C296 | Medium | react / hooks, streams, workers | stream hooks read `limits` once; a later change is ignored | `packages/react/src/useChartStream.ts:113-126` | CONFIRMED (run) |
+| C296 | Medium | react / hooks, streams, workers | stream hooks read `limits` once; a later change is ignored | `packages/react/src/useChartStream.ts:113-126` | CONFIRMED (run) → FIXED (#199) |
 | C297 | Medium | vl / mark encoding | A named style is honoured for paint only | `packages/vl/src/compile.ts:6267-6274` | CONFIRMED (run; re-run by lead) |
 | C298 | Medium | vl / mark encoding | Config precedence differs from vega-lite | `packages/vl/src/compile.ts:6563-6565` | CONFIRMED (run) |
 | C299 | Medium | vl / validate, optimize, predicates | The rename cannot tell compiler-written expressions from the user's, and is asymmetric about which keys it rewrites | `packages/vl/src/embed.ts:71-93` | CONFIRMED (run) |
@@ -538,7 +538,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C489 | Low | react / <Chart>, shells, SSR | A handle kept past unmount still calls the host's listeners | `packages/react/src/ChartCore.tsx:1609-1618` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
 | C490 | Low | react / <Chart>, shells, SSR | The persisted selection rectangle is neither clipped nor checked | `packages/react/src/interaction.ts:167-203` | CONFIRMED (run) → FIXED (#198) |
 | C491 | Low | react / <Chart>, shells, SSR | A brush-only chart cannot be brushed by touch | `packages/react/src/ChartCore.tsx:1645` | PLAUSIBLE → FIXED (#198) |
-| C492 | Low | react / hooks, streams, workers | `mergeBatches` is quadratic in pushes per tick | `packages/react/src/batches.ts:18-21` | CONFIRMED (run) |
+| C492 | Low | react / hooks, streams, workers | `mergeBatches` is quadratic in pushes per tick | `packages/react/src/batches.ts:18-21` | CONFIRMED (run) → FIXED (#199) |
 | C493 | Low | vl / composition | `compile` has no depth or cycle guard | `packages/vl/src/compile.ts:134-141` | CONFIRMED (run) |
 | C494 | Low | vl / composite marks, selections, transforms | `stack` `as` with one name is emitted as written | `packages/vl/src/transforms.ts:327` | CONFIRMED (run) |
 | C495 | Low | tooling / gates, CI, release, benchmarks | `pnpm build` rebuilds `@aster-charts/react` a second time, concurrently with a build that reads it | `apps/demo/package.json:8` | PLAUSIBLE → FIXED (#187) |
@@ -552,7 +552,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C503 | Low | core / session, stream, limits | A session's no-op evaluate still costs O(spec) | `packages/core/src/session.ts:345` | CONFIRMED (traced) |
 | C504 | Low | core / compiler, transforms | wrong-typed `width` / `padding` give garbage | `packages/core/src/compiler.ts:69-70` | CONFIRMED (run) → ALREADY FIXED (#194) |
 | C505 | Low | react / <Chart>, shells, SSR | `devicePixelRatio` is read through a store that never notifies | `packages/react/src/ChartCore.tsx:57` | CONFIRMED (traced) → FIXED (#198) |
-| C506 | Low | react / hooks, streams, workers | streams are not closed on unmount; `push` still answers `true` | `packages/react/src/useChartStream.ts:151-158` | CONFIRMED (run) |
+| C506 | Low | react / hooks, streams, workers | streams are not closed on unmount; `push` still answers `true` | `packages/react/src/useChartStream.ts:151-158` | CONFIRMED (run) → FIXED (#199) |
 | C507 | Low | conformance / harness | no per-spec time bound in the Node runners | `packages/conformance/src/run.ts:58-74` | CONFIRMED (traced) |
 | C508 | Low | conformance / scripts and gates | `gallery-fetch` has no fetch timeout, and `--regenerate` prints `ok` over a mismatching cache | `packages/conformance/scripts/gallery-fetch.mts:27` | CONFIRMED (traced) |
 | C509 | Low | tooling / gates, CI, release, benchmarks | `verify-publish` never checks the `browser` export targets | `scripts/verify-publish.mjs:102` | CONFIRMED (traced) → FIXED (#187) |
@@ -601,7 +601,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C552 | Low | core / hit index, bounds, geometry | Dead axis-bounds code with a title-length nudge; wrong comment about `shape: "point"`; unbounded "short" side list | `packages/core/src/bounds.ts:784-853` | CONFIRMED (run) |
 | C553 | Low | core / axes, legends, titles | `guide-model.ts` and the runtime disagree with Vega on what is parsed in 5 of 1018 probes (`axis.grid`, `config.axis.labelBound`) | `packages/core/src/guide-model.ts:50` | CONFIRMED (run) → FIXED (#194) |
 | C554 | Low | react / <Chart>, shells, SSR | The error state drops `className` and `ariaLabel` | `packages/react/src/ChartCore.tsx:1637` | CONFIRMED (run) → FIXED (#198) |
-| C555 | Low | react / hooks, streams, workers | one worker `error` event fails every hook sharing the worker | `packages/react/src/worker.ts:300-303` | CONFIRMED (traced) |
+| C555 | Low | react / hooks, streams, workers | one worker `error` event fails every hook sharing the worker | `packages/react/src/worker.ts:300-303` | CONFIRMED (traced) → FIXED (#199) |
 | C556 | Low | vl / composition | Composition hygiene: discarded `firstY`, `resolve.scale` parsed three times, bare-prefix `cellPrefixed`, misplaced doc comment | `packages/vl/src/compile.ts:1085` | CONFIRMED (traced) |
 | C557 | Low | vl / scales, stacking, guides | `config.fieldTitle: "plain"` titles a count axis `__count` (the synthetic source name leaks) | `packages/vl/src/compile.ts:3496-3500` | CONFIRMED (run) |
 | C558 | Low | vl / scales, stacking, guides | Dead type aliases and `order`-array handling behind an over-strict validator; misleading ternaries and misplaced doc comments | `packages/vl/src/compile.ts:3325-3328` | CONFIRMED (traced) |
@@ -678,7 +678,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C629 | Low | core / signal event loop, transitions | Handler shapes the loop rejects (`encode` updates, empty `merge`, invalid CSS source) are logged on every bind instead of refused once | `packages/core/src/signals.ts:1178` | CONFIRMED (run) → FIXED (#197) |
 | C630 | Low | react / <Chart>, shells, SSR | Size props are not validated | `packages/react/src/ChartCore.tsx:462-482` | CONFIRMED (run) → FIXED (#198) |
 | C631 | Low | react / <Chart>, shells, SSR | Test gaps: no `incremental={false}` render, no time/log pan-zoom, `select` unused, hydration tested in one process only | `packages/react/src/Chart.ssr.test.tsx:47-52` | CONFIRMED (traced) → FIXED (#198) |
-| C632 | Low | react / hooks, streams, workers | `useChartStream().flush()` with nothing queued sets state every call | `packages/react/src/useChartStream.ts:178-189` | CONFIRMED (run) |
+| C632 | Low | react / hooks, streams, workers | `useChartStream().flush()` with nothing queued sets state every call | `packages/react/src/useChartStream.ts:178-189` | CONFIRMED (run) → FIXED (#199) |
 | C633 | Low | vl / composition | `width: Infinity`/`NaN` reports "…got null" (the value is printed through `JSON.stringify`) | `packages/vl/src/validate.ts:153` | CONFIRMED (traced) |
 | C634 | Low | vl / scales, stacking, guides | `{repeat}` inside a repeated spec's `transform` fails validation with a message that does not mention repeat | `packages/vl/src/validate.ts:1165` | CONFIRMED (run) |
 | C635 | Low | vl / scales, stacking, guides | Test gaps: `config.scale` vs explicit encoding values, double binning and unstacked `normalize` are unpinned | `packages/vl/test/scaleconfig.test.ts:47-51` | CONFIRMED (traced) |
@@ -764,7 +764,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C715 | Low | core / signal event loop, transitions | API.md says the item is "read from the DOM … where mark names are not available"; with a picker the DOM is never consulted | `docs/API.md:552` | CONFIRMED (traced) → FIXED (#197) |
 | C716 | Low | core / signal event loop, transitions | ANIMATION.md omits `theta` from what moves | `docs/ANIMATION.md:69-71` | CONFIRMED (traced) → FIXED (#197) |
 | C717 | Low | core / axes, legends, titles | stale comments and duplicated tables | `packages/core/src/guide-encode.ts:231-235` | CONFIRMED (traced) → FIXED (#194) |
-| C718 | Low | react / hooks, streams, workers | stale comments, docs and test gaps | `packages/react/src/useChart.ts:113-115` | CONFIRMED (traced) |
+| C718 | Low | react / hooks, streams, workers | stale comments, docs and test gaps | `packages/react/src/useChart.ts:113-115` | CONFIRMED (traced) → FIXED (#199) |
 | C719 | Low | vl / mark encoding | Test gaps in `vl-compiler-parity`: no rounded stack in a facet, no `config.style.<mark>`, no two-channel invalid, no conditional format | `packages/conformance/test/vl-compiler-parity.test.ts:705` | CONFIRMED (traced) |
 | C720 | Low | vl / validate, optimize, predicates | Comment says `"a'b"` "keeps its name"; it throws, as vega-lite does | `packages/vl/src/names.ts:116` | CONFIRMED (run) |
 | C721 | Low | conformance / harness | What the canonicalizer drops beyond what its header lists (root ARIA, `<title>`/`<desc>`, `pointer-events`, shape class) | `packages/conformance/src/normalize.ts:682` | CONFIRMED (run) |
@@ -1567,6 +1567,7 @@ Direction: normalize inside the guarded evaluation, so the missing compiler, a `
 
 - **Location:** `packages/react/src/useChart.ts:129-134`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #199 (d3bfa54). Fixed: a rejected useSpecData load stays cached and reaches the error boundary once (1 fetch, was 168/s); it is retried on an input change or resetSpecDataErrors() from the boundary's reset (DECISIONS Q19); a time-based drop was measured to refetch inside React's own retry.
 - **Area:** react / hooks, streams, workers (also categories 5)
 - **Lane ID / scripts:** `react-hooks-1` — `react-hooks/`
 
@@ -1585,6 +1586,7 @@ Direction: normalize inside the guarded evaluation, so the missing compiler, a `
 
 - **Location:** `packages/react/src/useChartWorkerStream.ts:259-260`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #199 (dba96b7). Fixed: useChartWorkerStream has one ordered producer queue that exists before the stream; pushes before the start effect, during add-on load and across a restart are delivered in order; model-based test over generated op sequences.
 - **Area:** react / hooks, streams, workers
 - **Lane ID / scripts:** `react-hooks-3` — `react-hooks/`
 
@@ -1604,6 +1606,7 @@ Direction: normalize inside the guarded evaluation, so the missing compiler, a `
 
 - **Location:** `packages/react/src/useChart.ts:102-111`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #199 (d3bfa54 e9de2c6). Fixed (per the later DECISIONS ruling): spec and data options keyed by content, fetch/allow/signal by identity (closures never share a load), cacheKey shares across identities with a latest-ref; an inline function without cacheKey throws AsterUnstableLoadOptionError after fewer than 6 fetches; generated test over every option slot.
 - **Area:** react / hooks, streams, workers
 - **Lane ID / scripts:** `react-hooks-5` — `react-hooks/`
 
@@ -2945,6 +2948,7 @@ Direction: one deep `objectProperty` resolver for axis and legend `values` and `
 
 - **Location:** `packages/react/src/useChartWorkerStream.ts:208-212`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #199 (dba96b7). Fixed: the no-Worker fallback drains the same ordered queue into its stream when it is created, and flush() sends the queue; covered by the model test's no-Worker runs (planted reorder caught).
 - **Area:** react / hooks, streams, workers
 - **Lane ID / scripts:** `react-hooks-7` — `react-hooks/`
 
@@ -2966,6 +2970,7 @@ Direction: one deep `objectProperty` resolver for axis and legend `values` and `
 
 - **Location:** `packages/react/src/useChartStream.ts:206-219`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #199 (dba96b7). Fixed: cancelling an animation frame clears the scheduled flag in both hooks, and close() closes the stream without pausing the hook; lifecycle test on every path, microtask and raf.
 - **Area:** react / hooks, streams, workers
 - **Lane ID / scripts:** `react-hooks-8` — `react-hooks/`
 
@@ -2980,6 +2985,7 @@ Direction: one deep `objectProperty` resolver for axis and legend `values` and `
 
 - **Location:** `packages/react/src/worker.ts:716-724`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #199 (dba96b7). Fixed: the worker dispatcher answers a request whose post throws with a wire error for that id and never rejects its chain; generated test over message shapes and failing positions (fresh module registry per case, queued path), also executes worker-entry.
 - **Area:** react / hooks, streams, workers (also categories 5)
 - **Lane ID / scripts:** `react-hooks-9` — `react-hooks/`
 
@@ -5520,6 +5526,7 @@ Direction: skip a group item whose bounds miss the box, as Vega does, and restor
 
 - **Location:** `packages/react/src/worker.ts:458`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #199 (dba96b7). Fixed: useChartWorker compares data by datasets' row arrays and signals/domainRaw/sizes by content (useDataInput/useStableContent); useChart applies the rule to every RuntimeInput field; generated inline-literal test over every option of every hook.
 - **Area:** react / hooks, streams, workers (also categories 8)
 - **Lane ID / scripts:** `react-hooks-2` — `react-hooks/`
 
@@ -5711,6 +5718,7 @@ CONFIRMED-RUN.
 
 - **Location:** `packages/react/src/batches.ts:18-21`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #199 (dba96b7). Fixed: the coalesce queue folds batches in place (createBatchFold), linear in pushes; differential test against core's stream applying batches one by one, plus a growth-ratio check; pairwise mergeBatches removed.
 - **Area:** react / hooks, streams, workers
 - **Lane ID / scripts:** `react-hooks-13` — `react-hooks/`
 
@@ -6230,6 +6238,7 @@ Spec `vega/zoomable-world-map.vg.json:32` (`copy('projection')`), `:40`, `:47`, 
 
 - **Location:** `packages/react/src/useChartStream.ts:113-126`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #199 (dba96b7). Fixed: both stream hooks take limits (by content) and textMetrics changes to the live stream from the next flush, outside the queue; ChartStream's batch-based useStreamConfig removed; lifecycle test on every path.
 - **Area:** react / hooks, streams, workers (also categories 4)
 - **Lane ID / scripts:** `react-hooks-11` — `react-hooks/`
 
@@ -7186,6 +7195,7 @@ Status: **CONFIRMED-RUN** — `m1.out`, `repro.mjs` "G10".
 
 - **Location:** `packages/react/src/worker.ts:300-303`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #199 (dba96b7). Fixed: a worker error/messageerror event ends only requests in flight (one-shot and stream); an idle healthy stream keeps its chart and a late answer still applies.
 - **Area:** react / hooks, streams, workers
 - **Lane ID / scripts:** `react-hooks-16` — `react-hooks/`
 
@@ -8315,6 +8325,7 @@ No new defect; this is the consequence on official specs. All run through `S/i1.
 
 - **Location:** `packages/react/src/useChartWorkerStream.ts:238-252`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #199 (dba96b7). Fixed: one request in flight to the worker; pushes queue under the stream's policy until it is answered, so a silent worker holds one flush and the queue its bounds (t06: 2 of 2000 accepted); the model test asserts never two unanswered flushes.
 - **Area:** react / hooks, streams, workers (also categories 7)
 - **Lane ID / scripts:** `react-hooks-4` — `react-hooks/`
 
@@ -8442,6 +8453,7 @@ Direction: say "new rows" in the docs; let the watch fingerprint sampled rows wh
 
 - **Location:** `packages/react/src/ChartStream.tsx:238-249`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #199 (b7e2554 dba96b7). Fixed: core createChartStream now honours initial.random (vega setRandom oracle); stream components forward random (refused with an error across a Worker), relay logger from the worker, and report stream errors to onError.
 - **Area:** react / hooks, streams, workers
 - **Lane ID / scripts:** `react-hooks-15` — `react-hooks/`
 
@@ -9025,6 +9037,7 @@ No workflow sets `ASTER_ORACLE_SEEDS` (grep: only the test, `RUNBOOK.md`, `ARCHI
 
 - **Location:** `packages/react/src/worker.ts:272-292`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #199 (dba96b7 4212085). Fixed (DECISIONS Q4): timeoutMs (default 30 s) on every worker request; a miss terminates the worker, sets AsterWorkerTimeoutError, replaces a workerFactory worker (no re-post loop), and ends other hooks' requests on it; docs/ERRORS, LIMITS, ADR 0010 updated.
 - **Area:** react / hooks, streams, workers
 - **Lane ID / scripts:** `react-hooks-6` — `react-hooks/`
 
@@ -9579,6 +9592,7 @@ Direction: validate once where pulses are normalised (`runtime.ts:949-960`) with
 
 - **Location:** `packages/react/src/useChartStream.ts:151-158`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #199 (dba96b7). Fixed: a replaced stream and an unmounted hook's stream are closed (deferred a microtask so StrictMode keeps it); push answers false; tested on every path including StrictMode.
 - **Area:** react / hooks, streams, workers
 - **Lane ID / scripts:** `react-hooks-14` — `react-hooks/`
 
@@ -10669,6 +10683,7 @@ Run with `node --max-old-space-size=400 $S/probe.mjs <name> nolimits`.
 
 - **Location:** `packages/react/src/dataChanges.ts:49-50`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #199 (66c3351 dba96b7). Fixed: validateDataChanges walks positions with a loop, so undefined elements and holes are refused; generated test over every element kind at every position.
 - **Area:** react / hooks, streams, workers
 - **Lane ID / scripts:** `react-hooks-12` — `react-hooks/`
 
@@ -11751,6 +11766,7 @@ Status: **CONFIRMED-TRACE**.
 
 - **Location:** `packages/react/src/useChart.ts:113-115`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #199 (d3bfa54 dba96b7 4212085). Fixed: stale comments (useChart cache key, worker.ts 'let the hook create one', prepareWorkerMessage), accepted()/rejected() are real counts in both modes, docs updated; test gaps closed (slow fake workers, worker-entry executed, pushes before the start effect).
 - **Area:** react / hooks, streams, workers
 - **Lane ID / scripts:** `react-hooks-18` — `react-hooks/`
 
@@ -13397,6 +13413,7 @@ CONFIRMED-RUN.
 
 - **Location:** `packages/react/src/useChartStream.ts:178-189`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #199 (dba96b7). Fixed: a no-op flush returns the last frame without setting state; flush() in a dependency-less effect renders a bounded number of times.
 - **Area:** react / hooks, streams, workers
 - **Lane ID / scripts:** `react-hooks-17` — `react-hooks/`
 
