@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 594 of 766 findings resolved (579 fixed, 12 already fixed on main, 3 disputed with evidence); 172 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 618 of 766 findings resolved (602 fixed, 13 already fixed on main, 3 disputed with evidence); 148 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -68,7 +68,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C19 | High | core / scales, time, format, colour | fatal OOM from a tiny spec with no limits | `packages/core/src/scales.ts:254` | CONFIRMED (run) → FIXED (#196) |
 | C20 | High | core / SVG, DOM patcher, canvas, a11y | An `image` encode channel reaches `xlink:href` without the URL policy | `packages/core/src/render.ts:1420-1421` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
 | C21 | High | tests / core (render … stream) | The escaping suite's patcher coverage skips the cached-descriptor path and every encode-level channel name; its "every channel" table omits at least nine channels the renderer reads (adds… | `packages/core/src/svg-escaping.test.ts:50-67` | CONFIRMED (run) |
-| C22 | High | tests / conformance generators and case tables II | A `tickCount` ≥ 2^32 on a time/utc axis or legend skips the built-in ceiling and exhausts the heap | `packages/core/src/limits.ts:200` | CONFIRMED (run; re-run by lead) |
+| C22 | High | tests / conformance generators and case tables II | A `tickCount` ≥ 2^32 on a time/utc axis or legend skips the built-in ceiling and exhausts the heap | `packages/core/src/limits.ts:200` | CONFIRMED (run; re-run by lead) → ALREADY FIXED (#213) |
 | C23 | High | core / runtime: state, signals, reuse keys | The fixed point stops before the scales exist | `packages/core/src/runtime.ts:981-998` | CONFIRMED (run; re-run by lead) → FIXED (#201) |
 | C24 | High | core / runtime: state, signals, reuse keys | A signal holding a dataset array is identity-keyed past 512 values | `packages/core/src/fingerprint.ts:36-37` | CONFIRMED (run; re-run by lead) → FIXED (#201) |
 | C25 | High | core / runtime: state, signals, reuse keys | `init` latches before what it reads has a value | `packages/core/src/runtime.ts:1547-1575` | CONFIRMED (run; re-run by lead) → FIXED (#201) |
@@ -255,8 +255,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C206 | Medium | tests / conformance differentials II | canonicalizer collapses NBSP and all Unicode spaces as if they were XML whitespace | `packages/conformance/src/normalize.ts:469-470` | CONFIRMED (run; re-run by lead) |
 | C207 | Medium | tests / conformance differentials II | "stack keeps the input row order" shares its rows with Vega, which writes `y0`/`y1` onto them first | `packages/conformance/src/renderer-vs-vega.test.ts:33-35` | CONFIRMED (run; re-run by lead) |
 | C208 | Medium | tests / conformance differentials II | raster fixtures: loose hand tolerances and a self-recorded baseline that accepts large disagreement (adds to C191 (harness-src-5)) | `packages/conformance/src/raster-vs-chromium.test.ts:43-47` | CONFIRMED (run) |
-| C209 | Medium | tests / conformance generators and case tables II | `dom-string-parity` does not exercise the path its header names, and its comparator is blind to mixed content | `packages/conformance/scripts/dom-string-parity.test.mts:5-9` | CONFIRMED (run) |
-| C210 | Medium | tests / conformance generators and case tables II | `graticule` on a dataset that already has rows drops the rows; Vega keeps them | `packages/core/src/transform.ts:361-366` | CONFIRMED (run; re-run by lead) |
+| C209 | Medium | tests / conformance generators and case tables II | `dom-string-parity` does not exercise the path its header names, and its comparator is blind to mixed content | `packages/conformance/scripts/dom-string-parity.test.mts:5-9` | CONFIRMED (run) → FIXED (#213) |
+| C210 | Medium | tests / conformance generators and case tables II | `graticule` on a dataset that already has rows drops the rows; Vega keeps them | `packages/core/src/transform.ts:361-366` | CONFIRMED (run; re-run by lead) → FIXED (#213) |
 | C211 | Medium | tests / conformance suites I | A throw in a dataset re-ranked past the marks: Vega draws the marks that read nothing late, Aster draws none | `packages/conformance/test/dataflow-failure-vs-vega.test.ts:213-233` | CONFIRMED (run; re-run by lead) |
 | C212 | Medium | tests / conformance suites II | `compare()` accepts any throw where vega-lite refuses (adds to C639 (vl-rest2-12)) | `packages/conformance/test/vl-composite-compare.ts:17-21` | CONFIRMED (run) |
 | C213 | Medium | tests / conformance suites II | `pickSpec` name normalisation makes two different compiled specs equal | `packages/conformance/test/vl-composite-pick.ts:5-6` | CONFIRMED (run) |
@@ -357,7 +357,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C308 | Medium | tests / core (legacy copies II … path) | For `path` marks the legacy hit, intersect and label painter call the new reader: the old-vs-new comparison is new-vs-new | `packages/core/src/legacy-hit.testlib.ts:39` | CONFIRMED (run) → FIXED (#200) |
 | C309 | Medium | tests / core (legacy copies II … path) | The first-pass defects are present, identically, in the legacy copies: the differential is green because both sides are wrong the same way | `packages/core/src/legacy-hit.testlib.ts:460-473` | CONFIRMED (run) |
 | C310 | Medium | tests / conformance differentials I | specs `vega.parse` refuses are rendered by Aster; the tests count them and never run Aster | `packages/conformance/src/guide-null-vs-vega.test.ts:39-57` | CONFIRMED (run) |
-| C311 | Medium | tests / conformance generators and case tables I | An unknown `interpolate` logs Vega's error and still draws the line; the test that covers the names patches its oracle | `packages/core/src/shape.ts:278-285` | CONFIRMED (run; re-run by lead) |
+| C311 | Medium | tests / conformance generators and case tables I | An unknown `interpolate` logs Vega's error and still draws the line; the test that covers the names patches its oracle | `packages/core/src/shape.ts:278-285` | CONFIRMED (run; re-run by lead) → FIXED (#213) |
 | C312 | Medium | tests / conformance suites II | selection matrix: "x scale <type>" cases in hconcat and column facet have no x scale | `packages/conformance/test/vl-selection-matrix-cases.ts:109-114` | CONFIRMED (run; re-run by lead) |
 | C313 | Medium | corpus / specs, range 1 | 16 of 28 `area-curve-*` specs do not contain the curve or tension their name says | `packages/conformance/corpus/area-curve-step-after-tension.vg.json:45` | CONFIRMED (run; re-run by lead) → FIXED (#206) |
 | C314 | Medium | corpus / specs, range 1 | 7 `bar-color-*` specs use a different scheme than named; two schemes are never rendered anywhere | `packages/conformance/corpus/bar-color-bugn.vg.json:1` | CONFIRMED (run; re-run by lead) → FIXED (#206) |
@@ -398,8 +398,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C349 | Medium | tests / react II | "parity.assert.ts compiles as it stands" checks a program that does not include `parity.assert.ts` | `packages/react/src/Chart.types.test.ts:55-57` | CONFIRMED (run; re-run by lead) → FIXED (#212) |
 | C350 | Medium | tests / react II | every worker fake answers at once; four skip the clone boundary; none holds a stream flush (adds to the test-gap notes of C77 (react-hooks-4) / C244 (react-hooks-6) and report line 7160) | `packages/react/src/worker.protocol.test.tsx:212` | CONFIRMED (traced) → FIXED (#212) |
 | C351 | Medium | tests / react II | "uses a supplied Worker" tests pass unchanged if the hook ignored the Worker; worker ownership is untested | `packages/react/src/worker.test.tsx:43-71` | CONFIRMED (traced) → FIXED (#212) |
-| C352 | Medium | tests / conformance generators and case tables I | The geo differential excludes empty-ring shapes from the spherical measures entirely (why C152 (core-geo-6) was not caught) | `packages/conformance/scripts/differential-geo-generated.test.mts:341` | CONFIRMED (traced) |
-| C353 | Medium | tests / conformance generators and case tables II | The spec-level scale differentials draw no literal-as-signal, no case variant of `type` and no hostile `bins`/tick count (adds to C133 (core-scale-5), C288 (core-scale-6)) | `packages/conformance/scripts/differential-scale-spec-gen.test.mts:112-145` | CONFIRMED (traced) |
+| C352 | Medium | tests / conformance generators and case tables I | The geo differential excludes empty-ring shapes from the spherical measures entirely (why C152 (core-geo-6) was not caught) | `packages/conformance/scripts/differential-geo-generated.test.mts:341` | CONFIRMED (traced) → FIXED (#213) |
+| C353 | Medium | tests / conformance generators and case tables II | The spec-level scale differentials draw no literal-as-signal, no case variant of `type` and no hostile `bins`/tick count (adds to C133 (core-scale-5), C288 (core-scale-6)) | `packages/conformance/scripts/differential-scale-spec-gen.test.mts:112-145` | CONFIRMED (traced) → FIXED (#213) |
 | C354 | Medium | tests / conformance suites I | The parity gate's case table, not its oracle, let all twelve mis-compiles through (adds to C719 (vl-c3-23), C635 (vl-c2-23)) | `packages/conformance/test/vl-compiler-parity.test.ts:77-865` | CONFIRMED (run) |
 | C355 | Medium | tests / conformance suites I | `check()` cannot see interaction wiring: event types, `bind`, `interactive`, `cursor` | `packages/conformance/test/vl-compiler-parity.test.ts:903-916` | CONFIRMED (run) |
 | C356 | Medium | tests / conformance suites II | `vl-mark-channels`: 483 Aster-only refusals are silently skipped; the `time` channel is never compared | `packages/conformance/test/vl-mark-channels.test.ts:9-13` | CONFIRMED (run; re-run by lead) |
@@ -426,7 +426,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C377 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ARCHITECTURE statements about add-on detection the code contradicts ("cached per spec object", "no regular expression") | `docs/ARCHITECTURE.md:353` | CONFIRMED (traced) |
 | C378 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ARCHITECTURE repeats a stale corpus count (1060; actual 1063) and the guard's regex cannot match the sentence | `docs/ARCHITECTURE.md:577` | CONFIRMED (traced) |
 | C379 | Medium | tests / core (limits, loaders, locale, oracle vectors) | `docs/TESTING.md` says the default run pins `TZ=UTC`; it does not, and `locale-font-matrix.test.ts` fails off UTC | `docs/TESTING.md:143` | CONFIRMED (run; re-run by lead) → FIXED (#195) |
-| C380 | Medium | tests / conformance generators and case tables II | A derived dataset that opens with a sort re-orders its source in Vega; Aster does not, and the deviation is recorded only in a test comment | `packages/conformance/scripts/differential-sort-ties.test.mts:53-55` | CONFIRMED (run; re-run by lead) |
+| C380 | Medium | tests / conformance generators and case tables II | A derived dataset that opens with a sort re-orders its source in Vega; Aster does not, and the deviation is recorded only in a test comment | `packages/conformance/scripts/differential-sort-ties.test.mts:53-55` | CONFIRMED (run; re-run by lead) → FIXED (#213) |
 | C381 | Medium | tests / conformance suites I | `docs/ERRORS.md:182` misdescribes what a throwing dataset transform leaves | `docs/ERRORS.md:182` | CONFIRMED (run; re-run by lead) |
 | C382 | Medium | leftovers / budgets, declarations, demo data, gallery lists | `SignalBindOptions.pick` TSDoc recommends `HitIndex.query`; that is not vega's `event.item` | `packages/core/src/signals.ts:164` | CONFIRMED (run; re-run by lead) → FIXED (#188) |
 | C383 | Low | core / runtime: marks, encode, groups | Scope ids concatenate data-controlled keys | `packages/core/src/runtime.ts:6248` | PLAUSIBLE |
@@ -516,12 +516,12 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C467 | Low | tests / conformance differentials I | ceilings that depend on file order, and silent drops behind loose floors | `packages/conformance/src/guide-encode-vs-vega.test.ts:200-204` | CONFIRMED (run) |
 | C468 | Low | tests / conformance differentials II | `legend-discretizing`'s "unreadable" allowance does not check which side was unreadable | `packages/conformance/src/legend-discretizing-vs-vega.test.ts:123-131` | CONFIRMED (run) |
 | C469 | Low | tests / conformance differentials II | guards that hold today but cannot fail in the way their test implies | `packages/conformance/src/trellis-generated-vs-vega.test.ts:37-45` | CONFIRMED (traced) |
-| C470 | Low | tests / conformance generators and case tables I | Two inputs the generators exclude where the engines differ | `packages/conformance/scripts/transform-cases.mjs:748` | CONFIRMED (run) |
-| C471 | Low | tests / conformance generators and case tables II | Interpreter sandbox test: the "never executes injected code" marker cannot fire, the "smuggle" set omits what Aster does return, and the pin table calls weaker-than-Vega results "hardenin… | `packages/conformance/scripts/differential-vega-interpreter-gen.test.mts:176-183` | CONFIRMED (run) |
-| C472 | Low | tests / conformance generators and case tables II | `differential-transform-names`: 8 of 51 types are never compared with Vega, the floor is 20, and the `label` case is a self-oracle | `packages/conformance/scripts/differential-transform-names.test.mts:75` | CONFIRMED (run) |
-| C473 | Low | tests / conformance generators and case tables II | `differential-stats-random` checks Aster's row keys one-sidedly | `packages/conformance/scripts/differential-stats-random.test.mts:257-259` | CONFIRMED (run) |
-| C474 | Low | tests / conformance generators and case tables II | `differential-transforms-generated`: crash ceilings far above reality, message comparison skipped for real messages, and a dangling reference | `packages/conformance/scripts/differential-transforms-generated.test.mts:13` | CONFIRMED (run) |
-| C475 | Low | tests / conformance generators and case tables II | Decorative floors and non-differentials in the time files | `packages/conformance/scripts/differential-time-format.test.mts:166` | CONFIRMED (run) |
+| C470 | Low | tests / conformance generators and case tables I | Two inputs the generators exclude where the engines differ | `packages/conformance/scripts/transform-cases.mjs:748` | CONFIRMED (run) → FIXED (#213) |
+| C471 | Low | tests / conformance generators and case tables II | Interpreter sandbox test: the "never executes injected code" marker cannot fire, the "smuggle" set omits what Aster does return, and the pin table calls weaker-than-Vega results "hardenin… | `packages/conformance/scripts/differential-vega-interpreter-gen.test.mts:176-183` | CONFIRMED (run) → FIXED (#213) |
+| C472 | Low | tests / conformance generators and case tables II | `differential-transform-names`: 8 of 51 types are never compared with Vega, the floor is 20, and the `label` case is a self-oracle | `packages/conformance/scripts/differential-transform-names.test.mts:75` | CONFIRMED (run) → FIXED (#213) |
+| C473 | Low | tests / conformance generators and case tables II | `differential-stats-random` checks Aster's row keys one-sidedly | `packages/conformance/scripts/differential-stats-random.test.mts:257-259` | CONFIRMED (run) → FIXED (#213) |
+| C474 | Low | tests / conformance generators and case tables II | `differential-transforms-generated`: crash ceilings far above reality, message comparison skipped for real messages, and a dangling reference | `packages/conformance/scripts/differential-transforms-generated.test.mts:13` | CONFIRMED (run) → FIXED (#213) |
+| C475 | Low | tests / conformance generators and case tables II | Decorative floors and non-differentials in the time files | `packages/conformance/scripts/differential-time-format.test.mts:166` | CONFIRMED (run) → FIXED (#213) |
 | C476 | Low | corpus / specs, range 5 | specs whose named property is inert because of the chosen data or value | `packages/conformance/corpus/vlx-mark-order-false.vl.json:118` | CONFIRMED (run) → FIXED (#207) |
 | C477 | Low | corpus / specs, range 5 | interaction properties that a static SVG cannot show | `packages/conformance/corpus/vlx-param-bind-checkbox.vl.json:138` | CONFIRMED (run) → FIXED (#207) |
 | C478 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | A channel key omits the URL policy the mark key holds | `packages/core/src/runtime.ts:5119-5126` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
@@ -631,9 +631,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C582 | Low | tests / conformance differentials II | four "moved on by a click" tests in `parts-signal-driven` are the host-set test again | `packages/conformance/src/parts-signal-driven.test.ts:34-37` | CONFIRMED (traced) |
 | C583 | Low | tests / conformance differentials II | `legend-entries-failure` matrix never exercises its "vega cannot serialize" branch | `packages/conformance/src/legend-entries-failure-vs-vega.test.ts:13-14` | CONFIRMED (run) |
 | C584 | Low | tests / conformance differentials II | small leaks and partial assertions | `packages/conformance/src/vl-custom-format-types.test.ts:20-26` | CONFIRMED (traced) |
-| C585 | Low | tests / conformance generators and case tables II | `differential-scale-spec(-gen)`: "must throw in Aster too" is not what is compared | `packages/conformance/scripts/differential-scale-spec.test.mts:6-7` | CONFIRMED (run) |
-| C586 | Low | tests / conformance generators and case tables II | `differential-scale-helpers-gen`: "every scheme" is a hand list missing five, plus dead and duplicated lines | `packages/conformance/scripts/differential-scale-helpers-gen.test.mts:111` | CONFIRMED (run) |
-| C587 | Low | tests / conformance generators and case tables II | Smaller drifts between headers and code | `packages/conformance/scripts/differential-step-reuse.test.mts:110` | CONFIRMED (run) |
+| C585 | Low | tests / conformance generators and case tables II | `differential-scale-spec(-gen)`: "must throw in Aster too" is not what is compared | `packages/conformance/scripts/differential-scale-spec.test.mts:6-7` | CONFIRMED (run) → FIXED (#213) |
+| C586 | Low | tests / conformance generators and case tables II | `differential-scale-helpers-gen`: "every scheme" is a hand list missing five, plus dead and duplicated lines | `packages/conformance/scripts/differential-scale-helpers-gen.test.mts:111` | CONFIRMED (run) → FIXED (#213) |
+| C587 | Low | tests / conformance generators and case tables II | Smaller drifts between headers and code | `packages/conformance/scripts/differential-step-reuse.test.mts:110` | CONFIRMED (run) → FIXED (#213) |
 | C588 | Low | tests / conformance suites I | Two pairs of identical specs under different names; one name lies | `packages/conformance/test/vl-compiler-parity.test.ts:100` | CONFIRMED (run) |
 | C589 | Low | tests / conformance suites I | The structural half of `check()` is root-level and set-based, so its labels promise more than it compares | `packages/conformance/test/vl-compiler-parity.test.ts:867-881` | CONFIRMED (traced) |
 | C590 | Low | tests / conformance suites II | "a predicate vega-lite refuses must be refused here" is neither enforced nor exercised | `packages/conformance/test/vl-time-helpers.ts:42-43` | CONFIRMED (run) |
@@ -719,12 +719,12 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C670 | Low | tests / react II | `loadOptions.test.tsx` wraps a hook test in the variant matrix and shadows the variant | `packages/react/src/loadOptions.test.tsx:58-76` | CONFIRMED (traced) → FIXED (#212) |
 | C671 | Low | tests / react II | 23 of the 41 files call `act` without setting `IS_REACT_ACT_ENVIRONMENT` | `packages/react/src/testing/variants.tsx:143` | CONFIRMED (traced) → FIXED (#212) |
 | C672 | Low | tests / conformance differentials II | which canonicalizer behaviours `normalize.test.ts` pins and which it does not (adds to C192 (harness-src-6)) | `packages/conformance/src/normalize.test.ts:24-93` | CONFIRMED (run) |
-| C673 | Low | tests / conformance generators and case tables I | The "informative" floors of two generated differentials cannot fail | `packages/conformance/scripts/differential-d3-interpolate-gen.test.mts:145` | CONFIRMED (run) |
-| C674 | Low | tests / conformance generators and case tables I | `differential-item-datum` compares only the keys Vega has | `packages/conformance/scripts/differential-item-datum.test.mts:156-160` | CONFIRMED (run) |
-| C675 | Low | tests / conformance generators and case tables I | Generated geo specs on which Vega logs are never given to Aster; the "pinned" exclusion is a 2.75× loose ceiling | `packages/conformance/scripts/differential-geo-generated.test.mts:426-429` | CONFIRMED (run) |
-| C676 | Low | tests / conformance generators and case tables I | `differential-parse-errors` takes its exemption list from the code under test, with no ceiling | `packages/conformance/scripts/differential-parse-errors.test.mts:21` | CONFIRMED (run) |
-| C677 | Low | tests / conformance generators and case tables I | Smaller guards that assert nothing, and one misleading failure report | `packages/conformance/scripts/differential-data-format.test.mts:78-91` | CONFIRMED (traced) |
-| C678 | Low | tests / conformance generators and case tables I | Additions to existing findings (one line each) | `packages/conformance/scripts/differential-color.test.mts:29-33` | CONFIRMED (traced) |
+| C673 | Low | tests / conformance generators and case tables I | The "informative" floors of two generated differentials cannot fail | `packages/conformance/scripts/differential-d3-interpolate-gen.test.mts:145` | CONFIRMED (run) → FIXED (#213) |
+| C674 | Low | tests / conformance generators and case tables I | `differential-item-datum` compares only the keys Vega has | `packages/conformance/scripts/differential-item-datum.test.mts:156-160` | CONFIRMED (run) → FIXED (#213) |
+| C675 | Low | tests / conformance generators and case tables I | Generated geo specs on which Vega logs are never given to Aster; the "pinned" exclusion is a 2.75× loose ceiling | `packages/conformance/scripts/differential-geo-generated.test.mts:426-429` | CONFIRMED (run) → FIXED (#213) |
+| C676 | Low | tests / conformance generators and case tables I | `differential-parse-errors` takes its exemption list from the code under test, with no ceiling | `packages/conformance/scripts/differential-parse-errors.test.mts:21` | CONFIRMED (run) → FIXED (#213) |
+| C677 | Low | tests / conformance generators and case tables I | Smaller guards that assert nothing, and one misleading failure report | `packages/conformance/scripts/differential-data-format.test.mts:78-91` | CONFIRMED (traced) → FIXED (#213) |
+| C678 | Low | tests / conformance generators and case tables I | Additions to existing findings (one line each) | `packages/conformance/scripts/differential-color.test.mts:29-33` | CONFIRMED (traced) → FIXED (#213) |
 | C679 | Low | tests / conformance suites I | Stale skip: `filled` on text and trail marks is skipped as unsupported but matches vega-lite | `packages/conformance/test/vl-compiler-parity.test.ts:1041-1042` | CONFIRMED (run; re-run by lead) |
 | C680 | Low | tests / conformance suites I | "the layout and the signals of a faceted cell": four of six cases compare `null` with `null` | `packages/conformance/test/vl-compiler-parity.test.ts:1353-1369` | CONFIRMED (run) |
 | C681 | Low | tests / conformance suites I | The first group of `dataflow-failure` does not assert that Aster logs the failure | `packages/conformance/test/dataflow-failure-vs-vega.test.ts:68-79` | CONFIRMED (traced) |
@@ -793,8 +793,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C744 | Low | tests / conformance differentials I | stale structure-only filter and "separate defect" comment for the discrete legend | `packages/conformance/src/guide-structure-vs-vega.test.ts:89-91` | CONFIRMED (run) |
 | C745 | Low | tests / conformance differentials I | headers and titles that claim more than the file asserts | `packages/conformance/src/addons-needed.test.ts:4` | CONFIRMED (traced) |
 | C746 | Low | tests / conformance differentials II | stale skip in `signals-guides`: "which the engine does not model; 'sideways' is left out" | `packages/conformance/src/signals-guides-vs-vega.test.ts:145-152` | CONFIRMED (run) |
-| C747 | Low | tests / conformance generators and case tables I | The divergences `differential-identifier` avoids "by design" did not reproduce, and two are undocumented | `packages/conformance/scripts/differential-identifier.test.mts:16-22` | CONFIRMED (run) |
-| C748 | Low | tests / conformance generators and case tables I | Stale or false statements in the two case tables | `packages/conformance/scripts/transform-cases.mjs:855-856` | CONFIRMED (run) |
+| C747 | Low | tests / conformance generators and case tables I | The divergences `differential-identifier` avoids "by design" did not reproduce, and two are undocumented | `packages/conformance/scripts/differential-identifier.test.mts:16-22` | CONFIRMED (run) → FIXED (#213) |
+| C748 | Low | tests / conformance generators and case tables I | Stale or false statements in the two case tables | `packages/conformance/scripts/transform-cases.mjs:855-856` | CONFIRMED (run) → FIXED (#213) |
 | C749 | Low | tests / conformance suites I | Two test headers say "Fails today"; both files pass | `packages/conformance/test/legend-domain-signal-vs-vega.test.ts:3-6` | CONFIRMED (run) |
 | C750 | Low | tests / conformance suites II | `vl-scale-forwarding` excludes fillOpacity / strokeOpacity on a premise that is no longer true | `packages/conformance/test/vl-scale-forwarding.test.ts:8` | CONFIRMED (run) |
 | C751 | Low | tests / conformance suites II | `vl-inline-data-sharing` header contradicts its assertions | `packages/conformance/test/vl-inline-data-sharing.test.ts:9-10` | CONFIRMED (run) |
@@ -3931,6 +3931,7 @@ All five specs below are schema-valid (`role` is a plain string on a mark):
 
 - **Location:** `packages/conformance/scripts/dom-string-parity.test.mts:5-9`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #213 (c0aee333). Fixed: dom-string-parity patches over a string mount (same scene and another scene, ~1100 corpus pairs), the comparator walks child nodes and namespaces (self-tested on the stray text node and xlink), hostile values and the C136 sequence are cases; with C136's guard disabled two tests fail.
 - **Area:** tests / conformance generators and case tables II
 - **Lane ID / scripts:** `tests-confscripts2-2` — `tests-confscripts2/`
 
@@ -3955,6 +3956,7 @@ All five specs below are schema-valid (`role` is a plain string on a mark):
 
 - **Location:** `packages/core/src/transform.ts:361-366`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #213 (49338e38). Fixed: graticule appends its lines to the rows of a dataset that already has them, as sequence does; a graticule suite in transform-cases fails before ($.length 1 vs 3) and passes.
 - **Area:** tests / conformance generators and case tables II
 - **Lane ID / scripts:** `tests-confscripts2-4` — `tests-confscripts2/`
 
@@ -5362,6 +5364,7 @@ All CONFIRMED-TRACE; current values measured by script where given.
 
 - **Location:** `packages/conformance/scripts/transform-cases.mjs:748`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #213 (c5bd6d94). Fixed: dotbin over no rows and nest generate with no keys are cases of the expected-differences table (still computed on both sides, must still differ, stale entries fail), dropOnCrash for dotbin is gone (crash exclusion 41 to 40); known-differences.mts serves the vitest differentials.
 - **Area:** tests / conformance generators and case tables I
 - **Lane ID / scripts:** `tests-confscripts1-8` — `tests-confscripts1/`
 
@@ -5374,6 +5377,7 @@ All CONFIRMED-TRACE; current values measured by script where given.
 
 - **Location:** `packages/conformance/scripts/differential-vega-interpreter-gen.test.mts:176-183`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #213 (f8683251). Fixed: eleven probes set the marker if run (a self-test fires them unguarded), the smuggle set holds every built-in constructor and prototype and is checked on the product reading (no leak; a plain member read planted leaks) and the interpreter reading, and the pin table is four tables with the three more-permissive rows tied to the probes that leak.
 - **Area:** tests / conformance generators and case tables II
 - **Lane ID / scripts:** `tests-confscripts2-6` — `tests-confscripts2/`
 
@@ -5402,6 +5406,7 @@ All CONFIRMED-TRACE; current values measured by script where given.
 
 - **Location:** `packages/conformance/scripts/differential-transform-names.test.mts:75`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #213 (f04f8921). Fixed: the floor of 20 is gone: every type must agree with vega in lower case (then four spellings in full, with enc) except named heatmap/wordcloud/geoshape whose reasons are checked live; graticule and isocontour now agree (isocontour with no grid says invalid size), the label case compares real vega-label.
 - **Area:** tests / conformance generators and case tables II
 - **Lane ID / scripts:** `tests-confscripts2-8` — `tests-confscripts2/`
 
@@ -5422,6 +5427,7 @@ All CONFIRMED-TRACE; current values measured by script where given.
 
 - **Location:** `packages/conformance/scripts/differential-stats-random.test.mts:257-259`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #213 (63e2bc08). Fixed: Object.keys are compared exactly (planted extra key fails 6 tests), the no-op symbol filter is gone, the non-vacuity floors no longer fail under -t.
 - **Area:** tests / conformance generators and case tables II
 - **Lane ID / scripts:** `tests-confscripts2-9` — `tests-confscripts2/`
 
@@ -5438,6 +5444,7 @@ All CONFIRMED-TRACE; current values measured by script where given.
 
 - **Location:** `packages/conformance/scripts/differential-transforms-generated.test.mts:13`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #213 (12660702). Fixed: vega's crashes are pinned exactly per suite (window 133, sort ties 29, others 0) and Aster is run on them (crashes alike 69, answers 93); INCIDENTAL is the class of the error, so 'Invalid date: undefined' and the other 49 messages are compared (planted: 52 timeunit failures); the window generator draws the frames it avoided and the dangling header reference is gone.
 - **Area:** tests / conformance generators and case tables II
 - **Lane ID / scripts:** `tests-confscripts2-10` — `tests-confscripts2/`
 
@@ -5463,6 +5470,7 @@ All CONFIRMED-TRACE; current values measured by script where given.
 
 - **Location:** `packages/conformance/scripts/differential-time-format.test.mts:166`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #213 (5b1bbb07). Fixed: the time-format floor is refused < 10%, compareWithFloors makes every compareCases call state an informative share and refusal ceiling (nine calls discarded theirs), the durations are read from d3-time's duration.js (planted durationMonth 31 fails), the dead helper is gone.
 - **Area:** tests / conformance generators and case tables II
 - **Lane ID / scripts:** `tests-confscripts2-12` — `tests-confscripts2/`
 
@@ -6656,6 +6664,7 @@ Relates to C424 (core-guides-12), which reports the same skip for `guide-compare
 
 - **Location:** `packages/core/src/shape.ts:278-285`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #213 (d2dfb955). Fixed: monotone-x/-y name no curve (vega's table has only monotone, by orient), so resolveCurve and measureCurve agree and the mark is drawn linear with vega's error logged; the d3-shape differential no longer patches its oracle and pins the names vega has no curve for; the Deviations table states the rule.
 - **Area:** tests / conformance generators and case tables I
 - **Lane ID / scripts:** `tests-confscripts1-1` — `tests-confscripts1/`
 
@@ -7813,6 +7822,7 @@ All CONFIRMED-TRACE.
 
 - **Location:** `packages/conformance/scripts/differential-scale-spec.test.mts:6-7`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #213 (be2275ec). Fixed: both scale-spec differentials compare {kind parse|run, message} (engine errors by class), pass Aster a logger, require nothing logged where vega builds, and tally the documented parse-to-log deviation (planted message change fails every refusal).
 - **Area:** tests / conformance generators and case tables II
 - **Lane ID / scripts:** `tests-confscripts2-7` — `tests-confscripts2/`
 
@@ -7839,6 +7849,7 @@ All CONFIRMED-TRACE.
 
 - **Location:** `packages/conformance/scripts/differential-scale-helpers-gen.test.mts:111`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #213 (252c730f). Fixed: the scheme list is vega-scale-cases.mjs' 68 names (five were missing), the dead head and duplicated loop are gone, floors are shares of the cases drawn, compareCases' informative counts data (Case.informative).
 - **Area:** tests / conformance generators and case tables II
 - **Lane ID / scripts:** `tests-confscripts2-11` — `tests-confscripts2/`
 
@@ -7856,6 +7867,7 @@ All CONFIRMED-TRACE.
 
 - **Location:** `packages/conformance/scripts/differential-step-reuse.test.mts:110`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #213 (3d53b3c3). Fixed: step-reuse compares the first evaluation in order (header says so), raster drops its dead odd branch and gains per-section floors (planted empty draws fail), the run-sweep spawn deadline is 45 s under the 60 s test timeout, specs must be plain objects, voronoi asserts an array before its length.
 - **Area:** tests / conformance generators and case tables II
 - **Lane ID / scripts:** `tests-confscripts2-13` — `tests-confscripts2/`
 
@@ -10635,6 +10647,7 @@ A scale is a function object, so `scale[key]` also finds inherited members of `F
 
 - **Location:** `packages/core/src/limits.ts:200`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** ALREADY FIXED in #213 (2a637078,be2275ec,252c730f). Already fixed by a03's meters (2a637078: time ticks counted as items, checked before listing): a tickCount of 2^32, 1e308, 1e400 and {signal:"1/0"} on a time/utc axis or legend is an AsterLimitError in ~15 ms, re-run with the audit's tickcount-time2.mjs; ceiling-inputs.test.mts runs them in a child (300 MB, deadline) on every scale type with and without limits (neutering overCeiling makes the child abort and the test fail), and the helpers differential's `unbounded` exclusion is replaced by an asserted refusal.
 - **Area:** tests / conformance generators and case tables II
 - **Lane ID / scripts:** `tests-confscripts2-1` — `tests-confscripts2/`
 - **Lead's note:** The lead re-ran the `{signal: "1/0"}` form: fatal heap out-of-memory without `limits`; `AsterLimitError` (time ticks) with them. Same family as C9.
@@ -11734,6 +11747,7 @@ Direction: state "TypeScript needs `moduleResolution` `bundler`, `node16` or `no
 
 - **Location:** `packages/conformance/scripts/differential-sort-ties.test.mts:53-55`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #213 (95dd82cd). Fixed: the sort-first derived dataset is drawn and compared on every run as a known difference of the expected-differences table (line and text over the source, both sides pinned), the Deviations table lists the row, the corpus has no such spec and the gallery's donut-chart-labelled has it on a dataset no mark reads.
 - **Area:** tests / conformance generators and case tables II
 - **Lane ID / scripts:** `tests-confscripts2-3` — `tests-confscripts2/`
 
@@ -12485,6 +12499,7 @@ Direction: split the table into "vega-lite output is broken" and "not supported 
 
 - **Location:** `packages/conformance/scripts/differential-identifier.test.mts:16-22`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #213 (08b83e25). Fixed: lim moves both ways, a collect with a sort may sit anywhere in a chain and sorting datasets may be sources: vega and Aster agree on the drawn shapes (the header's claimed differences do not reproduce), the header says so; a fresh session per step planted fails.
 - **Area:** tests / conformance generators and case tables I
 - **Lane ID / scripts:** `tests-confscripts1-4` — `tests-confscripts1/`
 
@@ -12505,6 +12520,7 @@ Direction: split the table into "vega-lite output is broken" and "not supported 
 
 - **Location:** `packages/conformance/scripts/transform-cases.mjs:855-856`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #213 (f04f8921,c5bd6d94). Fixed: the false 'not implemented' and 'every transform' statements are corrected (a test names the suite that compares each of the 17 types the list lacks), 'Not recorded' comments are known differences or say 'not in this list', the dead [0, Infinity, 1] entry is removed, scale-spec-cases' probe comment is true.
 - **Area:** tests / conformance generators and case tables I
 - **Lane ID / scripts:** `tests-confscripts1-7` — `tests-confscripts1/`
 
@@ -13349,6 +13365,7 @@ Seven separate `FakeWorker` classes:
 
 - **Location:** `packages/conformance/scripts/differential-geo-generated.test.mts:341`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #213 (ea5e3cc1). Fixed: shapes with empty rings are measured in the spherical and default-path blocks against d3 on the shape without them (the documented deviation) and through a projection a throw is still held to; Polygon [[]] and MultiPolygon [[[]],[sq]] join the hostile lists and the geo-functions pool; with C152's guard disabled the generated sphere test fails.
 - **Area:** tests / conformance generators and case tables I
 - **Lane ID / scripts:** `tests-confscripts1-2` — `tests-confscripts1/`
 
@@ -13367,6 +13384,7 @@ The header promises "degenerate rings … Everything must be identical bit for b
 
 - **Location:** `packages/conformance/scripts/differential-scale-spec-gen.test.mts:112-145`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #213 (be2275ec). Fixed: the seeded scale-spec cases draw 480 specs with every option as {signal: literal text}, the type in six spellings and degenerate bins, and the generator draws signals and spellings too; planted C133 and C288 regressions fail 121 and 57 cases; the stronger generator exposed and fixed two defects (options apply literals before signals; a multi-field sort refusal is a parse-time error); hostile counts and steps are a child-process ceiling test.
 - **Area:** tests / conformance generators and case tables II
 - **Lane ID / scripts:** `tests-confscripts2-5` — `tests-confscripts2/`
 
@@ -14340,6 +14358,7 @@ All CONFIRMED-TRACE.
 
 - **Location:** `packages/conformance/scripts/differential-d3-interpolate-gen.test.mts:145`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #213 (252c730f). Fixed: Case.informative says what a floor counts (a finite number, colour string, date, non-empty tick list), the interpolate and array floors use it and are shares of the cases drawn (planted: every interpolator throws, 0 informative).
 - **Area:** tests / conformance generators and case tables I
 - **Lane ID / scripts:** `tests-confscripts1-3` — `tests-confscripts1/`
 
@@ -14356,6 +14375,7 @@ All CONFIRMED-TRACE.
 
 - **Location:** `packages/conformance/scripts/differential-item-datum.test.mts:156-160`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #213 (9a3b2afc). Fixed: the item-datum comparison iterates the union of both scenegraphs' marks and guide parts; a planted mark:ghost fails.
 - **Area:** tests / conformance generators and case tables I
 - **Lane ID / scripts:** `tests-confscripts1-5` — `tests-confscripts1/`
 
@@ -14370,6 +14390,7 @@ A mark or guide part present only in Aster's scene is never looked at. Planted: 
 
 - **Location:** `packages/conformance/scripts/differential-geo-generated.test.mts:426-429`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #213 (ea5e3cc1). Fixed: Aster is run on the 8 of 90 generated geo specs vega refuses and must log vega's first error; the indices are pinned (REFUSED_BY_VEGA) and the unreadable #81 is compared as SVG text and pinned.
 - **Area:** tests / conformance generators and case tables I
 - **Lane ID / scripts:** `tests-confscripts1-6` — `tests-confscripts1/`
 
@@ -14391,6 +14412,7 @@ Aster is not run on those 8. Run by hand, it logs the same first error on all 8,
 
 - **Location:** `packages/conformance/scripts/differential-parse-errors.test.mts:21`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #213 (4585773c). Fixed: the wrapped-property list is the test's own copy, the 417 excused refusals are counted and pinned and Aster's text on them must quote the expression by itself; planted wider list moves the count.
 - **Area:** tests / conformance generators and case tables I
 - **Lane ID / scripts:** `tests-confscripts1-9` — `tests-confscripts1/`
 
@@ -14407,6 +14429,7 @@ Measured: 375 of 17 008 fixed comparisons and 42 of 1 500 random ones are skippe
 
 - **Location:** `packages/conformance/scripts/differential-data-format.test.mts:78-91`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #213 (0ede4f73). Fixed: data-format parse/refuse counts, the engine-gen locale test counts compiled expressions and expressions whose results moved, field-paths holds refusals to vega's words and counts every case and draws ARRS/ABSENT, the arc pen failure prints its inputs, the guide-format registration says why it stays.
 - **Area:** tests / conformance generators and case tables I
 - **Lane ID / scripts:** `tests-confscripts1-10` — `tests-confscripts1/`
 
@@ -14421,6 +14444,7 @@ Measured: 375 of 17 008 fixed comparisons and 42 of 1 500 random ones are skippe
 
 - **Location:** `packages/conformance/scripts/differential-color.test.mts:29-33`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #213 (27c67f1a). Fixed: date/math/geo-function and nest differentials compare vega's own error words (loggedThrow/expectSameOutcome, self-tested), the engine encode generator reads parent and group(); the colour key-order remark is covered by C409's unsorted keys projection and the operator pool by a17's C302 work.
 - **Area:** tests / conformance generators and case tables I
 - **Lane ID / scripts:** `tests-confscripts1-11` — `tests-confscripts1/`
 
