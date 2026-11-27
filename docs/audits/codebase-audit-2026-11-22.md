@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 555 of 766 findings resolved (542 fixed, 10 already fixed on main, 3 disputed with evidence); 211 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 573 of 766 findings resolved (558 fixed, 12 already fixed on main, 3 disputed with evidence); 193 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -105,8 +105,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C56 | High | vl / validate, optimize, predicates | Merging "identical" datasets drops a bin `signal` that scales still read, so the compiled spec does not run | `packages/vl/src/optimize.ts:139-149` | CONFIRMED (run; re-run by lead) → FIXED (#202) |
 | C57 | High | vl / validate, optimize, predicates | Two views that aggregate to the same output name with different ops or fields are merged; both views silently draw the same numbers | `packages/vl/src/optimize.ts:217-223` | CONFIRMED (run; re-run by lead) → FIXED (#202) |
 | C58 | High | vl / validate, optimize, predicates | the `extent` transform's `param` is renamed as a cell-local signal, so references to it fail in every composition | `packages/vl/src/compile.ts:2811-2812` | CONFIRMED (run; re-run by lead) → FIXED (#202) |
-| C59 | High | vl / composite marks, selections, transforms | a composite-mark unit drops its `params` | `packages/vl/src/composite-marks.ts:340` | CONFIRMED (run; re-run by lead) |
-| C60 | High | vl / composite marks, selections, transforms | composite marks over nested or escaped fields (continues prior C37, fixed incompletely) | `packages/vl/src/composite-marks.ts:434-438` | CONFIRMED (run) |
+| C59 | High | vl / composite marks, selections, transforms | a composite-mark unit drops its `params` | `packages/vl/src/composite-marks.ts:340` | CONFIRMED (run; re-run by lead) → FIXED (#211) |
+| C60 | High | vl / composite marks, selections, transforms | composite marks over nested or escaped fields (continues prior C37, fixed incompletely) | `packages/vl/src/composite-marks.ts:434-438` | CONFIRMED (run) → FIXED (#211) |
 | C61 | High | conformance / harness | Aster receives the spec object the oracle has already written its answers onto | `packages/conformance/src/run-sweep.ts:201-202` | CONFIRMED (run; re-run by lead) → FIXED (#205) |
 | C62 | High | conformance / harness | `scene-diff` compares nothing for marks inside a group mark | `packages/conformance/src/scene-diff.ts:172-183` | CONFIRMED (run; re-run by lead) → FIXED (#205) |
 | C63 | High | conformance / harness | the label generator deletes inputs that expose a live, undocumented defect | `packages/conformance/src/label-cases.ts:192-195` | CONFIRMED (run; re-run by lead) → FIXED (#205) |
@@ -115,7 +115,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C66 | High | tooling / gates, CI, release, benchmarks | a prerelease tag publishes as npm `latest` | `.github/workflows/release.yml:103` | CONFIRMED (traced; lines re-read by lead) → FIXED (#187) |
 | C67 | High | tests / core (legacy copies II … path) | The hit comparison names items by first-encounter order on each side, so "compared by item identity" does not hold: a wrong-item bug is invisible | `packages/core/src/geometry-differential.testlib.ts:181` | CONFIRMED (run; re-run by lead) → FIXED (#200) |
 | C68 | High | gallery / official Vega examples II | A signal that holds an event's `datum` is never identical to a row afterwards, so `reorderable-matrix` cannot highlight or reorder | `packages/core/src/runtime.ts:4106-4108` | CONFIRMED (run; re-run by lead) |
-| C69 | High | gallery / official Vega-Lite examples I | `interactive_crossfilter`: a unit inside a `layer` bins after its own transforms; vega-lite bins before them, so any brush re-bins and re-scales the charts | `packages/vl/src/compile.ts:4296-4298` | CONFIRMED (run; re-run by lead) |
+| C69 | High | gallery / official Vega-Lite examples I | `interactive_crossfilter`: a unit inside a `layer` bins after its own transforms; vega-lite bins before them, so any brush re-bins and re-scales the charts | `packages/vl/src/compile.ts:4296-4298` | CONFIRMED (run; re-run by lead) → ALREADY FIXED (#211) |
 | C70 | High | gallery / official Vega-Lite examples II | After one legend click on the official `point_constant_legend_domain`, the legend loses its other entries; Vega keeps them | `packages/core/src/runtime.ts:4651-4658` | CONFIRMED (run; re-run by lead) |
 | C71 | High | react / <Chart>, shells, SSR | Pan/zoom keys and double-click are taken from bound inputs inside the chart | `packages/react/src/ChartCore.tsx:1449-1475` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
 | C72 | High | react / hooks, streams, workers | `useChartWorker` loops on inline `data` / `signals` / `domainRaw` | `packages/react/src/worker.ts:458` | CONFIRMED (run; re-run by lead) → FIXED (#199) |
@@ -231,12 +231,12 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C182 | Medium | vl / validate, optimize, predicates | Names the gate lets through that make the output unrunnable, with a raw Vega error instead of a `VLCompileError` | `packages/vl/src/validate.ts:584-589` | CONFIRMED (run) → FIXED (#202) |
 | C183 | Medium | vl / validate, optimize, predicates | A `binned*` time unit on a facet field renders raw-string headers (no `toDate` cast) | `packages/vl/src/timeunit.ts:40-55` | CONFIRMED (run) → FIXED (#202) |
 | C184 | Medium | vl / validate, optimize, predicates | ten further schema-valid forms render differently from vega-lite (delta-reduced) | `packages/vl/src/compile.ts:6915` | CONFIRMED (run) → FIXED (#202) |
-| C185 | Medium | vl / composite marks, selections, transforms | arc with an explicit colour domain is not stacked in domain order | `packages/vl/src/composite.ts:255-256` | CONFIRMED (run) |
-| C186 | Medium | vl / composite marks, selections, transforms | `bin` transform with `extent: {param}` throws a raw TypeError | `packages/vl/src/transforms.ts:249-251` | CONFIRMED (run; re-run by lead) |
-| C187 | Medium | vl / composite marks, selections, transforms | two equal bins of one field emit duplicate signals | `packages/vl/src/transforms.ts:243-254` | CONFIRMED (run) |
-| C188 | Medium | vl / composite marks, selections, transforms | a faceted unit map uses `equalEarth` where vega-lite's output is mercator | `packages/vl/src/geo.ts:203` | CONFIRMED (run) |
-| C189 | Medium | vl / composite marks, selections, transforms | colour-domain stack order breaks for a nested colour field | `packages/vl/src/composite.ts:257` | CONFIRMED (run) |
-| C190 | Medium | vl / composite marks, selections, transforms | `title: null` on a composite's measured channel does not remove the axis title | `packages/vl/src/composite-marks.ts:193` | CONFIRMED (run) |
+| C185 | Medium | vl / composite marks, selections, transforms | arc with an explicit colour domain is not stacked in domain order | `packages/vl/src/composite.ts:255-256` | CONFIRMED (run) → FIXED (#211) |
+| C186 | Medium | vl / composite marks, selections, transforms | `bin` transform with `extent: {param}` throws a raw TypeError | `packages/vl/src/transforms.ts:249-251` | CONFIRMED (run; re-run by lead) → FIXED (#211) |
+| C187 | Medium | vl / composite marks, selections, transforms | two equal bins of one field emit duplicate signals | `packages/vl/src/transforms.ts:243-254` | CONFIRMED (run) → FIXED (#211) |
+| C188 | Medium | vl / composite marks, selections, transforms | a faceted unit map uses `equalEarth` where vega-lite's output is mercator | `packages/vl/src/geo.ts:203` | CONFIRMED (run) → FIXED (#211) |
+| C189 | Medium | vl / composite marks, selections, transforms | colour-domain stack order breaks for a nested colour field | `packages/vl/src/composite.ts:257` | CONFIRMED (run) → FIXED (#211) |
+| C190 | Medium | vl / composite marks, selections, transforms | `title: null` on a composite's measured channel does not remove the axis title | `packages/vl/src/composite-marks.ts:193` | CONFIRMED (run) → FIXED (#211) |
 | C191 | Medium | conformance / harness | label differential tolerates 15% and shares Aster's rasterizer with the oracle | `packages/conformance/src/label-generated-vs-vega.test.ts:110-115` | CONFIRMED (traced) → FIXED (#205) |
 | C192 | Medium | conformance / harness | the canonicalizer's painted boxes are not conservative | `packages/conformance/src/normalize.ts:943-947` | CONFIRMED (run) → FIXED (#205) |
 | C193 | Medium | conformance / harness | `conformance:diff` counts any throw as "skipped" | `packages/conformance/src/diff.ts:228-238` | CONFIRMED (traced) → FIXED (#205) |
@@ -292,7 +292,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C243 | Medium | react / <Chart>, shells, SSR | A controlled `view` reaches the scales unvalidated | `packages/react/src/ChartCore.tsx:522-525` | CONFIRMED (run) → FIXED (#198) |
 | C244 | Medium | react / hooks, streams, workers | no deadline; a silent worker leaves `pending: true` forever | `packages/react/src/worker.ts:272-292` | CONFIRMED (run; re-run by lead) → FIXED (#199) |
 | C245 | Medium | vl / validate, optimize, predicates | The gate checks key names, not value types, so type-confused or `null` values compile to a chart that differs from vega-lite's instead of being refused | `packages/vl/src/validate.ts:153` | CONFIRMED (run) → FIXED (#203) |
-| C246 | Medium | vl / composite marks, selections, transforms | unknown errorbar / errorband `extent` or `center` values silently compile to IQR around the median | `packages/vl/src/composite-marks.ts:314-328` | CONFIRMED (run) |
+| C246 | Medium | vl / composite marks, selections, transforms | unknown errorbar / errorband `extent` or `center` values silently compile to IQR around the median | `packages/vl/src/composite-marks.ts:314-328` | CONFIRMED (run) → FIXED (#211) |
 | C247 | Medium | conformance / harness | `conformance-vl` passes when it runs nothing; four corpus gates have no count floor | `packages/conformance/src/run-vl.ts:126` | CONFIRMED (run; re-run by lead) → ALREADY FIXED (#205) |
 | C248 | Medium | conformance / scripts and gates | No browser gate pans, zooms or brushes `<Chart>` over a time (or band/point) scale | `packages/react/scripts/browser-interaction.mts:153-174` | CONFIRMED (traced) → FIXED (#204) |
 | C249 | Medium | conformance / scripts and gates | Whole feature classes are outside every generator | `packages/conformance/scripts/fuzz.mts:41-106` | CONFIRMED (traced) → FIXED (#204) |
@@ -310,7 +310,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C261 | Medium | corpus / specs, range 6 | Selection consumers are unobservable in 10 `vlx-sel-*` specs | `packages/conformance/corpus/vlx-sel-layer-brush-filter.vl.json:80` | CONFIRMED (run) → FIXED (#207) |
 | C262 | Medium | leftovers / budgets, declarations, demo data, gallery lists | Nothing guards the gallery ratchet files against being lowered; the gate compares a run to the files, never the files to their history | `packages/conformance/src/gallery/run.ts:51` | CONFIRMED (traced) → FIXED (#188) |
 | C263 | Medium | closure / gallery, sweeps, canvas helpers, corpus-tz | Both schema sweeps return at the first enum branch, so the other branches of a mixed property are never generated | `packages/conformance/src/sweeps/vega-schema.mjs:1410-1423` | CONFIRMED (run; re-run by lead) → FIXED (#205) |
-| C264 | Medium | gallery / official Vega-Lite examples II | The gallery gate cannot fail on what 66 of this lane's 313 specs are named for | `packages/conformance/src/gallery/static.ts:42` | CONFIRMED (run) |
+| C264 | Medium | gallery / official Vega-Lite examples II | The gallery gate cannot fail on what 66 of this lane's 313 specs are named for | `packages/conformance/src/gallery/static.ts:42` | CONFIRMED (run) → FIXED (#211) |
 | C265 | Medium | core / runtime: state, signals, reuse keys | In-place change of a host signal is noticed or not depending on an undocumented bound | `packages/core/src/fingerprint.ts:36-37` | CONFIRMED (run) → FIXED (#201) |
 | C266 | Medium | core / runtime: datasets, scales, fit | The documented remedy "pass a new array" fails for mutate-then-`[...rows]`: the diff sees the same row objects and the dev warning does not fire | `packages/core/src/row-watch.ts:145` | CONFIRMED (run) → FIXED (#201) |
 | C267 | Medium | core / session, stream, limits | `session.change()` keeps the last data but silently drops the last size and signals | `packages/core/src/session.ts:415-418` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
@@ -346,7 +346,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C297 | Medium | vl / mark encoding | A named style is honoured for paint only | `packages/vl/src/compile.ts:6267-6274` | CONFIRMED (run; re-run by lead) → FIXED (#209) |
 | C298 | Medium | vl / mark encoding | Config precedence differs from vega-lite | `packages/vl/src/compile.ts:6563-6565` | CONFIRMED (run) → FIXED (#209) |
 | C299 | Medium | vl / validate, optimize, predicates | The rename cannot tell compiler-written expressions from the user's, and is asymmetric about which keys it rewrites | `packages/vl/src/embed.ts:71-93` | CONFIRMED (run) → FIXED (#202) |
-| C300 | Medium | vl / composite marks, selections, transforms | a dotted `as` is refused for `calculate` but accepted for `aggregate`, then read as a nested path | `packages/vl/src/transforms.ts:268` | CONFIRMED (run) |
+| C300 | Medium | vl / composite marks, selections, transforms | a dotted `as` is refused for `calculate` but accepted for `aggregate`, then read as a nested path | `packages/vl/src/transforms.ts:268` | CONFIRMED (run) → FIXED (#211) |
 | C301 | Medium | conformance / harness | sweep skip tables carry reasons that are no longer true | `packages/conformance/src/sweeps/vega-lite-schema.mjs:1-9` | CONFIRMED (traced) → FIXED (#205) |
 | C302 | Medium | conformance / scripts and gates | Why no gate caught `in` throwing and `/g` regexes alternating | `packages/conformance/scripts/differential-expression-engine-gen.test.mts:107-111` | CONFIRMED (run) → FIXED (#204) |
 | C303 | Medium | tooling / gates, CI, release, benchmarks | the `typecheck` gate skips about 160 test files and all runner scripts, and they hold real type errors | `packages/vl/tsconfig.json:1` | CONFIRMED (run) → FIXED (#187) |
@@ -436,7 +436,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C387 | Low | core / SVG, DOM patcher, canvas, a11y | A gradient's own `id` shares the id space of clip paths | `packages/core/src/svg-defs.ts:82` | CONFIRMED (run) → FIXED (#191) |
 | C388 | Low | core / signal event loop, transitions | A timer of an element that was never in the document has no self-stop | `packages/core/src/signals.ts:1037-1045` | CONFIRMED (run) → FIXED (#197) |
 | C389 | Low | react / <Chart>, shells, SSR | An a11y node id goes into a selector unescaped | `packages/react/src/ChartCore.tsx:1379` | CONFIRMED (run) → FIXED (#198) |
-| C390 | Low | vl / composite marks, selections, transforms | `quotedRef` is a second, weaker field escaper (continues C37) | `packages/vl/src/composite-marks.ts:17` | CONFIRMED (run) |
+| C390 | Low | vl / composite marks, selections, transforms | `quotedRef` is a second, weaker field escaper (continues C37) | `packages/vl/src/composite-marks.ts:17` | CONFIRMED (run) → FIXED (#211) |
 | C391 | Low | tests / core (limits, loaders, locale, oracle vectors) | A URL refused for embedded credentials is echoed, password included, in the error message and `.url` | `packages/core/src/url-policy.ts:20-21` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
 | C392 | Low | corpus / specs, range 2 | `image.vg.json` points at a third-party host | `packages/conformance/corpus/image.vg.json:1` | CONFIRMED (traced) → FIXED (#206) |
 | C393 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | Lockfile hygiene: one deprecated package, unhashed `packageManager`, oracle versions held only by the lockfile outside conformance too | `package.json:4` | CONFIRMED (run) → FIXED (#188) |
@@ -489,8 +489,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C440 | Low | vl / mark encoding | The same time-unit field on x and y with `bandPosition` on one draws nothing | `packages/vl/src/compile.ts:7282-7290` | CONFIRMED (run) → FIXED (#209) |
 | C441 | Low | vl / validate, optimize, predicates | DateTime parts other than month/day/quarter are spliced into the predicate expression unchecked | `packages/vl/src/predicate.ts:55-67` | CONFIRMED (traced) → FIXED (#202) |
 | C442 | Low | vl / validate, optimize, predicates | smaller compile differences found in passing | `packages/vl/src/compile.ts:4268-4270` | CONFIRMED (run) |
-| C443 | Low | vl / composite marks, selections, transforms | stacked area with a colour domain imputes by the sort index too [compile.ts] | `packages/vl/src/composite.ts:255-262` | CONFIRMED (run) |
-| C444 | Low | vl / composite marks, selections, transforms | a `detail` list with a time-unit entry changes a composite's ARIA description | `packages/vl/src/composite-marks.ts:123-153` | CONFIRMED (run) |
+| C443 | Low | vl / composite marks, selections, transforms | stacked area with a colour domain imputes by the sort index too [compile.ts] | `packages/vl/src/composite.ts:255-262` | CONFIRMED (run) → FIXED (#211) |
+| C444 | Low | vl / composite marks, selections, transforms | a `detail` list with a time-unit entry changes a composite's ARIA description | `packages/vl/src/composite-marks.ts:123-153` | CONFIRMED (run) → FIXED (#211) |
 | C445 | Low | conformance / scripts and gates | The vector codec loses invalid Dates (replayed as the epoch); the "interior" mesh vector records exterior arcs | `packages/conformance/scripts/gen-vectors.mjs:53` | CONFIRMED (traced) → FIXED (#204) |
 | C446 | Low | conformance / scripts and gates | Several differentials count any Aster throw as agreement when Vega logged an error | `packages/conformance/scripts/differential-field-paths.test.mts:203-214` | CONFIRMED (traced) → FIXED (#204) |
 | C447 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ARCHITECTURE/ROADMAP/ADR name files and symbols that moved (`svg-path.ts`, `renderGroup`, `exprRows`, `SEED`/`lcg`) | `docs/ARCHITECTURE.md:373` | CONFIRMED (traced) |
@@ -540,7 +540,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C491 | Low | react / <Chart>, shells, SSR | A brush-only chart cannot be brushed by touch | `packages/react/src/ChartCore.tsx:1645` | PLAUSIBLE → FIXED (#198) |
 | C492 | Low | react / hooks, streams, workers | `mergeBatches` is quadratic in pushes per tick | `packages/react/src/batches.ts:18-21` | CONFIRMED (run) → FIXED (#199) |
 | C493 | Low | vl / composition | `compile` has no depth or cycle guard | `packages/vl/src/compile.ts:134-141` | CONFIRMED (run) → FIXED (#202) |
-| C494 | Low | vl / composite marks, selections, transforms | `stack` `as` with one name is emitted as written | `packages/vl/src/transforms.ts:327` | CONFIRMED (run) |
+| C494 | Low | vl / composite marks, selections, transforms | `stack` `as` with one name is emitted as written | `packages/vl/src/transforms.ts:327` | CONFIRMED (run) → ALREADY FIXED (#211) |
 | C495 | Low | tooling / gates, CI, release, benchmarks | `pnpm build` rebuilds `@aster-charts/react` a second time, concurrently with a build that reads it | `apps/demo/package.json:8` | PLAUSIBLE → FIXED (#187) |
 | C496 | Low | tooling / gates, CI, release, benchmarks | `check-bundle-shaking --only <typo>` passes with zero patterns | `scripts/check-bundle-shaking.mjs:42-43` | CONFIRMED (traced) → FIXED (#187) |
 | C497 | Low | tooling / gates, CI, release, benchmarks | `pnpm test:tz <misspelt zone>` runs in UTC and reports "all zones passed" | `scripts/test-tz.mjs:34-45` | CONFIRMED (run) → FIXED (#187) |
@@ -609,7 +609,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C560 | Low | vl / mark encoding | `config.legend.unselectedOpacity` is ignored | `packages/vl/src/compile.ts:9013` | CONFIRMED (run) → FIXED (#209) |
 | C561 | Low | vl / mark encoding | Mark-encoding hygiene: unreachable `startAngle`/`endAngle` pass-through, duplicated shape/size writes, leftover no-ops | `packages/vl/src/compile.ts:6915` | CONFIRMED (traced) → FIXED (#209) |
 | C562 | Low | vl / validate, optimize, predicates | dead code and drift in `validate.ts` (CONFIRMED-TRACE) | `packages/vl/src/timeunit.ts:12` | CONFIRMED (traced) → FIXED (#202) |
-| C563 | Low | vl / composite marks, selections, transforms | dead branches and misplaced comments | `packages/vl/src/composite-marks.ts:56-61` | CONFIRMED (traced) |
+| C563 | Low | vl / composite marks, selections, transforms | dead branches and misplaced comments | `packages/vl/src/composite-marks.ts:56-61` | CONFIRMED (traced) → FIXED (#211) |
 | C564 | Low | conformance / scripts and gates | One gate, two builds of the engine | `packages/conformance/scripts/browser-canvas-parity.mts:241-247` | CONFIRMED (traced) → FIXED (#204) |
 | C565 | Low | conformance / scripts and gates | The geo generator keeps path marks fill-only for a defect "see the report" that the simple form no longer shows | `packages/conformance/scripts/geo-gen.mts:404-405` | CONFIRMED (run) → FIXED (#204) |
 | C566 | Low | tooling / gates, CI, release, benchmarks | `tsc` never cleans `dist`: this tree holds a built module that has no source | `scripts/bundle-shaking.test.mjs:24-27` | CONFIRMED (run) → FIXED (#187) |
@@ -685,7 +685,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C636 | Low | vl / mark encoding | `x` on a point scale + an `xOffset` field compiles to Vega that real Vega refuses (cycle); vega-lite throws at compile | `packages/vl/src/compile.ts:4841-4846` | CONFIRMED (run) → FIXED (#209) |
 | C637 | Low | vl / validate, optimize, predicates | Validation error messages: no suggestion for near-misses, misleading config text, missing spec paths | `packages/vl/src/validate.ts:517` | CONFIRMED (run) → FIXED (#202) |
 | C638 | Low | vl / validate, optimize, predicates | Test gaps: no negative merge tests in `optimize`, no `Object.prototype` assertion | `packages/vl/test/optimize-reads.test.ts:1` | CONFIRMED (traced) → FIXED (#202) |
-| C639 | Low | vl / composite marks, selections, transforms | raw `TypeError`s instead of `VLCompileError`s | `packages/vl/src/composite-marks.ts:390` | CONFIRMED (run) |
+| C639 | Low | vl / composite marks, selections, transforms | raw `TypeError`s instead of `VLCompileError`s | `packages/vl/src/composite-marks.ts:390` | CONFIRMED (run) → FIXED (#211) |
 | C640 | Low | conformance / scripts and gates | Undocumented environment switches (one changes the verdict), raw TypeErrors in `gallery-triage`, fixed scratch paths | `packages/conformance/scripts/browser-signals.mts:1009` | CONFIRMED (traced) → FIXED (#204) |
 | C641 | Low | tooling / gates, CI, release, benchmarks | the `incremental-append` gate has no test that it can fail | `packages/benchmarks/src/incremental.bench.tsx:36-38` | CONFIRMED (traced) → FIXED (#187) |
 | C642 | Low | tooling / gates, CI, release, benchmarks | `pnpm check -- --only browser` is accepted, then "no gates selected" | `scripts/gates.mjs:121-135` | CONFIRMED (traced) → FIXED (#187) |
@@ -1815,6 +1815,7 @@ Measures are keyed by `as` only (`:221`: `if (!measures.has(String(as))) measure
 
 - **Location:** `packages/vl/src/composite-marks.ts:340`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #211 (0acd50d). Fixed: variable params stay with a composite's layers (boxplot/errorbar/errorband, faceted too); a selection param on one is refused
 - **Area:** vl / composite marks, selections, transforms (also categories 4)
 - **Lane ID / scripts:** `vl-rest2-1` — `vl-rest2/`
 
@@ -1832,6 +1833,7 @@ Measures are keyed by `as` only (`:221`: `if (!measures.has(String(as))) measure
 
 - **Location:** `packages/vl/src/composite-marks.ts:434-438`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #211 (0acd50d,b798b1a). Fixed: boxplot statistic names built once, raw field read through its pieces, flat copy by joined path; an errorbar/errorband over a nested or dotted measure is refused (Q9: vega-lite draws no bar or nulls)
 - **Area:** vl / composite marks, selections, transforms
 - **Lane ID / scripts:** `vl-rest2-3` — `vl-rest2/`
 
@@ -2035,6 +2037,7 @@ Direction: use one `ids` map for both sides, as `:210` does, or compare `t.item`
 
 - **Location:** `packages/vl/src/compile.ts:4296-4298`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** ALREADY FIXED in #211 (d30fab2,226c3a3). Fixed at base (leaf-first bins in the layer path); pinned by the brushed-store differential (bites when the order is swapped) and the gallery seeded path
 - **Area:** gallery / official Vega-Lite examples I
 - **Lane ID / scripts:** `gallery3-1` — `gallery3/`
 
@@ -3393,6 +3396,7 @@ Each is schema-valid, compiles in both compilers, and renders differently throug
 
 - **Location:** `packages/vl/src/composite.ts:255-256`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #211 (0acd50d). Fixed: unitStackProps answers the polar stack; an arc has no orientation
 - **Area:** vl / composite marks, selections, transforms
 - **Lane ID / scripts:** `vl-rest2-4` — `vl-rest2/`
 
@@ -3407,6 +3411,7 @@ Each is schema-valid, compiles in both compilers, and renders differently throug
 
 - **Location:** `packages/vl/src/transforms.ts:249-251`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #211 (0acd50d). Fixed: bin transform shares binTransforms with the channel (extent param, span)
 - **Area:** vl / composite marks, selections, transforms (also categories 7)
 - **Lane ID / scripts:** `vl-rest2-5` — `vl-rest2/`
 
@@ -3421,6 +3426,7 @@ Each is schema-valid, compiles in both compilers, and renders differently throug
 
 - **Location:** `packages/vl/src/transforms.ts:243-254`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #211 (0acd50d). Fixed: chained equal bins merge (mergeChainedBins); bins over different rows are refused
 - **Area:** vl / composite marks, selections, transforms
 - **Lane ID / scripts:** `vl-rest2-6` — `vl-rest2/`
 
@@ -3434,6 +3440,7 @@ Each is schema-valid, compiles in both compilers, and renders differently throug
 
 - **Location:** `packages/vl/src/geo.ts:203`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #211 (0acd50d). Fixed: a facet's projection loses the unit default type
 - **Area:** vl / composite marks, selections, transforms
 - **Lane ID / scripts:** `vl-rest2-7` — `vl-rest2/`
 
@@ -3457,6 +3464,7 @@ CONFIRMED-RUN. Whether real VL's omission is itself a VL bug is for the vl lane.
 
 - **Location:** `packages/vl/src/composite.ts:257`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #211 (0acd50d). Fixed: nested colour field reads its flat copy, produced names read back
 - **Area:** vl / composite marks, selections, transforms
 - **Lane ID / scripts:** `vl-rest2-8` — `vl-rest2/`
 
@@ -3471,6 +3479,7 @@ CONFIRMED-RUN. Whether real VL's omission is itself a VL bug is for the vl lane.
 
 - **Location:** `packages/vl/src/composite-marks.ts:193`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #211 (0acd50d). Fixed: title: null kept on a composite measure
 - **Area:** vl / composite marks, selections, transforms
 - **Lane ID / scripts:** `vl-rest2-10` — `vl-rest2/`
 
@@ -4948,6 +4957,7 @@ DateTime parts other than month, day and quarter are spliced into the expression
 
 - **Location:** `packages/vl/src/composite.ts:255-262`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #211 (0acd50d). Fixed: the synthesized sort-index order is not a stack-by field
 - **Area:** vl / composite marks, selections, transforms
 - **Lane ID / scripts:** `vl-rest2-15` — `vl-rest2/`
 
@@ -4959,6 +4969,7 @@ DateTime parts other than month, day and quarter are spliced into the expression
 
 - **Location:** `packages/vl/src/composite-marks.ts:123-153`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #211 (0acd50d). Fixed: a time unit a transform made is not made again
 - **Area:** vl / composite marks, selections, transforms
 - **Lane ID / scripts:** `vl-rest2-16` — `vl-rest2/`
 
@@ -5848,6 +5859,7 @@ CONFIRMED-RUN.
 
 - **Location:** `packages/vl/src/transforms.ts:327`
 - **Status:** CONFIRMED (run)
+- **Resolution:** ALREADY FIXED in #211 (a06d). Refused by the schema table (as needs two names); pinned in packages/vl/test/a16-refusals.test.ts
 - **Area:** vl / composite marks, selections, transforms
 - **Lane ID / scripts:** `vl-rest2-17` — `vl-rest2/`
 
@@ -6410,6 +6422,7 @@ Spec `vega/zoomable-world-map.vg.json:32` (`copy('projection')`), `:40`, `:47`, 
 
 - **Location:** `packages/vl/src/transforms.ts:268`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #211 (0acd50d). Fixed: dotted as accepted for every transform and read back as vega-lite does
 - **Area:** vl / composite marks, selections, transforms (also categories 5)
 - **Lane ID / scripts:** `vl-rest2-9` — `vl-rest2/`
 
@@ -7433,6 +7446,7 @@ Status: **CONFIRMED-RUN** `t19.mjs`.
 
 - **Location:** `packages/vl/src/composite-marks.ts:56-61`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #211 (0acd50d). Fixed: dead branches removed, doc comments moved, SelCmpt alias gone
 - **Area:** vl / composite marks, selections, transforms (also categories 7)
 - **Lane ID / scripts:** `vl-rest2-18` — `vl-rest2/`
 
@@ -9252,6 +9266,7 @@ The README contract is "renders like vega-lite, or throws". For these schema-inv
 
 - **Location:** `packages/vl/src/composite-marks.ts:314-328`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #211 (0acd50d,1618ee6). Fixed: extent refused by the schema table (a06d), centre now validated (mean|median) in the mark def and config
 - **Area:** vl / composite marks, selections, transforms
 - **Lane ID / scripts:** `vl-rest2-20` — `vl-rest2/`
 
@@ -9688,6 +9703,7 @@ Direction: add those properties and path forms to `randomItems`, a clipped, fram
 
 - **Location:** `packages/conformance/src/gallery/static.ts:42`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #211 (226c3a3). Fixed: gallery gate seeded path (floors, passing list); 92/108 pass, 2 fail on zindex order, 14 unverifiable
 - **Area:** gallery / official Vega-Lite examples II
 - **Lane ID / scripts:** `gallery4-5` — `gallery4/`
 
@@ -11144,6 +11160,7 @@ A timer of an element that was never in the document has no self-stop (`wasConne
 
 - **Location:** `packages/vl/src/composite-marks.ts:17`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #211 (0acd50d). Fixed: one escaper (quotedRef), names via statName; quotes yield a typed error or valid expressions
 - **Area:** vl / composite marks, selections, transforms (also categories 3)
 - **Lane ID / scripts:** `vl-rest2-13` — `vl-rest2/`
 
@@ -13726,6 +13743,7 @@ Status: **CONFIRMED-RUN** `t14-composite.mjs "repeat in transform"`.
 
 - **Location:** `packages/vl/src/composite-marks.ts:390`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #211 (0acd50d). Fixed: undraggable interval on/translate, interval bound to a map, empty composite, bin param extent are VLCompileErrors
 - **Area:** vl / composite marks, selections, transforms
 - **Lane ID / scripts:** `vl-rest2-12` — `vl-rest2/`
 
