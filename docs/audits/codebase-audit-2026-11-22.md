@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 618 of 766 findings resolved (602 fixed, 13 already fixed on main, 3 disputed with evidence); 148 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 649 of 766 findings resolved (630 fixed, 16 already fixed on main, 3 disputed with evidence); 117 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -132,7 +132,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C83 | High | vl / validate, optimize, predicates | The README says the "Throws" list is complete; at least nine schema-valid features are refused and not on it | `packages/vl/README.md:133-135` | CONFIRMED (run) → FIXED (#202) |
 | C84 | High | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ADR 0007 / ARCHITECTURE say "nothing loads asynchronously, the first paint is synchronous"; in a browser build a chart with a legend or time scale suspends first | `docs/adr/0007-svgchart-shell-over-lazy-loading.md:21-23` | CONFIRMED (run; re-run by lead) |
 | C85 | High | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | The incremental guarantee ("deep-equals a freshly compiled chart") is not what the oracle checks for any spec with `identifier` (every Vega-Lite point selection) | `packages/core/src/incremental-oracle.test.ts:718` | CONFIRMED (traced; lines re-read by lead) |
-| C86 | High | tests / conformance suites II | `ASTER_ONLY` is run by no test, and its stated reason for the nested-field exclusion is false | `packages/conformance/test/vl-composite-matrix-cases.ts:373-392` | CONFIRMED (run; re-run by lead) |
+| C86 | High | tests / conformance suites II | `ASTER_ONLY` is run by no test, and its stated reason for the nested-field exclusion is false | `packages/conformance/test/vl-composite-matrix-cases.ts:373-392` | CONFIRMED (run; re-run by lead) → FIXED (#214) |
 | C87 | Medium | core / runtime: marks, encode, groups | A group item's `datum` is the spec's own inline row object | `packages/core/src/runtime.ts:5873` | CONFIRMED (run) |
 | C88 | Medium | core / session, stream, limits | Spec-controlled amplification with no ceiling when no `limits` are given | `packages/core/src/arr.ts:50` | CONFIRMED (run) → FIXED (#193) |
 | C89 | Medium | core / expressions, regex screen | `sequence()` with a count ≥ 2^32 skips the built-in ceiling and then wraps via `count \| 0` | `packages/core/src/expression.ts:33-40` | CONFIRMED (run) → FIXED (#197) |
@@ -258,17 +258,17 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C209 | Medium | tests / conformance generators and case tables II | `dom-string-parity` does not exercise the path its header names, and its comparator is blind to mixed content | `packages/conformance/scripts/dom-string-parity.test.mts:5-9` | CONFIRMED (run) → FIXED (#213) |
 | C210 | Medium | tests / conformance generators and case tables II | `graticule` on a dataset that already has rows drops the rows; Vega keeps them | `packages/core/src/transform.ts:361-366` | CONFIRMED (run; re-run by lead) → FIXED (#213) |
 | C211 | Medium | tests / conformance suites I | A throw in a dataset re-ranked past the marks: Vega draws the marks that read nothing late, Aster draws none | `packages/conformance/test/dataflow-failure-vs-vega.test.ts:213-233` | CONFIRMED (run; re-run by lead) |
-| C212 | Medium | tests / conformance suites II | `compare()` accepts any throw where vega-lite refuses (adds to C639 (vl-rest2-12)) | `packages/conformance/test/vl-composite-compare.ts:17-21` | CONFIRMED (run) |
-| C213 | Medium | tests / conformance suites II | `pickSpec` name normalisation makes two different compiled specs equal | `packages/conformance/test/vl-composite-pick.ts:5-6` | CONFIRMED (run) |
+| C212 | Medium | tests / conformance suites II | `compare()` accepts any throw where vega-lite refuses (adds to C639 (vl-rest2-12)) | `packages/conformance/test/vl-composite-compare.ts:17-21` | CONFIRMED (run) → FIXED (#214) |
+| C213 | Medium | tests / conformance suites II | `pickSpec` name normalisation makes two different compiled specs equal | `packages/conformance/test/vl-composite-pick.ts:5-6` | CONFIRMED (run) → FIXED (#214) |
 | C214 | Medium | corpus / specs, range 5 | `vlx-geo-repeat-map-color-fields` draws zero shapes; the repeated colour fields do not exist on the rows | `packages/conformance/corpus/vlx-geo-repeat-map-color-fields.vl.json:5` | CONFIRMED (run; re-run by lead) → FIXED (#207) |
 | C215 | Medium | corpus / specs, range 5 | `vlx-image-value-url` draws zero images; `url:{value}` and mark `opacity` are never rendered | `packages/conformance/corpus/vlx-image-value-url.vl.json:39` | CONFIRMED (run; re-run by lead) → FIXED (#207) |
 | C216 | Medium | corpus / specs, range 5 | `vlx-hdr-label-expr` is inert in the oracle, and it is the only `labelExpr` in the corpus | `packages/conformance/corpus/vlx-hdr-label-expr.vl.json:130` | CONFIRMED (run) → FIXED (#207) |
 | C217 | Medium | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | The process-wide text measurer is keyed for guides only; kept marks keep bounds measured by the previous one | `packages/core/src/runtime.ts:1745` | CONFIRMED (run; re-run by lead) → FIXED (#188) |
 | C218 | Medium | leftovers / budgets, declarations, demo data, gallery lists | `translatePathData` gives wrong or `NaN` output for valid SVG path strings | `packages/core/src/dom.ts:122-172` | CONFIRMED (run; re-run by lead) → FIXED (#188) |
-| C219 | Medium | closure / conformance suites, line by line I | `firstDiff` skips any left-hand object it has met before, so the force comparison is blind to a wrong link endpoint and to node row order | `packages/conformance/test/force-hierarchy-gen.ts:46-47` | CONFIRMED (run) |
-| C220 | Medium | closure / conformance suites, line by line I | `expressionsOf` drops every in-place cast from both sides, so the expression diff cannot see a cast one compiler lacks or two different casts | `packages/conformance/test/vl-expressions.ts:152-153` | CONFIRMED (run) |
+| C219 | Medium | closure / conformance suites, line by line I | `firstDiff` skips any left-hand object it has met before, so the force comparison is blind to a wrong link endpoint and to node row order | `packages/conformance/test/force-hierarchy-gen.ts:46-47` | CONFIRMED (run) → FIXED (#214) |
+| C220 | Medium | closure / conformance suites, line by line I | `expressionsOf` drops every in-place cast from both sides, so the expression diff cannot see a cast one compiler lacks or two different casts | `packages/conformance/test/vl-expressions.ts:152-153` | CONFIRMED (run) → ALREADY FIXED (#214) |
 | C221 | Medium | closure / conformance suites, line by line I | Product: an area over a measure and a pre-binned position with no second channel draws nothing | `packages/vl/src/compile.ts:4376-4379` | CONFIRMED (run) → FIXED (#210) |
-| C222 | Medium | closure / conformance suites, line by line I | Product: a ranged mark from a datum to a field loses its axis title | `packages/conformance/test/vl-honoured-positions-space.ts:136` | CONFIRMED (run) |
+| C222 | Medium | closure / conformance suites, line by line I | Product: a ranged mark from a datum to a field loses its axis title | `packages/conformance/test/vl-honoured-positions-space.ts:136` | CONFIRMED (run) → FIXED (#214) |
 | C223 | Medium | closure / conformance suites, line by line II | `scale.rangeMin` / `rangeMax` are applied to scale types where vega-lite drops them | `packages/vl/src/compile.ts:4917-4922` | CONFIRMED (run; re-run by lead) → FIXED (#210) |
 | C224 | Medium | closure / conformance suites, line by line II | an explicit `scale.reverse` on a discrete `theta` or `radius` is deleted | `packages/vl/src/compile.ts:5272-5273` | CONFIRMED (run; re-run by lead) → FIXED (#210) |
 | C225 | Medium | gallery / official Vega examples I | A numeric top-level `width`/`height` beats the spec's own `width`/`height` signal `update`; vega/horizon-graph renders a wrong frame for any non-default `layers` given as `signals` (adds … | `packages/core/src/runtime.ts:870` | CONFIRMED (run; re-run by lead) |
@@ -358,7 +358,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C309 | Medium | tests / core (legacy copies II … path) | The first-pass defects are present, identically, in the legacy copies: the differential is green because both sides are wrong the same way | `packages/core/src/legacy-hit.testlib.ts:460-473` | CONFIRMED (run) |
 | C310 | Medium | tests / conformance differentials I | specs `vega.parse` refuses are rendered by Aster; the tests count them and never run Aster | `packages/conformance/src/guide-null-vs-vega.test.ts:39-57` | CONFIRMED (run) |
 | C311 | Medium | tests / conformance generators and case tables I | An unknown `interpolate` logs Vega's error and still draws the line; the test that covers the names patches its oracle | `packages/core/src/shape.ts:278-285` | CONFIRMED (run; re-run by lead) → FIXED (#213) |
-| C312 | Medium | tests / conformance suites II | selection matrix: "x scale <type>" cases in hconcat and column facet have no x scale | `packages/conformance/test/vl-selection-matrix-cases.ts:109-114` | CONFIRMED (run; re-run by lead) |
+| C312 | Medium | tests / conformance suites II | selection matrix: "x scale <type>" cases in hconcat and column facet have no x scale | `packages/conformance/test/vl-selection-matrix-cases.ts:109-114` | CONFIRMED (run; re-run by lead) → FIXED (#214) |
 | C313 | Medium | corpus / specs, range 1 | 16 of 28 `area-curve-*` specs do not contain the curve or tension their name says | `packages/conformance/corpus/area-curve-step-after-tension.vg.json:45` | CONFIRMED (run; re-run by lead) → FIXED (#206) |
 | C314 | Medium | corpus / specs, range 1 | 7 `bar-color-*` specs use a different scheme than named; two schemes are never rendered anywhere | `packages/conformance/corpus/bar-color-bugn.vg.json:1` | CONFIRMED (run; re-run by lead) → FIXED (#206) |
 | C315 | Medium | corpus / specs, range 1 | Four "gradient" specs contain no gradient; three compare a dangling `url(#gradient_0)` with itself | `packages/conformance/corpus/area-fill-gradient-signal.vg.json:1` | CONFIRMED (run; re-run by lead) → FIXED (#206) |
@@ -400,11 +400,11 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C351 | Medium | tests / react II | "uses a supplied Worker" tests pass unchanged if the hook ignored the Worker; worker ownership is untested | `packages/react/src/worker.test.tsx:43-71` | CONFIRMED (traced) → FIXED (#212) |
 | C352 | Medium | tests / conformance generators and case tables I | The geo differential excludes empty-ring shapes from the spherical measures entirely (why C152 (core-geo-6) was not caught) | `packages/conformance/scripts/differential-geo-generated.test.mts:341` | CONFIRMED (traced) → FIXED (#213) |
 | C353 | Medium | tests / conformance generators and case tables II | The spec-level scale differentials draw no literal-as-signal, no case variant of `type` and no hostile `bins`/tick count (adds to C133 (core-scale-5), C288 (core-scale-6)) | `packages/conformance/scripts/differential-scale-spec-gen.test.mts:112-145` | CONFIRMED (traced) → FIXED (#213) |
-| C354 | Medium | tests / conformance suites I | The parity gate's case table, not its oracle, let all twelve mis-compiles through (adds to C719 (vl-c3-23), C635 (vl-c2-23)) | `packages/conformance/test/vl-compiler-parity.test.ts:77-865` | CONFIRMED (run) |
-| C355 | Medium | tests / conformance suites I | `check()` cannot see interaction wiring: event types, `bind`, `interactive`, `cursor` | `packages/conformance/test/vl-compiler-parity.test.ts:903-916` | CONFIRMED (run) |
-| C356 | Medium | tests / conformance suites II | `vl-mark-channels`: 483 Aster-only refusals are silently skipped; the `time` channel is never compared | `packages/conformance/test/vl-mark-channels.test.ts:9-13` | CONFIRMED (run; re-run by lead) |
-| C357 | Medium | tests / conformance suites II | the holes that let the first-pass composite and selection defects through | `packages/conformance/test/vl-composite-matrix-cases.ts:146` | CONFIRMED (run) |
-| C358 | Medium | closure / conformance suites, line by line II | "scalePropApplies is what vega-lite does" checks the table, not the compiler, and leaves properties out | `packages/conformance/test/vl-scale-props.test.ts:96-121` | CONFIRMED (run) |
+| C354 | Medium | tests / conformance suites I | The parity gate's case table, not its oracle, let all twelve mis-compiles through (adds to C719 (vl-c3-23), C635 (vl-c2-23)) | `packages/conformance/test/vl-compiler-parity.test.ts:77-865` | CONFIRMED (run) → FIXED (#214) |
+| C355 | Medium | tests / conformance suites I | `check()` cannot see interaction wiring: event types, `bind`, `interactive`, `cursor` | `packages/conformance/test/vl-compiler-parity.test.ts:903-916` | CONFIRMED (run) → FIXED (#214) |
+| C356 | Medium | tests / conformance suites II | `vl-mark-channels`: 483 Aster-only refusals are silently skipped; the `time` channel is never compared | `packages/conformance/test/vl-mark-channels.test.ts:9-13` | CONFIRMED (run; re-run by lead) → FIXED (#214) |
+| C357 | Medium | tests / conformance suites II | the holes that let the first-pass composite and selection defects through | `packages/conformance/test/vl-composite-matrix-cases.ts:146` | CONFIRMED (run) → FIXED (#214) |
+| C358 | Medium | closure / conformance suites, line by line II | "scalePropApplies is what vega-lite does" checks the table, not the compiler, and leaves properties out | `packages/conformance/test/vl-scale-props.test.ts:96-121` | CONFIRMED (run) → ALREADY FIXED (#214) |
 | C359 | Medium | closure / vega-time vectors II | 104 of the 480 `timeFloor` vectors (and the same 104 in `utcFloor`) cannot fail: sub-minute units, sub-hour steps and millisecond truncation are never exercised | `packages/core/testdata/vectors/vega-time.json:19450-20649` | CONFIRMED (run; re-run by lead) → FIXED (#189) |
 | C360 | Medium | gallery / official Vega examples II | `vega/projections` is counted as passing on both paths while both engines fail on it | `packages/conformance/src/gallery/static.ts:47-48` | CONFIRMED (run; re-run by lead) |
 | C361 | Medium | core / layout transforms, rasterizer | "`label.ts` places labels as vega-label does" omits two known limits, and neither is in "Deviations from Vega" | `docs/ARCHITECTURE.md:342` | CONFIRMED (traced) → FIXED (#193) |
@@ -427,7 +427,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C378 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ARCHITECTURE repeats a stale corpus count (1060; actual 1063) and the guard's regex cannot match the sentence | `docs/ARCHITECTURE.md:577` | CONFIRMED (traced) |
 | C379 | Medium | tests / core (limits, loaders, locale, oracle vectors) | `docs/TESTING.md` says the default run pins `TZ=UTC`; it does not, and `locale-font-matrix.test.ts` fails off UTC | `docs/TESTING.md:143` | CONFIRMED (run; re-run by lead) → FIXED (#195) |
 | C380 | Medium | tests / conformance generators and case tables II | A derived dataset that opens with a sort re-orders its source in Vega; Aster does not, and the deviation is recorded only in a test comment | `packages/conformance/scripts/differential-sort-ties.test.mts:53-55` | CONFIRMED (run; re-run by lead) → FIXED (#213) |
-| C381 | Medium | tests / conformance suites I | `docs/ERRORS.md:182` misdescribes what a throwing dataset transform leaves | `docs/ERRORS.md:182` | CONFIRMED (run; re-run by lead) |
+| C381 | Medium | tests / conformance suites I | `docs/ERRORS.md:182` misdescribes what a throwing dataset transform leaves | `docs/ERRORS.md:182` | CONFIRMED (run; re-run by lead) → FIXED (#214) |
 | C382 | Medium | leftovers / budgets, declarations, demo data, gallery lists | `SignalBindOptions.pick` TSDoc recommends `HitIndex.query`; that is not vega's `event.item` | `packages/core/src/signals.ts:164` | CONFIRMED (run; re-run by lead) → FIXED (#188) |
 | C383 | Low | core / runtime: marks, encode, groups | Scope ids concatenate data-controlled keys | `packages/core/src/runtime.ts:6248` | PLAUSIBLE |
 | C384 | Low | core / expressions, regex screen | Member reads return built-in prototype objects and host-object getters as values | `packages/core/src/expr-interpreter.ts:279-305` | CONFIRMED (run) → FIXED (#197) |
@@ -572,7 +572,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C523 | Low | leftovers / budgets, declarations, demo data, gallery lists | A failing budget run leaves `packages/benchmarks/.tmp` in the working tree, and the path is not ignored | `packages/benchmarks/scripts/budget.mjs:678` | CONFIRMED (traced) → FIXED (#188) |
 | C524 | Low | leftovers / budgets, declarations, demo data, gallery lists | `bindSceneSignals` on a scene without `runtime`/`compiled` returns a dead binding and reports nothing | `packages/core/src/signals.ts:1801-1804` | CONFIRMED (run) → FIXED (#188) |
 | C525 | Low | leftovers / budgets, declarations, demo data, gallery lists | The swap floor lets 23 of the 223 committed pairs go unrun; duplicates in the gallery denominator | `packages/conformance/src/gallery/swap-plan.ts:35` | CONFIRMED (run) → FIXED (#188) |
-| C526 | Low | closure / conformance suites, line by line I | Force generator: 13% of cases have no node, 20% no force; what it never generates | `packages/conformance/test/force-hierarchy-gen.ts:103` | CONFIRMED (run) |
+| C526 | Low | closure / conformance suites, line by line I | Force generator: 13% of cases have no node, 20% no force; what it never generates | `packages/conformance/test/force-hierarchy-gen.ts:103` | CONFIRMED (run) → FIXED (#214) |
 | C527 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | Gallery static compares an oracle document after Vega logged an error, and drops Vega warnings | `packages/conformance/src/gallery/static.ts:47-48` | CONFIRMED (run) → FIXED (#205) |
 | C528 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | `runPage` leaks the browser when a worker rejects, and creates a temp directory it never uses | `packages/conformance/src/gallery/react.ts:61-63` | CONFIRMED (traced) → FIXED (#205) |
 | C529 | Low | core / session, stream, limits | A queued snapshot is held by reference | `packages/core/src/stream.ts:510` | CONFIRMED (run) → FIXED (#193) |
@@ -634,11 +634,11 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C585 | Low | tests / conformance generators and case tables II | `differential-scale-spec(-gen)`: "must throw in Aster too" is not what is compared | `packages/conformance/scripts/differential-scale-spec.test.mts:6-7` | CONFIRMED (run) → FIXED (#213) |
 | C586 | Low | tests / conformance generators and case tables II | `differential-scale-helpers-gen`: "every scheme" is a hand list missing five, plus dead and duplicated lines | `packages/conformance/scripts/differential-scale-helpers-gen.test.mts:111` | CONFIRMED (run) → FIXED (#213) |
 | C587 | Low | tests / conformance generators and case tables II | Smaller drifts between headers and code | `packages/conformance/scripts/differential-step-reuse.test.mts:110` | CONFIRMED (run) → FIXED (#213) |
-| C588 | Low | tests / conformance suites I | Two pairs of identical specs under different names; one name lies | `packages/conformance/test/vl-compiler-parity.test.ts:100` | CONFIRMED (run) |
-| C589 | Low | tests / conformance suites I | The structural half of `check()` is root-level and set-based, so its labels promise more than it compares | `packages/conformance/test/vl-compiler-parity.test.ts:867-881` | CONFIRMED (traced) |
-| C590 | Low | tests / conformance suites II | "a predicate vega-lite refuses must be refused here" is neither enforced nor exercised | `packages/conformance/test/vl-time-helpers.ts:42-43` | CONFIRMED (run) |
-| C591 | Low | tests / conformance suites II | case names that say something other than the spec | `packages/conformance/test/vl-composite-matrix-cases.ts:130` | CONFIRMED (traced) |
-| C592 | Low | tests / conformance suites II | loose floors; `probes/` holds no known gap | `packages/conformance/test/vl-real-vega.test.ts:78` | CONFIRMED (run) |
+| C588 | Low | tests / conformance suites I | Two pairs of identical specs under different names; one name lies | `packages/conformance/test/vl-compiler-parity.test.ts:100` | CONFIRMED (run) → FIXED (#214) |
+| C589 | Low | tests / conformance suites I | The structural half of `check()` is root-level and set-based, so its labels promise more than it compares | `packages/conformance/test/vl-compiler-parity.test.ts:867-881` | CONFIRMED (traced) → FIXED (#214) |
+| C590 | Low | tests / conformance suites II | "a predicate vega-lite refuses must be refused here" is neither enforced nor exercised | `packages/conformance/test/vl-time-helpers.ts:42-43` | CONFIRMED (run) → FIXED (#214) |
+| C591 | Low | tests / conformance suites II | case names that say something other than the spec | `packages/conformance/test/vl-composite-matrix-cases.ts:130` | CONFIRMED (traced) → FIXED (#214) |
+| C592 | Low | tests / conformance suites II | loose floors; `probes/` holds no known gap | `packages/conformance/test/vl-real-vega.test.ts:78` | CONFIRMED (run) → FIXED (#214) |
 | C593 | Low | corpus / specs, range 1 | 60 specs here (83 occurrences corpus-wide) spell a scheme as top-level `scale.scheme`, which is not in the Vega schema | `packages/conformance/corpus/bar-darker-scheme.vg.json:1` | CONFIRMED (run) → FIXED (#206) |
 | C594 | Low | corpus / specs, range 1 | Other schema-invalid properties that both engines ignore or tolerate | `packages/conformance/corpus/candlestick.vl.json:1` | CONFIRMED (run) → FIXED (#206) |
 | C595 | Low | corpus / specs, range 1 | 5 specs in range (11 corpus-wide) declare a v5 `$schema` | `packages/conformance/corpus/empty-group-mark.vg.json:2` | CONFIRMED (traced) → FIXED (#206) |
@@ -661,9 +661,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C612 | Low | corpus / specs, range 5 | properties vega-lite itself ignores, in specs not named as "ignored"/"dropped" | `packages/conformance/corpus/vlx-offs-theta2.vl.json:118` | CONFIRMED (run) → FIXED (#207) |
 | C613 | Low | corpus / specs, range 5 | near-duplicates and an accidental spec inside the range | `packages/conformance/corpus/vlx-geo-repeat-layer-map.vl.json:67` | CONFIRMED (run) → FIXED (#207) |
 | C614 | Low | corpus / specs, range 6 | Names that do not match content | `packages/conformance/corpus/vlx-sel-filter-interval.vl.json:45-56` | CONFIRMED (traced) → FIXED (#207) |
-| C615 | Low | closure / conformance suites, line by line I | `vl-geo.test`: "the projection each geoshape / geopoint refers to" is compared as a sorted multiset | `packages/conformance/test/vl-geo.test.ts:58` | CONFIRMED (traced) |
-| C616 | Low | closure / conformance suites, line by line II | `scheme` on a colour `point` scale is applied although the table and vega-lite drop it | `packages/conformance/test/vl-scale-props.test.ts:47` | CONFIRMED (run; re-run by lead) |
-| C617 | Low | closure / conformance suites, line by line II | the "by a list of values" sort names values no field holds | `packages/conformance/test/vl-sort-channels.test.ts:26` | CONFIRMED (run) |
+| C615 | Low | closure / conformance suites, line by line I | `vl-geo.test`: "the projection each geoshape / geopoint refers to" is compared as a sorted multiset | `packages/conformance/test/vl-geo.test.ts:58` | CONFIRMED (traced) → FIXED (#214) |
+| C616 | Low | closure / conformance suites, line by line II | `scheme` on a colour `point` scale is applied although the table and vega-lite drop it | `packages/conformance/test/vl-scale-props.test.ts:47` | CONFIRMED (run; re-run by lead) → ALREADY FIXED (#214) |
+| C617 | Low | closure / conformance suites, line by line II | the "by a list of values" sort names values no field holds | `packages/conformance/test/vl-sort-channels.test.ts:26` | CONFIRMED (run) → FIXED (#214) |
 | C618 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | `corpus-tz/tz-text-format-utc.vg.json` cannot test what its name says | `packages/conformance/corpus-tz/tz-text-format-utc.vg.json:49-53` | CONFIRMED (run; re-run by lead) → FIXED (#205) |
 | C619 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | The value sweep's stack journey never stacks | `packages/conformance/src/sweeps/values.mjs:192` | CONFIRMED (traced) → FIXED (#205) |
 | C620 | Low | closure / showcase, ADRs, engine parts, type fixtures | The core-parts test setup and `parts-all.ts` leave the `signals` slot empty, although both say they fill every part (adds to C737 (tests-core3-10)) | `scripts/vitest-core-parts.setup.mjs:18-19` | CONFIRMED (run; re-run by lead) → FIXED (#188) |
@@ -725,18 +725,18 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C676 | Low | tests / conformance generators and case tables I | `differential-parse-errors` takes its exemption list from the code under test, with no ceiling | `packages/conformance/scripts/differential-parse-errors.test.mts:21` | CONFIRMED (run) → FIXED (#213) |
 | C677 | Low | tests / conformance generators and case tables I | Smaller guards that assert nothing, and one misleading failure report | `packages/conformance/scripts/differential-data-format.test.mts:78-91` | CONFIRMED (traced) → FIXED (#213) |
 | C678 | Low | tests / conformance generators and case tables I | Additions to existing findings (one line each) | `packages/conformance/scripts/differential-color.test.mts:29-33` | CONFIRMED (traced) → FIXED (#213) |
-| C679 | Low | tests / conformance suites I | Stale skip: `filled` on text and trail marks is skipped as unsupported but matches vega-lite | `packages/conformance/test/vl-compiler-parity.test.ts:1041-1042` | CONFIRMED (run; re-run by lead) |
-| C680 | Low | tests / conformance suites I | "the layout and the signals of a faceted cell": four of six cases compare `null` with `null` | `packages/conformance/test/vl-compiler-parity.test.ts:1353-1369` | CONFIRMED (run) |
-| C681 | Low | tests / conformance suites I | The first group of `dataflow-failure` does not assert that Aster logs the failure | `packages/conformance/test/dataflow-failure-vs-vega.test.ts:68-79` | CONFIRMED (traced) |
-| C682 | Low | tests / conformance suites I | `vl-anim` first-frame renders are unchecked on both sides | `packages/conformance/test/vl-anim.test.ts:134-142` | CONFIRMED (traced) |
-| C683 | Low | tests / conformance suites II | corpus-tz: two inert specs and three uncovered zone behaviours | `packages/conformance/corpus-tz/enter-update.vg.json:1` | CONFIRMED (run) |
+| C679 | Low | tests / conformance suites I | Stale skip: `filled` on text and trail marks is skipped as unsupported but matches vega-lite | `packages/conformance/test/vl-compiler-parity.test.ts:1041-1042` | CONFIRMED (run; re-run by lead) → FIXED (#214) |
+| C680 | Low | tests / conformance suites I | "the layout and the signals of a faceted cell": four of six cases compare `null` with `null` | `packages/conformance/test/vl-compiler-parity.test.ts:1353-1369` | CONFIRMED (run) → FIXED (#214) |
+| C681 | Low | tests / conformance suites I | The first group of `dataflow-failure` does not assert that Aster logs the failure | `packages/conformance/test/dataflow-failure-vs-vega.test.ts:68-79` | CONFIRMED (traced) → FIXED (#214) |
+| C682 | Low | tests / conformance suites I | `vl-anim` first-frame renders are unchecked on both sides | `packages/conformance/test/vl-anim.test.ts:134-142` | CONFIRMED (traced) → FIXED (#214) |
+| C683 | Low | tests / conformance suites II | corpus-tz: two inert specs and three uncovered zone behaviours | `packages/conformance/corpus-tz/enter-update.vg.json:1` | CONFIRMED (run) → FIXED (#214) |
 | C684 | Low | corpus / specs, range 1 | Near-duplicate specs that differ only in data values | `packages/conformance/corpus/area-vl.vl.json:1` | CONFIRMED (traced) → FIXED (#206) |
 | C685 | Low | corpus / specs, range 2 | `$schema` hygiene | `packages/conformance/corpus/t-crossfilter.vg.json:1` | CONFIRMED (run) → FIXED (#206) |
 | C686 | Low | corpus / specs, range 4 | Lane boundary depends on sort collation | `packages/conformance/corpus/vlx-geo-proj-albers.vl.json:1` | CONFIRMED (run) → FIXED (#207) |
 | C687 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | Ten notice sections are outside the notices test; five licence texts cannot be checked in this repo | `scripts/notices.test.mjs:15` | CONFIRMED (traced) → FIXED (#188) |
 | C688 | Low | leftovers / budgets, declarations, demo data, gallery lists | `@aster-charts/core`'s declarations need the DOM lib, even for `renderSpec` alone | `packages/core/src/index.ts:1` | CONFIRMED (run) → FIXED (#188) |
 | C689 | Low | leftovers / budgets, declarations, demo data, gallery lists | No test reads `apps/demo/src/showcase/`; five of the fourteen specs are in no corpus and no gate | `apps/demo/src/showcase.tsx:22-26` | CONFIRMED (run) → FIXED (#188) |
-| C690 | Low | closure / conformance suites, line by line I | `vl-orient`: the orientation with no orient asked is never compared for tick or line, and the per-case tests cannot fail | `packages/conformance/test/vl-orient.test.ts:56-59` | CONFIRMED (run) |
+| C690 | Low | closure / conformance suites, line by line I | `vl-orient`: the orientation with no orient asked is never compared for tick or line, and the per-case tests cannot fail | `packages/conformance/test/vl-orient.test.ts:56-59` | CONFIRMED (run) → FIXED (#214) |
 | C691 | Low | closure / showcase, ADRs, engine parts, type fixtures | The empty-slot error says "import @aster-charts/core, which carries it"; the main entry leaves six slots empty | `packages/core/src/engine-parts.ts:157` | CONFIRMED (run; re-run by lead) → FIXED (#188) |
 | C692 | Low | closure / showcase, ADRs, engine parts, type fixtures | The "accepts every prop" type fixture exercises 24 of 33 shared props and 3 of 9 handle methods | `packages/react/type-fixtures/svg-chart-accepts.fixture.tsx:12-19` | CONFIRMED (run) → FIXED (#188) |
 | C693 | Low | closure / gallery lists, small recorded vectors | (test cannot fail) — d3-dsv vectors: the `dropOdd` case never drops a row, and the `dsvParseSemi` / `dsvParseTab` suites record `parseRows`, not `parse` | `packages/core/testdata/vectors/d3-dsv.json:467-477` | CONFIRMED (run) → FIXED (#189) |
@@ -795,9 +795,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C746 | Low | tests / conformance differentials II | stale skip in `signals-guides`: "which the engine does not model; 'sideways' is left out" | `packages/conformance/src/signals-guides-vs-vega.test.ts:145-152` | CONFIRMED (run) |
 | C747 | Low | tests / conformance generators and case tables I | The divergences `differential-identifier` avoids "by design" did not reproduce, and two are undocumented | `packages/conformance/scripts/differential-identifier.test.mts:16-22` | CONFIRMED (run) → FIXED (#213) |
 | C748 | Low | tests / conformance generators and case tables I | Stale or false statements in the two case tables | `packages/conformance/scripts/transform-cases.mjs:855-856` | CONFIRMED (run) → FIXED (#213) |
-| C749 | Low | tests / conformance suites I | Two test headers say "Fails today"; both files pass | `packages/conformance/test/legend-domain-signal-vs-vega.test.ts:3-6` | CONFIRMED (run) |
-| C750 | Low | tests / conformance suites II | `vl-scale-forwarding` excludes fillOpacity / strokeOpacity on a premise that is no longer true | `packages/conformance/test/vl-scale-forwarding.test.ts:8` | CONFIRMED (run) |
-| C751 | Low | tests / conformance suites II | `vl-inline-data-sharing` header contradicts its assertions | `packages/conformance/test/vl-inline-data-sharing.test.ts:9-10` | CONFIRMED (run) |
+| C749 | Low | tests / conformance suites I | Two test headers say "Fails today"; both files pass | `packages/conformance/test/legend-domain-signal-vs-vega.test.ts:3-6` | CONFIRMED (run) → FIXED (#214) |
+| C750 | Low | tests / conformance suites II | `vl-scale-forwarding` excludes fillOpacity / strokeOpacity on a premise that is no longer true | `packages/conformance/test/vl-scale-forwarding.test.ts:8` | CONFIRMED (run) → FIXED (#214) |
+| C751 | Low | tests / conformance suites II | `vl-inline-data-sharing` header contradicts its assertions | `packages/conformance/test/vl-inline-data-sharing.test.ts:9-10` | CONFIRMED (run) → FIXED (#214) |
 | C752 | Low | corpus / specs, range 5 | the one coarse-signature difference: Aster emits one `<clipPath>` where Vega emits two | `packages/conformance/corpus/vlx-sel-config-selection.vl.json:1` | CONFIRMED (run) → FIXED (#207) |
 | C753 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | ARCHITECTURE contradicts itself and the code on whether guides are kept | `docs/ARCHITECTURE.md:128` | CONFIRMED (run; re-run by lead) → FIXED (#188) |
 | C754 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | Reuse conditions the code enforces that ARCHITECTURE 117-193 and 556-565 omit, and two misplaced names | `docs/ARCHITECTURE.md:121` | CONFIRMED (traced) → FIXED (#188) |
@@ -3997,6 +3997,7 @@ Direction: rank marks against the failed dataset (those reading nothing ranked a
 
 - **Location:** `packages/conformance/test/vl-composite-compare.ts:17-21`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #214 (d21c89c5). Fixed: compare() in the composite and selection matrices requires VLCompileError where vega-lite refuses; 'errorbar: both off' (a TypeError) fails here until a16's C639.
 - **Area:** tests / conformance suites II
 - **Lane ID / scripts:** `tests-conftest2-4` — `tests-conftest2/`
 
@@ -4014,6 +4015,7 @@ Direction: rank marks against the failed dataset (those reading nothing ranked a
 
 - **Location:** `packages/conformance/test/vl-composite-pick.ts:5-6`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #214 (84c55ce2). Fixed: pickSpec reads Aster's flat keys from the formulas that copy a field into them and writes back only those exact strings (o_v no longer equals o.v, a user's v_abcdef stays); vl-composite-pick.test.ts fails the old function.
 - **Area:** tests / conformance suites II
 - **Lane ID / scripts:** `tests-conftest2-6` — `tests-conftest2/`
 
@@ -4133,6 +4135,7 @@ Direction: rank marks against the failed dataset (those reading nothing ranked a
 
 - **Location:** `packages/conformance/test/force-hierarchy-gen.ts:46-47`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #214 (b08a06e3). Fixed: firstDiff skips a (left, right) pair instead of a left object; a link ending on another node and linked nodes in another order are seen (the old logic fails both new tests). Earlier work: #210.
 - **Area:** closure / conformance suites, line by line I
 - **Lane ID / scripts:** `w3-conftest-a-1` — `w3-conftest-a/`
 
@@ -4152,6 +4155,7 @@ Direction: rank marks against the failed dataset (those reading nothing ranked a
 
 - **Location:** `packages/conformance/test/vl-expressions.ts:152-153`
 - **Status:** CONFIRMED (run)
+- **Resolution:** ALREADY FIXED in #214 (285c395e). Fixed by a15 (vl-expressions.ts compares in-place casts and format.parse as casts, vl-expressions-casts.test.ts plants each); not in this base, stack a15 first; this lane did not touch vl-expressions.ts. Earlier work: #210.
 - **Area:** closure / conformance suites, line by line I
 - **Lane ID / scripts:** `w3-conftest-a-2` — `w3-conftest-a/`
 
@@ -4189,6 +4193,7 @@ Direction: rank marks against the failed dataset (those reading nothing ranked a
 
 - **Location:** `packages/conformance/test/vl-honoured-positions-space.ts:136`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #214 (fb3f1e8d,99010aa2). Fixed: a datum on one end of a ranged mark takes the axis title from the second channel's field (bar, rule, rect, area, x and y); the datum space of vl-honoured-positions gains a field on the second channel and 360 of 1584 cases fail without the fix.
 - **Area:** closure / conformance suites, line by line I
 - **Lane ID / scripts:** `w3-conftest-a-4` — `w3-conftest-a/`
 
@@ -6692,6 +6697,7 @@ Scenario: a line mark with `interpolate: {value: X}`, followed by a rect mark.
 
 - **Location:** `packages/conformance/test/vl-selection-matrix-cases.ts:109-114`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #214 (a31082a1,d21c89c5). Fixed: every selection composer takes the x scale (60 hconcat / column-facet cases had none, log is now in a composition) and a test fails a composer that drops it (30 cases fail when hconcat does).
 - **Area:** tests / conformance suites II
 - **Lane ID / scripts:** `tests-conftest2-3` — `tests-conftest2/`
 
@@ -7895,6 +7901,7 @@ All CONFIRMED-TRACE.
 
 - **Location:** `packages/conformance/test/vl-compiler-parity.test.ts:100`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #214 (a31082a1). Fixed: 'stacked and grouped bars' stacks (colour on another field); the duplicate point-mark case is dropped.
 - **Area:** tests / conformance suites I
 - **Lane ID / scripts:** `tests-conftest1-7` — `tests-conftest1/`
 
@@ -7909,6 +7916,7 @@ All CONFIRMED-TRACE.
 
 - **Location:** `packages/conformance/test/vl-compiler-parity.test.ts:867-881`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #214 (a31082a1). Fixed: the size tree, axis steps, grouping of aggregate/stack/bin nodes and expression sites are compared in every group (child scales named child_x / concat_0_x were never compared before); vl-parity-structure.test.ts plants each, including in a facet's child group.
 - **Area:** tests / conformance suites I
 - **Lane ID / scripts:** `tests-conftest1-8` — `tests-conftest1/`
 
@@ -7926,6 +7934,7 @@ The render assertion is the real gate and did catch every probe; this matters fo
 
 - **Location:** `packages/conformance/test/vl-time-helpers.ts:42-43`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #214 (deaff385). Fixed: bothCompile says 'both' when both refuse and the callers fail on a vega-lite-only refusal; vl-predicate asks six predicates vega-lite refuses; labelDifferences fails a form of which nothing was compared.
 - **Area:** tests / conformance suites II
 - **Lane ID / scripts:** `tests-conftest2-7` — `tests-conftest2/`
 
@@ -7942,6 +7951,7 @@ The render assertion is the real gate and did catch every probe; this matters fo
 
 - **Location:** `packages/conformance/test/vl-composite-matrix-cases.ts:130`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #214 (a31082a1,deaff385). Fixed: every case name says what its spec holds (sqrt vs a real log, a field the data has, a thick rule, a row repeat holding a column repeat holding a layer repeat, bin maxbins 10 vs bin true, datum ordinal / second-channel labels); the dead selection-encoding axis and withEnc are gone and ZONES is read by the four zone files.
 - **Area:** tests / conformance suites II
 - **Lane ID / scripts:** `tests-conftest2-11` — `tests-conftest2/`
 
@@ -7961,6 +7971,7 @@ All traced by reading.
 
 - **Location:** `packages/conformance/test/vl-real-vega.test.ts:78`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #214 (deaff385). Fixed: vl-real-vega and vl-geo require the 692 Vega-Lite corpus specs and vl-geo no longer swallows a missing directory; t-geopoint is a whole spec; the probes stay (promoting them needs a decision on the probe gate's floor of 2, REVEALED.md).
 - **Area:** tests / conformance suites II
 - **Lane ID / scripts:** `tests-conftest2-12` — `tests-conftest2/`
 
@@ -8302,6 +8313,7 @@ All from `inert.mjs` (deletion leaves the oracle's canonical SVG identical):
 
 - **Location:** `packages/conformance/test/vl-geo.test.ts:58`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #214 (deaff385). Fixed: vl-geo compares the projection uses in document order, not as sorted multisets.
 - **Area:** closure / conformance suites, line by line I
 - **Lane ID / scripts:** `w3-conftest-a-6` — `w3-conftest-a/`
 
@@ -8316,6 +8328,7 @@ All from `inert.mjs` (deletion leaves the oracle's canonical SVG identical):
 
 - **Location:** `packages/conformance/test/vl-scale-props.test.ts:47`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** ALREADY FIXED in #214 (53ccb41e,deaff385). Fixed by a15 (scheme on a colour point scale gives vega-lite's ramp, checked on its build); not in this base: vl-scale-forwarding-more.test.ts (color, fill, stroke x point) fails here and passes with a15.
 - **Area:** closure / conformance suites, line by line II
 - **Lane ID / scripts:** `w3-conftest-b-4` — `w3-conftest-b/`
 
@@ -8332,6 +8345,7 @@ All from `inert.mjs` (deletion leaves the oracle's canonical SVG identical):
 
 - **Location:** `packages/conformance/test/vl-sort-channels.test.ts:26`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #214 (deaff385). Fixed: the list sort holds values each field has (k: 2,0,1; v: 9,4,3,2,1,0; a time's DateTime lists are a documented refusal); planting indices that ignore the list's order fails 18 of 348 cases.
 - **Area:** closure / conformance suites, line by line II
 - **Lane ID / scripts:** `w3-conftest-b-5` — `w3-conftest-b/`
 
@@ -10128,6 +10142,7 @@ A scenario whose spec fails to evaluate on both sides is green at every step. Th
 
 - **Location:** `packages/conformance/test/force-hierarchy-gen.ts:103`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #214 (b08a06e3). Fixed: the force generator draws 1+ nodes and 1+ forces; no node and no force are one named case each.
 - **Area:** closure / conformance suites, line by line I
 - **Lane ID / scripts:** `w3-conftest-a-7` — `w3-conftest-a/`
 
@@ -11371,6 +11386,7 @@ Direction: say "a resolver that applies the `browser` condition" instead of "a b
 
 - **Location:** `packages/conformance/test/vl-composite-matrix-cases.ts:373-392`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #214 (6a125c81). Fixed: ASTER_ONLY is gone: two stale exclusions and the nested boxplot are matrix cases, the rest are pinned differences that fail when they stop being true (vl-composite-known.test.ts), and case-tables-are-run.test.ts fails on any *-cases/*-space export no test reads (it failed on ASTER_ONLY as it was); the nested boxplot case is red here until a16's C60.
 - **Area:** tests / conformance suites II
 - **Lane ID / scripts:** `tests-conftest2-1` — `tests-conftest2/`
 
@@ -11767,6 +11783,7 @@ Direction: state "TypeScript needs `moduleResolution` `bundler`, `node16` or `no
 
 - **Location:** `docs/ERRORS.md:182`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #214 (3c37f915). Fixed: the ERRORS.md row says the pass stops at the dataset (nothing ranked after it is made, healthy marks included) and names the re-ranked exception that C211 tracks.
 - **Area:** tests / conformance suites I
 - **Lane ID / scripts:** `tests-conftest1-3` — `tests-conftest1/`
 
@@ -12534,6 +12551,7 @@ Direction: split the table into "vega-lite output is broken" and "not supported 
 
 - **Location:** `packages/conformance/test/legend-domain-signal-vs-vega.test.ts:3-6`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #214 (deaff385). Fixed: the 'Fails today' headers of legend-domain-signal and projection-scale say what is pinned.
 - **Area:** tests / conformance suites I
 - **Lane ID / scripts:** `tests-conftest1-6` — `tests-conftest1/`
 
@@ -12547,6 +12565,7 @@ Both carry a "HANDOFF (lane 3 -> lane 7) … Fails today; belongs in packages/co
 
 - **Location:** `packages/conformance/test/vl-scale-forwarding.test.ts:8`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #214 (deaff385). Fixed: fillOpacity and strokeOpacity are asked (every property, vl-scale-forwarding-more.test.ts) and the stale sentence of vl-scale-forwarding is corrected.
 - **Area:** tests / conformance suites II
 - **Lane ID / scripts:** `tests-conftest2-9` — `tests-conftest2/`
 
@@ -12562,6 +12581,7 @@ Both carry a "HANDOFF (lane 3 -> lane 7) … Fails today; belongs in packages/co
 
 - **Location:** `packages/conformance/test/vl-inline-data-sharing.test.ts:9-10`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #214 (deaff385). Fixed: the vl-inline-data-sharing header says views with equal rows share one source in both compilers, as the assertions say.
 - **Area:** tests / conformance suites II
 - **Lane ID / scripts:** `tests-conftest2-10` — `tests-conftest2/`
 
@@ -13407,6 +13427,7 @@ The header promises "degenerate rings … Everything must be identical bit for b
 
 - **Location:** `packages/conformance/test/vl-compiler-parity.test.ts:77-865`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #214 (a31082a1). Fixed: vl-parity-crossing.test.ts crosses 18 features (the twelve first-pass mis-compiles and computed-measure datasets) with 8 compositions; 62 of its 150 cases fail on this base, all in the eight features a06/a14/a15/a16 fix.
 - **Area:** tests / conformance suites I
 - **Lane ID / scripts:** `tests-conftest1-1` — `tests-conftest1/`
 
@@ -13439,6 +13460,7 @@ Direction: add the twelve cases, then generate the crossing (feature × {unit, l
 
 - **Location:** `packages/conformance/test/vl-compiler-parity.test.ts:903-916`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #214 (a31082a1). Fixed: check() compares each signal that holds a value, bind or handlers (events in full) and each mark's interactive / cursor in every group; vl-parity-structure.test.ts plants the dblclick event, the removed bind, the other range, the initial value, interactive false and the cursor, each seen.
 - **Area:** tests / conformance suites I
 - **Lane ID / scripts:** `tests-conftest1-4` — `tests-conftest1/`
 
@@ -13468,6 +13490,7 @@ Direction: add signals (`on` in full, `bind`, `value`) and each mark's `interact
 
 - **Location:** `packages/conformance/test/vl-mark-channels.test.ts:9-13`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #214 (2c9f04f2). Fixed: differences() says who stopped an uncompared case and with what, collectAll returns them, and vl-mark-channels pins the tally exactly (8 kinds, 597 cases: time channel, longitude/latitude, pairs, vega-lite's own refusals).
 - **Area:** tests / conformance suites II
 - **Lane ID / scripts:** `tests-conftest2-2` — `tests-conftest2/`
 
@@ -13490,6 +13513,7 @@ Direction: add signals (`on` in full, `bind`, `value`) and each mark's `interact
 
 - **Location:** `packages/conformance/test/vl-composite-matrix-cases.ts:146`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #214 (b0e390b7). Fixed: both matrices cross field names (nested, spaced, escaped), variable params, title null and layer resolves with their marks (46 new cases); 29 fail on this base for the defects a16 fixes (C59, C60, C190, selections over nested fields).
 - **Area:** tests / conformance suites II
 - **Lane ID / scripts:** `tests-conftest2-5` — `tests-conftest2/`
 
@@ -13511,6 +13535,7 @@ Each row was fed to a vitest-free copy of `compare()` (pickSpec, then a coarse S
 
 - **Location:** `packages/conformance/test/vl-scale-props.test.ts:96-121`
 - **Status:** CONFIRMED (run)
+- **Resolution:** ALREADY FIXED in #214 (285c395e). Fixed by a15 (forwarding differential over every Scale property on every scaled channel, rangeMin/rangeMax pinned); not in this base, stack a15 first; this lane adds the channels it leaves out (vl-scale-forwarding-more.test.ts). Earlier work: #210.
 - **Area:** closure / conformance suites, line by line II
 - **Lane ID / scripts:** `w3-conftest-b-3` — `w3-conftest-b/`
 
@@ -14456,6 +14481,7 @@ Measured: 375 of 17 008 fixed comparisons and 42 of 1 500 random ones are skippe
 
 - **Location:** `packages/conformance/test/vl-compiler-parity.test.ts:1041-1042`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #214 (a31082a1). Fixed: the stale filled skip for text and trail marks is deleted; the 12 combinations pass.
 - **Area:** tests / conformance suites I
 - **Lane ID / scripts:** `tests-conftest1-5` — `tests-conftest1/`
 
@@ -14469,6 +14495,7 @@ The comment says "@aster-charts/vl does not do that for either yet" and `continu
 
 - **Location:** `packages/conformance/test/vl-compiler-parity.test.ts:1353-1369`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #214 (a31082a1). Fixed: the two cases whose point is the cell's signals assert that vega-lite writes signals there; the others are named as comparing layout.align.
 - **Area:** tests / conformance suites I
 - **Lane ID / scripts:** `tests-conftest1-9` — `tests-conftest1/`
 
@@ -14482,6 +14509,7 @@ The comment says "@aster-charts/vl does not do that for either yet" and `continu
 
 - **Location:** `packages/conformance/test/dataflow-failure-vs-vega.test.ts:68-79`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #214 (3c37f915). Fixed: the 11 cases of the first group collect the logger's errors and require one.
 - **Area:** tests / conformance suites I
 - **Lane ID / scripts:** `tests-conftest1-10` — `tests-conftest1/`
 
@@ -14495,6 +14523,7 @@ The 11 cases call `renderSpec` with no logger (the error goes to the console) an
 
 - **Location:** `packages/conformance/test/vl-anim.test.ts:134-142`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #214 (2acd22fd). Fixed: all 150 animation seeds render through renderWithVegaChecked and an added message fails (30 were rendered by the unchecked helper).
 - **Area:** tests / conformance suites I
 - **Lane ID / scripts:** `tests-conftest1-11` — `tests-conftest1/`
 
@@ -14508,6 +14537,7 @@ It uses `renderWithVega` (default logger) for both outputs, so Vega errors or wa
 
 - **Location:** `packages/conformance/corpus-tz/enter-update.vg.json:1`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #214 (3b216b19). Fixed: the two zone-blind specs are dropped; hour axes across both daylight-saving days and a timeunit transform over them are added (each moves in UTC, New York, Kolkata, Lord Howe and Etc/GMT+5), floor 35.
 - **Area:** tests / conformance suites II
 - **Lane ID / scripts:** `tests-conftest2-8` — `tests-conftest2/`
 
@@ -14632,6 +14662,7 @@ Measured by rendering every spec with real Vega (and Aster) under different `TZ`
 
 - **Location:** `packages/conformance/test/vl-orient.test.ts:56-59`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #214 (d8c84b92). Fixed: each per-x test judges its own combinations, the none-asked orientation is compared through the compiled marks for all six marks (283 differ on this base, all constant {value} positions C436 / pre-binned ticks C221), and orientationOf is read from the built package.
 - **Area:** closure / conformance suites, line by line I
 - **Lane ID / scripts:** `w3-conftest-a-5` — `w3-conftest-a/`
 
