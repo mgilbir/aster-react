@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 649 of 766 findings resolved (630 fixed, 16 already fixed on main, 3 disputed with evidence); 117 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 669 of 766 findings resolved (648 fixed, 18 already fixed on main, 3 disputed with evidence); 97 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -250,10 +250,10 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C201 | Medium | tests / core (text … url) | "a clock that jumps forward does not make an interval fire a burst" never jumps, and with a real jump the interval does burst | `packages/core/src/timer.test.ts:108-119` | CONFIRMED (run; re-run by lead) → FIXED (#190) |
 | C202 | Medium | tests / core (text … url) | the `dsvFormatRow` vectors are recorded double-wrapped, and one pins a localised `Date#toString()` | `packages/conformance/scripts/gen-vectors.mjs:837-847` | CONFIRMED (run) → FIXED (#190) |
 | C203 | Medium | tests / core (text … url) | both topojson vector fixtures are malformed topologies; no vector covers a valid polygon | `packages/conformance/scripts/gen-vectors.mjs:633-678` | CONFIRMED (run) → FIXED (#190) |
-| C204 | Medium | tests / conformance differentials I | Vega rewrites shared inline rows, so the time-legend and one error-semantics differential cannot see a missing `format.parse` or transform on Aster's side | `packages/conformance/src/guides-layout-vs-vega.test.ts:34-36` | CONFIRMED (run; re-run by lead) |
+| C204 | Medium | tests / conformance differentials I | Vega rewrites shared inline rows, so the time-legend and one error-semantics differential cannot see a missing `format.parse` or transform on Aster's side | `packages/conformance/src/guides-layout-vs-vega.test.ts:34-36` | CONFIRMED (run; re-run by lead) → ALREADY FIXED (#215) |
 | C205 | Medium | tests / conformance differentials I | mark `role` values where Aster differs from Vega are excluded from the ARIA matrix or judged on structure only | `packages/conformance/src/aria-guides-vs-vega.test.ts:112-116` | CONFIRMED (run; re-run by lead) |
-| C206 | Medium | tests / conformance differentials II | canonicalizer collapses NBSP and all Unicode spaces as if they were XML whitespace | `packages/conformance/src/normalize.ts:469-470` | CONFIRMED (run; re-run by lead) |
-| C207 | Medium | tests / conformance differentials II | "stack keeps the input row order" shares its rows with Vega, which writes `y0`/`y1` onto them first | `packages/conformance/src/renderer-vs-vega.test.ts:33-35` | CONFIRMED (run; re-run by lead) |
+| C206 | Medium | tests / conformance differentials II | canonicalizer collapses NBSP and all Unicode spaces as if they were XML whitespace | `packages/conformance/src/normalize.ts:469-470` | CONFIRMED (run; re-run by lead) → FIXED (#215) |
+| C207 | Medium | tests / conformance differentials II | "stack keeps the input row order" shares its rows with Vega, which writes `y0`/`y1` onto them first | `packages/conformance/src/renderer-vs-vega.test.ts:33-35` | CONFIRMED (run; re-run by lead) → ALREADY FIXED (#215) |
 | C208 | Medium | tests / conformance differentials II | raster fixtures: loose hand tolerances and a self-recorded baseline that accepts large disagreement (adds to C191 (harness-src-5)) | `packages/conformance/src/raster-vs-chromium.test.ts:43-47` | CONFIRMED (run) |
 | C209 | Medium | tests / conformance generators and case tables II | `dom-string-parity` does not exercise the path its header names, and its comparator is blind to mixed content | `packages/conformance/scripts/dom-string-parity.test.mts:5-9` | CONFIRMED (run) → FIXED (#213) |
 | C210 | Medium | tests / conformance generators and case tables II | `graticule` on a dataset that already has rows drops the rows; Vega keeps them | `packages/core/src/transform.ts:361-366` | CONFIRMED (run; re-run by lead) → FIXED (#213) |
@@ -356,7 +356,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C307 | Medium | tests / core (incremental oracle, legacy copies I) | The three legacy testlibs are not "frozen copies", share modules with the code they check, and leave the view-sizing bounds uncompared | `packages/core/src/legacy-bounds.testlib.ts:1-3` | CONFIRMED (traced) |
 | C308 | Medium | tests / core (legacy copies II … path) | For `path` marks the legacy hit, intersect and label painter call the new reader: the old-vs-new comparison is new-vs-new | `packages/core/src/legacy-hit.testlib.ts:39` | CONFIRMED (run) → FIXED (#200) |
 | C309 | Medium | tests / core (legacy copies II … path) | The first-pass defects are present, identically, in the legacy copies: the differential is green because both sides are wrong the same way | `packages/core/src/legacy-hit.testlib.ts:460-473` | CONFIRMED (run) |
-| C310 | Medium | tests / conformance differentials I | specs `vega.parse` refuses are rendered by Aster; the tests count them and never run Aster | `packages/conformance/src/guide-null-vs-vega.test.ts:39-57` | CONFIRMED (run) |
+| C310 | Medium | tests / conformance differentials I | specs `vega.parse` refuses are rendered by Aster; the tests count them and never run Aster | `packages/conformance/src/guide-null-vs-vega.test.ts:39-57` | CONFIRMED (run) → FIXED (#215) |
 | C311 | Medium | tests / conformance generators and case tables I | An unknown `interpolate` logs Vega's error and still draws the line; the test that covers the names patches its oracle | `packages/core/src/shape.ts:278-285` | CONFIRMED (run; re-run by lead) → FIXED (#213) |
 | C312 | Medium | tests / conformance suites II | selection matrix: "x scale <type>" cases in hconcat and column facet have no x scale | `packages/conformance/test/vl-selection-matrix-cases.ts:109-114` | CONFIRMED (run; re-run by lead) → FIXED (#214) |
 | C313 | Medium | corpus / specs, range 1 | 16 of 28 `area-curve-*` specs do not contain the curve or tension their name says | `packages/conformance/corpus/area-curve-step-after-tension.vg.json:45` | CONFIRMED (run; re-run by lead) → FIXED (#206) |
@@ -512,10 +512,10 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C463 | Low | tests / core (text … url) | the per-projection loop in the geo concat test cannot fail | `packages/vl/test/geo.test.ts:205-207` | CONFIRMED (run) → FIXED (#190) |
 | C464 | Low | tests / core (text … url) | the "no Math.min/max(...x) or push(...x) left" scan misses spreads that are in the workspace | `packages/core/src/transform-safety.test.ts:58-61` | CONFIRMED (run) → FIXED (#190) |
 | C465 | Low | tests / core (text … url) | assertions weaker than their titles | `packages/core/src/text-metrics.test.ts:41-44` | CONFIRMED (run) → FIXED (#190) |
-| C466 | Low | tests / conformance differentials I | the ARIA "not vacuous" block has one counter that is always 0 and two that are always 600 | `packages/conformance/src/aria-guides-vs-vega.test.ts:244-256` | CONFIRMED (run) |
-| C467 | Low | tests / conformance differentials I | ceilings that depend on file order, and silent drops behind loose floors | `packages/conformance/src/guide-encode-vs-vega.test.ts:200-204` | CONFIRMED (run) |
-| C468 | Low | tests / conformance differentials II | `legend-discretizing`'s "unreadable" allowance does not check which side was unreadable | `packages/conformance/src/legend-discretizing-vs-vega.test.ts:123-131` | CONFIRMED (run) |
-| C469 | Low | tests / conformance differentials II | guards that hold today but cannot fail in the way their test implies | `packages/conformance/src/trellis-generated-vs-vega.test.ts:37-45` | CONFIRMED (traced) |
+| C466 | Low | tests / conformance differentials I | the ARIA "not vacuous" block has one counter that is always 0 and two that are always 600 | `packages/conformance/src/aria-guides-vs-vega.test.ts:244-256` | CONFIRMED (run) → FIXED (#215) |
+| C467 | Low | tests / conformance differentials I | ceilings that depend on file order, and silent drops behind loose floors | `packages/conformance/src/guide-encode-vs-vega.test.ts:200-204` | CONFIRMED (run) → FIXED (#215) |
+| C468 | Low | tests / conformance differentials II | `legend-discretizing`'s "unreadable" allowance does not check which side was unreadable | `packages/conformance/src/legend-discretizing-vs-vega.test.ts:123-131` | CONFIRMED (run) → FIXED (#215) |
+| C469 | Low | tests / conformance differentials II | guards that hold today but cannot fail in the way their test implies | `packages/conformance/src/trellis-generated-vs-vega.test.ts:37-45` | CONFIRMED (traced) → FIXED (#215) |
 | C470 | Low | tests / conformance generators and case tables I | Two inputs the generators exclude where the engines differ | `packages/conformance/scripts/transform-cases.mjs:748` | CONFIRMED (run) → FIXED (#213) |
 | C471 | Low | tests / conformance generators and case tables II | Interpreter sandbox test: the "never executes injected code" marker cannot fire, the "smuggle" set omits what Aster does return, and the pin table calls weaker-than-Vega results "hardenin… | `packages/conformance/scripts/differential-vega-interpreter-gen.test.mts:176-183` | CONFIRMED (run) → FIXED (#213) |
 | C472 | Low | tests / conformance generators and case tables II | `differential-transform-names`: 8 of 51 types are never compared with Vega, the floor is 20, and the `label` case is a self-oracle | `packages/conformance/scripts/differential-transform-names.test.mts:75` | CONFIRMED (run) → FIXED (#213) |
@@ -544,7 +544,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C495 | Low | tooling / gates, CI, release, benchmarks | `pnpm build` rebuilds `@aster-charts/react` a second time, concurrently with a build that reads it | `apps/demo/package.json:8` | PLAUSIBLE → FIXED (#187) |
 | C496 | Low | tooling / gates, CI, release, benchmarks | `check-bundle-shaking --only <typo>` passes with zero patterns | `scripts/check-bundle-shaking.mjs:42-43` | CONFIRMED (traced) → FIXED (#187) |
 | C497 | Low | tooling / gates, CI, release, benchmarks | `pnpm test:tz <misspelt zone>` runs in UTC and reports "all zones passed" | `scripts/test-tz.mjs:34-45` | CONFIRMED (run) → FIXED (#187) |
-| C498 | Low | tests / conformance differentials II | `projection-scope-vs-vega` empties the module-level `sphere` dataset for every later test | `packages/conformance/src/projection-scope-vs-vega.test.ts:54-58` | CONFIRMED (traced) |
+| C498 | Low | tests / conformance differentials II | `projection-scope-vs-vega` empties the module-level `sphere` dataset for every later test | `packages/conformance/src/projection-scope-vs-vega.test.ts:54-58` | CONFIRMED (traced) → FIXED (#215) |
 | C499 | Low | leftovers / budgets, declarations, demo data, gallery lists | The locale setters accept `undefined` by type, throw a raw `TypeError`, and `defaultLocale(def, undefined)` leaves the process-wide default half replaced | `packages/core/src/locale.ts:151-153` | CONFIRMED (run; re-run by lead) → FIXED (#188) |
 | C500 | Low | core / runtime: state, signals, reuse keys | A fractional or `NaN` `dataChanges` index blanks the chart or throws a bare TypeError | `packages/core/src/runtime.ts:950` | CONFIRMED (run) → FIXED (#201) |
 | C501 | Low | core / runtime: marks, encode, groups | A failed import of the pulse part is swallowed for the life of the page with no log | `packages/core/src/shell-setup.ts:20` | CONFIRMED (traced) |
@@ -624,13 +624,13 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C575 | Low | tests / core (legacy copies II … path) | Dead legacy code no test reaches | `packages/core/src/legacy-path-data.testlib.ts:196-254` | CONFIRMED (run) → FIXED (#200) |
 | C576 | Low | tests / core (limits, loaders, locale, oracle vectors) | `oracle-vectors.test.ts` sets `process.env.TZ` per suite and never restores it | `packages/core/src/oracle-vectors.test.ts:266` | CONFIRMED (traced) → FIXED (#195) |
 | C577 | Low | tests / core (text … url) | `vega-util.json` records `isDate(Date.now())`, so the recording is not reproducible | `packages/conformance/scripts/gen-vectors.mjs:223` | CONFIRMED (run) → ALREADY FIXED (#190) |
-| C578 | Low | tests / conformance differentials I | `chart-info.test.ts` says padding equals Vega's and never asserts it | `packages/conformance/src/chart-info.test.ts:36-41` | CONFIRMED (run) |
-| C579 | Low | tests / conformance differentials I | the `lineBreak` case cannot test `config.lineBreak` | `packages/conformance/src/guide-style-config-vs-vega.test.ts:84` | CONFIRMED (run) |
-| C580 | Low | tests / conformance differentials I | dead code in the tests | `packages/conformance/src/axis-ticks-failure-vs-vega.test.ts:99` | CONFIRMED (traced) |
-| C581 | Low | tests / conformance differentials II | `path-no-d-vs-vega` asserts its subject on Vega's side only, and Aster writes `d=""` | `packages/conformance/src/path-no-d-vs-vega.test.ts:2-5` | CONFIRMED (run; re-run by lead) |
-| C582 | Low | tests / conformance differentials II | four "moved on by a click" tests in `parts-signal-driven` are the host-set test again | `packages/conformance/src/parts-signal-driven.test.ts:34-37` | CONFIRMED (traced) |
-| C583 | Low | tests / conformance differentials II | `legend-entries-failure` matrix never exercises its "vega cannot serialize" branch | `packages/conformance/src/legend-entries-failure-vs-vega.test.ts:13-14` | CONFIRMED (run) |
-| C584 | Low | tests / conformance differentials II | small leaks and partial assertions | `packages/conformance/src/vl-custom-format-types.test.ts:20-26` | CONFIRMED (traced) |
+| C578 | Low | tests / conformance differentials I | `chart-info.test.ts` says padding equals Vega's and never asserts it | `packages/conformance/src/chart-info.test.ts:36-41` | CONFIRMED (run) → FIXED (#215) |
+| C579 | Low | tests / conformance differentials I | the `lineBreak` case cannot test `config.lineBreak` | `packages/conformance/src/guide-style-config-vs-vega.test.ts:84` | CONFIRMED (run) → FIXED (#215) |
+| C580 | Low | tests / conformance differentials I | dead code in the tests | `packages/conformance/src/axis-ticks-failure-vs-vega.test.ts:99` | CONFIRMED (traced) → FIXED (#215) |
+| C581 | Low | tests / conformance differentials II | `path-no-d-vs-vega` asserts its subject on Vega's side only, and Aster writes `d=""` | `packages/conformance/src/path-no-d-vs-vega.test.ts:2-5` | CONFIRMED (run; re-run by lead) → FIXED (#215) |
+| C582 | Low | tests / conformance differentials II | four "moved on by a click" tests in `parts-signal-driven` are the host-set test again | `packages/conformance/src/parts-signal-driven.test.ts:34-37` | CONFIRMED (traced) → FIXED (#215) |
+| C583 | Low | tests / conformance differentials II | `legend-entries-failure` matrix never exercises its "vega cannot serialize" branch | `packages/conformance/src/legend-entries-failure-vs-vega.test.ts:13-14` | CONFIRMED (run) → FIXED (#215) |
+| C584 | Low | tests / conformance differentials II | small leaks and partial assertions | `packages/conformance/src/vl-custom-format-types.test.ts:20-26` | CONFIRMED (traced) → FIXED (#215) |
 | C585 | Low | tests / conformance generators and case tables II | `differential-scale-spec(-gen)`: "must throw in Aster too" is not what is compared | `packages/conformance/scripts/differential-scale-spec.test.mts:6-7` | CONFIRMED (run) → FIXED (#213) |
 | C586 | Low | tests / conformance generators and case tables II | `differential-scale-helpers-gen`: "every scheme" is a hand list missing five, plus dead and duplicated lines | `packages/conformance/scripts/differential-scale-helpers-gen.test.mts:111` | CONFIRMED (run) → FIXED (#213) |
 | C587 | Low | tests / conformance generators and case tables II | Smaller drifts between headers and code | `packages/conformance/scripts/differential-step-reuse.test.mts:110` | CONFIRMED (run) → FIXED (#213) |
@@ -718,7 +718,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C669 | Low | tests / react II | vacuous selection assertion in the tab-stop suite | `packages/react/src/Chart.tabstop.test.tsx:194` | CONFIRMED (traced) → FIXED (#212) |
 | C670 | Low | tests / react II | `loadOptions.test.tsx` wraps a hook test in the variant matrix and shadows the variant | `packages/react/src/loadOptions.test.tsx:58-76` | CONFIRMED (traced) → FIXED (#212) |
 | C671 | Low | tests / react II | 23 of the 41 files call `act` without setting `IS_REACT_ACT_ENVIRONMENT` | `packages/react/src/testing/variants.tsx:143` | CONFIRMED (traced) → FIXED (#212) |
-| C672 | Low | tests / conformance differentials II | which canonicalizer behaviours `normalize.test.ts` pins and which it does not (adds to C192 (harness-src-6)) | `packages/conformance/src/normalize.test.ts:24-93` | CONFIRMED (run) |
+| C672 | Low | tests / conformance differentials II | which canonicalizer behaviours `normalize.test.ts` pins and which it does not (adds to C192 (harness-src-6)) | `packages/conformance/src/normalize.test.ts:24-93` | CONFIRMED (run) → FIXED (#215) |
 | C673 | Low | tests / conformance generators and case tables I | The "informative" floors of two generated differentials cannot fail | `packages/conformance/scripts/differential-d3-interpolate-gen.test.mts:145` | CONFIRMED (run) → FIXED (#213) |
 | C674 | Low | tests / conformance generators and case tables I | `differential-item-datum` compares only the keys Vega has | `packages/conformance/scripts/differential-item-datum.test.mts:156-160` | CONFIRMED (run) → FIXED (#213) |
 | C675 | Low | tests / conformance generators and case tables I | Generated geo specs on which Vega logs are never given to Aster; the "pinned" exclusion is a 2.75× loose ceiling | `packages/conformance/scripts/differential-geo-generated.test.mts:426-429` | CONFIRMED (run) → FIXED (#213) |
@@ -790,9 +790,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C741 | Low | tests / core (render … stream) | The DOM escaping tests use 4 of the 13 hostile strings while the comment says coverage is unchanged | `packages/core/src/svg-escaping.test.ts:317-319` | CONFIRMED (traced) |
 | C742 | Low | tests / core (text … url) | the animation refusals title overclaims what vega-lite does | `packages/vl/test/animation.test.ts:76` | CONFIRMED (run) → FIXED (#190) |
 | C743 | Low | tests / react II | stale debugging comments contradict the assertion | `packages/react/src/interaction.test.ts:131-142` | CONFIRMED (traced) → FIXED (#212) |
-| C744 | Low | tests / conformance differentials I | stale structure-only filter and "separate defect" comment for the discrete legend | `packages/conformance/src/guide-structure-vs-vega.test.ts:89-91` | CONFIRMED (run) |
-| C745 | Low | tests / conformance differentials I | headers and titles that claim more than the file asserts | `packages/conformance/src/addons-needed.test.ts:4` | CONFIRMED (traced) |
-| C746 | Low | tests / conformance differentials II | stale skip in `signals-guides`: "which the engine does not model; 'sideways' is left out" | `packages/conformance/src/signals-guides-vs-vega.test.ts:145-152` | CONFIRMED (run) |
+| C744 | Low | tests / conformance differentials I | stale structure-only filter and "separate defect" comment for the discrete legend | `packages/conformance/src/guide-structure-vs-vega.test.ts:89-91` | CONFIRMED (run) → FIXED (#215) |
+| C745 | Low | tests / conformance differentials I | headers and titles that claim more than the file asserts | `packages/conformance/src/addons-needed.test.ts:4` | CONFIRMED (traced) → FIXED (#215) |
+| C746 | Low | tests / conformance differentials II | stale skip in `signals-guides`: "which the engine does not model; 'sideways' is left out" | `packages/conformance/src/signals-guides-vs-vega.test.ts:145-152` | CONFIRMED (run) → FIXED (#215) |
 | C747 | Low | tests / conformance generators and case tables I | The divergences `differential-identifier` avoids "by design" did not reproduce, and two are undocumented | `packages/conformance/scripts/differential-identifier.test.mts:16-22` | CONFIRMED (run) → FIXED (#213) |
 | C748 | Low | tests / conformance generators and case tables I | Stale or false statements in the two case tables | `packages/conformance/scripts/transform-cases.mjs:855-856` | CONFIRMED (run) → FIXED (#213) |
 | C749 | Low | tests / conformance suites I | Two test headers say "Fails today"; both files pass | `packages/conformance/test/legend-domain-signal-vs-vega.test.ts:3-6` | CONFIRMED (run) → FIXED (#214) |
@@ -3762,6 +3762,7 @@ Direction: replace the fixtures with a valid two-square topology (quantized from
 
 - **Location:** `packages/conformance/src/guides-layout-vs-vega.test.ts:34-36`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** ALREADY FIXED in #215 (3df3102,cfcd65a,95661998). Already fixed at the root by a17's engine-sharing setup and forEngines (C61): with Aster's input stripped of format.parse the time-legend differential fails 8 tests (was 0), error-semantics now compares vega's errors in number and message, and dataflow-order gives vega its own copy.
 - **Area:** tests / conformance differentials I
 - **Lane ID / scripts:** `tests-confsrc1-1` — `tests-confsrc1/`
 
@@ -3837,6 +3838,7 @@ All five specs below are schema-valid (`role` is a plain string on a mark):
 
 - **Location:** `packages/conformance/src/normalize.ts:469-470`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #215 (4b287da9). Fixed: text whitespace collapses only space, tab, CR and LF (no-break and Unicode spaces are text); 15 planted pairs fail with the old collapse (17 tests).
 - **Area:** tests / conformance differentials II
 - **Lane ID / scripts:** `tests-confsrc2-1` — `tests-confsrc2/`
 
@@ -3854,6 +3856,7 @@ All five specs below are schema-valid (`role` is a plain string on a mark):
 
 - **Location:** `packages/conformance/src/renderer-vs-vega.test.ts:33-35`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** ALREADY FIXED in #215 (3df3102,cfcd65a,95661998). Already fixed by a17 (compare clones per engine and the setup file fails shared objects): with the stack transform removed from Aster's input the differential fails (1 test, was 0 on shared rows).
 - **Area:** tests / conformance differentials II
 - **Lane ID / scripts:** `tests-confsrc2-2` — `tests-confsrc2/`
 
@@ -5300,6 +5303,7 @@ None of these pins a wrong value; each was checked.
 
 - **Location:** `packages/conformance/src/aria-guides-vs-vega.test.ts:244-256`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #215 (aad2fb87). Fixed: the part-less axis regex matches (11 of 600 seeds), hidden guide and hidden mark are counted on their containers, the floors are asserted for every counter.
 - **Area:** tests / conformance differentials I
 - **Lane ID / scripts:** `tests-confsrc1-7` — `tests-confsrc1/`
 
@@ -5318,6 +5322,7 @@ Over the 600 seeds: `{"axis":331,"legend":326,"title":384,"subtitle":105,"hidden
 
 - **Location:** `packages/conformance/src/guide-encode-vs-vega.test.ts:200-204`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #215 (8c799958,d78bf5a7). Fixed: the two ceilings that ran last in file order are per-walk exact counts, addons-needed/parts-needed/chart-spec-swap name and forbid any dropped spec (none dropped), and guide-sharing-order pins the two url specs that throw and requires real renders for the rest.
 - **Area:** tests / conformance differentials I
 - **Lane ID / scripts:** `tests-confsrc1-8` — `tests-confsrc1/`
 
@@ -5334,6 +5339,7 @@ Over the 600 seeds: `{"axis":331,"legend":326,"title":384,"subtitle":105,"hidden
 
 - **Location:** `packages/conformance/src/legend-discretizing-vs-vega.test.ts:123-131`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #215 (fdd7355e). Fixed: each side is canonicalized apart (one side unreadable is a difference), the one both-unreadable case is pinned by name, the box-width check can no longer pass as undefined.
 - **Area:** tests / conformance differentials II
 - **Lane ID / scripts:** `tests-confsrc2-8` — `tests-confsrc2/`
 
@@ -5353,6 +5359,7 @@ Over the 600 seeds: `{"axis":331,"legend":326,"title":384,"subtitle":105,"hidden
 
 - **Location:** `packages/conformance/src/trellis-generated-vs-vega.test.ts:37-45`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #215 (f828520a,5f819e6d,8ee21246). Fixed: trellis seeds must all compare, regex-refuse judges each file and pins sites word for word, group labels pin the exact placed count (vega leaves labels out in six of eight), the <img half is replaced by a check every d is commands and numbers, parts-needed names dropped specs, sort-engine fails if the V8 flag detector is wrong; the inlining proof itself runs only on V8 15 (CI node leg).
 - **Area:** tests / conformance differentials II
 - **Lane ID / scripts:** `tests-confsrc2-11` — `tests-confsrc2/`
 
@@ -5920,6 +5927,7 @@ Positional zones are passed to `TZ` unchecked. Node treats an unknown zone as UT
 
 - **Location:** `packages/conformance/src/projection-scope-vs-vega.test.ts:54-58`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #215 (59123fd7). Fixed: DATA is frozen and copied at each use, so the identity test no longer empties the sphere for the clip tests (which now draw it and still agree with vega).
 - **Area:** tests / conformance differentials II
 - **Lane ID / scripts:** `tests-confsrc2-6` — `tests-confsrc2/`
 
@@ -6647,6 +6655,7 @@ Direction: an old-vs-new differential can only prove "unchanged". Each of these 
 
 - **Location:** `packages/conformance/src/guide-null-vs-vega.test.ts:39-57`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #215 (8c799958). Fixed: Aster is run on the 11 config nulls and 2 style lists vega.parse refuses and must render; each refusal is judged where it happens, counts are exact per kind, both classes are table cases held on their own probe, ERRORS.md states them.
 - **Area:** tests / conformance differentials I (also categories 7)
 - **Lane ID / scripts:** `tests-confsrc1-3` — `tests-confsrc1/`
 
@@ -7713,6 +7722,7 @@ Direction: use a constant; add a CI step that re-records and diffs.
 
 - **Location:** `packages/conformance/src/chart-info.test.ts:36-41`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #215 (cd21c6fd). Fixed: padding is asserted against vega's root translation and SVG size for every autosize (planted +1 fails 7).
 - **Area:** tests / conformance differentials I
 - **Lane ID / scripts:** `tests-confsrc1-4` — `tests-confsrc1/`
 
@@ -7730,6 +7740,7 @@ Direction: use a constant; add a CI step that re-records and diffs.
 
 - **Location:** `packages/conformance/src/guide-style-config-vs-vega.test.ts:84`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #215 (438f90af). Fixed: the break character is in the title, subtitle, axis titles and a legend title; a planted Aster that drops config.lineBreak fails.
 - **Area:** tests / conformance differentials I
 - **Lane ID / scripts:** `tests-confsrc1-5` — `tests-confsrc1/`
 
@@ -7746,6 +7757,7 @@ Direction: use a constant; add a CI step that re-records and diffs.
 
 - **Location:** `packages/conformance/src/axis-ticks-failure-vs-vega.test.ts:99`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #215 (aad2fb87,fdd7355e). Fixed: the always-true filter, the empty loop, the duplicate legend part, the empty spread and the private recorder copy are gone (the shared canvas-recorder is used).
 - **Area:** tests / conformance differentials I
 - **Lane ID / scripts:** `tests-confsrc1-10` — `tests-confsrc1/`
 
@@ -7763,6 +7775,7 @@ Direction: use a constant; add a CI step that re-records and diffs.
 
 - **Location:** `packages/conformance/src/path-no-d-vs-vega.test.ts:2-5`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #215 (1e3c92da). Fixed: the d-less paths of both raw documents are compared attribute for attribute and counted; Aster already writes no d for them on this base, as vega does.
 - **Area:** tests / conformance differentials II
 - **Lane ID / scripts:** `tests-confsrc2-5` — `tests-confsrc2/`
 
@@ -7783,6 +7796,7 @@ Direction: use a constant; add a CI step that re-records and diffs.
 
 - **Location:** `packages/conformance/src/parts-signal-driven.test.ts:34-37`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #215 (8ee21246). Fixed: the four cases carry a click handler (step counter, format and type as a pair) and each test asserts the handler is present in the handler variant only.
 - **Area:** tests / conformance differentials II
 - **Lane ID / scripts:** `tests-confsrc2-7` — `tests-confsrc2/`
 
@@ -7801,6 +7815,7 @@ Direction: use a constant; add a CI step that re-records and diffs.
 
 - **Location:** `packages/conformance/src/legend-entries-failure-vs-vega.test.ts:13-14`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #215 (57d6d7a0). Fixed: vega draws all 120 generated and 7 named specs, so the refusal comparison was never exercised; header corrected, counts exact (svg = all, threw 0), a spec vega cannot serialize fails by name.
 - **Area:** tests / conformance differentials II
 - **Lane ID / scripts:** `tests-confsrc2-9` — `tests-confsrc2/`
 
@@ -7815,6 +7830,7 @@ Direction: use a constant; add a CI step that re-records and diffs.
 
 - **Location:** `packages/conformance/src/vl-custom-format-types.test.ts:20-26`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #215 (fdd7355e). Fixed: diffCanonical arguments in parse-scoping and spec-data-refs, the undefined === undefined regex check; the vega expressionFunction leak is DISPUTED in part: vega has no unregister API and vitest gives each test file its own module instance, said in the file.
 - **Area:** tests / conformance differentials II
 - **Lane ID / scripts:** `tests-confsrc2-13` — `tests-confsrc2/`
 
@@ -12468,6 +12484,7 @@ Direction: split the table into "vega-lite output is broken" and "not supported 
 
 - **Location:** `packages/conformance/src/guide-structure-vs-vega.test.ts:89-91`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #215 (f5022765). Fixed: the structure-only filter and its stale comment are gone, the discrete legend is judged in full.
 - **Area:** tests / conformance differentials I
 - **Lane ID / scripts:** `tests-confsrc1-6` — `tests-confsrc1/`
 
@@ -12484,6 +12501,7 @@ Direction: split the table into "vega-lite output is broken" and "not supported 
 
 - **Location:** `packages/conformance/src/addons-needed.test.ts:4`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #215 (eee9fe84,95661998). Fixed: each header/title now says what the file asserts, or the assertion exists (group scales read from outside the group, errors compared by message and number).
 - **Area:** tests / conformance differentials I
 - **Lane ID / scripts:** `tests-confsrc1-9` — `tests-confsrc1/`
 
@@ -12502,6 +12520,7 @@ Direction: split the table into "vega-lite output is broken" and "not supported 
 
 - **Location:** `packages/conformance/src/signals-guides-vs-vega.test.ts:145-152`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #215 (f5022765). Fixed: 'sideways', empty and null orients join the loop with the config blocks over a linear and a band scale (all equal vega); a planted orient of top fails 4 tests.
 - **Area:** tests / conformance differentials II
 - **Lane ID / scripts:** `tests-confsrc2-10` — `tests-confsrc2/`
 
@@ -14347,6 +14366,7 @@ All CONFIRMED-TRACE.
 
 - **Location:** `packages/conformance/src/normalize.test.ts:24-93`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #215 (4b287da9). Fixed: normalize-pins.test.ts pins the 74 unpinned behaviours (differs, equal on purpose, refused), normalize.test.ts pins the 3- and 4-decimal rounding boundaries and the NBSP pairs; the 270-degree wedge and large-dy text were pinned by a17's C192.
 - **Area:** tests / conformance differentials II
 - **Lane ID / scripts:** `tests-confsrc2-12` — `tests-confsrc2/`
 
