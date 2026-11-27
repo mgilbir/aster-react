@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 340 of 766 findings resolved (332 fixed, 7 already fixed on main, 1 disputed with evidence); 426 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 364 of 766 findings resolved (356 fixed, 7 already fixed on main, 1 disputed with evidence); 402 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -53,7 +53,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C4 | Critical | core / signal event loop, transitions | A handler expression gets the native DOM event, so a spec can read whatever the page can, listen to elements outside the chart, and exfiltrate through an image url | `packages/core/src/signals.ts:997` | CONFIRMED (run; re-run by lead) → FIXED (#197) |
 | C5 | Critical | vl / validate, optimize, predicates | `compile()` of a spec with a field named `__proto__` and a legend-bound selection writes `Object.prototype.legendBound = true` | `packages/vl/src/selection.ts:285-287` | CONFIRMED (run; re-run by lead) |
 | C6 | Critical | vl / composition | A facet of layers draws every facet's rows in every cell when no layer needs a cast dataset | `packages/vl/src/compile.ts:2022-2024` | CONFIRMED (run; re-run by lead) |
-| C7 | Critical | tests / core (incremental oracle, legacy copies I) | A top-level mark drawn from another mark (`from: {data: <mark name>}`) keeps its previous items when the source rows are edited or reordered in place | `packages/core/src/runtime.ts:2961` | CONFIRMED (run; re-run by lead) |
+| C7 | Critical | tests / core (incremental oracle, legacy copies I) | A top-level mark drawn from another mark (`from: {data: <mark name>}`) keeps its previous items when the source rows are edited or reordered in place | `packages/core/src/runtime.ts:2961` | CONFIRMED (run; re-run by lead) → FIXED (#201) |
 | C8 | High | core / runtime: marks, encode, groups | A title's and a subtitle's `href` bypass the URL policy | `packages/core/src/runtime.ts:7899-7906` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
 | C9 | High | core / session, stream, limits | A legend's `tickCount` has no built-in ceiling | `packages/core/src/guide-legend.ts:90-92` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
 | C10 | High | core / expressions, regex screen | The static regex screen never terminates on a pattern containing `\u{` with no closing brace | `packages/core/src/regex-screen.ts:204` | CONFIRMED (run; re-run by lead) → FIXED (#197) |
@@ -69,10 +69,10 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C20 | High | core / SVG, DOM patcher, canvas, a11y | An `image` encode channel reaches `xlink:href` without the URL policy | `packages/core/src/render.ts:1420-1421` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
 | C21 | High | tests / core (render … stream) | The escaping suite's patcher coverage skips the cached-descriptor path and every encode-level channel name; its "every channel" table omits at least nine channels the renderer reads (adds… | `packages/core/src/svg-escaping.test.ts:50-67` | CONFIRMED (run) |
 | C22 | High | tests / conformance generators and case tables II | A `tickCount` ≥ 2^32 on a time/utc axis or legend skips the built-in ceiling and exhausts the heap | `packages/core/src/limits.ts:200` | CONFIRMED (run; re-run by lead) |
-| C23 | High | core / runtime: state, signals, reuse keys | The fixed point stops before the scales exist | `packages/core/src/runtime.ts:981-998` | CONFIRMED (run; re-run by lead) |
-| C24 | High | core / runtime: state, signals, reuse keys | A signal holding a dataset array is identity-keyed past 512 values | `packages/core/src/fingerprint.ts:36-37` | CONFIRMED (run; re-run by lead) |
-| C25 | High | core / runtime: state, signals, reuse keys | `init` latches before what it reads has a value | `packages/core/src/runtime.ts:1547-1575` | CONFIRMED (run; re-run by lead) |
-| C26 | High | core / runtime: datasets, scales, fit | A leaf mark inside a group item that reads another pipeline dataset by expression goes permanently stale after an append | `packages/core/src/runtime.ts:5644` | CONFIRMED (run; re-run by lead) |
+| C23 | High | core / runtime: state, signals, reuse keys | The fixed point stops before the scales exist | `packages/core/src/runtime.ts:981-998` | CONFIRMED (run; re-run by lead) → FIXED (#201) |
+| C24 | High | core / runtime: state, signals, reuse keys | A signal holding a dataset array is identity-keyed past 512 values | `packages/core/src/fingerprint.ts:36-37` | CONFIRMED (run; re-run by lead) → FIXED (#201) |
+| C25 | High | core / runtime: state, signals, reuse keys | `init` latches before what it reads has a value | `packages/core/src/runtime.ts:1547-1575` | CONFIRMED (run; re-run by lead) → FIXED (#201) |
+| C26 | High | core / runtime: datasets, scales, fit | A leaf mark inside a group item that reads another pipeline dataset by expression goes permanently stale after an append | `packages/core/src/runtime.ts:5644` | CONFIRMED (run; re-run by lead) → FIXED (#201) |
 | C27 | High | core / runtime: marks, encode, groups | Vega's colour-object encode is silently dropped | `packages/core/src/runtime.ts:6957-6964` | CONFIRMED (run; re-run by lead) |
 | C28 | High | core / runtime: marks, encode, groups | The per-item `zindex` channel does not reorder painting | `packages/core/src/runtime.ts:5597-5616` | CONFIRMED (run; re-run by lead) |
 | C29 | High | core / session, stream, limits | `limits: { maxGeneratedRows }` alone removes the `rows` ceiling for `density` / `quantile` | `packages/core/src/limits.ts:460-463` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
@@ -88,7 +88,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C39 | High | core / hit index, bounds, geometry | A canvas-mode hit index throws on a scene that crossed a structured clone and has an axis or legend | `packages/core/src/bounds.ts:783` | CONFIRMED (run; re-run by lead) → FIXED (#200) |
 | C40 | High | core / signal event loop, transitions | Per-owner state (`{signal}`-handler memory, between/throttle/debounce state, timer streams) is keyed by text (`<scope>\|<index>:<name>:<i>:<JSON events>`), not by chart | `packages/core/src/signals.ts:254` | CONFIRMED (run; re-run by lead) → FIXED (#197) |
 | C41 | High | core / axes, legends, titles | `config.locale` is silently ignored | `packages/core/src/runtime.ts:8022` | CONFIRMED (run; re-run by lead) → FIXED (#194) |
-| C42 | High | core / geo | a fitted projection goes stale for every consumer whose own rows did not change | `packages/core/src/runtime.ts:2116` | CONFIRMED (run; re-run by lead) |
+| C42 | High | core / geo | a fitted projection goes stale for every consumer whose own rows did not change | `packages/core/src/runtime.ts:2116` | CONFIRMED (run; re-run by lead) → FIXED (#201) |
 | C43 | High | react / <Chart>, shells, SSR | `incremental={false}` renders a blank chart for any dense symbol mark | `packages/react/src/ChartCore.tsx:754` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
 | C44 | High | react / <Chart>, shells, SSR | Wheel/pinch zoom and the interval brush skip `time` / `utc` scales | `packages/react/src/ChartCore.tsx:1130-1131` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
 | C45 | High | react / <Chart>, shells, SSR | React hydration keeps the server's picture when the client scene differs | `packages/react/src/ChartCore.tsx:745-768` | CONFIRMED (run) → FIXED (#198) |
@@ -156,13 +156,13 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C107 | Medium | tests / core (limits, loaders, locale, oracle vectors) | Under any `limits` object, a spec that shares sub-objects makes the pre-flight walk exponential; the "spec size" ceiling only holds without limits | `packages/core/src/limits.ts:547-585` | CONFIRMED (run; re-run by lead) → ALREADY FIXED (#195) |
 | C108 | Medium | tests / core (render … stream) | Escape classes with no case in `sandbox.test.ts` (adds to C4 (core-signals-1), C18 (core-scale-1), C384 (core-expr-11), C285 (core-expr-10)) | `packages/core/src/signals.test.tsx:151-161` | CONFIRMED (run) |
 | C109 | Medium | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | vega-tooltip code is followed without a notice, and the notices test cannot see it | `packages/react/src/tooltip-content.ts:7-18` | CONFIRMED (run) → FIXED (#188) |
-| C110 | Medium | core / runtime: state, signals, reuse keys | An update whose re-encode throws is not the fresh scene | `packages/core/src/runtime.ts:5339-5400` | CONFIRMED (run) |
-| C111 | Medium | core / runtime: state, signals, reuse keys | A transient text-measurer failure is swallowed and kept | `packages/core/src/text-metrics.ts:112-130` | CONFIRMED (run) |
-| C112 | Medium | core / runtime: state, signals, reuse keys | `=== DEFAULT_SIZE` (500) stands for "no size given", and an explicit size splits from its signal | `packages/core/src/runtime.ts:1004` | CONFIRMED (run) |
-| C113 | Medium | core / runtime: state, signals, reuse keys | Self-reading updates and signal cycles yield the number of resolve rounds | `packages/core/src/runtime.ts:978` | CONFIRMED (run) |
-| C114 | Medium | core / runtime: state, signals, reuse keys | One derived signal past 512 values makes every update a full re-derive | `packages/core/src/fingerprint.ts:111` | CONFIRMED (run) |
-| C115 | Medium | core / runtime: datasets, scales, fit | A `source` dataset with `format` is built from the source's raw values, skipping the source's transforms; Vega ignores `format` there | `packages/core/src/runtime.ts:3925-3933` | CONFIRMED (run; re-run by lead) |
-| C116 | Medium | core / runtime: datasets, scales, fit | Bounds carried across an append use an untyped `boundLeaf`, so padding, view size and title position differ from fresh and from Vega | `packages/core/src/runtime.ts:5609-5611` | CONFIRMED (run; re-run by lead) |
+| C110 | Medium | core / runtime: state, signals, reuse keys | An update whose re-encode throws is not the fresh scene | `packages/core/src/runtime.ts:5339-5400` | CONFIRMED (run) → FIXED (#201) |
+| C111 | Medium | core / runtime: state, signals, reuse keys | A transient text-measurer failure is swallowed and kept | `packages/core/src/text-metrics.ts:112-130` | CONFIRMED (run) → FIXED (#201) |
+| C112 | Medium | core / runtime: state, signals, reuse keys | `=== DEFAULT_SIZE` (500) stands for "no size given", and an explicit size splits from its signal | `packages/core/src/runtime.ts:1004` | CONFIRMED (run) → FIXED (#201) |
+| C113 | Medium | core / runtime: state, signals, reuse keys | Self-reading updates and signal cycles yield the number of resolve rounds | `packages/core/src/runtime.ts:978` | CONFIRMED (run) → FIXED (#201) |
+| C114 | Medium | core / runtime: state, signals, reuse keys | One derived signal past 512 values makes every update a full re-derive | `packages/core/src/fingerprint.ts:111` | CONFIRMED (run) → FIXED (#201) |
+| C115 | Medium | core / runtime: datasets, scales, fit | A `source` dataset with `format` is built from the source's raw values, skipping the source's transforms; Vega ignores `format` there | `packages/core/src/runtime.ts:3925-3933` | CONFIRMED (run; re-run by lead) → FIXED (#201) |
+| C116 | Medium | core / runtime: datasets, scales, fit | Bounds carried across an append use an untyped `boundLeaf`, so padding, view size and title position differ from fresh and from Vega | `packages/core/src/runtime.ts:5609-5611` | CONFIRMED (run; re-run by lead) → FIXED (#201) |
 | C117 | Medium | core / runtime: marks, encode, groups | Merging `enter` into `update` changes geometry | `packages/core/src/compiler.ts:770-771` | CONFIRMED (run; re-run by lead) |
 | C118 | Medium | core / runtime: marks, encode, groups | A mark's `zindex` works at the top level and is ignored inside any group mark | `packages/core/src/runtime.ts:6401` | CONFIRMED (run; re-run by lead) |
 | C119 | Medium | core / runtime: marks, encode, groups | `{field: {group: …}}` knows `width`/`height`/`x`/`y` and returns `0` for anything else; `level` is ignored | `packages/core/src/runtime.ts:6889-6903` | CONFIRMED (run) |
@@ -278,7 +278,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C229 | Medium | core / hit index, bounds, geometry | A retained index reads the engine's live items array, so after an append it reports items of a later scene | `packages/core/src/hit.ts:831` | CONFIRMED (run) → FIXED (#200) |
 | C230 | Medium | conformance / scripts and gates | Several gates pass on zero cases | `packages/conformance/scripts/fuzz.mts:119` | CONFIRMED (traced) |
 | C231 | Medium | tooling / gates, CI, release, benchmarks | a partial publish cannot be finished by the workflow, and exact pins make version skew costly | `.github/workflows/release.yml:99-104` | CONFIRMED (traced) → FIXED (#187) |
-| C232 | Medium | core / runtime: state, signals, reuse keys | An unknown name in a change hint is trusted | `packages/core/src/runtime.ts:962-967` | CONFIRMED (run) |
+| C232 | Medium | core / runtime: state, signals, reuse keys | An unknown name in a change hint is trusted | `packages/core/src/runtime.ts:962-967` | CONFIRMED (run) → FIXED (#201) |
 | C233 | Medium | core / session, stream, limits | Numeric limits are not validated | `packages/core/src/limits.ts:108-111` | CONFIRMED (run) → FIXED (#193) |
 | C234 | Medium | core / expressions, regex screen | `maxStringLength` and `maxGeneratedBytes` meter only `pad` and number-format width | `packages/core/src/expression.ts:205-216` | CONFIRMED (run) → FIXED (#197) |
 | C235 | Medium | core / loading, URL policy, add-ons | `timeoutMs`, `maxTimeMs` and `signal` depend on the `fetch` honouring `init.signal` | `packages/core/src/addon-load.ts:260-273` | CONFIRMED (run) → FIXED (#192) |
@@ -311,8 +311,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C262 | Medium | leftovers / budgets, declarations, demo data, gallery lists | Nothing guards the gallery ratchet files against being lowered; the gate compares a run to the files, never the files to their history | `packages/conformance/src/gallery/run.ts:51` | CONFIRMED (traced) → FIXED (#188) |
 | C263 | Medium | closure / gallery, sweeps, canvas helpers, corpus-tz | Both schema sweeps return at the first enum branch, so the other branches of a mixed property are never generated | `packages/conformance/src/sweeps/vega-schema.mjs:1410-1423` | CONFIRMED (run; re-run by lead) |
 | C264 | Medium | gallery / official Vega-Lite examples II | The gallery gate cannot fail on what 66 of this lane's 313 specs are named for | `packages/conformance/src/gallery/static.ts:42` | CONFIRMED (run) |
-| C265 | Medium | core / runtime: state, signals, reuse keys | In-place change of a host signal is noticed or not depending on an undocumented bound | `packages/core/src/fingerprint.ts:36-37` | CONFIRMED (run) |
-| C266 | Medium | core / runtime: datasets, scales, fit | The documented remedy "pass a new array" fails for mutate-then-`[...rows]`: the diff sees the same row objects and the dev warning does not fire | `packages/core/src/row-watch.ts:145` | CONFIRMED (run) |
+| C265 | Medium | core / runtime: state, signals, reuse keys | In-place change of a host signal is noticed or not depending on an undocumented bound | `packages/core/src/fingerprint.ts:36-37` | CONFIRMED (run) → FIXED (#201) |
+| C266 | Medium | core / runtime: datasets, scales, fit | The documented remedy "pass a new array" fails for mutate-then-`[...rows]`: the diff sees the same row objects and the dev warning does not fire | `packages/core/src/row-watch.ts:145` | CONFIRMED (run) → FIXED (#201) |
 | C267 | Medium | core / session, stream, limits | `session.change()` keeps the last data but silently drops the last size and signals | `packages/core/src/session.ts:415-418` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
 | C268 | Medium | core / loading, URL policy, add-ons | In a browser no redirect hop is vetted before it is requested, and `maxRedirects` is not enforced; the docs promise both | `packages/core/src/addon-load.ts:336-341` | CONFIRMED (run) → FIXED (#192) |
 | C269 | Medium | core / layout transforms, rasterizer | `method: 'resquarify'` is accepted but always lays out as `squarify` after an update | `packages/core/src/treemap-tiling.ts:160-182` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
@@ -326,8 +326,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C277 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | the configuration LIMITS.md recommends for untrusted specs disables signal-scoped reuse, kept builds, instance marks, kept group marks, channel re-encode, kept guides and scale-settings r… | `docs/ARCHITECTURE.md:125` | CONFIRMED (run; re-run by lead) |
 | C278 | Medium | leftovers / budgets, declarations, demo data, gallery lists | `diffRows`' result is not assignable to `dataPulse` or `StreamBatch.pulse`, though API.md says to pass it | `docs/API.md:224-229` | CONFIRMED (run) → FIXED (#188) |
 | C279 | Medium | gallery / official Vega-Lite examples I | `interactive_line_brush_cursor`: the view's own `cursor` is dropped and the root group never takes the pointer | `packages/core/src/runtime.ts:2072-2084` | CONFIRMED (run; re-run by lead) |
-| C280 | Medium | core / runtime: state, signals, reuse keys | Registry epoch is in the named key but not the whole-context key | `packages/core/src/runtime.ts:2509` | CONFIRMED (run) |
-| C281 | Medium | core / runtime: datasets, scales, fit | `maxGeneratedRows` is metered per pulse, so a session accepts appends a fresh evaluation rejects, then throws on the next signal change or resize | `packages/core/src/runtime.ts:4036-4045` | CONFIRMED (run; re-run by lead) |
+| C280 | Medium | core / runtime: state, signals, reuse keys | Registry epoch is in the named key but not the whole-context key | `packages/core/src/runtime.ts:2509` | CONFIRMED (run) → FIXED (#201) |
+| C281 | Medium | core / runtime: datasets, scales, fit | `maxGeneratedRows` is metered per pulse, so a session accepts appends a fresh evaluation rejects, then throws on the next signal change or resize | `packages/core/src/runtime.ts:4036-4045` | CONFIRMED (run; re-run by lead) → FIXED (#201) |
 | C282 | Medium | core / session, stream, limits | The session cache does not know the expression-function registry changed | `packages/core/src/session.ts:194-217` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
 | C283 | Medium | core / session, stream, limits | `buildPulseGraph` / `propagatePulse` / `transformNeedsFullRederive` are public, unused by the engine, and wrong | `packages/core/src/pulse.ts:333-335` | CONFIRMED (run) |
 | C284 | Medium | core / expressions, regex screen | `limits.regex: 'refuse'` does not see expressions in the view's own `layout` and `encode` | `packages/core/src/spec-expressions.ts:222-231` | CONFIRMED (run) → FIXED (#197) |
@@ -441,7 +441,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C392 | Low | corpus / specs, range 2 | `image.vg.json` points at a third-party host | `packages/conformance/corpus/image.vg.json:1` | CONFIRMED (traced) |
 | C393 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | Lockfile hygiene: one deprecated package, unhashed `packageManager`, oracle versions held only by the lockfile outside conformance too | `package.json:4` | CONFIRMED (run) → FIXED (#188) |
 | C394 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | `localFileFor` ignores the package and version in a jsDelivr URL and throws on a malformed escape | `packages/conformance/src/gallery/lib.ts:54-58` | CONFIRMED (run) |
-| C395 | Low | core / runtime: state, signals, reuse keys | Every evaluation with `input.textMetrics` clears the process-wide width cache | `packages/core/src/text-metrics.ts:30-34` | CONFIRMED (traced) |
+| C395 | Low | core / runtime: state, signals, reuse keys | Every evaluation with `input.textMetrics` clears the process-wide width cache | `packages/core/src/text-metrics.ts:30-34` | CONFIRMED (traced) → FIXED (#201) |
 | C396 | Low | core / runtime: marks, encode, groups | An explicit `null` on a defaulted channel is replaced by the default | `packages/core/src/runtime.ts:6497` | CONFIRMED (run) |
 | C397 | Low | core / runtime: marks, encode, groups | Three encode-entry deviations from vega-parser `entry.js` | `packages/core/src/runtime.ts:6963` | CONFIRMED (run) |
 | C398 | Low | core / runtime: marks, encode, groups | A layout `{signal}` that throws is swallowed without a log | `packages/core/src/runtime.ts:6470` | CONFIRMED (run) |
@@ -546,7 +546,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C497 | Low | tooling / gates, CI, release, benchmarks | `pnpm test:tz <misspelt zone>` runs in UTC and reports "all zones passed" | `scripts/test-tz.mjs:34-45` | CONFIRMED (run) → FIXED (#187) |
 | C498 | Low | tests / conformance differentials II | `projection-scope-vs-vega` empties the module-level `sphere` dataset for every later test | `packages/conformance/src/projection-scope-vs-vega.test.ts:54-58` | CONFIRMED (traced) |
 | C499 | Low | leftovers / budgets, declarations, demo data, gallery lists | The locale setters accept `undefined` by type, throw a raw `TypeError`, and `defaultLocale(def, undefined)` leaves the process-wide default half replaced | `packages/core/src/locale.ts:151-153` | CONFIRMED (run; re-run by lead) → FIXED (#188) |
-| C500 | Low | core / runtime: state, signals, reuse keys | A fractional or `NaN` `dataChanges` index blanks the chart or throws a bare TypeError | `packages/core/src/runtime.ts:950` | CONFIRMED (run) |
+| C500 | Low | core / runtime: state, signals, reuse keys | A fractional or `NaN` `dataChanges` index blanks the chart or throws a bare TypeError | `packages/core/src/runtime.ts:950` | CONFIRMED (run) → FIXED (#201) |
 | C501 | Low | core / runtime: marks, encode, groups | A failed import of the pulse part is swallowed for the life of the page with no log | `packages/core/src/shell-setup.ts:20` | CONFIRMED (traced) |
 | C502 | Low | core / session, stream, limits | Stream bounds accept `NaN` | `packages/core/src/stream.ts:443-444` | CONFIRMED (run) → FIXED (#193) |
 | C503 | Low | core / session, stream, limits | A session's no-op evaluate still costs O(spec) | `packages/core/src/session.ts:345` | CONFIRMED (traced) |
@@ -585,8 +585,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C536 | Low | vl / mark encoding | `mark.ariaRole` is dropped; vega-lite encodes it | `packages/vl/src/compile.ts:6915` | CONFIRMED (run) |
 | C537 | Low | conformance / harness | `--print-passing` rewrites the baseline in the run that found the regression | `packages/conformance/src/gallery/run.ts:147-152` | CONFIRMED (traced) |
 | C538 | Low | leftovers / budgets, declarations, demo data, gallery lists | Scene types omit fields the docs and the engine use: `item.image`, `item.tooltip`, `scene.signalParams`, `scene.__limits` | `docs/API.md:650` | CONFIRMED (run) → FIXED (#188) |
-| C539 | Low | core / runtime: state, signals, reuse keys | `types.ts` shapes that do not match what runs (`CompiledScale.type` union, `autoChanges`, orphaned TSDoc, `__source`) | `packages/core/src/types.ts:381` | CONFIRMED (run) |
-| C540 | Low | core / runtime: state, signals, reuse keys | `valueKey` and `valuesEqual` disagree | `packages/core/src/fingerprint.ts:70` | CONFIRMED (traced) |
+| C539 | Low | core / runtime: state, signals, reuse keys | `types.ts` shapes that do not match what runs (`CompiledScale.type` union, `autoChanges`, orphaned TSDoc, `__source`) | `packages/core/src/types.ts:381` | CONFIRMED (run) → FIXED (#201) |
+| C540 | Low | core / runtime: state, signals, reuse keys | `valueKey` and `valuesEqual` disagree | `packages/core/src/fingerprint.ts:70` | CONFIRMED (traced) → FIXED (#201) |
 | C541 | Low | core / runtime: marks, encode, groups | The instance-mark diff misses a nested change that the top-level path sees | `packages/core/src/runtime.ts:5653-5654` | CONFIRMED (run) |
 | C542 | Low | core / runtime: marks, encode, groups | Leaf marks fall back to `enter`; group marks do not | `packages/core/src/runtime.ts:5322` | CONFIRMED (traced) |
 | C543 | Low | core / loading, URL policy, add-ons | Process-global mutable tables are public API (`withdrawFunctions`, writable `dataFormatRegistry`, `typeParsers`) | `packages/core/src/addons.ts:54-56` | CONFIRMED (traced) |
@@ -671,7 +671,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C622 | Low | closure / vega-format vectors | the `localeTimeParse` case `'%G-W11-4'` is not an ISO week-date parse; the week and weekday are literals | `packages/core/testdata/vectors/vega-format.json:5753-5762` | CONFIRMED (traced) → FIXED (#189) |
 | C623 | Low | closure / vega-time vectors I | `date` and `day` record the same 88 results twice, while the third alias `dayofyear` is never recorded | `packages/conformance/scripts/gen-vectors.mjs:320` | CONFIRMED (run) → FIXED (#189) |
 | C624 | Low | gallery / official Vega examples II | The static oracle is one dataflow run ahead of Vega's first frame; `time-units` differs by 1 px at two widget values | `packages/conformance/src/gallery/oracle.ts:39-41` | CONFIRMED (run) |
-| C625 | Low | core / runtime: datasets, scales, fit | Test gaps: the incremental oracle generates no text-less text mark, failing step, nested cross-dataset read or pulse under `limits` | `packages/core/src/incremental-oracle.test.ts:196-208` | CONFIRMED (traced) |
+| C625 | Low | core / runtime: datasets, scales, fit | Test gaps: the incremental oracle generates no text-less text mark, failing step, nested cross-dataset read or pulse under `limits` | `packages/core/src/incremental-oracle.test.ts:196-208` | CONFIRMED (traced) → FIXED (#201) |
 | C626 | Low | core / loading, URL policy, add-ons | An unknown `format.type` (`"jsno"`) is reported as "load the addon first", also with the add-on loaded | `packages/core/src/data-format.ts:116-119` | CONFIRMED (run) → FIXED (#192) |
 | C627 | Low | core / loading, URL policy, add-ons | `loadAddons(["nope"])` throws synchronously instead of rejecting | `packages/core/src/addons.ts:545-565` | CONFIRMED (run) → FIXED (#192) |
 | C628 | Low | core / compiler, transforms | Test gaps: no object-form field parameter, no hostile raster grid, no mark `type` test, thin `dotbin` cases | `packages/conformance/scripts/transform-cases.mjs:1` | CONFIRMED (traced) → FIXED (#194) |
@@ -748,7 +748,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C699 | Low | closure / vega-time vectors I | The offset vectors record only integer steps {1, 3, -2, 12}; the step-coercion branch and gap/repeated-hour landings are never pinned | `packages/conformance/scripts/gen-vectors.mjs:319-322` | CONFIRMED (run) → FIXED (#189) |
 | C700 | Low | closure / vega-time vectors II | one of the two custom-specifier `timeUnitSpecifier` vectors is inert, and `day`/`dayofyear` are never given to the sequence or offset suites | `packages/core/testdata/vectors/vega-time.json:16485-16497` | CONFIRMED (run) → FIXED (#189) |
 | C701 | Low | closure / vega-time vectors III | the interval suites pin no `count`/`range`/`every` for any UTC or sub-day interval, and the one `timeYear.every(3)` case wants `[]` | `packages/conformance/scripts/gen-vectors.mjs:375-381` | CONFIRMED (run) → FIXED (#189) |
-| C702 | Low | core / runtime: datasets, scales, fit | Stale or orphaned comments and test switches in production modules (`runtime.ts`, `step-reuse.ts`) | `packages/core/src/runtime.ts:2990-2992` | CONFIRMED (traced) |
+| C702 | Low | core / runtime: datasets, scales, fit | Stale or orphaned comments and test switches in production modules (`runtime.ts`, `step-reuse.ts`) | `packages/core/src/runtime.ts:2990-2992` | CONFIRMED (traced) → FIXED (#201) |
 | C703 | Low | core / runtime: marks, encode, groups | Misplaced or stale comments in `runtime.ts` (docstrings on the wrong declarations) | `packages/core/src/runtime.ts:5724-5729` | CONFIRMED (traced) |
 | C704 | Low | core / session, stream, limits | `maxStringLength` is documented wider than it is | `packages/core/src/limits.ts:15-16` | CONFIRMED (run) → FIXED (#193) |
 | C705 | Low | core / session, stream, limits | Stale statements in the docs | `docs/LIMITS.md:236-240` | CONFIRMED (run) → FIXED (#193) |
@@ -922,6 +922,7 @@ Each finding is filed under its primary category and listed in severity (ID) ord
 
 - **Location:** `packages/core/src/runtime.ts:2961`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #201 (feddea0). Fixed: a mark drawn from a mark records a copy of the source items and every reuse compares engine arrays by content stamp (content-stamp.ts); incremental-shapes.test.ts generates text/rule/voronoi/label over a mark, top level and nested, under every delivery.
 - **Area:** tests / core (incremental oracle, legacy copies I)
 - **Lane ID / scripts:** `tests-core3-1` — `tests-core3/`
 - **Lead's note:** Found by reading the incremental oracle's generator for what it never produces. The lead re-ran `r1c-scope.mjs` and `r1d-cause.mjs`: real Vega and a fresh Aster evaluation agree, the session keeps the old items for an edit, a move and a swap. Reached by hand-written Vega (labels, `label` transforms, voronoi or rules over a top-level mark); the lane found Vega-Lite `nearest` output unaffected and did not trace why. If "default path" is read as Vega-Lite output only, this is High.
@@ -969,6 +970,7 @@ The same marks inside a group pass.
 
 - **Location:** `packages/core/src/runtime.ts:981-998`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #201 (feddea0 409b2fd 557ff2d). Fixed: each round resolves signals after its scales exist and rebuilds datasets when a signal they read moved, bounded by chart size; signal-order-generated-vs-vega.test.ts chains depth 1..8 vs vega.
 - **Area:** core / runtime: state, signals, reuse keys
 - **Lane ID / scripts:** `core-rt1-2` — `core-rt1/`
 
@@ -999,6 +1001,7 @@ The same marks inside a group pass.
 
 - **Location:** `packages/core/src/fingerprint.ts:36-37`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #201 (feddea0). Fixed: valueKey keys a published dataset array past the 512 budget by its content stamp (identity + in-place write count), so data('t') signals see pulses; large-signal shape in incremental-shapes.test.ts.
 - **Area:** core / runtime: state, signals, reuse keys
 - **Lane ID / scripts:** `core-rt1-3` — `core-rt1/`
 
@@ -1020,6 +1023,7 @@ The same marks inside a group pass.
 
 - **Location:** `packages/core/src/runtime.ts:1547-1575`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #201 (feddea0 409b2fd e7f09d1 557ff2d). Fixed: an init that reads data, a scale or a published signal (transitively) runs once those exist, and a dataset that threw on a not-yet-settled signal is rebuilt, not reported; inits family of signal-order-generated-vs-vega.test.ts.
 - **Area:** core / runtime: state, signals, reuse keys
 - **Lane ID / scripts:** `core-rt1-4` — `core-rt1/`
 
@@ -1041,6 +1045,7 @@ The same marks inside a group pass.
 
 - **Location:** `packages/core/src/runtime.ts:5644`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #201 (feddea0). Fixed: instance-mark deps are pinned (array + version) instead of compared by identity; group-scoped reads shape in incremental-shapes.test.ts (length/indata/data()[0], 2..600 rows).
 - **Area:** core / runtime: datasets, scales, fit (also categories 3)
 - **Lane ID / scripts:** `core-rt2-1` — `core-rt2/`
 
@@ -1426,6 +1431,7 @@ Direction: either honour it (a per-chart `Locale` built at compile time and thre
 
 - **Location:** `packages/core/src/runtime.ts:2116`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #201 (feddea00). A fitted projection is a node of the dependency closure (projection edges), so every consumer is refreshed when the fit changes; pinned by incremental-shapes and by the incremental oracle seeds that reproduce C42 on the audited base. Earlier work: #196.
 - **Area:** core / geo (also categories 2)
 - **Lane ID / scripts:** `core-geo-1` — `core-geo/`
 
@@ -2070,6 +2076,7 @@ Direction: use one `ids` map for both sides, as `:210` does, or compare `t.item`
 
 - **Location:** `packages/core/src/runtime.ts:5339-5400`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #201 (0af54b9). Fixed (DECISIONS Q8): a pass cut short by a failure takes no pulse, so the update equals the fresh scene; recovered encode errors shape in incremental-shapes.test.ts.
 - **Area:** core / runtime: state, signals, reuse keys
 - **Lane ID / scripts:** `core-rt1-5` — `core-rt1/`
 
@@ -2105,6 +2112,7 @@ Direction: on a failed pulsed encode, re-make the mark or pass without reuse; or
 
 - **Location:** `packages/core/src/text-metrics.ts:112-130`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #201 (430d489). Fixed: a throwing text-metrics provider is logged once per evaluation, its fallback is not cached, and the evaluation is not committed; runtime-state-contracts.test.ts.
 - **Area:** core / runtime: state, signals, reuse keys (also categories 5)
 - **Lane ID / scripts:** `core-rt1-6` — `core-rt1/`
 
@@ -2123,6 +2131,7 @@ Direction: on a failed pulsed encode, re-make the mark or pass without reuse; or
 
 - **Location:** `packages/core/src/runtime.ts:1004`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #201 (c6c8419). Fixed: a width/height signal with an update (no handlers) sizes the view over host size and signal writes, frame and signal alike (fit resizes excepted); view-size-signal-vs-vega.test.ts.
 - **Area:** core / runtime: state, signals, reuse keys (also categories 3)
 - **Lane ID / scripts:** `core-rt1-8` — `core-rt1/`
 
@@ -2142,6 +2151,7 @@ Direction: on a failed pulsed encode, re-make the mark or pass without reuse; or
 
 - **Location:** `packages/core/src/runtime.ts:978`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #201 (feddea0 409b2fd). Fixed: signals ranked by vega's rerank (signal-propagation's Propagation.connect), an update reruns only when its reads changed, cycles refused with vega's message; self/cycle family of signal-order-generated-vs-vega.test.ts.
 - **Area:** core / runtime: state, signals, reuse keys
 - **Lane ID / scripts:** `core-rt1-9` — `core-rt1/`
 
@@ -2154,6 +2164,7 @@ Direction: on a failed pulsed encode, re-make the mark or pass without reuse; or
 
 - **Location:** `packages/core/src/fingerprint.ts:111`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #201 (feddea0 430d489). Fixed: values past the text budget are keyed by a one-pass content hash, so an equal large derived signal is no change (one edited row costs 2 calls at any size); runtime-state-contracts.test.ts.
 - **Area:** core / runtime: state, signals, reuse keys
 - **Lane ID / scripts:** `core-rt1-11` — `core-rt1/`
 
@@ -2166,6 +2177,7 @@ Direction: on a failed pulsed encode, re-make the mark or pass without reuse; or
 
 - **Location:** `packages/core/src/runtime.ts:3925-3933`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #201 (0af54b9 4a5138b). Fixed (DECISIONS Q12): format on a source-derived dataset is ignored as in vega; source-format-vs-vega.test.ts.
 - **Area:** core / runtime: datasets, scales, fit (also categories 3, 7)
 - **Lane ID / scripts:** `core-rt2-2` — `core-rt2/`
 
@@ -2189,6 +2201,7 @@ Direction: match Vega (ignore `format` on a `source` dataset), or keep the exten
 
 - **Location:** `packages/core/src/runtime.ts:5609-5611`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #201 (0af54b9). Fixed: appended items extend carried bounds through boundTypedMark by the mark's type; 'marks that lay the view out' shape in incremental-shapes.test.ts.
 - **Area:** core / runtime: datasets, scales, fit (also categories 3)
 - **Lane ID / scripts:** `core-rt2-3` — `core-rt2/`
 
@@ -4259,6 +4272,7 @@ Source line not traced (found by render); revealed by `packages/conformance/test
 
 - **Location:** `packages/core/src/text-metrics.ts:30-34`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #201 (430d489). Fixed: providers keep a stable id, so re-scoping a provider no longer clears the width cache; runtime-state-contracts.test.ts.
 - **Area:** core / runtime: state, signals, reuse keys
 - **Lane ID / scripts:** `core-rt1-16` — `core-rt1/`
 
@@ -5977,6 +5991,7 @@ Status: **CONFIRMED-RUN** `t21.mjs`.
 
 - **Location:** `packages/core/src/runtime.ts:2509`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #201 (430d489). Fixed: ctxFpOf includes the expression registry epoch; runtime-state-contracts.test.ts covers names-keyed, all-signal and transform marks.
 - **Area:** core / runtime: state, signals, reuse keys
 - **Lane ID / scripts:** `core-rt1-10` — `core-rt1/`
 
@@ -5989,6 +6004,7 @@ Status: **CONFIRMED-RUN** `t21.mjs`.
 
 - **Location:** `packages/core/src/runtime.ts:4036-4045`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #201 (0af54b9 430d489). Fixed (DECISIONS Q17): maxGeneratedRows meters the rows an evaluation produces; kept steps are not charged; LIMITS.md documents the session-vs-fresh consequence; runtime-state-contracts.test.ts.
 - **Area:** core / runtime: datasets, scales, fit
 - **Lane ID / scripts:** `core-rt2-6` — `core-rt2/`
 
@@ -7032,6 +7048,7 @@ For the lead: the whole-corpus list (54 groups) is in `render-identical-groups.t
 
 - **Location:** `packages/core/src/types.ts:381`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #201 (6c5a0c7). Fixed: CompiledScale.type is vega's ScaleType and compileChart refuses others with vega's message; orphaned TSDoc, autoChanges and __source docs corrected; the CompiledTransform catch-all is kept on purpose (compiled transforms pass every parameter through); scale-type-vs-vega.test.ts.
 - **Area:** core / runtime: state, signals, reuse keys (also categories 7)
 - **Lane ID / scripts:** `core-rt1-14` — `core-rt1/`
 
@@ -7045,6 +7062,7 @@ For the lead: the whole-corpus list (54 groups) is in `render-identical-groups.t
 
 - **Location:** `packages/core/src/fingerprint.ts:70`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #201 (feddea0 430d489). Fixed: valuesEqual is defined through valueKey (invalid Dates equal, symbols by identity, typed arrays by content); generated agreement test in runtime-state-contracts.test.ts.
 - **Area:** core / runtime: state, signals, reuse keys
 - **Lane ID / scripts:** `core-rt1-15` — `core-rt1/`
 
@@ -8358,6 +8376,7 @@ No new defect; this is the consequence on official specs. All run through `S/i1.
 
 - **Location:** `packages/core/src/fingerprint.ts:36-37`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #201 (feddea0 430d489). Fixed: host signal values are compared by content at any size (arrays, typed arrays, deep objects), so in-place changes are seen; API.md documents it; runtime-state-contracts.test.ts.
 - **Area:** core / runtime: state, signals, reuse keys (also categories 7)
 - **Lane ID / scripts:** `core-rt1-7` — `core-rt1/`
 
@@ -8371,6 +8390,7 @@ No new defect; this is the consequence on official specs. All run through `S/i1.
 
 - **Location:** `packages/core/src/row-watch.ts:145`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #201 (0af54b9). Fixed: the dev row watch warns when sampled row objects were edited and handed back in a new array; API.md says 'a new array of new rows'; row-watch.test.ts.
 - **Area:** core / runtime: datasets, scales, fit (also categories 7, 8)
 - **Lane ID / scripts:** `core-rt2-7` — `core-rt2/`
 
@@ -8852,6 +8872,7 @@ No workflow sets `ASTER_ORACLE_SEEDS` (grep: only the test, `RUNBOOK.md`, `ARCHI
 
 - **Location:** `packages/core/src/runtime.ts:962-967`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #201 (0af54b9 430d489). Fixed: unknown or derived dataset names in hints throw a TypeError naming the dataset; empty hint means nothing changed; runtime-state-contracts.test.ts.
 - **Area:** core / runtime: state, signals, reuse keys (also categories 8)
 - **Lane ID / scripts:** `core-rt1-12` — `core-rt1/`
 
@@ -9534,6 +9555,7 @@ Direction: add those properties and path forms to `randomItems`, a clipped, fram
 
 - **Location:** `packages/core/src/runtime.ts:950`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #201 (0af54b9 430d489). Fixed: non-integer, NaN, text and null change lists throw a TypeError naming the dataset (checked in evaluation and session); null rows in the diff are changes; runtime-state-contracts.test.ts.
 - **Area:** core / runtime: state, signals, reuse keys
 - **Lane ID / scripts:** `core-rt1-13` — `core-rt1/`
 
@@ -11580,6 +11602,7 @@ Direction: rewrite the row as "the pass stops at the dataset: no dataset, scale,
 
 - **Location:** `packages/core/src/runtime.ts:2990-2992`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #201 (6c5a0c7). Fixed: the fit-loop comment, orphaned TSDoc of datasetsMayDraw/snapshotScales, withNewDatums' unused mark and the false instance-deps comment corrected; stepCounts/reuse.on documented as unexported test instrumentation.
 - **Area:** core / runtime: datasets, scales, fit (also categories 3)
 - **Lane ID / scripts:** `core-rt2-9` — `core-rt2/`
 
@@ -13353,6 +13376,7 @@ Direction: use all of `dstDates` in `floorCases`, or add instants such as `…T0
 
 - **Location:** `packages/core/src/incremental-oracle.test.ts:196-208`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #201 (0af54b9 8c66af3). Fixed: incremental-shapes.test.ts generates text-less and null-label text marks, failing encode steps, nested cross-dataset reads, pulses under limits and checks datasetsOfScene history; source+format covered by source-format-vs-vega.test.ts.
 - **Area:** core / runtime: datasets, scales, fit
 - **Lane ID / scripts:** `core-rt2-10` — `core-rt2/`
 
