@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 763 of 766 findings resolved (737 fixed, 22 already fixed on main, 4 disputed with evidence); 3 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 766 of 766 findings resolved (738 fixed, 24 already fixed on main, 4 disputed with evidence); 0 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -329,7 +329,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C280 | Medium | core / runtime: state, signals, reuse keys | Registry epoch is in the named key but not the whole-context key | `packages/core/src/runtime.ts:2509` | CONFIRMED (run) → FIXED (#201) |
 | C281 | Medium | core / runtime: datasets, scales, fit | `maxGeneratedRows` is metered per pulse, so a session accepts appends a fresh evaluation rejects, then throws on the next signal change or resize | `packages/core/src/runtime.ts:4036-4045` | CONFIRMED (run; re-run by lead) → FIXED (#201) |
 | C282 | Medium | core / session, stream, limits | The session cache does not know the expression-function registry changed | `packages/core/src/session.ts:194-217` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
-| C283 | Medium | core / session, stream, limits | `buildPulseGraph` / `propagatePulse` / `transformNeedsFullRederive` are public, unused by the engine, and wrong | `packages/core/src/pulse.ts:333-335` | CONFIRMED (run) |
+| C283 | Medium | core / session, stream, limits | `buildPulseGraph` / `propagatePulse` / `transformNeedsFullRederive` are public, unused by the engine, and wrong | `packages/core/src/pulse.ts:333-335` | CONFIRMED (run) → ALREADY FIXED (#229) |
 | C284 | Medium | core / expressions, regex screen | `limits.regex: 'refuse'` does not see expressions in the view's own `layout` and `encode` | `packages/core/src/spec-expressions.ts:222-231` | CONFIRMED (run) → FIXED (#197) |
 | C285 | Medium | core / expressions, regex screen | The interpreter-shaped entry points have a weaker sandbox than the file header states, and only tests use them | `packages/core/src/expr-interpreter.ts:14-20` | CONFIRMED (traced) → FIXED (#197) |
 | C286 | Medium | core / loading, URL policy, add-ons | `baseURL` is WHATWG-resolved for data and the policy check, but string-prefixed for the drawn image | `packages/core/src/url-policy.ts:159-169` | CONFIRMED (run) → FIXED (#191) |
@@ -589,7 +589,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C540 | Low | core / runtime: state, signals, reuse keys | `valueKey` and `valuesEqual` disagree | `packages/core/src/fingerprint.ts:70` | CONFIRMED (traced) → FIXED (#201) |
 | C541 | Low | core / runtime: marks, encode, groups | The instance-mark diff misses a nested change that the top-level path sees | `packages/core/src/runtime.ts:5653-5654` | CONFIRMED (run) → FIXED (#224) |
 | C542 | Low | core / runtime: marks, encode, groups | Leaf marks fall back to `enter`; group marks do not | `packages/core/src/runtime.ts:5322` | CONFIRMED (traced) → FIXED (#224) |
-| C543 | Low | core / loading, URL policy, add-ons | Process-global mutable tables are public API (`withdrawFunctions`, writable `dataFormatRegistry`, `typeParsers`) | `packages/core/src/addons.ts:54-56` | CONFIRMED (traced) |
+| C543 | Low | core / loading, URL policy, add-ons | Process-global mutable tables are public API (`withdrawFunctions`, writable `dataFormatRegistry`, `typeParsers`) | `packages/core/src/addons.ts:54-56` | CONFIRMED (traced) → ALREADY FIXED (#229) |
 | C544 | Low | core / compiler, transforms | a transform `signal` is declared for every transform but set by five | `packages/core/src/transform.ts:245-248` | CONFIRMED (run) → FIXED (#194) |
 | C545 | Low | core / compiler, transforms | Dead or misleading code in `compiler.ts` (unused `scales` parameter, `bar`/`tick` mark types, "never aliases the spec") | `packages/core/src/compiler.ts:604` | CONFIRMED (traced) → FIXED (#194) |
 | C546 | Low | core / compiler, transforms | `__proto__` as an output name is guarded in `formula` only | `packages/core/src/transform.ts:225` | CONFIRMED (run) → FIXED (#194) |
@@ -804,7 +804,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C755 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | The time-grain-detector notice points at the wrong file, and the right file has no attribution | `THIRD_PARTY_NOTICES.md:942` | CONFIRMED (traced) → FIXED (#188) |
 | C756 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | CHANGELOG 0.3.x and older: one misleading placement, unmarked behaviour changes, one untested fix | `CHANGELOG.md:578-586` | CONFIRMED (run) → FIXED (#188) |
 | C757 | Low | leftovers / budgets, declarations, demo data, gallery lists | Every ceiling equals its last comment + 0.5, but the comments no longer describe the tree; seven rows have 0.01-0.12 kB of headroom (adds to C449 (docs-arch-15)) | `packages/benchmarks/scripts/budget.mjs:299-400` | CONFIRMED (run) → FIXED (#188) |
-| C758 | Low | leftovers / budgets, declarations, demo data, gallery lists | Declaration hygiene: one TSDoc that is false, dead exported types, stray comments, `@internal` members shipped | `packages/core/src/types.ts:741` | CONFIRMED (run) |
+| C758 | Low | leftovers / budgets, declarations, demo data, gallery lists | Declaration hygiene: one TSDoc that is false, dead exported types, stray comments, `@internal` members shipped | `packages/core/src/types.ts:741` | CONFIRMED (run) → FIXED (#229) |
 | C759 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | Comment and table drift in `vega-schema.mjs` | `packages/conformance/src/sweeps/vega-schema.mjs:936` | CONFIRMED (traced) → FIXED (#205) |
 | C760 | Low | closure / showcase, ADRs, engine parts, type fixtures | ADR 0009 says generated suites scale with `ASTER_DIFF_SCALE`; four of thirteen do not | `docs/adr/0009-live-differentials-over-recorded-vectors.md:22` | CONFIRMED (traced) → FIXED (#188) |
 | C761 | Low | closure / showcase, ADRs, engine parts, type fixtures | ADR 0001 still states recorded vectors as the gate for every ported surface; no amendment points at ADR 0009 | `docs/adr/0001-own-the-engine.md:36-43` | CONFIRMED (traced) → FIXED (#188) |
@@ -6183,6 +6183,7 @@ Direction: one accounting rule: the pulse path charges what a run from scratch w
 
 - **Location:** `packages/core/src/pulse.ts:333-335`
 - **Status:** CONFIRMED (run)
+- **Resolution:** ALREADY FIXED in #229 (5b8ff14,250c327f,37838870). buildPulseGraph and friends removed by a03-limits; pinned by scripts/public-surface.test.mjs (Q20 floor list). Earlier work: #193.
 - **Area:** core / session, stream, limits (also categories 4)
 - **Lane ID / scripts:** `core-incr-9` — `core-incr/`
 
@@ -7266,6 +7267,7 @@ For the lead: the whole-corpus list (54 groups) is in `render-identical-groups.t
 
 - **Location:** `packages/core/src/addons.ts:54-56`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** ALREADY FIXED in #229 (f69c273,250c327f,37838870). Registries removed from every entry by a02-loading; scripts/public-surface.test.mjs now pins their names (and every @internal export) off all public entries. Earlier work: #192.
 - **Area:** core / loading, URL policy, add-ons
 - **Lane ID / scripts:** `core-load-21` — `core-load/`
 
@@ -12824,6 +12826,7 @@ Each ceiling is its last dated note + 0.5 exactly; no row breaks the rule on pap
 
 - **Location:** `packages/core/src/types.ts:741`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #229 (250c327f,37838870). Fixed: stripInternal is on in core, react and vl; the lean subpaths became core/internal* (declare nothing to a consumer, real declarations via the aster-internal condition), scene metadata is read through sceneScaleMap/sceneScaleSnapshots, and a test type-checks every built .d.ts with skipLibCheck off so a stripped name that is still re-exported fails. Earlier work: #188.
 - **Area:** leftovers / budgets, declarations, demo data, gallery lists
 - **Lane ID / scripts:** `gaps-misc-b-13` — `gaps-misc-b/`
 
