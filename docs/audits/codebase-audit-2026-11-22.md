@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 444 of 766 findings resolved (435 fixed, 8 already fixed on main, 1 disputed with evidence); 322 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 479 of 766 findings resolved (469 fixed, 8 already fixed on main, 2 disputed with evidence); 287 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -359,23 +359,23 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C310 | Medium | tests / conformance differentials I | specs `vega.parse` refuses are rendered by Aster; the tests count them and never run Aster | `packages/conformance/src/guide-null-vs-vega.test.ts:39-57` | CONFIRMED (run) |
 | C311 | Medium | tests / conformance generators and case tables I | An unknown `interpolate` logs Vega's error and still draws the line; the test that covers the names patches its oracle | `packages/core/src/shape.ts:278-285` | CONFIRMED (run; re-run by lead) |
 | C312 | Medium | tests / conformance suites II | selection matrix: "x scale <type>" cases in hconcat and column facet have no x scale | `packages/conformance/test/vl-selection-matrix-cases.ts:109-114` | CONFIRMED (run; re-run by lead) |
-| C313 | Medium | corpus / specs, range 1 | 16 of 28 `area-curve-*` specs do not contain the curve or tension their name says | `packages/conformance/corpus/area-curve-step-after-tension.vg.json:45` | CONFIRMED (run; re-run by lead) |
-| C314 | Medium | corpus / specs, range 1 | 7 `bar-color-*` specs use a different scheme than named; two schemes are never rendered anywhere | `packages/conformance/corpus/bar-color-bugn.vg.json:1` | CONFIRMED (run; re-run by lead) |
-| C315 | Medium | corpus / specs, range 1 | Four "gradient" specs contain no gradient; three compare a dangling `url(#gradient_0)` with itself | `packages/conformance/corpus/area-fill-gradient-signal.vg.json:1` | CONFIRMED (run; re-run by lead) |
-| C316 | Medium | corpus / specs, range 1 | 13 specs whose named property is inert: deleting or flipping it leaves real Vega's SVG unchanged | `packages/conformance/corpus/bar-clip.vg.json:1` | CONFIRMED (run) |
-| C317 | Medium | corpus / specs, range 1 | 11 specs whose named feature is absent | `packages/conformance/corpus/force.vg.json:1` | CONFIRMED (run; re-run by lead) |
-| C318 | Medium | corpus / specs, range 1 | 54 groups / 140 files give byte-identical oracle SVG, so 86 of the "1063/1063" add no runtime coverage | `packages/conformance/corpus/area-curve-basis-open-tension.vg.json:1` | CONFIRMED (run) |
-| C319 | Medium | corpus / specs, range 2 | `loess.vl.json` renders an empty line in both engines; the entry passes while comparing nothing of loess | `packages/conformance/corpus/loess.vl.json:1` | CONFIRMED (run; re-run by lead) |
-| C320 | Medium | corpus / specs, range 2 | `tree-links-paths.vg.json` never draws its link paths; linkpath `shape` and `orient` are inert | `packages/conformance/corpus/tree-links-paths.vg.json:1` | CONFIRMED (run; re-run by lead) |
-| C321 | Medium | corpus / specs, range 2 | `line-curve-monotone-y-tension` has `orient` outside `update`; six `*-tension*` specs set no tension | `packages/conformance/corpus/line-curve-monotone-y-tension.vg.json:1` | CONFIRMED (run; re-run by lead) |
-| C322 | Medium | corpus / specs, range 2 | `hierarchy.vg.json` and `radar.vg.json` do not exercise what they are named for | `packages/conformance/corpus/hierarchy.vg.json:1` | CONFIRMED (run) |
-| C323 | Medium | corpus / specs, range 2 | The 17 `vlx-anim-*` specs compare only the pre-tick frame; most named features are inert here | `packages/conformance/src/render-vega.ts:10-13` | CONFIRMED (run) |
-| C324 | Medium | corpus / specs, range 2 | All 23 colour-scheme specs in the range go through a legacy path the Vega 6 schema rejects; three names advertise schemes that do not exist | `packages/conformance/corpus/point-color-bluyl.vg.json:1` | CONFIRMED (run) |
-| C325 | Medium | corpus / specs, range 3 | Four errorbar/errorband specs draw nothing; both engines agree on an empty chart | `packages/conformance/corpus/vlx-ebx-eb-stdev-ticks.vl.json:73-77` | CONFIRMED (run) |
-| C326 | Medium | corpus / specs, range 3 | Two condition specs whose test is true for every row | `packages/conformance/corpus/vlx-cond-predicate-valid-lt-lte.vl.json:135-143` | CONFIRMED (run) |
-| C327 | Medium | corpus / specs, range 3 | Bin specs whose named parameter does not change the bins | `packages/conformance/corpus/vlx-bin-nice-false.vl.json:122` | CONFIRMED (run) |
-| C328 | Medium | corpus / specs, range 3 | Three `config.scale` specs where the config has no effect in real Vega-Lite | `packages/conformance/corpus/vlx-cfgs-clamp.vl.json:129` | CONFIRMED (run) |
-| C329 | Medium | corpus / specs, range 3 | Tooltip specs are invisible to the corpus gate | `packages/conformance/corpus/vlx-chan-tooltip-mark-true.vl.json:118` | CONFIRMED (run; re-run by lead) |
+| C313 | Medium | corpus / specs, range 1 | 16 of 28 `area-curve-*` specs do not contain the curve or tension their name says | `packages/conformance/corpus/area-curve-step-after-tension.vg.json:45` | CONFIRMED (run; re-run by lead) → FIXED (#206) |
+| C314 | Medium | corpus / specs, range 1 | 7 `bar-color-*` specs use a different scheme than named; two schemes are never rendered anywhere | `packages/conformance/corpus/bar-color-bugn.vg.json:1` | CONFIRMED (run; re-run by lead) → FIXED (#206) |
+| C315 | Medium | corpus / specs, range 1 | Four "gradient" specs contain no gradient; three compare a dangling `url(#gradient_0)` with itself | `packages/conformance/corpus/area-fill-gradient-signal.vg.json:1` | CONFIRMED (run; re-run by lead) → FIXED (#206) |
+| C316 | Medium | corpus / specs, range 1 | 13 specs whose named property is inert: deleting or flipping it leaves real Vega's SVG unchanged | `packages/conformance/corpus/bar-clip.vg.json:1` | CONFIRMED (run) → FIXED (#206) |
+| C317 | Medium | corpus / specs, range 1 | 11 specs whose named feature is absent | `packages/conformance/corpus/force.vg.json:1` | CONFIRMED (run; re-run by lead) → FIXED (#206) |
+| C318 | Medium | corpus / specs, range 1 | 54 groups / 140 files give byte-identical oracle SVG, so 86 of the "1063/1063" add no runtime coverage | `packages/conformance/corpus/area-curve-basis-open-tension.vg.json:1` | CONFIRMED (run) → FIXED (#206) |
+| C319 | Medium | corpus / specs, range 2 | `loess.vl.json` renders an empty line in both engines; the entry passes while comparing nothing of loess | `packages/conformance/corpus/loess.vl.json:1` | CONFIRMED (run; re-run by lead) → FIXED (#206) |
+| C320 | Medium | corpus / specs, range 2 | `tree-links-paths.vg.json` never draws its link paths; linkpath `shape` and `orient` are inert | `packages/conformance/corpus/tree-links-paths.vg.json:1` | CONFIRMED (run; re-run by lead) → FIXED (#206) |
+| C321 | Medium | corpus / specs, range 2 | `line-curve-monotone-y-tension` has `orient` outside `update`; six `*-tension*` specs set no tension | `packages/conformance/corpus/line-curve-monotone-y-tension.vg.json:1` | CONFIRMED (run; re-run by lead) → FIXED (#206) |
+| C322 | Medium | corpus / specs, range 2 | `hierarchy.vg.json` and `radar.vg.json` do not exercise what they are named for | `packages/conformance/corpus/hierarchy.vg.json:1` | CONFIRMED (run) → FIXED (#206) |
+| C323 | Medium | corpus / specs, range 2 | The 17 `vlx-anim-*` specs compare only the pre-tick frame; most named features are inert here | `packages/conformance/src/render-vega.ts:10-13` | CONFIRMED (run) → FIXED (#206) |
+| C324 | Medium | corpus / specs, range 2 | All 23 colour-scheme specs in the range go through a legacy path the Vega 6 schema rejects; three names advertise schemes that do not exist | `packages/conformance/corpus/point-color-bluyl.vg.json:1` | CONFIRMED (run) → FIXED (#206) |
+| C325 | Medium | corpus / specs, range 3 | Four errorbar/errorband specs draw nothing; both engines agree on an empty chart | `packages/conformance/corpus/vlx-ebx-eb-stdev-ticks.vl.json:73-77` | CONFIRMED (run) → FIXED (#206) |
+| C326 | Medium | corpus / specs, range 3 | Two condition specs whose test is true for every row | `packages/conformance/corpus/vlx-cond-predicate-valid-lt-lte.vl.json:135-143` | CONFIRMED (run) → FIXED (#206) |
+| C327 | Medium | corpus / specs, range 3 | Bin specs whose named parameter does not change the bins | `packages/conformance/corpus/vlx-bin-nice-false.vl.json:122` | CONFIRMED (run) → FIXED (#206) |
+| C328 | Medium | corpus / specs, range 3 | Three `config.scale` specs where the config has no effect in real Vega-Lite | `packages/conformance/corpus/vlx-cfgs-clamp.vl.json:129` | CONFIRMED (run) → FIXED (#206) |
+| C329 | Medium | corpus / specs, range 3 | Tooltip specs are invisible to the corpus gate | `packages/conformance/corpus/vlx-chan-tooltip-mark-true.vl.json:118` | CONFIRMED (run; re-run by lead) → FIXED (#206) |
 | C330 | Medium | corpus / specs, range 5 | 42 `vlx-invalid-<mark>-<mode>` specs are 15 distinct tests; the `*-domains` modes are never distinguished | `packages/conformance/corpus/vlx-invalid-point-break-paths-show-domains.vl.json:41` | CONFIRMED (run) |
 | C331 | Medium | leftovers / budgets, declarations, demo data, gallery lists | React budget rows are the gzip of concatenated chunks and stop at the first `import()`; the "whole bundle" label is no longer true | `packages/benchmarks/scripts/budget.mjs:24` | CONFIRMED (run) → FIXED (#188) |
 | C332 | Medium | closure / gallery, sweeps, canvas helpers, corpus-tz | The Vega sweep never sweeps scale `reverse` or legend `type`; the skip reasons are false for those families | `packages/conformance/src/sweeps/vega-schema.mjs:939` | CONFIRMED (run) → FIXED (#205) |
@@ -438,7 +438,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C389 | Low | react / <Chart>, shells, SSR | An a11y node id goes into a selector unescaped | `packages/react/src/ChartCore.tsx:1379` | CONFIRMED (run) → FIXED (#198) |
 | C390 | Low | vl / composite marks, selections, transforms | `quotedRef` is a second, weaker field escaper (continues C37) | `packages/vl/src/composite-marks.ts:17` | CONFIRMED (run) |
 | C391 | Low | tests / core (limits, loaders, locale, oracle vectors) | A URL refused for embedded credentials is echoed, password included, in the error message and `.url` | `packages/core/src/url-policy.ts:20-21` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
-| C392 | Low | corpus / specs, range 2 | `image.vg.json` points at a third-party host | `packages/conformance/corpus/image.vg.json:1` | CONFIRMED (traced) |
+| C392 | Low | corpus / specs, range 2 | `image.vg.json` points at a third-party host | `packages/conformance/corpus/image.vg.json:1` | CONFIRMED (traced) → FIXED (#206) |
 | C393 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | Lockfile hygiene: one deprecated package, unhashed `packageManager`, oracle versions held only by the lockfile outside conformance too | `package.json:4` | CONFIRMED (run) → FIXED (#188) |
 | C394 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | `localFileFor` ignores the package and version in a jsDelivr URL and throws on a malformed escape | `packages/conformance/src/gallery/lib.ts:54-58` | CONFIRMED (run) → FIXED (#205) |
 | C395 | Low | core / runtime: state, signals, reuse keys | Every evaluation with `input.textMetrics` clears the process-wide width cache | `packages/core/src/text-metrics.ts:30-34` | CONFIRMED (traced) → FIXED (#201) |
@@ -639,20 +639,20 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C590 | Low | tests / conformance suites II | "a predicate vega-lite refuses must be refused here" is neither enforced nor exercised | `packages/conformance/test/vl-time-helpers.ts:42-43` | CONFIRMED (run) |
 | C591 | Low | tests / conformance suites II | case names that say something other than the spec | `packages/conformance/test/vl-composite-matrix-cases.ts:130` | CONFIRMED (traced) |
 | C592 | Low | tests / conformance suites II | loose floors; `probes/` holds no known gap | `packages/conformance/test/vl-real-vega.test.ts:78` | CONFIRMED (run) |
-| C593 | Low | corpus / specs, range 1 | 60 specs here (83 occurrences corpus-wide) spell a scheme as top-level `scale.scheme`, which is not in the Vega schema | `packages/conformance/corpus/bar-darker-scheme.vg.json:1` | CONFIRMED (run) |
-| C594 | Low | corpus / specs, range 1 | Other schema-invalid properties that both engines ignore or tolerate | `packages/conformance/corpus/candlestick.vl.json:1` | CONFIRMED (run) |
-| C595 | Low | corpus / specs, range 1 | 5 specs in range (11 corpus-wide) declare a v5 `$schema` | `packages/conformance/corpus/empty-group-mark.vg.json:2` | CONFIRMED (traced) |
-| C596 | Low | corpus / specs, range 1 | One spec in range draws zero data-driven items (intended) | `packages/conformance/corpus/color-legend-all-nan-domain.vl.json:42` | CONFIRMED (run) |
-| C597 | Low | corpus / specs, range 2 | `sorted-bar.vl.json`: the sort is the default | `packages/conformance/corpus/sorted-bar.vl.json:1` | CONFIRMED (run) |
-| C598 | Low | corpus / specs, range 2 | Per-row line style specs only ever read the first row | `packages/conformance/corpus/line-multicolor.vg.json:1` | CONFIRMED (run) |
-| C599 | Low | corpus / specs, range 2 | More names that lie, and exact duplicates | `packages/conformance/corpus/trail-curve.vg.json:1` | CONFIRMED (run) |
-| C600 | Low | corpus / specs, range 2 | `signal-without-value-in-domain.vg.json`: the scale with the valueless signal domain is used by nothing | `packages/conformance/corpus/signal-without-value-in-domain.vg.json:1` | CONFIRMED (run) |
-| C601 | Low | corpus / specs, range 2 | Selection and binding specs with nothing to see in a static render | `packages/conformance/corpus/select-interval.vl.json:7` | CONFIRMED (run) |
-| C602 | Low | corpus / specs, range 2 | Specs with zero data-driven marks (the brief's list) | `packages/conformance/corpus/loess.vl.json:1` | CONFIRMED (run) |
-| C603 | Low | corpus / specs, range 3 | `vlx-cfgs-line-size` draws eight zero-length lines | `packages/conformance/corpus/vlx-cfgs-line-size.vl.json:116` | CONFIRMED (run) |
-| C604 | Low | corpus / specs, range 3 | Individual properties that are inert in otherwise effective specs | `packages/conformance/corpus/vlx-bin-anchor-base-minstep.vl.json:124` | CONFIRMED (run) |
-| C605 | Low | corpus / specs, range 3 | Names that do not describe the spec | `packages/conformance/corpus/vlx-concat-in-facet-spacing.vl.json:114-120` | CONFIRMED (traced) |
-| C606 | Low | corpus / specs, range 3 | `vlx-container-*` exercise only the no-container fallback in the Node gate | `packages/conformance/corpus/vlx-container-both.vl.json:113-114` | CONFIRMED (run) |
+| C593 | Low | corpus / specs, range 1 | 60 specs here (83 occurrences corpus-wide) spell a scheme as top-level `scale.scheme`, which is not in the Vega schema | `packages/conformance/corpus/bar-darker-scheme.vg.json:1` | CONFIRMED (run) → FIXED (#206) |
+| C594 | Low | corpus / specs, range 1 | Other schema-invalid properties that both engines ignore or tolerate | `packages/conformance/corpus/candlestick.vl.json:1` | CONFIRMED (run) → FIXED (#206) |
+| C595 | Low | corpus / specs, range 1 | 5 specs in range (11 corpus-wide) declare a v5 `$schema` | `packages/conformance/corpus/empty-group-mark.vg.json:2` | CONFIRMED (traced) → FIXED (#206) |
+| C596 | Low | corpus / specs, range 1 | One spec in range draws zero data-driven items (intended) | `packages/conformance/corpus/color-legend-all-nan-domain.vl.json:42` | CONFIRMED (run) → FIXED (#206) |
+| C597 | Low | corpus / specs, range 2 | `sorted-bar.vl.json`: the sort is the default | `packages/conformance/corpus/sorted-bar.vl.json:1` | CONFIRMED (run) → FIXED (#206) |
+| C598 | Low | corpus / specs, range 2 | Per-row line style specs only ever read the first row | `packages/conformance/corpus/line-multicolor.vg.json:1` | CONFIRMED (run) → FIXED (#206) |
+| C599 | Low | corpus / specs, range 2 | More names that lie, and exact duplicates | `packages/conformance/corpus/trail-curve.vg.json:1` | CONFIRMED (run) → FIXED (#206) |
+| C600 | Low | corpus / specs, range 2 | `signal-without-value-in-domain.vg.json`: the scale with the valueless signal domain is used by nothing | `packages/conformance/corpus/signal-without-value-in-domain.vg.json:1` | CONFIRMED (run) → FIXED (#206) |
+| C601 | Low | corpus / specs, range 2 | Selection and binding specs with nothing to see in a static render | `packages/conformance/corpus/select-interval.vl.json:7` | CONFIRMED (run) → FIXED (#206) |
+| C602 | Low | corpus / specs, range 2 | Specs with zero data-driven marks (the brief's list) | `packages/conformance/corpus/loess.vl.json:1` | CONFIRMED (run) → FIXED (#206) |
+| C603 | Low | corpus / specs, range 3 | `vlx-cfgs-line-size` draws eight zero-length lines | `packages/conformance/corpus/vlx-cfgs-line-size.vl.json:116` | CONFIRMED (run) → FIXED (#206) |
+| C604 | Low | corpus / specs, range 3 | Individual properties that are inert in otherwise effective specs | `packages/conformance/corpus/vlx-bin-anchor-base-minstep.vl.json:124` | CONFIRMED (run) → FIXED (#206) |
+| C605 | Low | corpus / specs, range 3 | Names that do not describe the spec | `packages/conformance/corpus/vlx-concat-in-facet-spacing.vl.json:114-120` | CONFIRMED (traced) → FIXED (#206) |
+| C606 | Low | corpus / specs, range 3 | `vlx-container-*` exercise only the no-container fallback in the Node gate | `packages/conformance/corpus/vlx-container-both.vl.json:113-114` | CONFIRMED (run) → DISPUTED (#206) |
 | C607 | Low | corpus / specs, range 4 | `vlx-geo-geoshape-config-view` tests an inert config | `packages/conformance/corpus/vlx-geo-geoshape-config-view.vl.json:8-10` | CONFIRMED (run) |
 | C608 | Low | corpus / specs, range 4 | `vlx-geo-explicit-clipped` clips nothing; two explicit-scale specs draw specks | `packages/conformance/corpus/vlx-geo-explicit-clipped.vl.json:191` | CONFIRMED (run) |
 | C609 | Low | corpus / specs, range 4 | `vlx-geo-explicit-translate-only` also sets `scale` | `packages/conformance/corpus/vlx-geo-explicit-translate-only.vl.json:191` | CONFIRMED (run) |
@@ -730,8 +730,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C681 | Low | tests / conformance suites I | The first group of `dataflow-failure` does not assert that Aster logs the failure | `packages/conformance/test/dataflow-failure-vs-vega.test.ts:68-79` | CONFIRMED (traced) |
 | C682 | Low | tests / conformance suites I | `vl-anim` first-frame renders are unchecked on both sides | `packages/conformance/test/vl-anim.test.ts:134-142` | CONFIRMED (traced) |
 | C683 | Low | tests / conformance suites II | corpus-tz: two inert specs and three uncovered zone behaviours | `packages/conformance/corpus-tz/enter-update.vg.json:1` | CONFIRMED (run) |
-| C684 | Low | corpus / specs, range 1 | Near-duplicate specs that differ only in data values | `packages/conformance/corpus/area-vl.vl.json:1` | CONFIRMED (traced) |
-| C685 | Low | corpus / specs, range 2 | `$schema` hygiene | `packages/conformance/corpus/t-crossfilter.vg.json:1` | CONFIRMED (run) |
+| C684 | Low | corpus / specs, range 1 | Near-duplicate specs that differ only in data values | `packages/conformance/corpus/area-vl.vl.json:1` | CONFIRMED (traced) → FIXED (#206) |
+| C685 | Low | corpus / specs, range 2 | `$schema` hygiene | `packages/conformance/corpus/t-crossfilter.vg.json:1` | CONFIRMED (run) → FIXED (#206) |
 | C686 | Low | corpus / specs, range 4 | Lane boundary depends on sort collation | `packages/conformance/corpus/vlx-geo-proj-albers.vl.json:1` | CONFIRMED (run) |
 | C687 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | Ten notice sections are outside the notices test; five licence texts cannot be checked in this repo | `scripts/notices.test.mjs:15` | CONFIRMED (traced) → FIXED (#188) |
 | C688 | Low | leftovers / budgets, declarations, demo data, gallery lists | `@aster-charts/core`'s declarations need the DOM lib, even for `renderSpec` alone | `packages/core/src/index.ts:1` | CONFIRMED (run) → FIXED (#188) |
@@ -811,7 +811,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C762 | Low | closure / gallery lists, small recorded vectors | The stall fixture is not the scene its test describes: the refusal comes from a NaN box left by a sibling group, and depends on mark order | `packages/core/src/scene-intersect-limits.test.ts:35-38` | CONFIRMED (run) → FIXED (#189) |
 | C763 | Low | closure / vega-format vectors | the "DST-straddling" date set never crosses either 2024 transition and has no fractional second, so the `%Z`, `%L` and `%f` groups are inert for what they suggest | `packages/conformance/scripts/gen-vectors.mjs:301-308` | CONFIRMED (run; re-run by lead) → FIXED (#189) |
 | C764 | Low | closure / raster fixtures I | `raster-shapes.ts` comment says the circle moves "a sixteenth of a pixel at a time"; the step is an eighth | `packages/conformance/src/raster-shapes.ts:18` | CONFIRMED (traced) → FIXED (#189) |
-| C765 | Low | lead / coverage closure | `docs/TESTING.md` says the budget gate has 13 import-pattern rows; `budget.mjs` has 16 | `docs/TESTING.md:184` | CONFIRMED (traced) |
+| C765 | Low | lead / coverage closure | `docs/TESTING.md` says the budget gate has 13 import-pattern rows; `budget.mjs` has 16 | `docs/TESTING.md:184` | CONFIRMED (traced) → FIXED (#206) |
 | C766 | Low | gallery / official Vega examples I | the documented "signal write is a fresh render" deviation moves official charts under the pointer | `docs/INTERACTION.md:142-146` | CONFIRMED (run) |
 
 ---
@@ -6649,6 +6649,7 @@ Scenario: a line mark with `interpolate: {value: X}`, followed by a rect mark.
 
 - **Location:** `packages/conformance/corpus/area-curve-step-after-tension.vg.json:45`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #206 (957704d9). area-curve specs hold the curve/tension they name (tension written on a second outline where the curve ignores it; bundle/natural-closed/monotone-closed renamed for what they hold: vega draws no area with bundle); the three horizontal-monotone copies are three different areas
 - **Area:** corpus / specs, range 1
 - **Lane ID / scripts:** `corpus1-1` — `corpus1/`
 
@@ -6682,6 +6683,7 @@ Name → actual content (`interpolate`, `tension`):
 
 - **Location:** `packages/conformance/corpus/bar-color-bugn.vg.json:1`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #206 (be5a0b02). bar-color specs hold the scheme they name (bluegreen, pinkyellowgreen, purplegreen, yellowgreenblue; spectral and turbo renamed); 32 registered schemes without a spec each got one
 - **Area:** corpus / specs, range 1
 - **Lane ID / scripts:** `corpus1-2` — `corpus1/`
 
@@ -6706,6 +6708,7 @@ Name → actual content (`interpolate`, `tension`):
 
 - **Location:** `packages/conformance/corpus/area-fill-gradient-signal.vg.json:1`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #206 (a20e2598). the four gradient specs carry real gradient objects (signal-held, vertical area, bar, Vega-Lite mark.fill); the canvas parity gate's only skip (area-gradient) is removed
 - **Area:** corpus / specs, range 1
 - **Lane ID / scripts:** `corpus1-3` — `corpus1/`
 
@@ -6725,6 +6728,7 @@ Name → actual content (`interpolate`, `tension`):
 
 - **Location:** `packages/conformance/corpus/bar-clip.vg.json:1`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #206 (24f7a7d5,1b00c821). every inert property now bites (mark-level clip over a clamped domain, sort with op, domainRaw differing, nice on a non-nice max, zero with min>0, domainMin 1, domainMid 4, extent 0.25, expr filter dropping rows, config.group.stroke); bar-stack-zero-explicit and bar-align-center are kept as the default written out and say so, next to bar-align-left/right where align bites
 - **Area:** corpus / specs, range 1
 - **Lane ID / scripts:** `corpus1-4` — `corpus1/`
 
@@ -6754,6 +6758,7 @@ Mutation probe: `inert.mjs inert-cases.json` and `inert2.json`. Each line printe
 
 - **Location:** `packages/conformance/corpus/force.vg.json:1`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #206 (d7347aa8,1b00c821). force (real force transform), crossfilter, box-plot, gnomonic, mercator-default, bar-interpolate, color-scheme, canvas-arc-radius-scale, funnel, dot-plot, expr-function-geo-only now contain the named feature
 - **Area:** corpus / specs, range 1
 - **Lane ID / scripts:** `corpus1-5` — `corpus1/`
 
@@ -6776,6 +6781,7 @@ Mutation probe: `inert.mjs inert-cases.json` and `inert2.json`. Each line printe
 
 - **Location:** `packages/conformance/corpus/area-curve-basis-open-tension.vg.json:1`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #206 (957704d9,24f7a7d5,1b00c821,f1dd19ca). all 26 render-identical groups of ranges 1-3 made distinct; pnpm conformance now refuses new identical groups (corpus-identical.json, exact both ways); the 28 groups of ranges 4-6 are the table a28 must empty
 - **Area:** corpus / specs, range 1
 - **Lane ID / scripts:** `corpus1-6` — `corpus1/`
 
@@ -6840,6 +6846,7 @@ For the lead: the whole-corpus list (54 groups) is in `render-identical-groups.t
 
 - **Location:** `packages/conformance/corpus/loess.vl.json:1`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #206 (1b00c821). loess.vl as is [x, y2]: the line draws and matches
 - **Area:** corpus / specs, range 2
 - **Lane ID / scripts:** `corpus2-1` — `corpus2/`
 
@@ -6855,6 +6862,7 @@ For the lead: the whole-corpus list (54 groups) is in `render-identical-groups.t
 
 - **Location:** `packages/conformance/corpus/tree-links-paths.vg.json:1`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #206 (1b00c821). tree-links-paths encodes the path field; new tree-links-shapes (5 shapes) and tree-links-orients (3 orients)
 - **Area:** corpus / specs, range 2
 - **Lane ID / scripts:** `corpus2-2` — `corpus2/`
 
@@ -6871,6 +6879,7 @@ For the lead: the whole-corpus list (54 groups) is in `render-identical-groups.t
 
 - **Location:** `packages/conformance/corpus/line-curve-monotone-y-tension.vg.json:1`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #206 (1b00c821). monotone-y-tension has orient in update; the six tension-less specs set a tension; copies that rendered alike hold their own outline
 - **Area:** corpus / specs, range 2
 - **Lane ID / scripts:** `corpus2-3` — `corpus2/`
 
@@ -6893,6 +6902,7 @@ For the lead: the whole-corpus list (54 groups) is in `render-identical-groups.t
 
 - **Location:** `packages/conformance/corpus/hierarchy.vg.json:1`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #206 (1b00c821). hierarchy has a partition layout and encodes it; radar's theta is a point scale and the polygon closes
 - **Area:** corpus / specs, range 2
 - **Lane ID / scripts:** `corpus2-4` — `corpus2/`
 
@@ -6910,6 +6920,7 @@ For the lead: the whole-corpus list (54 groups) is in `render-identical-groups.t
 
 - **Location:** `packages/conformance/src/render-vega.ts:10-13`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #206 (1b00c821,30aaab7d). timer-object-throttle, quantitative-time, time-unit-year are stepped in browser-signals; frames-per-second made a different chart; line-grouped has no stepped case because vega-lite's own output ignores the animation filter for lines; the stepped time-unit case reveals an engine difference (REVEALED R2, left failing)
 - **Area:** corpus / specs, range 2
 - **Lane ID / scripts:** `corpus2-5` — `corpus2/`
 
@@ -6931,6 +6942,7 @@ For the lead: the whole-corpus list (54 groups) is in `render-identical-groups.t
 
 - **Location:** `packages/conformance/corpus/point-color-bluyl.vg.json:1`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #206 (1b00c821). point-color/line-multi-series/point-fill-transparent use range:{scheme}; bluyl/cool/gnpu renamed to blues/bluegreen/purplegreen; the legacy top-level spelling is kept in two named specs (scheme-legacy-toplevel-*)
 - **Area:** corpus / specs, range 2
 - **Lane ID / scripts:** `corpus2-6` — `corpus2/`
 
@@ -6948,6 +6960,7 @@ For the lead: the whole-corpus list (54 groups) is in `render-identical-groups.t
 
 - **Location:** `packages/conformance/corpus/vlx-ebx-eb-stdev-ticks.vl.json:73-77`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #206 (1b00c821,f1dd19ca). the four errorbar/errorband specs get three rows per group and draw; the per-entry floor on data items is the corpus-no-items.json check
 - **Area:** corpus / specs, range 3
 - **Lane ID / scripts:** `corpus3-2` — `corpus3/`
 
@@ -6967,6 +6980,7 @@ For the lead: the whole-corpus list (54 groups) is in `render-identical-groups.t
 
 - **Location:** `packages/conformance/corpus/vlx-cond-predicate-valid-lt-lte.vl.json:135-143`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #206 (1b00c821). or(lt,lte) on different fields; separate lt, lte and valid specs with a boundary row and nulls; cond-bar threshold divides the sums
 - **Area:** corpus / specs, range 3
 - **Lane ID / scripts:** `corpus3-3` — `corpus3/`
 
@@ -6984,6 +6998,7 @@ For the lead: the whole-corpus list (54 groups) is in `render-identical-groups.t
 
 - **Location:** `packages/conformance/corpus/vlx-bin-nice-false.vl.json:122`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #206 (1b00c821). bin nice-false on IMDB Rating, steps [3,5], a divide-only spec, minstep 3, maxbins 3: each parameter changes the bins
 - **Area:** corpus / specs, range 3
 - **Lane ID / scripts:** `corpus3-4` — `corpus3/`
 
@@ -6998,6 +7013,7 @@ For the lead: the whole-corpus list (54 groups) is in `render-identical-groups.t
 
 - **Location:** `packages/conformance/corpus/vlx-cfgs-clamp.vl.json:129`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #206 (1b00c821). clamp over explicit narrow domains; quantile/quantize counts on size where vega-lite uses them
 - **Area:** corpus / specs, range 3
 - **Lane ID / scripts:** `corpus3-5` — `corpus3/`
 
@@ -7014,6 +7030,7 @@ For the lead: the whole-corpus list (54 groups) is in `render-identical-groups.t
 
 - **Location:** `packages/conformance/corpus/vlx-chan-tooltip-mark-true.vl.json:118`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #206 (f1dd19ca). conformance-vl compares every item's tooltip between vega-lite's Vega and ours; planted tooltip strip fails all five specs
 - **Area:** corpus / specs, range 3
 - **Lane ID / scripts:** `corpus3-6` — `corpus3/`
 
@@ -7888,6 +7905,7 @@ All traced by reading.
 
 - **Location:** `packages/conformance/corpus/bar-darker-scheme.vg.json:1`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #206 (be5a0b02,1b00c821). bar-color-*, bar-darker-scheme and the point-color family use range:{scheme}; the top-level spelling stays in two specs named for it
 - **Area:** corpus / specs, range 1
 - **Lane ID / scripts:** `corpus1-7` — `corpus1/`
 
@@ -7902,6 +7920,7 @@ All traced by reading.
 
 - **Location:** `packages/conformance/corpus/candlestick.vl.json:1`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #206 (1b00c821). contour's inert 'as' removed; crossfilter's inert type gone with its rewrite; candlestick/error-bar y2.type were already absent; area-stack-wiggle kept (observable pass-through to vega's stack offset, out of the VL enum)
 - **Area:** corpus / specs, range 1
 - **Lane ID / scripts:** `corpus1-8` — `corpus1/`
 
@@ -7918,6 +7937,7 @@ All traced by reading.
 
 - **Location:** `packages/conformance/corpus/empty-group-mark.vg.json:2`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #206 (1b00c821). the five v5 specs are v6
 - **Area:** corpus / specs, range 1
 - **Lane ID / scripts:** `corpus1-9` — `corpus1/`
 
@@ -7932,6 +7952,7 @@ All traced by reading.
 
 - **Location:** `packages/conformance/corpus/color-legend-all-nan-domain.vl.json:42`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #206 (f1dd19ca). color-legend-all-nan-domain is listed in corpus-no-items.json as intended (its guides are the point); an unlisted zero-item spec is now refused
 - **Area:** corpus / specs, range 1
 - **Lane ID / scripts:** `corpus1-11` — `corpus1/`
 
@@ -7946,6 +7967,7 @@ All traced by reading.
 
 - **Location:** `packages/conformance/corpus/sorted-bar.vl.json:1`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #206 (1b00c821). sorted-bar sorts by -y over data where that differs from the name order
 - **Area:** corpus / specs, range 2
 - **Lane ID / scripts:** `corpus2-7` — `corpus2/`
 
@@ -7958,6 +7980,7 @@ All traced by reading.
 
 - **Location:** `packages/conformance/corpus/line-multicolor.vg.json:1`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #206 (1b00c821). the first-item-wins line specs are renamed/described as that (line-stroke-first-item-color, line-stroke-width-field-first-item)
 - **Area:** corpus / specs, range 2
 - **Lane ID / scripts:** `corpus2-8` — `corpus2/`
 
@@ -7971,6 +7994,7 @@ All traced by reading.
 
 - **Location:** `packages/conformance/corpus/trail-curve.vg.json:1`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #206 (1b00c821). trail-axes-constant-width, legend orient right written out, text-stacked-single-lines, line-point-size sizes only the points, the two identical pairs made distinct
 - **Area:** corpus / specs, range 2
 - **Lane ID / scripts:** `corpus2-9` — `corpus2/`
 
@@ -7987,6 +8011,7 @@ All traced by reading.
 
 - **Location:** `packages/conformance/corpus/signal-without-value-in-domain.vg.json:1`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #206 (1b00c821). signal-without-value-in-domain encodes a mark through the zoom scale
 - **Area:** corpus / specs, range 2
 - **Lane ID / scripts:** `corpus2-11` — `corpus2/`
 
@@ -7999,6 +8024,7 @@ All traced by reading.
 
 - **Location:** `packages/conformance/corpus/select-interval.vl.json:7`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #206 (1b00c821). select-interval starts with a brush; param-bound's bind leaves no trace in a static render (the selection and signal browser gates drive it; stated in TESTING.md)
 - **Area:** corpus / specs, range 2
 - **Lane ID / scripts:** `corpus2-12` — `corpus2/`
 
@@ -8010,6 +8036,7 @@ All traced by reading.
 
 - **Location:** `packages/conformance/corpus/loess.vl.json:1`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #206 (1b00c821,f1dd19ca). loess and tree-links now draw; the guide-only/by-design entries are listed with their reasons in corpus-no-items.json
 - **Area:** corpus / specs, range 2
 - **Lane ID / scripts:** `corpus2-15` — `corpus2/`
 
@@ -8025,6 +8052,7 @@ From `render-all.log`:
 
 - **Location:** `packages/conformance/corpus/vlx-cfgs-line-size.vl.json:116`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #206 (1b00c821). vlx-cfgs-line-size sizes by g: two lines with real widths
 - **Area:** corpus / specs, range 3
 - **Lane ID / scripts:** `corpus3-7` — `corpus3/`
 
@@ -8034,6 +8062,7 @@ From `render-all.log`:
 
 - **Location:** `packages/conformance/corpus/vlx-bin-anchor-base-minstep.vl.json:124`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #206 (1b00c821). the ten inert properties made to bite or dropped (vlx-bar-round-zero kept as the default written out)
 - **Area:** corpus / specs, range 3
 - **Lane ID / scripts:** `corpus3-8` — `corpus3/`
 
@@ -8055,6 +8084,7 @@ All from `inert.mjs` (deletion leaves the oracle's canonical SVG identical):
 
 - **Location:** `packages/conformance/corpus/vlx-concat-in-facet-spacing.vl.json:114-120`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #206 (1b00c821). vlx-facet-column-spacing (renamed, it had no concat); vlx-concat-spacing-align has align:'all' and reveals that @aster-charts/vl refuses it (REVEALED R1, left failing)
 - **Area:** corpus / specs, range 3
 - **Lane ID / scripts:** `corpus3-9` — `corpus3/`
 
@@ -8067,6 +8097,7 @@ All from `inert.mjs` (deletion leaves the oracle's canonical SVG identical):
 
 - **Location:** `packages/conformance/corpus/vlx-container-both.vl.json:113-114`
 - **Status:** CONFIRMED (run)
+- **Resolution:** DISPUTED in #206 (30aaab7d). packages/conformance/scripts/browser-conformance.mts:67-84 renders the container specs in a host of a given size (containerSize); the Node gate takes the fallback by construction; stated in docs/TESTING.md
 - **Area:** corpus / specs, range 3
 - **Lane ID / scripts:** `corpus3-10` — `corpus3/`
 
@@ -11071,6 +11102,7 @@ A timer of an element that was never in the document has no self-stop (`wasConne
 
 - **Location:** `packages/conformance/corpus/image.vg.json:1`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #206 (1b00c821). image.vg uses two data: URIs
 - **Area:** corpus / specs, range 2
 - **Lane ID / scripts:** `corpus2-13` — `corpus2/`
 
@@ -12726,6 +12758,7 @@ Each ceiling is its last dated note + 0.5 exactly; no row breaks the rule on pap
 
 - **Location:** `docs/TESTING.md:184`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #206 (30aaab7d). TESTING says 19 import-pattern rows; docs-counts.test.mjs reads the count from budget-rows.mjs
 - **Area:** lead / coverage closure
 - **Lane ID / scripts:** `lead-1` — `lead/`
 
@@ -14366,6 +14399,7 @@ Measured by rendering every spec with real Vega (and Aster) under different `TZ`
 
 - **Location:** `packages/conformance/corpus/area-vl.vl.json:1`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #206 (1b00c821). near-duplicates differ in what they exercise (area-vl, area-monotone-opacity-curve, area-stacked-color, bar-vl, funnel, area-vg described)
 - **Area:** corpus / specs, range 1
 - **Lane ID / scripts:** `corpus1-10` — `corpus1/`
 
@@ -14383,6 +14417,7 @@ Measured by rendering every spec with real Vega (and Aster) under different `TZ`
 
 - **Location:** `packages/conformance/corpus/t-crossfilter.vg.json:1`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #206 (1b00c821). the six t-* specs have a v6 $schema, the v5 ones are v6, t-crossfilter draws 336 px wide instead of 8096
 - **Area:** corpus / specs, range 2
 - **Lane ID / scripts:** `corpus2-14` — `corpus2/`
 
