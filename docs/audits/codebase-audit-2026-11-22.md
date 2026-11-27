@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 50 of 766 findings resolved (50 fixed, 0 already fixed on main, 0 disputed with evidence); 716 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 68 of 766 findings resolved (68 fixed, 0 already fixed on main, 0 disputed with evidence); 698 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -405,7 +405,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C356 | Medium | tests / conformance suites II | `vl-mark-channels`: 483 Aster-only refusals are silently skipped; the `time` channel is never compared | `packages/conformance/test/vl-mark-channels.test.ts:9-13` | CONFIRMED (run; re-run by lead) |
 | C357 | Medium | tests / conformance suites II | the holes that let the first-pass composite and selection defects through | `packages/conformance/test/vl-composite-matrix-cases.ts:146` | CONFIRMED (run) |
 | C358 | Medium | closure / conformance suites, line by line II | "scalePropApplies is what vega-lite does" checks the table, not the compiler, and leaves properties out | `packages/conformance/test/vl-scale-props.test.ts:96-121` | CONFIRMED (run) |
-| C359 | Medium | closure / vega-time vectors II | 104 of the 480 `timeFloor` vectors (and the same 104 in `utcFloor`) cannot fail: sub-minute units, sub-hour steps and millisecond truncation are never exercised | `packages/core/testdata/vectors/vega-time.json:19450-20649` | CONFIRMED (run; re-run by lead) |
+| C359 | Medium | closure / vega-time vectors II | 104 of the 480 `timeFloor` vectors (and the same 104 in `utcFloor`) cannot fail: sub-minute units, sub-hour steps and millisecond truncation are never exercised | `packages/core/testdata/vectors/vega-time.json:19450-20649` | CONFIRMED (run; re-run by lead) → FIXED (#189) |
 | C360 | Medium | gallery / official Vega examples II | `vega/projections` is counted as passing on both paths while both engines fail on it | `packages/conformance/src/gallery/static.ts:47-48` | CONFIRMED (run; re-run by lead) |
 | C361 | Medium | core / layout transforms, rasterizer | "`label.ts` places labels as vega-label does" omits two known limits, and neither is in "Deviations from Vega" | `docs/ARCHITECTURE.md:342` | CONFIRMED (traced) |
 | C362 | Medium | core / geo | "matches d3-geo/vega bit for bit" has undocumented exceptions; "No state outlives a call" is not what the code does | `docs/ARCHITECTURE.md:328` | CONFIRMED (run) |
@@ -526,8 +526,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C477 | Low | corpus / specs, range 5 | interaction properties that a static SVG cannot show | `packages/conformance/corpus/vlx-param-bind-checkbox.vl.json:138` | CONFIRMED (run) |
 | C478 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | A channel key omits the URL policy the mark key holds | `packages/core/src/runtime.ts:5119-5126` | CONFIRMED (run; re-run by lead) |
 | C479 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | The collision renamer in both schema generators produces duplicate names from the third collision on | `packages/conformance/src/sweeps/vega-schema.mjs:1509-1511` | CONFIRMED (run) |
-| C480 | Low | closure / gallery lists, small recorded vectors | `intersect()` moves the box into every nested group without the bounds check Vega makes, so a group at a huge x loses later sibling hits | `packages/core/src/scene-intersect.ts:282-290` | CONFIRMED (run; re-run by lead) |
-| C481 | Low | closure / raster fixtures I | the quarter-pixel test's pattern records that a grid repeats an earlier one, not which one | `packages/conformance/src/raster-vs-chromium.test.ts:54-59` | CONFIRMED (run; re-run by lead) |
+| C480 | Low | closure / gallery lists, small recorded vectors | `intersect()` moves the box into every nested group without the bounds check Vega makes, so a group at a huge x loses later sibling hits | `packages/core/src/scene-intersect.ts:282-290` | CONFIRMED (run; re-run by lead) → FIXED (#189) |
+| C481 | Low | closure / raster fixtures I | the quarter-pixel test's pattern records that a grid repeats an earlier one, not which one | `packages/conformance/src/raster-vs-chromium.test.ts:54-59` | CONFIRMED (run; re-run by lead) → FIXED (#189) |
 | C482 | Low | closure / raster fixtures II | the engine's stroker puts a miter join on the vertices of a flattened curve, so a tight turn in a stroked curve grows a spike the browser does not draw; the baseline pins it | `packages/core/src/raster-stroke.ts:158-188` | CONFIRMED (run; re-run by lead) |
 | C483 | Low | core / runtime: marks, encode, groups | Scoped derived signals are evaluated n rounds × n signals per group item | `packages/core/src/runtime.ts:6203-6210` | CONFIRMED (run) |
 | C484 | Low | core / session, stream, limits | Coalesce: a `push` made while `flush` runs is acknowledged and lost | `packages/core/src/stream.ts:514` | CONFIRMED (run) |
@@ -667,9 +667,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C618 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | `corpus-tz/tz-text-format-utc.vg.json` cannot test what its name says | `packages/conformance/corpus-tz/tz-text-format-utc.vg.json:49-53` | CONFIRMED (run; re-run by lead) |
 | C619 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | The value sweep's stack journey never stacks | `packages/conformance/src/sweeps/values.mjs:192` | CONFIRMED (traced) |
 | C620 | Low | closure / showcase, ADRs, engine parts, type fixtures | The core-parts test setup and `parts-all.ts` leave the `signals` slot empty, although both say they fill every part (adds to C737 (tests-core3-10)) | `scripts/vitest-core-parts.setup.mjs:18-19` | CONFIRMED (run; re-run by lead) → FIXED (#188) |
-| C621 | Low | closure / d3-format vectors | `invalidFormatSpecs` is half valid, and those three specs are never applied to a value (adds to `C461 (tests-core7-5)`) | `packages/conformance/scripts/gen-vectors.mjs:512` | CONFIRMED (run) |
-| C622 | Low | closure / vega-format vectors | the `localeTimeParse` case `'%G-W11-4'` is not an ISO week-date parse; the week and weekday are literals | `packages/core/testdata/vectors/vega-format.json:5753-5762` | CONFIRMED (traced) |
-| C623 | Low | closure / vega-time vectors I | `date` and `day` record the same 88 results twice, while the third alias `dayofyear` is never recorded | `packages/conformance/scripts/gen-vectors.mjs:320` | CONFIRMED (run) |
+| C621 | Low | closure / d3-format vectors | `invalidFormatSpecs` is half valid, and those three specs are never applied to a value (adds to `C461 (tests-core7-5)`) | `packages/conformance/scripts/gen-vectors.mjs:512` | CONFIRMED (run) → FIXED (#189) |
+| C622 | Low | closure / vega-format vectors | the `localeTimeParse` case `'%G-W11-4'` is not an ISO week-date parse; the week and weekday are literals | `packages/core/testdata/vectors/vega-format.json:5753-5762` | CONFIRMED (traced) → FIXED (#189) |
+| C623 | Low | closure / vega-time vectors I | `date` and `day` record the same 88 results twice, while the third alias `dayofyear` is never recorded | `packages/conformance/scripts/gen-vectors.mjs:320` | CONFIRMED (run) → FIXED (#189) |
 | C624 | Low | gallery / official Vega examples II | The static oracle is one dataflow run ahead of Vega's first frame; `time-units` differs by 1 px at two widget values | `packages/conformance/src/gallery/oracle.ts:39-41` | CONFIRMED (run) |
 | C625 | Low | core / runtime: datasets, scales, fit | Test gaps: the incremental oracle generates no text-less text mark, failing step, nested cross-dataset read or pulse under `limits` | `packages/core/src/incremental-oracle.test.ts:196-208` | CONFIRMED (traced) |
 | C626 | Low | core / loading, URL policy, add-ons | An unknown `format.type` (`"jsno"`) is reported as "load the addon first", also with the add-on loaded | `packages/core/src/data-format.ts:116-119` | CONFIRMED (run) |
@@ -739,15 +739,15 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C690 | Low | closure / conformance suites, line by line I | `vl-orient`: the orientation with no orient asked is never compared for tick or line, and the per-case tests cannot fail | `packages/conformance/test/vl-orient.test.ts:56-59` | CONFIRMED (run) |
 | C691 | Low | closure / showcase, ADRs, engine parts, type fixtures | The empty-slot error says "import @aster-charts/core, which carries it"; the main entry leaves six slots empty | `packages/core/src/engine-parts.ts:157` | CONFIRMED (run; re-run by lead) → FIXED (#188) |
 | C692 | Low | closure / showcase, ADRs, engine parts, type fixtures | The "accepts every prop" type fixture exercises 24 of 33 shared props and 3 of 9 handle methods | `packages/react/type-fixtures/svg-chart-accepts.fixture.tsx:12-19` | CONFIRMED (run) → FIXED (#188) |
-| C693 | Low | closure / gallery lists, small recorded vectors | (test cannot fail) — d3-dsv vectors: the `dropOdd` case never drops a row, and the `dsvParseSemi` / `dsvParseTab` suites record `parseRows`, not `parse` | `packages/core/testdata/vectors/d3-dsv.json:467-477` | CONFIRMED (run) |
-| C694 | Low | closure / d3-format vectors | 8 of 108 `formatPrefix` cases are exact duplicates, and 12 record the same degenerate `"NaN"` | `packages/conformance/scripts/gen-vectors.mjs:548-553` | CONFIRMED (run) |
-| C695 | Low | closure / d3-format vectors | 8 recorded strings depend on the recording engine's Intl data, not on d3 | `packages/core/testdata/vectors/d3-format.json:113` | PLAUSIBLE |
-| C696 | Low | closure / d3-format vectors | the four small suites and the `format` value list leave whole input classes unrecorded | `packages/conformance/scripts/gen-vectors.mjs:514-518` | CONFIRMED (run) |
-| C697 | Low | closure / vega-format vectors | the 33 multi-format (object specifier) cases only reach the hours/minutes/seconds levels; the `{year, month, date}` object is indistinguishable from `{}` | `packages/core/testdata/vectors/vega-format.json:4571-4724` | CONFIRMED (run; re-run by lead) |
-| C698 | Low | closure / d3-color vectors I | the parse/rgb/hsl case table leaves whole parser branches unexercised; four planted parser bugs pass all 285 recorded cases | `packages/conformance/scripts/gen-vectors.mjs:455-469` | CONFIRMED (run; re-run by lead) |
-| C699 | Low | closure / vega-time vectors I | The offset vectors record only integer steps {1, 3, -2, 12}; the step-coercion branch and gap/repeated-hour landings are never pinned | `packages/conformance/scripts/gen-vectors.mjs:319-322` | CONFIRMED (run) |
-| C700 | Low | closure / vega-time vectors II | one of the two custom-specifier `timeUnitSpecifier` vectors is inert, and `day`/`dayofyear` are never given to the sequence or offset suites | `packages/core/testdata/vectors/vega-time.json:16485-16497` | CONFIRMED (run) |
-| C701 | Low | closure / vega-time vectors III | the interval suites pin no `count`/`range`/`every` for any UTC or sub-day interval, and the one `timeYear.every(3)` case wants `[]` | `packages/conformance/scripts/gen-vectors.mjs:375-381` | CONFIRMED (run) |
+| C693 | Low | closure / gallery lists, small recorded vectors | (test cannot fail) — d3-dsv vectors: the `dropOdd` case never drops a row, and the `dsvParseSemi` / `dsvParseTab` suites record `parseRows`, not `parse` | `packages/core/testdata/vectors/d3-dsv.json:467-477` | CONFIRMED (run) → FIXED (#189) |
+| C694 | Low | closure / d3-format vectors | 8 of 108 `formatPrefix` cases are exact duplicates, and 12 record the same degenerate `"NaN"` | `packages/conformance/scripts/gen-vectors.mjs:548-553` | CONFIRMED (run) → FIXED (#189) |
+| C695 | Low | closure / d3-format vectors | 8 recorded strings depend on the recording engine's Intl data, not on d3 | `packages/core/testdata/vectors/d3-format.json:113` | PLAUSIBLE → FIXED (#189) |
+| C696 | Low | closure / d3-format vectors | the four small suites and the `format` value list leave whole input classes unrecorded | `packages/conformance/scripts/gen-vectors.mjs:514-518` | CONFIRMED (run) → FIXED (#189) |
+| C697 | Low | closure / vega-format vectors | the 33 multi-format (object specifier) cases only reach the hours/minutes/seconds levels; the `{year, month, date}` object is indistinguishable from `{}` | `packages/core/testdata/vectors/vega-format.json:4571-4724` | CONFIRMED (run; re-run by lead) → FIXED (#189) |
+| C698 | Low | closure / d3-color vectors I | the parse/rgb/hsl case table leaves whole parser branches unexercised; four planted parser bugs pass all 285 recorded cases | `packages/conformance/scripts/gen-vectors.mjs:455-469` | CONFIRMED (run; re-run by lead) → FIXED (#189) |
+| C699 | Low | closure / vega-time vectors I | The offset vectors record only integer steps {1, 3, -2, 12}; the step-coercion branch and gap/repeated-hour landings are never pinned | `packages/conformance/scripts/gen-vectors.mjs:319-322` | CONFIRMED (run) → FIXED (#189) |
+| C700 | Low | closure / vega-time vectors II | one of the two custom-specifier `timeUnitSpecifier` vectors is inert, and `day`/`dayofyear` are never given to the sequence or offset suites | `packages/core/testdata/vectors/vega-time.json:16485-16497` | CONFIRMED (run) → FIXED (#189) |
+| C701 | Low | closure / vega-time vectors III | the interval suites pin no `count`/`range`/`every` for any UTC or sub-day interval, and the one `timeYear.every(3)` case wants `[]` | `packages/conformance/scripts/gen-vectors.mjs:375-381` | CONFIRMED (run) → FIXED (#189) |
 | C702 | Low | core / runtime: datasets, scales, fit | Stale or orphaned comments and test switches in production modules (`runtime.ts`, `step-reuse.ts`) | `packages/core/src/runtime.ts:2990-2992` | CONFIRMED (traced) |
 | C703 | Low | core / runtime: marks, encode, groups | Misplaced or stale comments in `runtime.ts` (docstrings on the wrong declarations) | `packages/core/src/runtime.ts:5724-5729` | CONFIRMED (traced) |
 | C704 | Low | core / session, stream, limits | `maxStringLength` is documented wider than it is | `packages/core/src/limits.ts:15-16` | CONFIRMED (run) |
@@ -808,9 +808,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C759 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | Comment and table drift in `vega-schema.mjs` | `packages/conformance/src/sweeps/vega-schema.mjs:936` | CONFIRMED (traced) |
 | C760 | Low | closure / showcase, ADRs, engine parts, type fixtures | ADR 0009 says generated suites scale with `ASTER_DIFF_SCALE`; four of thirteen do not | `docs/adr/0009-live-differentials-over-recorded-vectors.md:22` | CONFIRMED (traced) → FIXED (#188) |
 | C761 | Low | closure / showcase, ADRs, engine parts, type fixtures | ADR 0001 still states recorded vectors as the gate for every ported surface; no amendment points at ADR 0009 | `docs/adr/0001-own-the-engine.md:36-43` | CONFIRMED (traced) → FIXED (#188) |
-| C762 | Low | closure / gallery lists, small recorded vectors | The stall fixture is not the scene its test describes: the refusal comes from a NaN box left by a sibling group, and depends on mark order | `packages/core/src/scene-intersect-limits.test.ts:35-38` | CONFIRMED (run) |
-| C763 | Low | closure / vega-format vectors | the "DST-straddling" date set never crosses either 2024 transition and has no fractional second, so the `%Z`, `%L` and `%f` groups are inert for what they suggest | `packages/conformance/scripts/gen-vectors.mjs:301-308` | CONFIRMED (run; re-run by lead) |
-| C764 | Low | closure / raster fixtures I | `raster-shapes.ts` comment says the circle moves "a sixteenth of a pixel at a time"; the step is an eighth | `packages/conformance/src/raster-shapes.ts:18` | CONFIRMED (traced) |
+| C762 | Low | closure / gallery lists, small recorded vectors | The stall fixture is not the scene its test describes: the refusal comes from a NaN box left by a sibling group, and depends on mark order | `packages/core/src/scene-intersect-limits.test.ts:35-38` | CONFIRMED (run) → FIXED (#189) |
+| C763 | Low | closure / vega-format vectors | the "DST-straddling" date set never crosses either 2024 transition and has no fractional second, so the `%Z`, `%L` and `%f` groups are inert for what they suggest | `packages/conformance/scripts/gen-vectors.mjs:301-308` | CONFIRMED (run; re-run by lead) → FIXED (#189) |
+| C764 | Low | closure / raster fixtures I | `raster-shapes.ts` comment says the circle moves "a sixteenth of a pixel at a time"; the step is an eighth | `packages/conformance/src/raster-shapes.ts:18` | CONFIRMED (traced) → FIXED (#189) |
 | C765 | Low | lead / coverage closure | `docs/TESTING.md` says the budget gate has 13 import-pattern rows; `budget.mjs` has 16 | `docs/TESTING.md:184` | CONFIRMED (traced) |
 | C766 | Low | gallery / official Vega examples I | the documented "signal write is a fresh render" deviation moves official charts under the pointer | `docs/INTERACTION.md:142-146` | CONFIRMED (run) |
 
@@ -5342,6 +5342,7 @@ Deleting the property leaves the oracle SVG byte-identical (`inert.mjs`), althou
 
 - **Location:** `packages/core/src/scene-intersect.ts:282-290`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #189 (fbefcc3,e33eb9a). Fixed: intersect() enters a nested group only if its mark-style bounds meet the box, as vega visitMark; differential vs vega.intersect over 14 magnitudes (8/29 failed before); CPU cold/warm neutral to faster
 - **Area:** closure / gallery lists, small recorded vectors
 - **Lane ID / scripts:** `w3-lists-1` — `w3-lists/`
 
@@ -5365,6 +5366,7 @@ Direction: skip a group item whose bounds miss the box, as Vega does, and restor
 
 - **Location:** `packages/conformance/src/raster-vs-chromium.test.ts:54-59`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #189 (b7d2b6e). Fixed: pattern compares first-equal grid index (0,1,1,3,3,5,5,7) and the one-row shift; planted grid swap fails
 - **Area:** closure / raster fixtures I
 - **Lane ID / scripts:** `w3-raster-a-1` — `w3-raster-a/`
 
@@ -8065,6 +8067,7 @@ All from `inert.mjs` (deletion leaves the oracle's canonical SVG identical):
 
 - **Location:** `packages/conformance/scripts/gen-vectors.mjs:512`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #189 (d275b19,ffde8e6). Fixed: valid specs #,+,q moved to edgeFormatSpecs and applied through the format suite with sign/$/( specs
 - **Area:** closure / d3-format vectors
 - **Lane ID / scripts:** `w3-vecfmt-a-2` — `w3-vecfmt-a/`
 
@@ -8084,6 +8087,7 @@ Direction: rename the list (e.g. `edgeFormatSpecs`) and put its valid members th
 
 - **Location:** `packages/core/testdata/vectors/vega-format.json:5753-5762`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #189 (d275b19,ffde8e6). Fixed: %G-W%V-%u (and %u, %w) ISO week-date parses recorded beside the literal form
 - **Area:** closure / vega-format vectors
 - **Lane ID / scripts:** `w3-vecfmt-b-3` — `w3-vecfmt-b/`
 
@@ -8100,6 +8104,7 @@ Direction: rename the list (e.g. `edgeFormatSpecs`) and put its valid members th
 
 - **Location:** `packages/conformance/scripts/gen-vectors.mjs:320`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #189 (d275b19,ffde8e6). Fixed: dayofyear added to offset units (and sequences); date/day duplicates remain but alias is now pinned
 - **Area:** closure / vega-time vectors I
 - **Lane ID / scripts:** `w3-time-a-2` — `w3-time-a/`
 
@@ -12288,6 +12293,7 @@ Each ceiling is its last dated note + 0.5 exactly; no row breaks the rule on pap
 
 - **Location:** `packages/core/src/scene-intersect-limits.test.ts:35-38`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #189 (fbefcc3). Fixed: the fixture refusal was a NaN-box artefact of C480; test now pins the infinite arc alone under a half-infinite box (refused) and that the unreachable group changes nothing
 - **Area:** closure / gallery lists, small recorded vectors
 - **Lane ID / scripts:** `w3-lists-2` — `w3-lists/`
 
@@ -12317,6 +12323,7 @@ Each ceiling is its last dated note + 0.5 exactly; no row breaks the rule on pap
 
 - **Location:** `packages/conformance/scripts/gen-vectors.mjs:301-308`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #189 (d275b19,ffde8e6). Fixed: dstDates gains post-gap, second-01:30, gap/repeat-landing and ms instants, comment corrected; %Z varies within both transition days, %L/%f not constant, skipped/repeated hour parsed
 - **Area:** closure / vega-format vectors
 - **Lane ID / scripts:** `w3-vecfmt-b-2` — `w3-vecfmt-b/`
 
@@ -12354,6 +12361,7 @@ Each ceiling is its last dated note + 0.5 exactly; no row breaks the rule on pap
 
 - **Location:** `packages/conformance/src/raster-shapes.ts:18`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #189 (b7d2b6e). Fixed: comment says an eighth
 - **Area:** closure / raster fixtures I
 - **Lane ID / scripts:** `w3-raster-a-2` — `w3-raster-a/`
 
@@ -13017,6 +13025,7 @@ Each row was fed to a vitest-free copy of `compare()` (pickSpec, then a coarse S
 
 - **Location:** `packages/core/testdata/vectors/vega-time.json:19450-20649`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #189 (d275b19,ffde8e6,471bf8e). Fixed at the generator: floors use every dstDates instant (non-zero seconds/ms, minutes not multiples of 3 or 5), vectors-coverage fails if a step or unit goes inert; mutants (seconds/ms reader 0, trunc) now fail the replay
 - **Area:** closure / vega-time vectors II
 - **Lane ID / scripts:** `w3-time-b-1` — `w3-time-b/`
 
@@ -14125,6 +14134,7 @@ Measured by rendering every spec with real Vega (and Aster) under different `TZ`
 
 - **Location:** `packages/core/testdata/vectors/d3-dsv.json:467-477`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #189 (d275b19,ffde8e6). Fixed: dropOdd on 3 and 5 rows; dsvParseSemi/Tab now record parse (objects), parseRows suites renamed dsvParseRowsSemi/Tab
 - **Area:** closure / gallery lists, small recorded vectors
 - **Lane ID / scripts:** `w3-lists-3` — `w3-lists/`
 
@@ -14142,6 +14152,7 @@ Measured by rendering every spec with real Vega (and Aster) under different `TZ`
 
 - **Location:** `packages/conformance/scripts/gen-vectors.mjs:548-553`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #189 (d275b19,471bf8e,ffde8e6). Fixed: refs y..Y, clamp, zero and non-finite, more specs, de-duplicated triples; no suite may record a case twice (test); V8-pow-dependent cases avoided
 - **Area:** closure / d3-format vectors
 - **Lane ID / scripts:** `w3-vecfmt-a-1` — `w3-vecfmt-a/`
 
@@ -14167,6 +14178,7 @@ Direction: use refs `[1e-24, 1e-9, 0.001, 0.5, …, 1e24, 1e27, NaN, Infinity]`,
 
 - **Location:** `packages/core/testdata/vectors/d3-format.json:113`
 - **Status:** PLAUSIBLE
+- **Resolution:** FIXED in #189 (d275b19,ffde8e6). Documented in generator header and docs/TESTING.md: the eight d strings are ICU output; no product change
 - **Area:** closure / d3-format vectors
 - **Lane ID / scripts:** `w3-vecfmt-a-3` — `w3-vecfmt-a/`
 
@@ -14187,6 +14199,7 @@ Direction: note the Intl dependence beside the generator's value list, or beside
 
 - **Location:** `packages/conformance/scripts/gen-vectors.mjs:514-518`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #189 (d275b19,ffde8e6). Fixed: precisionPrefix/Round zero/negative/NaN/infinite, tickStep count 0/equal/non-finite/subnormal, format values strings/null/undefined/booleans/beyond 1e24
 - **Area:** closure / d3-format vectors
 - **Lane ID / scripts:** `w3-vecfmt-a-4` — `w3-vecfmt-a/`
 
@@ -14205,6 +14218,7 @@ Direction: extend the case lists with those classes.
 
 - **Location:** `packages/core/testdata/vectors/vega-format.json:4571-4724`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #189 (d275b19,ffde8e6). Fixed: multi-format objects applied to boundary instants of every level incl. an all-levels marker object, also in localeUtcFormat
 - **Area:** closure / vega-format vectors
 - **Lane ID / scripts:** `w3-vecfmt-b-1` — `w3-vecfmt-b/`
 
@@ -14226,6 +14240,7 @@ Direction: extend the case lists with those classes.
 
 - **Location:** `packages/conformance/scripts/gen-vectors.mjs:455-469`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #189 (d275b19,ffde8e6). Fixed: percent rgba, alpha hex, upper case, out-of-range alpha, null/undefined/number args, projection adds toString/brighter(.5)/darker(2)/copy; planted rgba-null mutant now fails
 - **Area:** closure / d3-color vectors I
 - **Lane ID / scripts:** `w3-color-a-1` — `w3-color-a/`
 
@@ -14264,6 +14279,7 @@ Direction: add roughly eight strings to `parseSpecs` (`rgba(100%,0%,0%,0.5)`, `#
 
 - **Location:** `packages/conformance/scripts/gen-vectors.mjs:319-322`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #189 (d275b19,ffde8e6). Fixed: offset steps 0, 1.5, -0.5, undefined, plus gap/repeated-hour landing and second-01:30 instants; trunc and null-default mutants fail
 - **Area:** closure / vega-time vectors I
 - **Lane ID / scripts:** `w3-time-a-1` — `w3-time-a/`
 
@@ -14287,6 +14303,7 @@ Direction: add roughly eight strings to `parseSpecs` (`rgba(100%,0%,0%,0.5)`, `#
 
 - **Location:** `packages/core/testdata/vectors/vega-time.json:16485-16497`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #189 (d275b19,ffde8e6). Fixed: composite-key override, null specifiers, and day/dayofyear sequences added (inert case kept, it is true)
 - **Area:** closure / vega-time vectors II
 - **Lane ID / scripts:** `w3-time-b-3` — `w3-time-b/`
 
@@ -14303,6 +14320,7 @@ Direction: add roughly eight strings to `parseSpecs` (`rgba(100%,0%,0%,0.5)`, `#
 
 - **Location:** `packages/conformance/scripts/gen-vectors.mjs:375-381`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #189 (d275b19,471bf8e,ffde8e6). Fixed: off-boundary probe plus count/range/every(3) for all 16 intervals; year window starts mid-2021 so a wrong every floor changes the result; between/phase/every mutants fail
 - **Area:** closure / vega-time vectors III
 - **Lane ID / scripts:** `w3-time-c-2` — `w3-time-c/`
 
