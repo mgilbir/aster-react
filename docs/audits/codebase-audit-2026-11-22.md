@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 674 of 766 findings resolved (653 fixed, 18 already fixed on main, 3 disputed with evidence); 92 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 675 of 766 findings resolved (654 fixed, 18 already fixed on main, 3 disputed with evidence); 91 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -577,7 +577,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C528 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | `runPage` leaks the browser when a worker rejects, and creates a temp directory it never uses | `packages/conformance/src/gallery/react.ts:61-63` | CONFIRMED (traced) → FIXED (#205) |
 | C529 | Low | core / session, stream, limits | A queued snapshot is held by reference | `packages/core/src/stream.ts:510` | CONFIRMED (run) → FIXED (#193) |
 | C530 | Low | core / expressions, regex screen | `guardArgs` exempts any function whose name starts with `is`, host-registered ones included | `packages/core/src/expr-interpreter.ts:331` | CONFIRMED (traced) → FIXED (#197) |
-| C531 | Low | core / loading, URL policy, add-ons | A `{signal}` url resolves against top-level spec defaults only (no group scope, no host signals, no reload) | `packages/core/src/addon-load.ts:389-403` | CONFIRMED (run) |
+| C531 | Low | core / loading, URL policy, add-ons | A `{signal}` url resolves against top-level spec defaults only (no group scope, no host signals, no reload) | `packages/core/src/addon-load.ts:389-403` | CONFIRMED (run) → FIXED (#218) |
 | C532 | Low | core / hit index, bounds, geometry | `createPointMapper().map` returns raw client coordinates when there is no element yet | `packages/core/src/pointer.ts:59` | CONFIRMED (traced) → FIXED (#200) |
 | C533 | Low | core / axes, legends, titles | `clip` and `blend` set through `encode.axis` / `encode.legend` / `encode.entries` are dropped | `packages/core/src/guide-axis.ts:324` | CONFIRMED (run; re-run by lead) → FIXED (#194) |
 | C534 | Low | react / <Chart>, shells, SSR | The exported helpers need `PositionalScales`, which a host cannot obtain | `packages/react/src/index.ts:62-79` | CONFIRMED (traced) → FIXED (#198) |
@@ -8875,6 +8875,7 @@ Direction: decide whether `tooltips` is public. If so, rename it for what it doe
 
 - **Location:** `packages/core/src/addon-load.ts:389-403`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #218 (ac6d2b95 2bac63a9 d090ede2). Fixed: <Chart urlLoad> loads url data itself under the loader policy and reloads when a signal a url reads changes inside the chart (cancels a superseded load, errors through onError); pinned against real vega in Chromium (pnpm conformance:url-reload) and in jsdom. Earlier work: #192.
 - **Area:** core / loading, URL policy, add-ons
 - **Lane ID / scripts:** `core-load-20` — `core-load/`
 
