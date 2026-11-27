@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 68 of 766 findings resolved (68 fixed, 0 already fixed on main, 0 disputed with evidence); 698 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 89 of 766 findings resolved (88 fixed, 1 already fixed on main, 0 disputed with evidence); 677 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -247,9 +247,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C198 | Medium | tests / core (legacy copies II … path) | Product defect shared by legacy and new: a rect with a numeric-string `width`/`height` is drawn zero-size (Vega draws it), while the hit index still treats it as full-size | `packages/core/src/geometry.ts:670-671` | CONFIRMED (run; re-run by lead) |
 | C199 | Medium | tests / core (limits, loaders, locale, oracle vectors) | `okResult` passes when the attack child crashes, so the "still renders" halves of the ceiling tests cannot fail on an out-of-memory | `packages/core/src/limits-attacks.test.ts:392-395` | CONFIRMED (run; re-run by lead) |
 | C200 | Medium | tests / core (limits, loaders, locale, oracle vectors) | "sequence transform with only a time budget is cut off by the clock inside the loop" is stopped by the built-in ceiling, not the clock | `packages/core/src/limits-attacks.test.ts:28-33` | CONFIRMED (run; re-run by lead) |
-| C201 | Medium | tests / core (text … url) | "a clock that jumps forward does not make an interval fire a burst" never jumps, and with a real jump the interval does burst | `packages/core/src/timer.test.ts:108-119` | CONFIRMED (run; re-run by lead) |
-| C202 | Medium | tests / core (text … url) | the `dsvFormatRow` vectors are recorded double-wrapped, and one pins a localised `Date#toString()` | `packages/conformance/scripts/gen-vectors.mjs:837-847` | CONFIRMED (run) |
-| C203 | Medium | tests / core (text … url) | both topojson vector fixtures are malformed topologies; no vector covers a valid polygon | `packages/conformance/scripts/gen-vectors.mjs:633-678` | CONFIRMED (run) |
+| C201 | Medium | tests / core (text … url) | "a clock that jumps forward does not make an interval fire a burst" never jumps, and with a real jump the interval does burst | `packages/core/src/timer.test.ts:108-119` | CONFIRMED (run; re-run by lead) → FIXED (#190) |
+| C202 | Medium | tests / core (text … url) | the `dsvFormatRow` vectors are recorded double-wrapped, and one pins a localised `Date#toString()` | `packages/conformance/scripts/gen-vectors.mjs:837-847` | CONFIRMED (run) → FIXED (#190) |
+| C203 | Medium | tests / core (text … url) | both topojson vector fixtures are malformed topologies; no vector covers a valid polygon | `packages/conformance/scripts/gen-vectors.mjs:633-678` | CONFIRMED (run) → FIXED (#190) |
 | C204 | Medium | tests / conformance differentials I | Vega rewrites shared inline rows, so the time-legend and one error-semantics differential cannot see a missing `format.parse` or transform on Aster's side | `packages/conformance/src/guides-layout-vs-vega.test.ts:34-36` | CONFIRMED (run; re-run by lead) |
 | C205 | Medium | tests / conformance differentials I | mark `role` values where Aster differs from Vega are excluded from the ARIA matrix or judged on structure only | `packages/conformance/src/aria-guides-vs-vega.test.ts:112-116` | CONFIRMED (run; re-run by lead) |
 | C206 | Medium | tests / conformance differentials II | canonicalizer collapses NBSP and all Unicode spaces as if they were XML whitespace | `packages/conformance/src/normalize.ts:469-470` | CONFIRMED (run; re-run by lead) |
@@ -380,10 +380,10 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C331 | Medium | leftovers / budgets, declarations, demo data, gallery lists | React budget rows are the gzip of concatenated chunks and stop at the first `import()`; the "whole bundle" label is no longer true | `packages/benchmarks/scripts/budget.mjs:24` | CONFIRMED (run) → FIXED (#188) |
 | C332 | Medium | closure / gallery, sweeps, canvas helpers, corpus-tz | The Vega sweep never sweeps scale `reverse` or legend `type`; the skip reasons are false for those families | `packages/conformance/src/sweeps/vega-schema.mjs:939` | CONFIRMED (run) |
 | C333 | Medium | core / scales, time, format, colour | unknown or misspelt scale properties are dropped silently | `packages/core/src/scales.ts:103-107` | CONFIRMED (run; re-run by lead) |
-| C334 | Medium | tests / core (a11y … curves) | The canvas/SVG corpus parity test silently skips 42 of 391 specs, covers no Vega-Lite spec, and has no floor on passes | `packages/core/src/canvas.test.ts:626-631` | CONFIRMED (run; re-run by lead) |
-| C335 | Medium | tests / core (a11y … curves) | The parity recorder in `canvas.test.ts` is blind to eight kinds of paint difference and rejects a correct rotated symbol | `packages/core/src/canvas.test.ts:50-53` | CONFIRMED (run; re-run by lead) |
-| C336 | Medium | tests / core (a11y … curves) | The paint recorder behind the append and same-pixels oracles cannot see text rotation, blend, dash offset, stroked text or images | `packages/core/src/canvas-record.testlib.ts:128` | CONFIRMED (run) |
-| C337 | Medium | tests / core (a11y … curves) | `calendar.tz.test.ts` skips its zone checks under one of the three zones `pnpm test:tz` runs | `packages/core/src/calendar.tz.test.ts:38` | CONFIRMED (traced) |
+| C334 | Medium | tests / core (a11y … curves) | The canvas/SVG corpus parity test silently skips 42 of 391 specs, covers no Vega-Lite spec, and has no floor on passes | `packages/core/src/canvas.test.ts:626-631` | CONFIRMED (run; re-run by lead) → FIXED (#190) |
+| C335 | Medium | tests / core (a11y … curves) | The parity recorder in `canvas.test.ts` is blind to eight kinds of paint difference and rejects a correct rotated symbol | `packages/core/src/canvas.test.ts:50-53` | CONFIRMED (run; re-run by lead) → FIXED (#190) |
+| C336 | Medium | tests / core (a11y … curves) | The paint recorder behind the append and same-pixels oracles cannot see text rotation, blend, dash offset, stroked text or images | `packages/core/src/canvas-record.testlib.ts:128` | CONFIRMED (run) → FIXED (#190) |
+| C337 | Medium | tests / core (a11y … curves) | `calendar.tz.test.ts` skips its zone checks under one of the three zones `pnpm test:tz` runs | `packages/core/src/calendar.tz.test.ts:38` | CONFIRMED (traced) → FIXED (#190) |
 | C338 | Medium | tests / core (data … hit) | "grid and linear modes agree across the vega corpus" compares the linear scan with itself | `packages/core/src/hit.test.ts:181-219` | CONFIRMED (run; re-run by lead) |
 | C339 | Medium | tests / core (incremental oracle, legacy copies I) | The shrinker prints a "minimal" step list that does not reproduce a final-audit failure | `packages/core/src/incremental-oracle.test.ts:752` | CONFIRMED (traced) |
 | C340 | Medium | tests / core (limits, loaders, locale, oracle vectors) | The attack suite covers about half of the claims in `docs/LIMITS.md` | `docs/LIMITS.md:70-79` | CONFIRMED (run) |
@@ -507,11 +507,11 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C458 | Low | tests / core (limits, loaders, locale, oracle vectors) | `runtime.test.ts` still takes the "full" reference from the same compiled chart in about 20 tests | `packages/core/src/runtime.test.ts:45-95` | CONFIRMED (run) |
 | C459 | Low | tests / core (limits, loaders, locale, oracle vectors) | `load-policy.test.ts` "cut off at maxBytes WHILE it streams" does not show the reader was cancelled | `packages/core/src/load-policy.test.ts:200-207` | CONFIRMED (run) |
 | C460 | Low | tests / core (limits, loaders, locale, oracle vectors) | Smaller assertions that say less than their comments or titles | `packages/core/src/partial.test.ts:38` | CONFIRMED (traced) |
-| C461 | Low | tests / core (text … url) | a typo in the format spec list makes 24 of 1008 cases the same throw | `packages/conformance/scripts/gen-vectors.mjs:506-511` | CONFIRMED (run) |
-| C462 | Low | tests / core (text … url) | two timer tests pass under a planted bug | `packages/core/src/timer.test.ts:37-43` | CONFIRMED (run; re-run by lead) |
-| C463 | Low | tests / core (text … url) | the per-projection loop in the geo concat test cannot fail | `packages/vl/test/geo.test.ts:205-207` | CONFIRMED (run) |
-| C464 | Low | tests / core (text … url) | the "no Math.min/max(...x) or push(...x) left" scan misses spreads that are in the workspace | `packages/core/src/transform-safety.test.ts:58-61` | CONFIRMED (run) |
-| C465 | Low | tests / core (text … url) | assertions weaker than their titles | `packages/core/src/text-metrics.test.ts:41-44` | CONFIRMED (run) |
+| C461 | Low | tests / core (text … url) | a typo in the format spec list makes 24 of 1008 cases the same throw | `packages/conformance/scripts/gen-vectors.mjs:506-511` | CONFIRMED (run) → FIXED (#190) |
+| C462 | Low | tests / core (text … url) | two timer tests pass under a planted bug | `packages/core/src/timer.test.ts:37-43` | CONFIRMED (run; re-run by lead) → FIXED (#190) |
+| C463 | Low | tests / core (text … url) | the per-projection loop in the geo concat test cannot fail | `packages/vl/test/geo.test.ts:205-207` | CONFIRMED (run) → FIXED (#190) |
+| C464 | Low | tests / core (text … url) | the "no Math.min/max(...x) or push(...x) left" scan misses spreads that are in the workspace | `packages/core/src/transform-safety.test.ts:58-61` | CONFIRMED (run) → FIXED (#190) |
+| C465 | Low | tests / core (text … url) | assertions weaker than their titles | `packages/core/src/text-metrics.test.ts:41-44` | CONFIRMED (run) → FIXED (#190) |
 | C466 | Low | tests / conformance differentials I | the ARIA "not vacuous" block has one counter that is always 0 and two that are always 600 | `packages/conformance/src/aria-guides-vs-vega.test.ts:244-256` | CONFIRMED (run) |
 | C467 | Low | tests / conformance differentials I | ceilings that depend on file order, and silent drops behind loose floors | `packages/conformance/src/guide-encode-vs-vega.test.ts:200-204` | CONFIRMED (run) |
 | C468 | Low | tests / conformance differentials II | `legend-discretizing`'s "unreadable" allowance does not check which side was unreadable | `packages/conformance/src/legend-discretizing-vs-vega.test.ts:123-131` | CONFIRMED (run) |
@@ -615,15 +615,15 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C566 | Low | tooling / gates, CI, release, benchmarks | `tsc` never cleans `dist`: this tree holds a built module that has no source | `scripts/bundle-shaking.test.mjs:24-27` | CONFIRMED (run) → FIXED (#187) |
 | C567 | Low | tooling / gates, CI, release, benchmarks | `readme-examples.test.mjs` keeps its own, already wrong, copy of the `exports` map | `scripts/readme-examples.test.mjs:39-46` | CONFIRMED (traced) → FIXED (#187) |
 | C568 | Low | tooling / gates, CI, release, benchmarks | Config hygiene that hides things (knip ignores, a core entry no export reaches, unusable root tsconfig, strict flags off) | `knip.json:4-7` | CONFIRMED (traced) |
-| C569 | Low | tests / core (a11y … curves) | `CanvasLike.fillText` declares a fourth parameter nobody passes; the recorder's multi-line exclusion is dead | `packages/core/src/canvas.ts:64` | CONFIRMED (traced) |
-| C570 | Low | tests / core (a11y … curves) | Test files export functions that nothing imports | `packages/core/src/canvas-append-oracle.test.ts:32` | CONFIRMED (traced) |
+| C569 | Low | tests / core (a11y … curves) | `CanvasLike.fillText` declares a fourth parameter nobody passes; the recorder's multi-line exclusion is dead | `packages/core/src/canvas.ts:64` | CONFIRMED (traced) → FIXED (#190) |
+| C570 | Low | tests / core (a11y … curves) | Test files export functions that nothing imports | `packages/core/src/canvas-append-oracle.test.ts:32` | CONFIRMED (traced) → FIXED (#190) |
 | C571 | Low | tests / core (data … hit) | the no-parse guard sees one of three parsers, and its claim is false for non-finite geometry | `packages/core/src/geometry-no-parse.test.ts:13-17` | CONFIRMED (traced) |
 | C572 | Low | tests / core (data … hit) | adds to C501 (core-rt3-18): a test pins that the fallback without the pulse part changes seeded random draws | `packages/core/src/engine-parts.test.ts:224-239` | CONFIRMED (traced) |
 | C573 | Low | tests / core (incremental oracle, legacy copies I) | Oracle labels that lie, and the coverage assertions that pass on them | `packages/core/src/incremental-oracle.test.ts:225` | CONFIRMED (run; re-run by lead) |
 | C574 | Low | tests / core (legacy copies II … path) | The random scenes' "legend-like leaves" are never drawn: the generator builds a shape the renderers read as one zero-length `<line>` | `packages/core/src/geometry-scenes.testlib.ts:137-143` | CONFIRMED (run) |
 | C575 | Low | tests / core (legacy copies II … path) | Dead legacy code no test reaches | `packages/core/src/legacy-path-data.testlib.ts:196-254` | CONFIRMED (run) |
 | C576 | Low | tests / core (limits, loaders, locale, oracle vectors) | `oracle-vectors.test.ts` sets `process.env.TZ` per suite and never restores it | `packages/core/src/oracle-vectors.test.ts:266` | CONFIRMED (traced) |
-| C577 | Low | tests / core (text … url) | `vega-util.json` records `isDate(Date.now())`, so the recording is not reproducible | `packages/conformance/scripts/gen-vectors.mjs:223` | CONFIRMED (run) |
+| C577 | Low | tests / core (text … url) | `vega-util.json` records `isDate(Date.now())`, so the recording is not reproducible | `packages/conformance/scripts/gen-vectors.mjs:223` | CONFIRMED (run) → ALREADY FIXED (#190) |
 | C578 | Low | tests / conformance differentials I | `chart-info.test.ts` says padding equals Vega's and never asserts it | `packages/conformance/src/chart-info.test.ts:36-41` | CONFIRMED (run) |
 | C579 | Low | tests / conformance differentials I | the `lineBreak` case cannot test `config.lineBreak` | `packages/conformance/src/guide-style-config-vs-vega.test.ts:84` | CONFIRMED (run) |
 | C580 | Low | tests / conformance differentials I | dead code in the tests | `packages/conformance/src/axis-ticks-failure-vs-vega.test.ts:99` | CONFIRMED (traced) |
@@ -692,10 +692,10 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C643 | Low | tooling / gates, CI, release, benchmarks | onboarding gaps (following README and CONTRIBUTING literally) | `CONTRIBUTING.md:1-44` | CONFIRMED (traced) → FIXED (#187) |
 | C644 | Low | docs / README, API, ERRORS | raw `TypeError`s on simple misuse, where `renderSpec` has a proper message | `docs/ERRORS.md:58-59` | CONFIRMED (run) |
 | C645 | Low | docs / README, API, ERRORS | silently accepted misconfiguration (JS callers; TypeScript catches the literal forms) | `packages/react/src/ChartCore.tsx:432` | CONFIRMED (run) |
-| C646 | Low | tests / core (a11y … curves) | Test titles that assert less than they say | `packages/core/src/canvas-regressions.test.ts:68-80` | CONFIRMED (traced) |
-| C647 | Low | tests / core (a11y … curves) | "writes zero attributes when the scene is unchanged" counts only `setAttribute` | `packages/core/src/dom.test.ts:91-119` | CONFIRMED (traced) |
-| C648 | Low | tests / core (a11y … curves) | Loose or absent engagement floors in the generated oracles | `packages/core/src/canvas-append-oracle.test.ts:74` | CONFIRMED (run) |
-| C649 | Low | tests / core (a11y … curves) | Module-level counter makes `discrete-scale-reuse` rows depend on which tests ran before | `packages/core/src/discrete-scale-reuse.test.ts:232-233` | CONFIRMED (traced) |
+| C646 | Low | tests / core (a11y … curves) | Test titles that assert less than they say | `packages/core/src/canvas-regressions.test.ts:68-80` | CONFIRMED (traced) → FIXED (#190) |
+| C647 | Low | tests / core (a11y … curves) | "writes zero attributes when the scene is unchanged" counts only `setAttribute` | `packages/core/src/dom.test.ts:91-119` | CONFIRMED (traced) → FIXED (#190) |
+| C648 | Low | tests / core (a11y … curves) | Loose or absent engagement floors in the generated oracles | `packages/core/src/canvas-append-oracle.test.ts:74` | CONFIRMED (run) → FIXED (#190) |
+| C649 | Low | tests / core (a11y … curves) | Module-level counter makes `discrete-scale-reuse` rows depend on which tests ran before | `packages/core/src/discrete-scale-reuse.test.ts:232-233` | CONFIRMED (traced) → FIXED (#190) |
 | C650 | Low | tests / core (data … hit) | the pixel-ratio half of a cache test compares the renderer with itself | `packages/core/src/geometry-cache.test.ts:152-156` | CONFIRMED (traced) |
 | C651 | Low | tests / core (data … hit) | the regex-screen test's "never run" check sees only `test()`, and "lets a safe one run" is never asserted | `packages/core/src/engine-parts.test.ts:78-92` | CONFIRMED (run) |
 | C652 | Low | tests / core (data … hit) | `intersect()` on non-finite scenes is excluded from the differential for a reason that only holds for the legacy copy | `packages/core/src/geometry-scenes.testlib.ts:122` | CONFIRMED (run) |
@@ -780,7 +780,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C731 | Low | docs / README, API, ERRORS | entry-point inventories still incomplete (continues D10) | `README.md:202-203` | CONFIRMED (traced) |
 | C732 | Low | docs / README, API, ERRORS | "examples that are type-checked against the source" is gated for 2 of API.md's 18 blocks; ANIMATION.md's two blocks do not compile | `docs/API.md:3` | CONFIRMED (run) |
 | C733 | Low | docs / README, API, ERRORS | small drifts between TSDoc and docs | `packages/react/src/chart-types.ts:223` | CONFIRMED (traced) |
-| C734 | Low | tests / core (a11y … curves) | `dataset-reuse.test.ts` header describes a reference the generated walk does not use; `usable()` filters nothing | `packages/core/src/dataset-reuse.test.ts:11` | CONFIRMED (run) |
+| C734 | Low | tests / core (a11y … curves) | `dataset-reuse.test.ts` header describes a reference the generated walk does not use; `usable()` filters nothing | `packages/core/src/dataset-reuse.test.ts:11` | CONFIRMED (run) → FIXED (#190) |
 | C735 | Low | tests / core (data … hit) | a trail with a negative `size` throws a bare `Error` from every renderer and the hit index; not in `docs/ERRORS.md` | `packages/core/src/geometry-differential.testlib.ts:152-165` | CONFIRMED (run; re-run by lead) |
 | C736 | Low | tests / core (data … hit) | `hit-geometry.test.ts` documents mark types it does not test | `packages/core/src/hit-geometry.test.ts:8-9` | CONFIRMED (traced) |
 | C737 | Low | tests / core (incremental oracle, legacy copies I) | `installAllParts()` says "every part of the engine" and installs 17 of 18 | `packages/core/src/install-parts.testlib.ts:1-5` | CONFIRMED (traced) |
@@ -788,7 +788,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C739 | Low | tests / core (legacy copies II … path) | Two descriptions in the differential say more than the code does | `packages/core/src/geometry-differential.test.ts:6` | CONFIRMED (traced) |
 | C740 | Low | tests / core (render … stream) | The property test's header says pause/resume run against a real stream; the stream has no such API | `packages/core/src/stream.property.test.ts:4` | CONFIRMED (traced) |
 | C741 | Low | tests / core (render … stream) | The DOM escaping tests use 4 of the 13 hostile strings while the comment says coverage is unchanged | `packages/core/src/svg-escaping.test.ts:317-319` | CONFIRMED (traced) |
-| C742 | Low | tests / core (text … url) | the animation refusals title overclaims what vega-lite does | `packages/vl/test/animation.test.ts:76` | CONFIRMED (run) |
+| C742 | Low | tests / core (text … url) | the animation refusals title overclaims what vega-lite does | `packages/vl/test/animation.test.ts:76` | CONFIRMED (run) → FIXED (#190) |
 | C743 | Low | tests / react II | stale debugging comments contradict the assertion | `packages/react/src/interaction.test.ts:131-142` | CONFIRMED (traced) |
 | C744 | Low | tests / conformance differentials I | stale structure-only filter and "separate defect" comment for the discrete legend | `packages/conformance/src/guide-structure-vs-vega.test.ts:89-91` | CONFIRMED (run) |
 | C745 | Low | tests / conformance differentials I | headers and titles that claim more than the file asserts | `packages/conformance/src/addons-needed.test.ts:4` | CONFIRMED (traced) |
@@ -3563,6 +3563,7 @@ Direction: coerce as Vega does (`+w || 0`). The random scenes do feed numeric st
 
 - **Location:** `packages/core/src/timer.test.ts:108-119`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #190 (7f0bf5e). Timer tests now jump the clock: frame-first stall is caught up at frame rate as d3-timer (63/62/21), the background-tab case where the 1 s poll fires first rebases the schedule; header worded as what happens; planted skew/poll removal fails.
 - **Area:** tests / core (text … url)
 - **Lane ID / scripts:** `tests-core7-1` — `tests-core7/`
 
@@ -3587,6 +3588,7 @@ Direction: rewrite the test with `jump()`. Add a case where the poll fires first
 
 - **Location:** `packages/conformance/scripts/gen-vectors.mjs:837-847`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #190 (f34283d). dsvFormatRow vectors are real rows (null, undefined, Date as ISO, newlines, empty row); Date#toString and the double wrapping are gone; regenerated with gen-vectors.mjs; invalid-Date NaN now survives the codec (was null -> epoch).
 - **Area:** tests / core (text … url)
 - **Lane ID / scripts:** `tests-core7-2` — `tests-core7/`
 
@@ -3610,6 +3612,7 @@ Direction: record `call(formatRow, [row])` with `row` as the row; add null, unde
 
 - **Location:** `packages/conformance/scripts/gen-vectors.mjs:633-678`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #190 (f34283d). Topology fixtures are valid (two squares, a hole, a MultiPolygon), the quantized form is derived from the absolute one and the generator refuses unclosed rings or unequal decodes; interior (a!==b) and exterior (a===b) both recorded, duplicate topoMeshOuter dropped.
 - **Area:** tests / core (text … url)
 - **Lane ID / scripts:** `tests-core7-3` — `tests-core7/`
 
@@ -4998,6 +5001,7 @@ Direction: track the subpath start in `tracePath` and restore `cx`, `cy` on `Z`.
 
 - **Location:** `packages/conformance/scripts/gen-vectors.mjs:506-511`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #190 (f34283d). '+$, .2f' moved to the invalid specs; '$x' added; the +,(,space,$ options are in the format vectors (also by a29's edge specs).
 - **Area:** tests / core (text … url)
 - **Lane ID / scripts:** `tests-core7-5` — `tests-core7/`
 
@@ -5015,6 +5019,7 @@ Direction: fix the spec to `'+$,.2f'` and add `(`, space and `$#x`.
 
 - **Location:** `packages/core/src/timer.test.ts:37-43`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #190 (7f0bf5e). Timer first tick asserted at clock 60 and the restart log at four ticks; planted 'time' ignored and a restart that never fires fail.
 - **Area:** tests / core (text … url)
 - **Lane ID / scripts:** `tests-core7-6` — `tests-core7/`
 
@@ -5034,6 +5039,7 @@ Direction: assert `clock.now()` at the first tick (60), and `log.length === 4`.
 
 - **Location:** `packages/vl/test/geo.test.ts:205-207`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #190 (05c7eba). Geo concat tests assert the exact fit signals (merged and distinct projections); the vacuous startsWith('') loop is gone.
 - **Area:** tests / core (text … url)
 - **Lane ID / scripts:** `tests-core7-7` — `tests-core7/`
 
@@ -5051,6 +5057,7 @@ Direction: use cells with different projections, or assert the fit signal text.
 
 - **Location:** `packages/core/src/transform-safety.test.ts:58-61`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #190 (b731b43). Spread scan is an AST scan of every call/new argument spread (rest-forwards structural, bounded ones listed with their bound); the three Math.max spreads (vl compile, conformance normalize, benchmarks stats) are now folds; every shape planted.
 - **Area:** tests / core (text … url)
 - **Lane ID / scripts:** `tests-core7-8` — `tests-core7/`
 
@@ -5073,6 +5080,7 @@ Direction: match `Math\.(min|max)\([^)]*\.\.\.` and any call with a spread of a 
 
 - **Location:** `packages/core/src/text-metrics.test.ts:41-44`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #190 (e5b995f). Text-metrics, scale bins, empty stratify root, treemap tiles (vega 6.3.1), wordcloud TypeError message, url-data allowed error, transition replan geometry, tuple-order, vl validate messages and structure dataset names all assert their title; each planted defect fails.
 - **Area:** tests / core (text … url)
 - **Lane ID / scripts:** `tests-core7-9` — `tests-core7/`
 
@@ -7238,6 +7246,7 @@ CONFIRMED-TRACE.
 
 - **Location:** `packages/core/src/canvas.ts:64`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #190 (a98fe89). CanvasLike.fillText and the legacy testlib lose the fourth parameter; the recorder's dead multi-line branch is gone and the two by-name exclusions are asserted to still hold their reason.
 - **Area:** tests / core (a11y … curves)
 - **Lane ID / scripts:** `tests-core1-5` — `tests-core1/`
 
@@ -7253,6 +7262,7 @@ CONFIRMED-TRACE.
 
 - **Location:** `packages/core/src/canvas-append-oracle.test.ts:32`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #190 (dcbdf0b). The four unused exports of canvas-append-oracle and dom-oracle tests are dropped.
 - **Area:** tests / core (a11y … curves)
 - **Lane ID / scripts:** `tests-core1-10` — `tests-core1/`
 
@@ -7382,6 +7392,7 @@ Direction: none needed if the copies are deleted with the differential, as their
 
 - **Location:** `packages/conformance/scripts/gen-vectors.mjs:223`
 - **Status:** CONFIRMED (run)
+- **Resolution:** ALREADY FIXED in #190 (d275b19 f34283d). a29-vectors replaced Date.now() by a constant (d275b19, merged into this branch); here the codec also tags an invalid Date's NaN so no recorded 'ms: null' remains.
 - **Area:** tests / core (text … url)
 - **Lane ID / scripts:** `tests-core7-4` — `tests-core7/`
 
@@ -11794,6 +11805,7 @@ Status: **CONFIRMED-TRACE**.
 
 - **Location:** `packages/core/src/dataset-reuse.test.ts:11`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #190 (4db861f). Header states the real reference, the first visit of each seed is also compared with a one-shot evaluateChart, and unusable generated specs are counted and required to be 0.
 - **Area:** tests / core (a11y … curves)
 - **Lane ID / scripts:** `tests-core1-8` — `tests-core1/`
 
@@ -11932,6 +11944,7 @@ Direction: change the headers to "baseline, amended in 06e1a76 for …".
 
 - **Location:** `packages/vl/test/animation.test.ts:76`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #190 (4db861f). Refusals split into 11 where vega-lite breaks and 9 where vega-lite compiles and vega runs, each group titled for that, held against the live upstream by differential-animation-refusals.test.mts; whether those 9 refusals stay is for the VL lane under Q9/Q10 (reported, not changed).
 - **Area:** tests / core (text … url)
 - **Lane ID / scripts:** `tests-core7-10` — `tests-core7/`
 
@@ -12426,6 +12439,7 @@ Not a defect report, since the deviation is documented. But the doc's only advic
 
 - **Location:** `packages/core/src/canvas.test.ts:626-631`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #190 (a98fe89 d26d040). canvas, geometry-differential, geometry-no-parse and hit corpus loops load the add-ons, skip only the two url-data specs (named, asserted) and rethrow the rest; counts and per-mark floors added; Vega-Lite corpus declared out of scope for core (banner corrected).
 - **Area:** tests / core (a11y … curves)
 - **Lane ID / scripts:** `tests-core1-1` — `tests-core1/`
 
@@ -12493,6 +12507,7 @@ Direction: load the add-ons (`loadAddonsFor`) before evaluating, count skips, an
 
 - **Location:** `packages/core/src/canvas.test.ts:50-53`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #190 (a98fe89). Parity recorder keeps full graphics state, clip, rotation, strokeText, drawImage and every line property; SVG side reads transform lists, clipPaths, cap/join/miter/dashoffset, blend, stroked text, images; a pair test shows all eight blind spots are now seen and a correct rotated symbol is no difference.
 - **Area:** tests / core (a11y … curves)
 - **Lane ID / scripts:** `tests-core1-2` — `tests-core1/`
 
@@ -12527,6 +12542,7 @@ Direction: load the add-ons (`loadAddonsFor`) before evaluating, count skips, an
 
 - **Location:** `packages/core/src/canvas-record.testlib.ts:128`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #190 (9bb0e46). Testlib recorder keys text on the full matrix and records blend, dash offset, strokeText and drawImage; canvas-record.test.ts shows 10 pairs unseen by the old recorder are seen.
 - **Area:** tests / core (a11y … curves)
 - **Lane ID / scripts:** `tests-core1-3` — `tests-core1/`
 
@@ -12558,6 +12574,7 @@ Users: `canvas-append-oracle.test.ts`, `canvas-same-pixels.test.ts`, `canvas-reg
 
 - **Location:** `packages/core/src/calendar.tz.test.ts:38`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #190 (624d1d2 2a822ce). calendar.tz records Lord_Howe (gen-tz-hours.mjs from vega 6.3.1), shares ZONES via scripts/lib/tz-zones.mjs, and fails instead of skipping for an unrecorded zone.
 - **Area:** tests / core (a11y … curves)
 - **Lane ID / scripts:** `tests-core1-4` — `tests-core1/`
 
@@ -13364,6 +13381,7 @@ Status: **CONFIRMED-RUN** — `$S/ws/misuse-core.mjs`, `$S/ws/misuse-oracle.mjs`
 
 - **Location:** `packages/core/src/canvas-regressions.test.ts:68-80`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #190 (a98fe89 095c363 878257d). canvas-regressions asserts the append is declined, discrete-scale-reuse asserts the scale is a new object each step, dom-regressions asserts the escaped text round-trips and matches the DOM descriptors, dom.test 'updates only changed values' asserts what was written; the clip test asserts the clip.
 - **Area:** tests / core (a11y … curves)
 - **Lane ID / scripts:** `tests-core1-6` — `tests-core1/`
 
@@ -13378,6 +13396,7 @@ Status: **CONFIRMED-RUN** — `$S/ws/misuse-core.mjs`, `$S/ws/misuse-oracle.mjs`
 
 - **Location:** `packages/core/src/dom.test.ts:91-119`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #190 (878257d). dom.test watches every writer with a MutationObserver (bar and text/link scenes, plus a control); this found and fixed a product defect: getAttributeNS/removeAttributeNS were given 'xlink:href' instead of 'href', so a first patch over string DOM rewrote every link.
 - **Area:** tests / core (a11y … curves)
 - **Lane ID / scripts:** `tests-core1-7` — `tests-core1/`
 
@@ -13393,6 +13412,7 @@ Status: **CONFIRMED-RUN** — `$S/ws/misuse-core.mjs`, `$S/ws/misuse-oracle.mjs`
 
 - **Location:** `packages/core/src/canvas-append-oracle.test.ts:74`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #190 (dcbdf0b 095c363). Append floor is 1.5 per seed (measured 137/127 of 720), the DOM oracle requires that most steps change the DOM (80%) and that dense runs batch (3 of 10), discrete-scale-reuse counts partial-encode steps (91-104 per kind); planted declines fail.
 - **Area:** tests / core (a11y … curves)
 - **Lane ID / scripts:** `tests-core1-9` — `tests-core1/`
 
@@ -13407,6 +13427,7 @@ Status: **CONFIRMED-RUN** — `$S/ws/misuse-core.mjs`, `$S/ws/misuse-oracle.mjs`
 
 - **Location:** `packages/core/src/discrete-scale-reuse.test.ts:232-233`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #190 (095c363). The row serial resets at the start of each walk, so a failure reproduces under -t.
 - **Area:** tests / core (a11y … curves)
 - **Lane ID / scripts:** `tests-core1-11` — `tests-core1/`
 
