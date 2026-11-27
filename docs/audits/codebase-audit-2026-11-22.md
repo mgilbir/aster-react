@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 316 of 766 findings resolved (308 fixed, 7 already fixed on main, 1 disputed with evidence); 450 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 340 of 766 findings resolved (332 fixed, 7 already fixed on main, 1 disputed with evidence); 426 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -85,7 +85,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C36 | High | core / compiler, transforms | `padding`, `background`, `autosize` as `{signal}` are ignored or stringified | `packages/core/src/compiler.ts:59` | CONFIRMED (run; re-run by lead) → ALREADY FIXED (#194) |
 | C37 | High | core / SVG, DOM patcher, canvas, a11y | Canvas symbol batching changes the picture for translucent, blended or filled-and-stroked overlapping symbols | `packages/core/src/canvas.ts:1123-1178` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
 | C38 | High | core / SVG, DOM patcher, canvas, a11y | A per-call text-metrics provider is not in force when the scene is serialised | `packages/core/src/index.ts:107-124` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
-| C39 | High | core / hit index, bounds, geometry | A canvas-mode hit index throws on a scene that crossed a structured clone and has an axis or legend | `packages/core/src/bounds.ts:783` | CONFIRMED (run; re-run by lead) |
+| C39 | High | core / hit index, bounds, geometry | A canvas-mode hit index throws on a scene that crossed a structured clone and has an axis or legend | `packages/core/src/bounds.ts:783` | CONFIRMED (run; re-run by lead) → FIXED (#200) |
 | C40 | High | core / signal event loop, transitions | Per-owner state (`{signal}`-handler memory, between/throttle/debounce state, timer streams) is keyed by text (`<scope>\|<index>:<name>:<i>:<JSON events>`), not by chart | `packages/core/src/signals.ts:254` | CONFIRMED (run; re-run by lead) → FIXED (#197) |
 | C41 | High | core / axes, legends, titles | `config.locale` is silently ignored | `packages/core/src/runtime.ts:8022` | CONFIRMED (run; re-run by lead) → FIXED (#194) |
 | C42 | High | core / geo | a fitted projection goes stale for every consumer whose own rows did not change | `packages/core/src/runtime.ts:2116` | CONFIRMED (run; re-run by lead) |
@@ -113,7 +113,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C64 | High | conformance / scripts and gates | The `browser-conformance` gate cannot fail on a difference: the script never sets an exit code | `packages/conformance/scripts/browser-conformance.mts:134-141` | CONFIRMED (traced; lines re-read by lead) |
 | C65 | High | conformance / scripts and gates | The batch gate's corpus half compares a render with itself, and its tolerance passes dozens of missing marks | `packages/conformance/scripts/browser-svg-batch-parity.mts:34-36` | CONFIRMED (run; re-run by lead) |
 | C66 | High | tooling / gates, CI, release, benchmarks | a prerelease tag publishes as npm `latest` | `.github/workflows/release.yml:103` | CONFIRMED (traced; lines re-read by lead) → FIXED (#187) |
-| C67 | High | tests / core (legacy copies II … path) | The hit comparison names items by first-encounter order on each side, so "compared by item identity" does not hold: a wrong-item bug is invisible | `packages/core/src/geometry-differential.testlib.ts:181` | CONFIRMED (run; re-run by lead) |
+| C67 | High | tests / core (legacy copies II … path) | The hit comparison names items by first-encounter order on each side, so "compared by item identity" does not hold: a wrong-item bug is invisible | `packages/core/src/geometry-differential.testlib.ts:181` | CONFIRMED (run; re-run by lead) → FIXED (#200) |
 | C68 | High | gallery / official Vega examples II | A signal that holds an event's `datum` is never identical to a row afterwards, so `reorderable-matrix` cannot highlight or reorder | `packages/core/src/runtime.ts:4106-4108` | CONFIRMED (run; re-run by lead) |
 | C69 | High | gallery / official Vega-Lite examples I | `interactive_crossfilter`: a unit inside a `layer` bins after its own transforms; vega-lite bins before them, so any brush re-bins and re-scales the charts | `packages/vl/src/compile.ts:4296-4298` | CONFIRMED (run; re-run by lead) |
 | C70 | High | gallery / official Vega-Lite examples II | After one legend click on the official `point_constant_legend_domain`, the legend loses its other entries; Vega keeps them | `packages/core/src/runtime.ts:4651-4658` | CONFIRMED (run; re-run by lead) |
@@ -144,7 +144,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C95 | Medium | core / layout transforms, rasterizer | The word cloud's board is `(size[0] >> 5) * size[1]` int32 with no meter (450 MB accepted under `maxRows: 1000`) | `packages/core/src/wordcloud.ts:298-300` | CONFIRMED (run) → FIXED (#193) |
 | C96 | Medium | core / scales, time, format, colour | log-scale ticks: work and allocation driven by `base` | `packages/core/src/scale-warped.ts:81-103` | CONFIRMED (run) → FIXED (#196) |
 | C97 | Medium | core / SVG, DOM patcher, canvas, a11y | The `cursor` channel / signal is handed to the host as any text, `url(https://…)` included | `packages/core/src/cursor.ts:24-36` | CONFIRMED (run) → FIXED (#191) |
-| C98 | Medium | core / hit index, bounds, geometry | The parse caches are module-level and bounded by 4096 entries, not by size | `packages/core/src/path-data.ts:130-141` | CONFIRMED (run) |
+| C98 | Medium | core / hit index, bounds, geometry | The parse caches are module-level and bounded by 4096 entries, not by size | `packages/core/src/path-data.ts:130-141` | CONFIRMED (run) → FIXED (#200) |
 | C99 | Medium | core / signal event loop, transitions | A `modify` that feeds itself is bounded only by the call stack; `maxTimeMs` and `maxRows` do not stop it | `packages/core/src/signals.ts:678-695` | CONFIRMED (run) → FIXED (#197) |
 | C100 | Medium | react / <Chart>, shells, SSR | `data` rows are not validated at the React boundary | `packages/react/src/ChartCore.tsx:585-586` | CONFIRMED (run) → FIXED (#198) |
 | C101 | Medium | react / hooks, streams, workers | `validateDataChanges` accepts `undefined` and holes | `packages/react/src/dataChanges.ts:49-50` | CONFIRMED (run) → FIXED (#199) |
@@ -185,10 +185,10 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C136 | Medium | core / SVG, DOM patcher, canvas, a11y | First patch of a string-mounted `<text>` going from one line to several keeps the old text node | `packages/core/src/dom.ts:942-956` | CONFIRMED (run) → FIXED (#191) |
 | C137 | Medium | core / SVG, DOM patcher, canvas, a11y | A gradient paint with its own `id` and no coordinates is drawn bottom-to-top; Vega draws it left-to-right | `packages/core/src/render.ts:1957-1961` | CONFIRMED (run) → FIXED (#191) |
 | C138 | Medium | core / SVG, DOM patcher, canvas, a11y | Legend entry node ids repeat across legends of one scale | `packages/core/src/a11y.ts:305` | CONFIRMED (run) → FIXED (#191) |
-| C139 | Medium | core / hit index, bounds, geometry | A rect with a NaN position is drawn at 0 but left out of the bounds on that axis | `packages/core/src/bounds.ts:271-275` | CONFIRMED (run; re-run by lead) |
-| C140 | Medium | core / hit index, bounds, geometry | `boundIsolated` tests `it.text != null` before the arc and path branches | `packages/core/src/bounds.ts:867` | CONFIRMED (run; re-run by lead) |
-| C141 | Medium | core / hit index, bounds, geometry | A symbol or image with a missing or NaN `x`/`y` is painted at 0, as Vega does, but cannot be picked | `packages/core/src/hit.ts:865` | CONFIRMED (run; re-run by lead) |
-| C142 | Medium | core / hit index, bounds, geometry | The flattener loses a subpath that continues after `Z` without a moveto | `packages/core/src/path-flatten.ts:39-41` | CONFIRMED (run; re-run by lead) |
+| C139 | Medium | core / hit index, bounds, geometry | A rect with a NaN position is drawn at 0 but left out of the bounds on that axis | `packages/core/src/bounds.ts:271-275` | CONFIRMED (run; re-run by lead) → FIXED (#200) |
+| C140 | Medium | core / hit index, bounds, geometry | `boundIsolated` tests `it.text != null` before the arc and path branches | `packages/core/src/bounds.ts:867` | CONFIRMED (run; re-run by lead) → FIXED (#200) |
+| C141 | Medium | core / hit index, bounds, geometry | A symbol or image with a missing or NaN `x`/`y` is painted at 0, as Vega does, but cannot be picked | `packages/core/src/hit.ts:865` | CONFIRMED (run; re-run by lead) → FIXED (#200) |
+| C142 | Medium | core / hit index, bounds, geometry | The flattener loses a subpath that continues after `Z` without a moveto | `packages/core/src/path-flatten.ts:39-41` | CONFIRMED (run; re-run by lead) → FIXED (#200) |
 | C143 | Medium | core / signal event loop, transitions | `init` is re-evaluated by every render that follows a signal change; Vega evaluates it once | `packages/core/src/runtime.ts:1547-1549` | CONFIRMED (run) → FIXED (#197) |
 | C144 | Medium | core / signal event loop, transitions | The reorder walk has no visited set, and its step bound (`ORDER_LIMIT`) is reported as a cycle | `packages/core/src/signal-propagation.ts:47` | CONFIRMED (run; re-run by lead) → FIXED (#197) |
 | C145 | Medium | core / signal event loop, transitions | A handler cycle that Vega refuses is logged on every bind and then run | `packages/core/src/signals.ts:1345` | CONFIRMED (run) → FIXED (#197) |
@@ -244,7 +244,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C195 | Medium | conformance / scripts and gates | Phases 2–4 of the canvas gate count the path they exist to test but never require it to be taken | `packages/conformance/scripts/browser-canvas-append.mts:69-70` | CONFIRMED (traced) |
 | C196 | Medium | conformance / scripts and gates | Two React-gate assertions cannot fail for the reason they name | `packages/react/scripts/browser-interaction.mts:455` | CONFIRMED (traced) |
 | C197 | Medium | tooling / gates, CI, release, benchmarks | the nightly browser floors pass on missing measurements, and are loose where they do bite | `packages/benchmarks/src/browser-floors.ts:52-57` | CONFIRMED (run; re-run by lead) → FIXED (#187) |
-| C198 | Medium | tests / core (legacy copies II … path) | Product defect shared by legacy and new: a rect with a numeric-string `width`/`height` is drawn zero-size (Vega draws it), while the hit index still treats it as full-size | `packages/core/src/geometry.ts:670-671` | CONFIRMED (run; re-run by lead) |
+| C198 | Medium | tests / core (legacy copies II … path) | Product defect shared by legacy and new: a rect with a numeric-string `width`/`height` is drawn zero-size (Vega draws it), while the hit index still treats it as full-size | `packages/core/src/geometry.ts:670-671` | CONFIRMED (run; re-run by lead) → FIXED (#200) |
 | C199 | Medium | tests / core (limits, loaders, locale, oracle vectors) | `okResult` passes when the attack child crashes, so the "still renders" halves of the ceiling tests cannot fail on an out-of-memory | `packages/core/src/limits-attacks.test.ts:392-395` | CONFIRMED (run; re-run by lead) → FIXED (#195) |
 | C200 | Medium | tests / core (limits, loaders, locale, oracle vectors) | "sequence transform with only a time budget is cut off by the clock inside the loop" is stopped by the built-in ceiling, not the clock | `packages/core/src/limits-attacks.test.ts:28-33` | CONFIRMED (run; re-run by lead) → FIXED (#195) |
 | C201 | Medium | tests / core (text … url) | "a clock that jumps forward does not make an interval fire a burst" never jumps, and with a real jump the interval does burst | `packages/core/src/timer.test.ts:108-119` | CONFIRMED (run; re-run by lead) → FIXED (#190) |
@@ -275,7 +275,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C226 | Medium | gallery / official Vega-Lite examples I | `bar_axis_orient`: an `axis.orient: {expr}` does not drive the label alignment; with "top" the rotated labels point into the plot | `packages/vl/src/compile.ts:5878-5892` | CONFIRMED (run; re-run by lead) |
 | C227 | Medium | gallery / official Vega-Lite examples II | A `select` bind whose options are arrays renders "undefined" seven times and writes `undefined` | `packages/react/src/ChartCore.tsx:190-192` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
 | C228 | Medium | core / SVG, DOM patcher, canvas, a11y | A throw mid-paint leaves the context's save stack, transform and clip behind | `packages/core/src/canvas.ts:134-157` | CONFIRMED (run) → FIXED (#191) |
-| C229 | Medium | core / hit index, bounds, geometry | A retained index reads the engine's live items array, so after an append it reports items of a later scene | `packages/core/src/hit.ts:831` | CONFIRMED (run) |
+| C229 | Medium | core / hit index, bounds, geometry | A retained index reads the engine's live items array, so after an append it reports items of a later scene | `packages/core/src/hit.ts:831` | CONFIRMED (run) → FIXED (#200) |
 | C230 | Medium | conformance / scripts and gates | Several gates pass on zero cases | `packages/conformance/scripts/fuzz.mts:119` | CONFIRMED (traced) |
 | C231 | Medium | tooling / gates, CI, release, benchmarks | a partial publish cannot be finished by the workflow, and exact pins make version skew costly | `.github/workflows/release.yml:99-104` | CONFIRMED (traced) → FIXED (#187) |
 | C232 | Medium | core / runtime: state, signals, reuse keys | An unknown name in a change hint is trusted | `packages/core/src/runtime.ts:962-967` | CONFIRMED (run) |
@@ -300,7 +300,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C251 | Medium | tooling / gates, CI, release, benchmarks | no time bound on a gate, on the CI jobs or on the release jobs | `scripts/gates.mjs:144` | CONFIRMED (traced) → FIXED (#187) |
 | C252 | Medium | tests / core (incremental oracle, legacy copies I) | What the oracle's `compare` and generators cannot see (beyond C85 (docs-arch-3) / C625 (core-rt2-10)) | `packages/core/src/incremental-oracle.test.ts:555-573` | CONFIRMED (run) |
 | C253 | Medium | tests / core (incremental oracle, legacy copies I) | `incremental.test.ts` compares SVGs that do not depend on the transform under test | `packages/core/src/incremental.test.ts:95-117` | CONFIRMED (run; re-run by lead) |
-| C254 | Medium | tests / core (legacy copies II … path) | Input space: branches of the legacy copies the differential never executes, so the matching new code is never compared on them | `packages/core/src/geometry-differential.testlib.ts:211` | CONFIRMED (run) |
+| C254 | Medium | tests / core (legacy copies II … path) | Input space: branches of the legacy copies the differential never executes, so the matching new code is never compared on them | `packages/core/src/geometry-differential.testlib.ts:211` | CONFIRMED (run) → FIXED (#200) |
 | C255 | Medium | corpus / specs, range 4 | Concat specs with `autosize: none` and no root size render into a 10 px canvas | `packages/conformance/corpus/vlx-geo-concat-explicit-projection-maps.vl.json:4` | CONFIRMED (run; re-run by lead) |
 | C256 | Medium | corpus / specs, range 4 | albersUsa's composite insets are never exercised by the corpus | `packages/conformance/corpus/vlx-geo-proj-albersusa.vl.json:201` | CONFIRMED (run; re-run by lead) |
 | C257 | Medium | corpus / specs, range 4 | `vlx-geo-fit-center-rotate` cannot fail if `center` and `rotate` are ignored | `packages/conformance/corpus/vlx-geo-fit-center-rotate.vl.json:191` | CONFIRMED (run) |
@@ -354,7 +354,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C305 | Medium | tooling / gates, CI, release, benchmarks | `ci.yml` runs on every pull request although the convention is CI on `main` only | `.github/workflows/ci.yml:3-7` | CONFIRMED (traced) → FIXED (#187) |
 | C306 | Medium | docs / README, API, ERRORS | an undeclared dataset name in `data` is silently ignored (Vega throws) | `docs/API.md:358-359` | CONFIRMED (run; re-run by lead) |
 | C307 | Medium | tests / core (incremental oracle, legacy copies I) | The three legacy testlibs are not "frozen copies", share modules with the code they check, and leave the view-sizing bounds uncompared | `packages/core/src/legacy-bounds.testlib.ts:1-3` | CONFIRMED (traced) |
-| C308 | Medium | tests / core (legacy copies II … path) | For `path` marks the legacy hit, intersect and label painter call the new reader: the old-vs-new comparison is new-vs-new | `packages/core/src/legacy-hit.testlib.ts:39` | CONFIRMED (run) |
+| C308 | Medium | tests / core (legacy copies II … path) | For `path` marks the legacy hit, intersect and label painter call the new reader: the old-vs-new comparison is new-vs-new | `packages/core/src/legacy-hit.testlib.ts:39` | CONFIRMED (run) → FIXED (#200) |
 | C309 | Medium | tests / core (legacy copies II … path) | The first-pass defects are present, identically, in the legacy copies: the differential is green because both sides are wrong the same way | `packages/core/src/legacy-hit.testlib.ts:460-473` | CONFIRMED (run) |
 | C310 | Medium | tests / conformance differentials I | specs `vega.parse` refuses are rendered by Aster; the tests count them and never run Aster | `packages/conformance/src/guide-null-vs-vega.test.ts:39-57` | CONFIRMED (run) |
 | C311 | Medium | tests / conformance generators and case tables I | An unknown `interpolate` logs Vega's error and still draws the line; the test that covers the names patches its oracle | `packages/core/src/shape.ts:278-285` | CONFIRMED (run; re-run by lead) |
@@ -461,10 +461,10 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C412 | Low | core / SVG, DOM patcher, canvas, a11y | Canvas text with `fill: ''` or `stroke: ''` is painted | `packages/core/src/canvas.ts:1030-1031` | CONFIRMED (run) → FIXED (#191) |
 | C413 | Low | core / SVG, DOM patcher, canvas, a11y | `denseMarks` batches filled-and-stroked symbols into one `<path>` | `packages/core/src/dom.ts:260-273` | CONFIRMED (run) → FIXED (#191) |
 | C414 | Low | core / SVG, DOM patcher, canvas, a11y | Text-width cache key is ambiguous between font and text, and every per-call provider clears the global cache | `packages/core/src/text-metrics.ts:113` | CONFIRMED (traced) → FIXED (#191) |
-| C415 | Low | core / hit index, bounds, geometry | `tracePath` (public, re-exported at `canvas.ts:21`) mis-draws two SVG arc forms the engine never writes | `packages/core/src/path-data.ts:486-492` | CONFIRMED (run) |
-| C416 | Low | core / hit index, bounds, geometry | Zero-area items are picked on their exact coordinates | `packages/core/src/hit.ts:908` | CONFIRMED (run) |
-| C417 | Low | core / hit index, bounds, geometry | `intersect()` ignores a mark's `clip` | `packages/core/src/scene-intersect.ts:70-76` | CONFIRMED (run) |
-| C418 | Low | core / hit index, bounds, geometry | Bounds drift from `vega.boundMark` on three uncommon item shapes | `packages/core/src/bounds.ts:286-289` | CONFIRMED (run) |
+| C415 | Low | core / hit index, bounds, geometry | `tracePath` (public, re-exported at `canvas.ts:21`) mis-draws two SVG arc forms the engine never writes | `packages/core/src/path-data.ts:486-492` | CONFIRMED (run) → FIXED (#200) |
+| C416 | Low | core / hit index, bounds, geometry | Zero-area items are picked on their exact coordinates | `packages/core/src/hit.ts:908` | CONFIRMED (run) → FIXED (#200) |
+| C417 | Low | core / hit index, bounds, geometry | `intersect()` ignores a mark's `clip` | `packages/core/src/scene-intersect.ts:70-76` | CONFIRMED (run) → FIXED (#200) |
+| C418 | Low | core / hit index, bounds, geometry | Bounds drift from `vega.boundMark` on three uncommon item shapes | `packages/core/src/bounds.ts:286-289` | CONFIRMED (run) → FIXED (#200) |
 | C419 | Low | core / signal event loop, transitions | The selection unit-count cache is trusted on `(length, first, last)`; replacing a middle tuple in place leaves stale counts | `packages/core/src/selections.ts:104-111` | CONFIRMED (run) → FIXED (#197) |
 | C420 | Low | core / signal event loop, transitions | With `op` not a literal `intersect`, Vega requires every tuple to match; Aster always combines per unit | `packages/core/src/selections.ts:117-141` | CONFIRMED (run) → FIXED (#197) |
 | C421 | Low | core / axes, legends, titles | non-standard `tickCount` values | `packages/core/src/runtime.ts:7971` | CONFIRMED (run; re-run by lead) → FIXED (#194) |
@@ -501,7 +501,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C452 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | `apps/demo/.wrangler/` is not in `.gitignore` | `.gitignore:1` | CONFIRMED (traced) |
 | C453 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ARCHITECTURE "11 of 26" shaking-pattern count is stale | `docs/ARCHITECTURE.md:513` | CONFIRMED (traced) |
 | C454 | Low | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | ARCHITECTURE classifies a `force` mark as one that "may draw" random numbers; ADR 0006 says force never reads the source | `docs/ARCHITECTURE.md:122` | CONFIRMED (traced) |
-| C455 | Low | tests / core (legacy copies II … path) | `tracePath` keeps a stale current point after `Z` (new and legacy): `H`, `V`, `S`, `T` and `A` after a close start from the wrong point | `packages/core/src/path-data.ts:498` | CONFIRMED (run) |
+| C455 | Low | tests / core (legacy copies II … path) | `tracePath` keeps a stale current point after `Z` (new and legacy): `H`, `V`, `S`, `T` and `A` after a close start from the wrong point | `packages/core/src/path-data.ts:498` | CONFIRMED (run) → FIXED (#200) |
 | C456 | Low | tests / core (limits, loaders, locale, oracle vectors) | `pulse.test.ts` "incremental sorted window/stack matches a full re-derive" cannot see the window's output and has no stack | `packages/core/src/pulse.test.ts:88-106` | CONFIRMED (run) → FIXED (#195) |
 | C457 | Low | tests / core (limits, loaders, locale, oracle vectors) | Two cache tests assert less than their titles and pass on a planted wrong implementation | `packages/core/src/limits.test.ts:190-196` | CONFIRMED (run) → FIXED (#195) |
 | C458 | Low | tests / core (limits, loaders, locale, oracle vectors) | `runtime.test.ts` still takes the "full" reference from the same compiled chart in about 20 tests | `packages/core/src/runtime.test.ts:45-95` | CONFIRMED (run) → FIXED (#195) |
@@ -578,7 +578,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C529 | Low | core / session, stream, limits | A queued snapshot is held by reference | `packages/core/src/stream.ts:510` | CONFIRMED (run) → FIXED (#193) |
 | C530 | Low | core / expressions, regex screen | `guardArgs` exempts any function whose name starts with `is`, host-registered ones included | `packages/core/src/expr-interpreter.ts:331` | CONFIRMED (traced) → FIXED (#197) |
 | C531 | Low | core / loading, URL policy, add-ons | A `{signal}` url resolves against top-level spec defaults only (no group scope, no host signals, no reload) | `packages/core/src/addon-load.ts:389-403` | CONFIRMED (run) |
-| C532 | Low | core / hit index, bounds, geometry | `createPointMapper().map` returns raw client coordinates when there is no element yet | `packages/core/src/pointer.ts:59` | CONFIRMED (traced) |
+| C532 | Low | core / hit index, bounds, geometry | `createPointMapper().map` returns raw client coordinates when there is no element yet | `packages/core/src/pointer.ts:59` | CONFIRMED (traced) → FIXED (#200) |
 | C533 | Low | core / axes, legends, titles | `clip` and `blend` set through `encode.axis` / `encode.legend` / `encode.entries` are dropped | `packages/core/src/guide-axis.ts:324` | CONFIRMED (run; re-run by lead) → FIXED (#194) |
 | C534 | Low | react / <Chart>, shells, SSR | The exported helpers need `PositionalScales`, which a host cannot obtain | `packages/react/src/index.ts:62-79` | CONFIRMED (traced) → FIXED (#198) |
 | C535 | Low | vl / scales, stacking, guides | `axis.style` is emitted as a raw Vega `style`; vega-lite resolves `config.style.<name>` into axis properties | `packages/vl/src/compile.ts:5906-5910` | CONFIRMED (run) |
@@ -598,7 +598,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C549 | Low | core / scales, time, format, colour | `CONTINUOUS_TYPES` is a hand list that disagrees with the registry | `packages/core/src/scales.ts:33-34` | CONFIRMED (traced) → FIXED (#196) |
 | C550 | Low | core / SVG, DOM patcher, canvas, a11y | A non-numeric `angle` is written escaped by the DOM builder | `packages/core/src/render.ts:1119-1122` | CONFIRMED (run) → FIXED (#191) |
 | C551 | Low | core / SVG, DOM patcher, canvas, a11y | Canvas event tables are plain-object lookups by event type; two `fontString` implementations disagree | `packages/core/src/canvas-events.ts:135` | CONFIRMED (traced) → FIXED (#191) |
-| C552 | Low | core / hit index, bounds, geometry | Dead axis-bounds code with a title-length nudge; wrong comment about `shape: "point"`; unbounded "short" side list | `packages/core/src/bounds.ts:784-853` | CONFIRMED (run) |
+| C552 | Low | core / hit index, bounds, geometry | Dead axis-bounds code with a title-length nudge; wrong comment about `shape: "point"`; unbounded "short" side list | `packages/core/src/bounds.ts:784-853` | CONFIRMED (run) → FIXED (#200) |
 | C553 | Low | core / axes, legends, titles | `guide-model.ts` and the runtime disagree with Vega on what is parsed in 5 of 1018 probes (`axis.grid`, `config.axis.labelBound`) | `packages/core/src/guide-model.ts:50` | CONFIRMED (run) → FIXED (#194) |
 | C554 | Low | react / <Chart>, shells, SSR | The error state drops `className` and `ariaLabel` | `packages/react/src/ChartCore.tsx:1637` | CONFIRMED (run) → FIXED (#198) |
 | C555 | Low | react / hooks, streams, workers | one worker `error` event fails every hook sharing the worker | `packages/react/src/worker.ts:300-303` | CONFIRMED (traced) → FIXED (#199) |
@@ -620,8 +620,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C571 | Low | tests / core (data … hit) | the no-parse guard sees one of three parsers, and its claim is false for non-finite geometry | `packages/core/src/geometry-no-parse.test.ts:13-17` | CONFIRMED (traced) → FIXED (#195) |
 | C572 | Low | tests / core (data … hit) | adds to C501 (core-rt3-18): a test pins that the fallback without the pulse part changes seeded random draws | `packages/core/src/engine-parts.test.ts:224-239` | CONFIRMED (traced) → FIXED (#195) |
 | C573 | Low | tests / core (incremental oracle, legacy copies I) | Oracle labels that lie, and the coverage assertions that pass on them | `packages/core/src/incremental-oracle.test.ts:225` | CONFIRMED (run; re-run by lead) |
-| C574 | Low | tests / core (legacy copies II … path) | The random scenes' "legend-like leaves" are never drawn: the generator builds a shape the renderers read as one zero-length `<line>` | `packages/core/src/geometry-scenes.testlib.ts:137-143` | CONFIRMED (run) |
-| C575 | Low | tests / core (legacy copies II … path) | Dead legacy code no test reaches | `packages/core/src/legacy-path-data.testlib.ts:196-254` | CONFIRMED (run) |
+| C574 | Low | tests / core (legacy copies II … path) | The random scenes' "legend-like leaves" are never drawn: the generator builds a shape the renderers read as one zero-length `<line>` | `packages/core/src/geometry-scenes.testlib.ts:137-143` | CONFIRMED (run) → FIXED (#200) |
+| C575 | Low | tests / core (legacy copies II … path) | Dead legacy code no test reaches | `packages/core/src/legacy-path-data.testlib.ts:196-254` | CONFIRMED (run) → FIXED (#200) |
 | C576 | Low | tests / core (limits, loaders, locale, oracle vectors) | `oracle-vectors.test.ts` sets `process.env.TZ` per suite and never restores it | `packages/core/src/oracle-vectors.test.ts:266` | CONFIRMED (traced) → FIXED (#195) |
 | C577 | Low | tests / core (text … url) | `vega-util.json` records `isDate(Date.now())`, so the recording is not reproducible | `packages/conformance/scripts/gen-vectors.mjs:223` | CONFIRMED (run) → ALREADY FIXED (#190) |
 | C578 | Low | tests / conformance differentials I | `chart-info.test.ts` says padding equals Vega's and never asserts it | `packages/conformance/src/chart-info.test.ts:36-41` | CONFIRMED (run) |
@@ -759,8 +759,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C710 | Low | core / scales, time, format, colour | the "Scales" section and file headers describe the layout before the split | `docs/ARCHITECTURE.md:523` | CONFIRMED (traced) → FIXED (#196) |
 | C711 | Low | core / scales, time, format, colour | deviations table omits other resolved `{signal}` positions | `docs/ARCHITECTURE.md:593` | CONFIRMED (run) → FIXED (#196) |
 | C712 | Low | core / SVG, DOM patcher, canvas, a11y | Docs and comments: `renderGroup` named for the wrong file; "neither side owns a list" while `dom.ts` hand-writes four | `docs/ARCHITECTURE.md:545` | CONFIRMED (traced) → FIXED (#191) |
-| C713 | Low | core / hit index, bounds, geometry | Stroke dashes are not part of the tested stroke, so a dash gap is pickable | `packages/core/src/hit.ts:185-196` | PLAUSIBLE |
-| C714 | Low | core / hit index, bounds, geometry | An area with `interpolate: "bundle"` draws; Vega throws `output.areaStart is not a function` | `packages/core/src/curves.ts:63-81` | CONFIRMED (run) |
+| C713 | Low | core / hit index, bounds, geometry | Stroke dashes are not part of the tested stroke, so a dash gap is pickable | `packages/core/src/hit.ts:185-196` | PLAUSIBLE → FIXED (#200) |
+| C714 | Low | core / hit index, bounds, geometry | An area with `interpolate: "bundle"` draws; Vega throws `output.areaStart is not a function` | `packages/core/src/curves.ts:63-81` | CONFIRMED (run) → FIXED (#200) |
 | C715 | Low | core / signal event loop, transitions | API.md says the item is "read from the DOM … where mark names are not available"; with a picker the DOM is never consulted | `docs/API.md:552` | CONFIRMED (traced) → FIXED (#197) |
 | C716 | Low | core / signal event loop, transitions | ANIMATION.md omits `theta` from what moves | `docs/ANIMATION.md:69-71` | CONFIRMED (traced) → FIXED (#197) |
 | C717 | Low | core / axes, legends, titles | stale comments and duplicated tables | `packages/core/src/guide-encode.ts:231-235` | CONFIRMED (traced) → FIXED (#194) |
@@ -784,8 +784,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C735 | Low | tests / core (data … hit) | a trail with a negative `size` throws a bare `Error` from every renderer and the hit index; not in `docs/ERRORS.md` | `packages/core/src/geometry-differential.testlib.ts:152-165` | CONFIRMED (run; re-run by lead) → FIXED (#195) |
 | C736 | Low | tests / core (data … hit) | `hit-geometry.test.ts` documents mark types it does not test | `packages/core/src/hit-geometry.test.ts:8-9` | CONFIRMED (traced) → FIXED (#195) |
 | C737 | Low | tests / core (incremental oracle, legacy copies I) | `installAllParts()` says "every part of the engine" and installs 17 of 18 | `packages/core/src/install-parts.testlib.ts:1-5` | CONFIRMED (traced) |
-| C738 | Low | tests / core (legacy copies II … path) | "A frozen copy … as it was on stack/3-expr" is not true of four of the copies | `packages/core/src/legacy-path-data.testlib.ts:51-56` | CONFIRMED (traced) |
-| C739 | Low | tests / core (legacy copies II … path) | Two descriptions in the differential say more than the code does | `packages/core/src/geometry-differential.test.ts:6` | CONFIRMED (traced) |
+| C738 | Low | tests / core (legacy copies II … path) | "A frozen copy … as it was on stack/3-expr" is not true of four of the copies | `packages/core/src/legacy-path-data.testlib.ts:51-56` | CONFIRMED (traced) → FIXED (#200) |
+| C739 | Low | tests / core (legacy copies II … path) | Two descriptions in the differential say more than the code does | `packages/core/src/geometry-differential.test.ts:6` | CONFIRMED (traced) → FIXED (#200) |
 | C740 | Low | tests / core (render … stream) | The property test's header says pause/resume run against a real stream; the stream has no such API | `packages/core/src/stream.property.test.ts:4` | CONFIRMED (traced) |
 | C741 | Low | tests / core (render … stream) | The DOM escaping tests use 4 of the 13 hostile strings while the comment says coverage is unchanged | `packages/core/src/svg-escaping.test.ts:317-319` | CONFIRMED (traced) |
 | C742 | Low | tests / core (text … url) | the animation refusals title overclaims what vega-lite does | `packages/vl/test/animation.test.ts:76` | CONFIRMED (run) → FIXED (#190) |
@@ -1344,6 +1344,7 @@ Direction: bind the item under construction into the encode frame (`EntryScope.i
 
 - **Location:** `packages/core/src/bounds.ts:783`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #200 (2ce7c3b). Stored guide boxes are read by their numbers (Bounds.copyOf); hit-canvas.test.ts indexes a JSON-round-tripped scene with an axis and a legend on both renderers and requires the same answers (bite: .clone() restored fails the canvas case).
 - **Area:** core / hit index, bounds, geometry (also categories 6)
 - **Lane ID / scripts:** `core-hit-1` — `core-hit/`
 
@@ -1964,6 +1965,7 @@ The file ends by printing the failures:
 
 - **Location:** `packages/core/src/geometry-differential.testlib.ts:181`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #200 (2ce7c3b 855f5fb 3c22efa). The numbered old-vs-new hit comparison is gone; geometry-vs-vega.test.ts and conformance:geometry name items by their place (/g0[1]/m2[3]); bite: intersect reporting the next item of a mark fails 8 runs.
 - **Area:** tests / core (legacy copies II … path)
 - **Lane ID / scripts:** `tests-core4-1` — `tests-core4/`
 - **Lead's note:** The lead re-ran `j-identity.mjs` against the lane's clean and planted bundles: with the planted bug the new index picks item `b` where the legacy picks `a`, and `diffScene` reports no hit difference on that scene or on 300 random scenes.
@@ -2584,6 +2586,7 @@ if (IDENTIFIER.test(reference) && !EXPRESSION_CONSTANTS.has(reference)) raise(`U
 
 - **Location:** `packages/core/src/bounds.ts:271-275`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #200 (2ce7c3b 855f5fb). Rect bounds use x || 0 as vega's; covered by the bit-exact item bounds differential (bite: x ?? 0 fails 7 runs).
 - **Area:** core / hit index, bounds, geometry
 - **Lane ID / scripts:** `core-hit-3` — `core-hit/`
 
@@ -2600,6 +2603,7 @@ if (IDENTIFIER.test(reference) && !EXPRESSION_CONSTANTS.has(reference)) raise(`U
 
 - **Location:** `packages/core/src/bounds.ts:867`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #200 (2ce7c3b 855f5fb). Typed marks are measured by their mark type (itemBounds), duck typing kept for guide leaves only; the arc/path text-channel case is in the generated specs and item differential.
 - **Area:** core / hit index, bounds, geometry
 - **Lane ID / scripts:** `core-hit-4` — `core-hit/`
 
@@ -2619,6 +2623,7 @@ if (IDENTIFIER.test(reference) && !EXPRESSION_CONSTANTS.has(reference)) raise(`U
 
 - **Location:** `packages/core/src/hit.ts:865`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #200 (2ce7c3b 93b06d5). Symbols and images are placed as vega draws them (drawnOffset, x || 0); the nox repro's symbol at a missing/NaN x is picked; the pick on wild values is compared with vega in Chromium by the blocking conformance:geometry (a canvas image is picked by its bounds alone).
 - **Area:** core / hit index, bounds, geometry (also categories 3)
 - **Lane ID / scripts:** `core-hit-5` — `core-hit/`
 
@@ -2637,6 +2642,7 @@ if (IDENTIFIER.test(reference) && !EXPRESSION_CONSTANTS.has(reference)) raise(`U
 
 - **Location:** `packages/core/src/path-flatten.ts:39-41`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #200 (2ce7c3b 855f5fb). The flattener starts a subpath after Z at the closed one's start; path-outline-vs-vega.test.ts compares against vega's pathRender (bite fails both cases); canvas-recorder had the same defect, fixed.
 - **Area:** core / hit index, bounds, geometry
 - **Lane ID / scripts:** `core-hit-6` — `core-hit/`
 
@@ -3542,6 +3548,7 @@ blank vs blank: null   hasInk: false
 
 - **Location:** `packages/core/src/geometry.ts:670-671`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #200 (2ce7c3b). rectData reads +(width || 0) as vega's rectangle builder: SVG text equals vega's for '30', '25px' and Infinity widths, and the hit index takes no pointer where nothing is drawn.
 - **Area:** tests / core (legacy copies II … path)
 - **Lane ID / scripts:** `tests-core4-3` — `tests-core4/`
 
@@ -4495,6 +4502,7 @@ Source line not traced (found by render); revealed by `packages/conformance/test
 
 - **Location:** `packages/core/src/path-data.ts:486-492`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #200 (2ce7c3b 855f5fb). tracePath draws an arc too small for its chord at the radius that reaches it and samples an ellipse from the current point in its own frame; bites fail path-outline-vs-vega.
 - **Area:** core / hit index, bounds, geometry (also categories 4)
 - **Lane ID / scripts:** `core-hit-9` — `core-hit/`
 
@@ -4512,6 +4520,7 @@ Source line not traced (found by render); revealed by `packages/conformance/test
 
 - **Location:** `packages/core/src/hit.ts:908`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #200 (2ce7c3b 93b06d5). Rect boxes, symbols and images of no area take no fill pick (vega's isPointInPath and the browser find none); an outline of no area has no edge a fill test finds; pick parity on wild values is the blocking conformance:geometry.
 - **Area:** core / hit index, bounds, geometry
 - **Lane ID / scripts:** `core-hit-10` — `core-hit/`
 
@@ -4523,6 +4532,7 @@ Source line not traced (found by render); revealed by `packages/conformance/test
 
 - **Location:** `packages/core/src/scene-intersect.ts:70-76`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #200 (2ce7c3b 855f5fb). intersect() cuts a clipped mark's bounds to its group's frame as vega's boundClip; compared over ~28k boxes in geometry-vs-vega (the stall test now pins vega's answer for a clipped mark).
 - **Area:** core / hit index, bounds, geometry
 - **Lane ID / scripts:** `core-hit-12` — `core-hit/`
 
@@ -4535,6 +4545,7 @@ Source line not traced (found by render); revealed by `packages/conformance/test
 
 - **Location:** `packages/core/src/bounds.ts:286-289`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #200 (2ce7c3b 855f5fb). Image bounds take no stroke, arcs read outerRadius only, a symbol of negative/NaN size measures nothing; bit-exact against vega's mark bound over 4000 items per type.
 - **Area:** core / hit index, bounds, geometry
 - **Lane ID / scripts:** `core-hit-13` — `core-hit/`
 
@@ -4985,6 +4996,7 @@ DateTime parts other than month, day and quarter are spliced into the expression
 
 - **Location:** `packages/core/src/path-data.ts:498`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #200 (2ce7c3b 855f5fb). tracePath returns the current point to the subpath's start on Z; bite fails path-outline-vs-vega.
 - **Area:** tests / core (legacy copies II … path)
 - **Lane ID / scripts:** `tests-core4-7` — `tests-core4/`
 
@@ -5558,6 +5570,7 @@ Direction: skip a group item whose bounds miss the box, as Vega does, and restor
 
 - **Location:** `packages/core/src/hit.ts:831`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #200 (2ce7c3b 9603346). Line/area/trail hit entries copy their items array; hit-canvas.test.ts appends after indexing and requires only the earlier scene's items (bite: live array restored fails); scene-registry.ts states the guarantee is the nodes'.
 - **Area:** core / hit index, bounds, geometry (also categories 7)
 - **Lane ID / scripts:** `core-hit-8` — `core-hit/`
 
@@ -6454,6 +6467,7 @@ Direction: refuse, or at least report through `logger`/`onError`, a `data` key t
 
 - **Location:** `packages/core/src/legacy-hit.testlib.ts:39`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #200 (2ce7c3b 855f5fb). Path marks' bounds, intersect and outlines are compared with vega's own code (geometry-vs-vega, path-outline-vs-vega); the legacy copies that called the new reader are deleted.
 - **Area:** tests / core (legacy copies II … path)
 - **Lane ID / scripts:** `tests-core4-2` — `tests-core4/`
 
@@ -7158,6 +7172,7 @@ Process-global mutable tables are public API: `withdrawFunctions` (a test seam) 
 
 - **Location:** `packages/core/src/bounds.ts:784-853`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #200 (2ce7c3b). The dead axis-bounds fallback and its title-length nudge are removed (a non-engine axis is bounded as a group); the 'point' comment is gone with it (Aster throws vega's Invalid SVG path for 'point', as vega does).
 - **Area:** core / hit index, bounds, geometry (also categories 7)
 - **Lane ID / scripts:** `core-hit-15` — `core-hit/`
 
@@ -7449,6 +7464,7 @@ CONFIRMED-TRACE.
 
 - **Location:** `packages/core/src/geometry-scenes.testlib.ts:137-143`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #200 (855f5fb). The hand-built generator with legend-like leaves no renderer drew is replaced by geometry-specs.ts (vega-structured specs; guides are covered by the corpus and the guide gates).
 - **Area:** tests / core (legacy copies II … path)
 - **Lane ID / scripts:** `tests-core4-8` — `tests-core4/`
 
@@ -7471,6 +7487,7 @@ Direction: put the leaves directly in the legend group's `items` with `_part` se
 
 - **Location:** `packages/core/src/legacy-path-data.testlib.ts:196-254`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #200 (2ce7c3b). The legacy hit, intersect, label-draw and path-flatten copies are deleted; legacy-path-data loses its dead bezier arcs.
 - **Area:** tests / core (legacy copies II … path)
 - **Lane ID / scripts:** `tests-core4-11` — `tests-core4/`
 
@@ -8654,6 +8671,7 @@ A `{signal}` url resolves against top-level spec defaults only.
 
 - **Location:** `packages/core/src/pointer.ts:59`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #200 (2ce7c3b 9352305). createPointMapper maps to (NaN, NaN) with no element; pointer.test.ts (bite: the client-coordinate return fails).
 - **Area:** core / hit index, bounds, geometry
 - **Lane ID / scripts:** `core-hit-16` — `core-hit/`
 
@@ -9226,6 +9244,7 @@ The title "keeps geo and layout transforms on the mapping path" also overstates:
 
 - **Location:** `packages/core/src/geometry-differential.testlib.ts:211`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #200 (855f5fb). The input space now lives in geometry-specs.ts for the vega differential (every mark type, value classes, joins, miter limits, caps, dashes, curves, custom shapes, relative/elliptical paths, clips, non-interactive marks, nested groups, filters); the legacy hit/intersect copies whose branches went unexecuted are deleted.
 - **Area:** tests / core (legacy copies II … path)
 - **Lane ID / scripts:** `tests-core4-6` — `tests-core4/`
 
@@ -10627,6 +10646,7 @@ Run with `node --max-old-space-size=400 $S/probe.mjs <name> nolimits`.
 
 - **Location:** `packages/core/src/path-data.ts:130-141`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #200 (2ce7c3b). The path parse caches are bounded by the characters they hold (2^21 per cache) as well as by count; the repro's heap after release fell from 763 MB to 2 MB.
 - **Area:** core / hit index, bounds, geometry
 - **Lane ID / scripts:** `core-hit-7` — `core-hit/`
 
@@ -11704,6 +11724,7 @@ Status: **CONFIRMED-TRACE**.
 
 - **Location:** `packages/core/src/hit.ts:185-196`
 - **Status:** PLAUSIBLE
+- **Resolution:** FIXED in #200 (93b06d5 2ac40e7). Answered by the gate against real vega in Chromium: a dash gap takes no pointer (SVG: every stroked mark; vega's canvas: a rule only), implemented in the hit index (bounded cut into dashes) and pinned in hit-oracle-rules.test.ts; conformance:geometry is blocking and green.
 - **Area:** core / hit index, bounds, geometry
 - **Lane ID / scripts:** `core-hit-11` — `core-hit/`
 
@@ -11715,6 +11736,7 @@ Status: **CONFIRMED-TRACE**.
 
 - **Location:** `packages/core/src/curves.ts:63-81`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #200 (2ce7c3b). The bundle area is listed in ARCHITECTURE.md Deviations from Vega as an oracle crash not reproduced; the differential requires any vega failure to be a listed one, with Aster's error equal to vega's (trail negative width, 'point' shape).
 - **Area:** core / hit index, bounds, geometry
 - **Lane ID / scripts:** `core-hit-14` — `core-hit/`
 
@@ -12096,6 +12118,7 @@ Direction: keep one dedicated negative-size case and clamp the generator elsewhe
 
 - **Location:** `packages/core/src/legacy-path-data.testlib.ts:51-56`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #200 (2ce7c3b). The four copies' false 'frozen' headers are gone with the copies; legacy-path-data's header says it was amended (06e1a76) and follows the tracePath fixes.
 - **Area:** tests / core (legacy copies II … path)
 - **Lane ID / scripts:** `tests-core4-10` — `tests-core4/`
 
@@ -12115,6 +12138,7 @@ Direction: change the headers to "baseline, amended in 06e1a76 for …".
 
 - **Location:** `packages/core/src/geometry-differential.test.ts:6`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #200 (855f5fb). The baseline differential's header says what it compares (svg/dom/canvas, evaluator scenes) and the corpus is drawn twice; the grid/linear hit description is gone with the hit comparison.
 - **Area:** tests / core (legacy copies II … path)
 - **Lane ID / scripts:** `tests-core4-12` — `tests-core4/`
 
