@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 509 of 766 findings resolved (497 fixed, 9 already fixed on main, 3 disputed with evidence); 257 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 531 of 766 findings resolved (519 fixed, 9 already fixed on main, 3 disputed with evidence); 235 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -101,7 +101,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C52 | High | vl / composition | A wrapped facet ignores most of `header` and all of `config.headerFacet` | `packages/vl/src/compile.ts:2283-2314` | CONFIRMED (run) → FIXED (#202) |
 | C53 | High | vl / scales, stacking, guides | Two different binnings of one field: the aggregate groups by only the last one | `packages/vl/src/compile.ts:4176` | CONFIRMED (run; re-run by lead) |
 | C54 | High | vl / scales, stacking, guides | `stack: "normalize"` fixes the domain to `[0,1]` even when nothing is stacked | `packages/vl/src/compile.ts:5461` | CONFIRMED (run; re-run by lead) |
-| C55 | High | vl / mark encoding | A rounded stacked bar inside a facet draws every segment once per row of the facet cell | `packages/vl/src/compile.ts:7214-7218` | CONFIRMED (run; re-run by lead) |
+| C55 | High | vl / mark encoding | A rounded stacked bar inside a facet draws every segment once per row of the facet cell | `packages/vl/src/compile.ts:7214-7218` | CONFIRMED (run; re-run by lead) → FIXED (#209) |
 | C56 | High | vl / validate, optimize, predicates | Merging "identical" datasets drops a bin `signal` that scales still read, so the compiled spec does not run | `packages/vl/src/optimize.ts:139-149` | CONFIRMED (run; re-run by lead) → FIXED (#202) |
 | C57 | High | vl / validate, optimize, predicates | Two views that aggregate to the same output name with different ops or fields are merged; both views silently draw the same numbers | `packages/vl/src/optimize.ts:217-223` | CONFIRMED (run; re-run by lead) → FIXED (#202) |
 | C58 | High | vl / validate, optimize, predicates | the `extent` transform's `param` is renamed as a cell-local signal, so references to it fail in every composition | `packages/vl/src/compile.ts:2811-2812` | CONFIRMED (run; re-run by lead) → FIXED (#202) |
@@ -126,7 +126,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C77 | High | react / hooks, streams, workers | worker-stream backpressure bounds one tick, not the worker | `packages/react/src/useChartWorkerStream.ts:238-252` | CONFIRMED (run; re-run by lead) → FIXED (#199) |
 | C78 | High | core / signal event loop, transitions | `config.events.view` / `.window` / `.selector` / `.timer` are ignored by the event loop | `packages/core/src/signals.ts:349-353` | CONFIRMED (run; re-run by lead) → FIXED (#197) |
 | C79 | High | vl / composition | `resolve` on a layer is validated for every channel and kind but mostly not implemented | `packages/vl/src/compile.ts:1056-1066` | CONFIRMED (run; re-run by lead) → FIXED (#202) |
-| C80 | High | vl / mark encoding | `config.style.<mark type>` is dropped from the emitted Vega config | `packages/vl/src/compile.ts:3747` | CONFIRMED (run; re-run by lead) |
+| C80 | High | vl / mark encoding | `config.style.<mark type>` is dropped from the emitted Vega config | `packages/vl/src/compile.ts:3747` | CONFIRMED (run; re-run by lead) → FIXED (#209) |
 | C81 | High | conformance / scripts and gates | "Every place a Vega spec holds an expression" is not every place: 15 of 63 further sites disagree with `vega.parse` | `packages/conformance/scripts/expression-sites.mts:1-8` | CONFIRMED (run; re-run by lead) → FIXED (#204) |
 | C82 | High | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | `import { ChartStream }` pulls the whole synchronous engine up front (244.4 vs 188.6 kB gzip); no budget row or shaking pattern covers it | `packages/react/src/ChartStream.tsx:23-26` | CONFIRMED (run; re-run by lead) |
 | C83 | High | vl / validate, optimize, predicates | The README says the "Throws" list is complete; at least nine schema-valid features are refused and not on it | `packages/vl/README.md:133-135` | CONFIRMED (run) → FIXED (#202) |
@@ -149,7 +149,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C100 | Medium | react / <Chart>, shells, SSR | `data` rows are not validated at the React boundary | `packages/react/src/ChartCore.tsx:585-586` | CONFIRMED (run) → FIXED (#198) |
 | C101 | Medium | react / hooks, streams, workers | `validateDataChanges` accepts `undefined` and holes | `packages/react/src/dataChanges.ts:49-50` | CONFIRMED (run) → FIXED (#199) |
 | C102 | Medium | vl / composition | The repeated spec's `name` goes raw into signal names, scale names and expressions | `packages/vl/src/compile.ts:3192` | CONFIRMED (run; re-run by lead) → FIXED (#202) |
-| C103 | Medium | vl / mark encoding | Titles are spliced into the tooltip object literal and the aria description with only `"` escaped | `packages/vl/src/compile.ts:7805` | CONFIRMED (run) |
+| C103 | Medium | vl / mark encoding | Titles are spliced into the tooltip object literal and the aria description with only `"` escaped | `packages/vl/src/compile.ts:7805` | CONFIRMED (run) → FIXED (#209) |
 | C104 | Medium | tooling / gates, CI, release, benchmarks | the dependency boundary still has holes (continues C40) | `scripts/lib/scan-imports.mjs:70-83` | CONFIRMED (run; re-run by lead) → FIXED (#187) |
 | C105 | Medium | tests / core (data … hit) | the linearity guard for the untrusted-text readers accepts quadratic growth | `packages/core/src/expr-text.test.ts:33-37` | CONFIRMED (run) → FIXED (#195) |
 | C106 | Medium | tests / core (incremental oracle, legacy copies I) | Legacy and new DOM builders cache descriptors in the same `__domDesc` slot, so "old vs new" on reused items compares an object with itself | `packages/core/src/legacy-dom.testlib.ts:397-409` | CONFIRMED (run; re-run by lead) |
@@ -224,8 +224,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C175 | Medium | vl / scales, stacking, guides | `axis.values` / `legend.values` of a temporal field are forwarded raw | `packages/vl/src/compile.ts:5807-5809` | CONFIRMED (run) |
 | C176 | Medium | vl / scales, stacking, guides | The x2/y2 domain union is skipped whenever `stack` is set, although a ranged mark never stacks | `packages/vl/src/compile.ts:5040` | CONFIRMED (run) |
 | C177 | Medium | vl / scales, stacking, guides | An explicitly stacked `rule` is drawn from the stack end to the axis, not to the stack start | `packages/vl/src/compile.ts:6719-6720` | CONFIRMED (run) |
-| C178 | Medium | vl / mark encoding | Invalid handling is deduplicated per field, last channel winning | `packages/vl/src/compile.ts:8124-8139` | CONFIRMED (run) |
-| C179 | Medium | vl / mark encoding | `format` / `formatType` on a conditional field of text / tooltip / href is ignored | `packages/vl/src/compile.ts:7948` | CONFIRMED (run) |
+| C178 | Medium | vl / mark encoding | Invalid handling is deduplicated per field, last channel winning | `packages/vl/src/compile.ts:8124-8139` | CONFIRMED (run) → FIXED (#209) |
+| C179 | Medium | vl / mark encoding | `format` / `formatType` on a conditional field of text / tooltip / href is ignored | `packages/vl/src/compile.ts:7948` | CONFIRMED (run) → FIXED (#209) |
 | C180 | Medium | vl / validate, optimize, predicates | Sources with the same values or url but different explicit `format.parse` are merged; the later view's parse is lost | `packages/vl/src/optimize.ts:404-445` | CONFIRMED (run; re-run by lead) → FIXED (#202) |
 | C181 | Medium | vl / validate, optimize, predicates | `data.format.parse: null` and `parse: {field: null}` pass the gate and are mis-compiled | `packages/vl/src/validate.ts:414` | CONFIRMED (run) → FIXED (#202) |
 | C182 | Medium | vl / validate, optimize, predicates | Names the gate lets through that make the output unrunnable, with a raw Vega error instead of a `VLCompileError` | `packages/vl/src/validate.ts:584-589` | CONFIRMED (run) → FIXED (#202) |
@@ -272,7 +272,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C223 | Medium | closure / conformance suites, line by line II | `scale.rangeMin` / `rangeMax` are applied to scale types where vega-lite drops them | `packages/vl/src/compile.ts:4917-4922` | CONFIRMED (run; re-run by lead) |
 | C224 | Medium | closure / conformance suites, line by line II | an explicit `scale.reverse` on a discrete `theta` or `radius` is deleted | `packages/vl/src/compile.ts:5272-5273` | CONFIRMED (run; re-run by lead) |
 | C225 | Medium | gallery / official Vega examples I | A numeric top-level `width`/`height` beats the spec's own `width`/`height` signal `update`; vega/horizon-graph renders a wrong frame for any non-default `layers` given as `signals` (adds … | `packages/core/src/runtime.ts:870` | CONFIRMED (run; re-run by lead) |
-| C226 | Medium | gallery / official Vega-Lite examples I | `bar_axis_orient`: an `axis.orient: {expr}` does not drive the label alignment; with "top" the rotated labels point into the plot | `packages/vl/src/compile.ts:5878-5892` | CONFIRMED (run; re-run by lead) |
+| C226 | Medium | gallery / official Vega-Lite examples I | `bar_axis_orient`: an `axis.orient: {expr}` does not drive the label alignment; with "top" the rotated labels point into the plot | `packages/vl/src/compile.ts:5878-5892` | CONFIRMED (run; re-run by lead) → FIXED (#209) |
 | C227 | Medium | gallery / official Vega-Lite examples II | A `select` bind whose options are arrays renders "undefined" seven times and writes `undefined` | `packages/react/src/ChartCore.tsx:190-192` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
 | C228 | Medium | core / SVG, DOM patcher, canvas, a11y | A throw mid-paint leaves the context's save stack, transform and clip behind | `packages/core/src/canvas.ts:134-157` | CONFIRMED (run) → FIXED (#191) |
 | C229 | Medium | core / hit index, bounds, geometry | A retained index reads the engine's live items array, so after an append it reports items of a later scene | `packages/core/src/hit.ts:831` | CONFIRMED (run) → FIXED (#200) |
@@ -319,7 +319,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C270 | Medium | core / signal event loop, transitions | `setSignal` forces, and accepts any name | `packages/core/src/signals.ts:1402-1406` | CONFIRMED (run) → FIXED (#197) |
 | C271 | Medium | core / signal event loop, transitions | An `owner` that is not a DOM node kills the timers it was meant to keep | `packages/core/src/signals.ts:1040-1045` | CONFIRMED (run) → FIXED (#197) |
 | C272 | Medium | react / hooks, streams, workers | `<ChartStream>` / `<ChartWorkerStream>` accept `random` and never pass it to the stream | `packages/react/src/ChartStream.tsx:238-249` | CONFIRMED (traced) → FIXED (#199) |
-| C273 | Medium | vl / mark encoding | `mark.url` on an image mark is silently dropped, so nothing renders | `packages/vl/src/compile.ts:7854-7857` | CONFIRMED (run) |
+| C273 | Medium | vl / mark encoding | `mark.url` on an image mark is silently dropped, so nothing renders | `packages/vl/src/compile.ts:7854-7857` | CONFIRMED (run) → FIXED (#209) |
 | C274 | Medium | docs / README, API, ERRORS | the README's first React chart does not draw at the spec's `width`/`height` | `README.md:83-109` | CONFIRMED (run) |
 | C275 | Medium | docs / README, API, ERRORS | `ChartStreamHandle.flush/pending/pulse/stats` are typed `() => unknown` | `packages/react/src/ChartStream.tsx:42-45` | CONFIRMED (run) |
 | C276 | Medium | docs / README, API, ERRORS | `hydrateChart`: `tooltips` shows no tooltip and writes row JSON into the DOM; the result is undocumented | `packages/react/src/ssr.ts:26-27` | CONFIRMED (run) |
@@ -343,8 +343,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C294 | Medium | react / <Chart>, shells, SSR | `style.width` / `height` / `position` are overridden whenever the a11y tree is on (the default) | `packages/react/src/ChartCore.tsx:1643-1646` | CONFIRMED (run) → FIXED (#198) |
 | C295 | Medium | react / <Chart>, shells, SSR | Bound inputs: `bind.labels` is ignored; a `number` input cannot be cleared | `packages/react/src/ChartCore.tsx:188-196` | CONFIRMED (run; re-run by lead) → FIXED (#198) |
 | C296 | Medium | react / hooks, streams, workers | stream hooks read `limits` once; a later change is ignored | `packages/react/src/useChartStream.ts:113-126` | CONFIRMED (run) → FIXED (#199) |
-| C297 | Medium | vl / mark encoding | A named style is honoured for paint only | `packages/vl/src/compile.ts:6267-6274` | CONFIRMED (run; re-run by lead) |
-| C298 | Medium | vl / mark encoding | Config precedence differs from vega-lite | `packages/vl/src/compile.ts:6563-6565` | CONFIRMED (run) |
+| C297 | Medium | vl / mark encoding | A named style is honoured for paint only | `packages/vl/src/compile.ts:6267-6274` | CONFIRMED (run; re-run by lead) → FIXED (#209) |
+| C298 | Medium | vl / mark encoding | Config precedence differs from vega-lite | `packages/vl/src/compile.ts:6563-6565` | CONFIRMED (run) → FIXED (#209) |
 | C299 | Medium | vl / validate, optimize, predicates | The rename cannot tell compiler-written expressions from the user's, and is asymmetric about which keys it rewrites | `packages/vl/src/embed.ts:71-93` | CONFIRMED (run) → FIXED (#202) |
 | C300 | Medium | vl / composite marks, selections, transforms | a dotted `as` is refused for `calculate` but accepted for `aggregate`, then read as a nested path | `packages/vl/src/transforms.ts:268` | CONFIRMED (run) |
 | C301 | Medium | conformance / harness | sweep skip tables carry reasons that are no longer true | `packages/conformance/src/sweeps/vega-lite-schema.mjs:1-9` | CONFIRMED (traced) → FIXED (#205) |
@@ -480,13 +480,13 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C431 | Low | vl / scales, stacking, guides | Bar half-band padding on a continuous dimension is withheld when that channel carries `stack` | `packages/vl/src/compile.ts:5066-5067` | CONFIRMED (run) |
 | C432 | Low | vl / scales, stacking, guides | A gradient legend's encoded opacity beats `legend.gradientOpacity`; `config.legend.title: null` does not remove titles | `packages/vl/src/compile.ts:6030-6031` | CONFIRMED (run) |
 | C433 | Low | vl / scales, stacking, guides | Object-form `autosize: {type: "fit"}` on a concat is kept; vega-lite resets it to `pad` (0×300 vs 350×351) | `packages/vl/src/compile.ts:3134` | CONFIRMED (run) |
-| C434 | Low | vl / mark encoding | `invalid: 'show'` does nothing for a binned field on point-placed marks | `packages/vl/src/compile.ts:8277` | CONFIRMED (run) |
-| C435 | Low | vl / mark encoding | A non-positional scale bound to a selection clips the marks | `packages/vl/src/compile.ts:8964-8976` | CONFIRMED (run) |
-| C436 | Low | vl / mark encoding | A constant position on a bar / tick / rule with no inferable orientation | `packages/vl/src/compile.ts:6841` | CONFIRMED (run) |
-| C437 | Low | vl / mark encoding | Band placement differs in two corners | `packages/vl/src/compile.ts:6709-6710` | CONFIRMED (run) |
-| C438 | Low | vl / mark encoding | Bar with a `size` field in less common layouts | `packages/vl/src/compile.ts:6335-6338` | CONFIRMED (run) |
-| C439 | Low | vl / mark encoding | `mark.shape: {expr}` does not reach the legend symbols | `packages/vl/src/compile.ts:8633-8639` | CONFIRMED (run) |
-| C440 | Low | vl / mark encoding | The same time-unit field on x and y with `bandPosition` on one draws nothing | `packages/vl/src/compile.ts:7282-7290` | CONFIRMED (run) |
+| C434 | Low | vl / mark encoding | `invalid: 'show'` does nothing for a binned field on point-placed marks | `packages/vl/src/compile.ts:8277` | CONFIRMED (run) → FIXED (#209) |
+| C435 | Low | vl / mark encoding | A non-positional scale bound to a selection clips the marks | `packages/vl/src/compile.ts:8964-8976` | CONFIRMED (run) → FIXED (#209) |
+| C436 | Low | vl / mark encoding | A constant position on a bar / tick / rule with no inferable orientation | `packages/vl/src/compile.ts:6841` | CONFIRMED (run) → FIXED (#209) |
+| C437 | Low | vl / mark encoding | Band placement differs in two corners | `packages/vl/src/compile.ts:6709-6710` | CONFIRMED (run) → FIXED (#209) |
+| C438 | Low | vl / mark encoding | Bar with a `size` field in less common layouts | `packages/vl/src/compile.ts:6335-6338` | CONFIRMED (run) → FIXED (#209) |
+| C439 | Low | vl / mark encoding | `mark.shape: {expr}` does not reach the legend symbols | `packages/vl/src/compile.ts:8633-8639` | CONFIRMED (run) → FIXED (#209) |
+| C440 | Low | vl / mark encoding | The same time-unit field on x and y with `bandPosition` on one draws nothing | `packages/vl/src/compile.ts:7282-7290` | CONFIRMED (run) → FIXED (#209) |
 | C441 | Low | vl / validate, optimize, predicates | DateTime parts other than month/day/quarter are spliced into the predicate expression unchecked | `packages/vl/src/predicate.ts:55-67` | CONFIRMED (traced) → FIXED (#202) |
 | C442 | Low | vl / validate, optimize, predicates | smaller compile differences found in passing | `packages/vl/src/compile.ts:4268-4270` | CONFIRMED (run) |
 | C443 | Low | vl / composite marks, selections, transforms | stacked area with a colour domain imputes by the sort index too [compile.ts] | `packages/vl/src/composite.ts:255-262` | CONFIRMED (run) |
@@ -582,7 +582,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C533 | Low | core / axes, legends, titles | `clip` and `blend` set through `encode.axis` / `encode.legend` / `encode.entries` are dropped | `packages/core/src/guide-axis.ts:324` | CONFIRMED (run; re-run by lead) → FIXED (#194) |
 | C534 | Low | react / <Chart>, shells, SSR | The exported helpers need `PositionalScales`, which a host cannot obtain | `packages/react/src/index.ts:62-79` | CONFIRMED (traced) → FIXED (#198) |
 | C535 | Low | vl / scales, stacking, guides | `axis.style` is emitted as a raw Vega `style`; vega-lite resolves `config.style.<name>` into axis properties | `packages/vl/src/compile.ts:5906-5910` | CONFIRMED (run) |
-| C536 | Low | vl / mark encoding | `mark.ariaRole` is dropped; vega-lite encodes it | `packages/vl/src/compile.ts:6915` | CONFIRMED (run) |
+| C536 | Low | vl / mark encoding | `mark.ariaRole` is dropped; vega-lite encodes it | `packages/vl/src/compile.ts:6915` | CONFIRMED (run) → FIXED (#209) |
 | C537 | Low | conformance / harness | `--print-passing` rewrites the baseline in the run that found the regression | `packages/conformance/src/gallery/run.ts:147-152` | CONFIRMED (traced) → FIXED (#205) |
 | C538 | Low | leftovers / budgets, declarations, demo data, gallery lists | Scene types omit fields the docs and the engine use: `item.image`, `item.tooltip`, `scene.signalParams`, `scene.__limits` | `docs/API.md:650` | CONFIRMED (run) → FIXED (#188) |
 | C539 | Low | core / runtime: state, signals, reuse keys | `types.ts` shapes that do not match what runs (`CompiledScale.type` union, `autoChanges`, orphaned TSDoc, `__source`) | `packages/core/src/types.ts:381` | CONFIRMED (run) → FIXED (#201) |
@@ -605,9 +605,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C556 | Low | vl / composition | Composition hygiene: discarded `firstY`, `resolve.scale` parsed three times, bare-prefix `cellPrefixed`, misplaced doc comment | `packages/vl/src/compile.ts:1085` | CONFIRMED (traced) → FIXED (#202) |
 | C557 | Low | vl / scales, stacking, guides | `config.fieldTitle: "plain"` titles a count axis `__count` (the synthetic source name leaks) | `packages/vl/src/compile.ts:3496-3500` | CONFIRMED (run) |
 | C558 | Low | vl / scales, stacking, guides | Dead type aliases and `order`-array handling behind an over-strict validator; misleading ternaries and misplaced doc comments | `packages/vl/src/compile.ts:3325-3328` | CONFIRMED (traced) |
-| C559 | Low | vl / mark encoding | Tick ignores `mark.height`, `config.mark.baseline` and the band axis's `bandPosition` | `packages/vl/src/compile.ts:6629-6646` | CONFIRMED (run) |
-| C560 | Low | vl / mark encoding | `config.legend.unselectedOpacity` is ignored | `packages/vl/src/compile.ts:9013` | CONFIRMED (run) |
-| C561 | Low | vl / mark encoding | Mark-encoding hygiene: unreachable `startAngle`/`endAngle` pass-through, duplicated shape/size writes, leftover no-ops | `packages/vl/src/compile.ts:6915` | CONFIRMED (traced) |
+| C559 | Low | vl / mark encoding | Tick ignores `mark.height`, `config.mark.baseline` and the band axis's `bandPosition` | `packages/vl/src/compile.ts:6629-6646` | CONFIRMED (run) → FIXED (#209) |
+| C560 | Low | vl / mark encoding | `config.legend.unselectedOpacity` is ignored | `packages/vl/src/compile.ts:9013` | CONFIRMED (run) → FIXED (#209) |
+| C561 | Low | vl / mark encoding | Mark-encoding hygiene: unreachable `startAngle`/`endAngle` pass-through, duplicated shape/size writes, leftover no-ops | `packages/vl/src/compile.ts:6915` | CONFIRMED (traced) → FIXED (#209) |
 | C562 | Low | vl / validate, optimize, predicates | dead code and drift in `validate.ts` (CONFIRMED-TRACE) | `packages/vl/src/timeunit.ts:12` | CONFIRMED (traced) → FIXED (#202) |
 | C563 | Low | vl / composite marks, selections, transforms | dead branches and misplaced comments | `packages/vl/src/composite-marks.ts:56-61` | CONFIRMED (traced) |
 | C564 | Low | conformance / scripts and gates | One gate, two builds of the engine | `packages/conformance/scripts/browser-canvas-parity.mts:241-247` | CONFIRMED (traced) → FIXED (#204) |
@@ -682,7 +682,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C633 | Low | vl / composition | `width: Infinity`/`NaN` reports "…got null" (the value is printed through `JSON.stringify`) | `packages/vl/src/validate.ts:153` | CONFIRMED (traced) → FIXED (#202) |
 | C634 | Low | vl / scales, stacking, guides | `{repeat}` inside a repeated spec's `transform` fails validation with a message that does not mention repeat | `packages/vl/src/validate.ts:1165` | CONFIRMED (run) |
 | C635 | Low | vl / scales, stacking, guides | Test gaps: `config.scale` vs explicit encoding values, double binning and unstacked `normalize` are unpinned | `packages/vl/test/scaleconfig.test.ts:47-51` | CONFIRMED (traced) |
-| C636 | Low | vl / mark encoding | `x` on a point scale + an `xOffset` field compiles to Vega that real Vega refuses (cycle); vega-lite throws at compile | `packages/vl/src/compile.ts:4841-4846` | CONFIRMED (run) |
+| C636 | Low | vl / mark encoding | `x` on a point scale + an `xOffset` field compiles to Vega that real Vega refuses (cycle); vega-lite throws at compile | `packages/vl/src/compile.ts:4841-4846` | CONFIRMED (run) → FIXED (#209) |
 | C637 | Low | vl / validate, optimize, predicates | Validation error messages: no suggestion for near-misses, misleading config text, missing spec paths | `packages/vl/src/validate.ts:517` | CONFIRMED (run) → FIXED (#202) |
 | C638 | Low | vl / validate, optimize, predicates | Test gaps: no negative merge tests in `optimize`, no `Object.prototype` assertion | `packages/vl/test/optimize-reads.test.ts:1` | CONFIRMED (traced) → FIXED (#202) |
 | C639 | Low | vl / composite marks, selections, transforms | raw `TypeError`s instead of `VLCompileError`s | `packages/vl/src/composite-marks.ts:390` | CONFIRMED (run) |
@@ -765,7 +765,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C716 | Low | core / signal event loop, transitions | ANIMATION.md omits `theta` from what moves | `docs/ANIMATION.md:69-71` | CONFIRMED (traced) → FIXED (#197) |
 | C717 | Low | core / axes, legends, titles | stale comments and duplicated tables | `packages/core/src/guide-encode.ts:231-235` | CONFIRMED (traced) → FIXED (#194) |
 | C718 | Low | react / hooks, streams, workers | stale comments, docs and test gaps | `packages/react/src/useChart.ts:113-115` | CONFIRMED (traced) → FIXED (#199) |
-| C719 | Low | vl / mark encoding | Test gaps in `vl-compiler-parity`: no rounded stack in a facet, no `config.style.<mark>`, no two-channel invalid, no conditional format | `packages/conformance/test/vl-compiler-parity.test.ts:705` | CONFIRMED (traced) |
+| C719 | Low | vl / mark encoding | Test gaps in `vl-compiler-parity`: no rounded stack in a facet, no `config.style.<mark>`, no two-channel invalid, no conditional format | `packages/conformance/test/vl-compiler-parity.test.ts:705` | CONFIRMED (traced) → FIXED (#209) |
 | C720 | Low | vl / validate, optimize, predicates | Comment says `"a'b"` "keeps its name"; it throws, as vega-lite does | `packages/vl/src/names.ts:116` | CONFIRMED (run) → FIXED (#202) |
 | C721 | Low | conformance / harness | What the canonicalizer drops beyond what its header lists (root ARIA, `<title>`/`<desc>`, `pointer-events`, shape class) | `packages/conformance/src/normalize.ts:682` | CONFIRMED (run) → FIXED (#205) |
 | C722 | Low | conformance / harness | `docs/TESTING.md` counts are stale ("319 files" vs 465 collected) and the scene-differential claims do not hold | `docs/TESTING.md:161` | CONFIRMED (run) → FIXED (#205) |
@@ -1735,6 +1735,7 @@ Direction: gate on `isStacked(def, mark, orient, fields)`.
 
 - **Location:** `packages/vl/src/compile.ts:7214-7218`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #209 (583c565). Fixed: the inner group of a rounded stack in a facet reads no dataset of its own (a mark with no from below a group that has one keeps none); 9 facet/row/column/operator/layer cases against vega-lite, 8 fail on the base.
 - **Area:** vl / mark encoding (also categories 2)
 - **Lane ID / scripts:** `vl-c3-1` — `vl-c3/`
 
@@ -3257,6 +3258,7 @@ Status: **CONFIRMED-RUN** `t3.mjs`.
 
 - **Location:** `packages/vl/src/compile.ts:8124-8139`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #209 (3bc5fbd). Fixed: invalid handling is per channel (a field on two channels keeps both tests), the filter per field; generated over 10 marks x 6 shapes x 6 modes x 4 config.scale.invalid forms, the base fails 10 marks.
 - **Area:** vl / mark encoding
 - **Lane ID / scripts:** `vl-c3-4` — `vl-c3/`
 
@@ -3283,6 +3285,7 @@ Status: **CONFIRMED-RUN** `inv2.mjs`.
 
 - **Location:** `packages/vl/src/compile.ts:7948`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #209 (3bc5fbd). Fixed: a field that comes from a condition is formatted by the condition (conditionRaw); text and tooltip, 7 format forms.
 - **Area:** vl / mark encoding
 - **Lane ID / scripts:** `vl-c3-6` — `vl-c3/`
 
@@ -4267,6 +4270,7 @@ Source line not traced (found by render); revealed by `packages/conformance/test
 
 - **Location:** `packages/vl/src/compile.ts:5878-5892`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #209 (3bc5fbd). Fixed: defaultLabelAlign / Baseline take the orient as a signal; driven through the bound parameter for both axes and 6 label angles.
 - **Area:** gallery / official Vega-Lite examples I
 - **Lane ID / scripts:** `gallery3-2` — `gallery3/`
 
@@ -4794,6 +4798,7 @@ Status: **CONFIRMED-RUN** `t15-autosize.mjs` for hconcat only; the repeat path a
 
 - **Location:** `packages/vl/src/compile.ts:8277`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #209 (3bc5fbd). Fixed: the invalid test of a binned point-placed mark reads the bin-start field through the midpoint signal and the stacked bin mid field.
 - **Area:** vl / mark encoding
 - **Lane ID / scripts:** `vl-c3-9` — `vl-c3/`
 
@@ -4806,6 +4811,7 @@ Status: **CONFIRMED-RUN** `t15-autosize.mjs` for hconcat only; the repeat path a
 
 - **Location:** `packages/vl/src/compile.ts:8964-8976`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #209 (3bc5fbd). Fixed: only an x or y scale bound to a selection clips the marks (scaleClip); 11 channels against vega-lite.
 - **Area:** vl / mark encoding
 - **Lane ID / scripts:** `vl-c3-10` — `vl-c3/`
 
@@ -4824,6 +4830,7 @@ Status: **CONFIRMED-RUN** `t15-autosize.mjs` for hconcat only; the repeat path a
 
 - **Location:** `packages/vl/src/compile.ts:6841`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #209 (3bc5fbd). Fixed: a constant position is a band only where markOrient gives the bar or tick an orientation; a rule with a constant position gets its x2 / y2; generated over 6 marks x every other position.
 - **Area:** vl / mark encoding
 - **Lane ID / scripts:** `vl-c3-11` — `vl-c3/`
 
@@ -4838,6 +4845,7 @@ Status: **CONFIRMED-RUN** `t15-autosize.mjs` for hconcat only; the repeat path a
 
 - **Location:** `packages/vl/src/compile.ts:6709-6710`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #209 (3bc5fbd). Fixed: bandOfPosition (valueref.ts midPoint): a bin or a time unit on a band scale is at the band start, any other field at its own bandPosition, also for a ranged bar and a tick thickness axis.
 - **Area:** vl / mark encoding
 - **Lane ID / scripts:** `vl-c3-13` — `vl-c3/`
 
@@ -4850,6 +4858,7 @@ Status: **CONFIRMED-RUN** `t15-autosize.mjs` for hconcat only; the repeat path a
 
 - **Location:** `packages/vl/src/compile.ts:6335-6338`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #209 (3bc5fbd). Fixed: the size channel applies to a bar only with an orientation and to a tick with one or a discrete size axis; a size takes a bin or time unit off its span (read at its middle); mark.size of an unoriented bar is ignored; all 49 position pairs for bar, tick and rect match.
 - **Area:** vl / mark encoding
 - **Lane ID / scripts:** `vl-c3-14` — `vl-c3/`
 
@@ -4863,6 +4872,7 @@ Status: **CONFIRMED-RUN** `t15-autosize.mjs` for hconcat only; the repeat path a
 
 - **Location:** `packages/vl/src/compile.ts:8633-8639`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #209 (624b1193,3bc5fbd). Fixed by a06c commit d354b0ed (mark-def {expr} written as a signal, in the legend symbol type), absent from the stack tip and cherry-picked here; pinned by the a06 table test and the legend cases.
 - **Area:** vl / mark encoding
 - **Lane ID / scripts:** `vl-c3-17` — `vl-c3/`
 
@@ -4872,6 +4882,7 @@ Status: **CONFIRMED-RUN** `t15-autosize.mjs` for hconcat only; the repeat path a
 
 - **Location:** `packages/vl/src/compile.ts:7282-7290`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #209 (3bc5fbd). Fixed: the offsetted rect formulas are written for every channel that asks (x then y, the later writing over the earlier as vega-lite does), a shared time unit used to skip the second.
 - **Area:** vl / mark encoding
 - **Lane ID / scripts:** `vl-c3-19` — `vl-c3/`
 
@@ -5967,6 +5978,7 @@ Status: **CONFIRMED-RUN** `t21.mjs`.
 
 - **Location:** `packages/vl/src/compile.ts:3747`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #209 (3bc5fbd). Fixed: config.style.<mark> is merged over config.<mark> into the one style Vega gets (as vega-lite redirects it), Vega-Lite-only keys are stripped per mark, and the compiler reads styles for every property; the mark x property x place sweep (about 15 000 drawings) fails on the base.
 - **Area:** vl / mark encoding (also categories 4, 7)
 - **Lane ID / scripts:** `vl-c3-2` — `vl-c3/`
 
@@ -6327,6 +6339,7 @@ Spec `vega/zoomable-world-map.vg.json:32` (`copy('projection')`), `:40`, `:47`, 
 
 - **Location:** `packages/vl/src/compile.ts:6267-6274`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #209 (3bc5fbd). Fixed: the compiler reads a named style for every mark property (mark type then mark.style over config.<mark> over config.mark), in the sweep.
 - **Area:** vl / mark encoding (also categories 4)
 - **Lane ID / scripts:** `vl-c3-3` — `vl-c3/`
 
@@ -6341,6 +6354,7 @@ Spec `vega/zoomable-world-map.vg.json:32` (`copy('projection')`), `:40`, `:47`, 
 
 - **Location:** `packages/vl/src/compile.ts:6563-6565`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #209 (3bc5fbd). Fixed: getMarkConfig with the Vega channel (line / rule size is strokeWidth, text size is fontSize, config.mark.size is the point size), and config values are no longer repeated above Vega defaults; every row of the finding is a sweep case.
 - **Area:** vl / mark encoding
 - **Lane ID / scripts:** `vl-c3-5` — `vl-c3/`
 
@@ -7345,6 +7359,7 @@ Status: **CONFIRMED-RUN** `t19.mjs`.
 
 - **Location:** `packages/vl/src/compile.ts:6629-6646`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #209 (3bc5fbd). Fixed: tick height / width and config.mark.height / width, config.mark.baseline, and the thickness axis band position (bandOfPosition).
 - **Area:** vl / mark encoding
 - **Lane ID / scripts:** `vl-c3-12` — `vl-c3/`
 
@@ -7357,6 +7372,7 @@ Status: **CONFIRMED-RUN** `t19.mjs`.
 
 - **Location:** `packages/vl/src/compile.ts:9013`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #209 (3bc5fbd). Fixed: config.legend.unselectedOpacity read (default 0.35) and stripped from the Vega config as vega-lite strips it; 3 channels x 4 values.
 - **Area:** vl / mark encoding
 - **Lane ID / scripts:** `vl-c3-21` — `vl-c3/`
 
@@ -7366,6 +7382,7 @@ Status: **CONFIRMED-RUN** `t19.mjs`.
 
 - **Location:** `packages/vl/src/compile.ts:6915`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #209 (3bc5fbd). Fixed: unreachable startAngle / endAngle, the doubled shape / size writes, four void no-ops, the two unused zeroOrMinRef parameters removed; a tick size reads width / height of its own axis.
 - **Area:** vl / mark encoding
 - **Lane ID / scripts:** `vl-c3-22` — `vl-c3/`
 
@@ -8613,6 +8630,7 @@ Direction: forward `random` into `initial`, as `logger` is (`ChartStream.tsx:247
 
 - **Location:** `packages/vl/src/compile.ts:7854-7857`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #209 (3bc5fbd). Fixed: mark.url of an image is written to the image (the mark-definition table lists it as used, not forwarded).
 - **Area:** vl / mark encoding
 - **Lane ID / scripts:** `vl-c3-7` — `vl-c3/`
 
@@ -8834,6 +8852,7 @@ Status: **CONFIRMED-RUN** `ax.mjs style`.
 
 - **Location:** `packages/vl/src/compile.ts:6915`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #209 (624b1193,3bc5fbd). Fixed by the a06c table commits (ariaRole is forwarded by vega-lite), cherry-picked from a06 (absent from the stack tip); ariaRole is in the 15 000-drawing sweep on every mark.
 - **Area:** vl / mark encoding
 - **Lane ID / scripts:** `vl-c3-16` — `vl-c3/`
 
@@ -10874,6 +10893,7 @@ Run with `node --max-old-space-size=400 $S/probe.mjs <name> nolimits`.
 
 - **Location:** `packages/vl/src/compile.ts:7805`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #209 (3bc5fbd). Fixed: a title the user wrote is JSON-encoded in the tooltip object and the aria description, the default title of a field keeps vega-lite text with the literal made unbreakable (newline, trailing backslash, U+2028); vega-lite fails to run these charts, Aster draws them.
 - **Area:** vl / mark encoding (also categories 8)
 - **Lane ID / scripts:** `vl-c3-8` — `vl-c3/`
 
@@ -11955,6 +11975,7 @@ Status: **CONFIRMED-TRACE**.
 
 - **Location:** `packages/conformance/test/vl-compiler-parity.test.ts:705`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #209 (583c565,3bc5fbd). Fixed: packages/conformance/test/vl-encoding-differential.test.ts holds a rounded stack in a facet, config.style.<mark>, two-channel invalid, a conditional format and every mark property x place; 146 of its 225 cases fail on the stack tip.
 - **Area:** vl / mark encoding (also categories 8)
 - **Lane ID / scripts:** `vl-c3-23` — `vl-c3/`
 
@@ -13642,6 +13663,7 @@ Status: **CONFIRMED-RUN** `t14-composite.mjs "repeat in transform"`.
 
 - **Location:** `packages/vl/src/compile.ts:4841-4846`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #209 (3bc5fbd). Fixed: an offset over a point scale throws a VLCompileError (vega-lite throws "Cannot use xOffset scale if x scale is not discrete"); 5 marks x 2 offsets.
 - **Area:** vl / mark encoding
 - **Lane ID / scripts:** `vl-c3-20` — `vl-c3/`
 
