@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 89 of 766 findings resolved (88 fixed, 1 already fixed on main, 0 disputed with evidence); 677 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 116 of 766 findings resolved (115 fixed, 1 already fixed on main, 0 disputed with evidence); 650 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -47,14 +47,14 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 
 | ID | Severity | Area | Issue | Location | Status |
 |---|---|---|---|---|---|
-| C1 | Critical | core / SVG, DOM patcher, canvas, a11y | An encode channel named `__domDesc` is taken verbatim as the item's cached DOM descriptor | `packages/core/src/dom.ts:488-501` | CONFIRMED (run; re-run by lead) |
-| C2 | Critical | core / runtime: state, signals, reuse keys | URL policy bypass through the in-place item append | `packages/core/src/runtime.ts:5357-5387` | CONFIRMED (run; re-run by lead) |
-| C3 | Critical | core / loading, URL policy, add-ons | `sanitizeHref` strips a leading `file://` after the allow-check, so `file://javascript:…` becomes `xlink:href="javascript:…"` | `packages/core/src/url-policy.ts:143-149` | CONFIRMED (run; re-run by lead) |
+| C1 | Critical | core / SVG, DOM patcher, canvas, a11y | An encode channel named `__domDesc` is taken verbatim as the item's cached DOM descriptor | `packages/core/src/dom.ts:488-501` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
+| C2 | Critical | core / runtime: state, signals, reuse keys | URL policy bypass through the in-place item append | `packages/core/src/runtime.ts:5357-5387` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
+| C3 | Critical | core / loading, URL policy, add-ons | `sanitizeHref` strips a leading `file://` after the allow-check, so `file://javascript:…` becomes `xlink:href="javascript:…"` | `packages/core/src/url-policy.ts:143-149` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
 | C4 | Critical | core / signal event loop, transitions | A handler expression gets the native DOM event, so a spec can read whatever the page can, listen to elements outside the chart, and exfiltrate through an image url | `packages/core/src/signals.ts:997` | CONFIRMED (run; re-run by lead) |
 | C5 | Critical | vl / validate, optimize, predicates | `compile()` of a spec with a field named `__proto__` and a legend-bound selection writes `Object.prototype.legendBound = true` | `packages/vl/src/selection.ts:285-287` | CONFIRMED (run; re-run by lead) |
 | C6 | Critical | vl / composition | A facet of layers draws every facet's rows in every cell when no layer needs a cast dataset | `packages/vl/src/compile.ts:2022-2024` | CONFIRMED (run; re-run by lead) |
 | C7 | Critical | tests / core (incremental oracle, legacy copies I) | A top-level mark drawn from another mark (`from: {data: <mark name>}`) keeps its previous items when the source rows are edited or reordered in place | `packages/core/src/runtime.ts:2961` | CONFIRMED (run; re-run by lead) |
-| C8 | High | core / runtime: marks, encode, groups | A title's and a subtitle's `href` bypass the URL policy | `packages/core/src/runtime.ts:7899-7906` | CONFIRMED (run; re-run by lead) |
+| C8 | High | core / runtime: marks, encode, groups | A title's and a subtitle's `href` bypass the URL policy | `packages/core/src/runtime.ts:7899-7906` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
 | C9 | High | core / session, stream, limits | A legend's `tickCount` has no built-in ceiling | `packages/core/src/guide-legend.ts:90-92` | CONFIRMED (run; re-run by lead) |
 | C10 | High | core / expressions, regex screen | The static regex screen never terminates on a pattern containing `\u{` with no closing brace | `packages/core/src/regex-screen.ts:204` | CONFIRMED (run; re-run by lead) |
 | C11 | High | core / expressions, regex screen | The screen passes valid patterns it misreads and catastrophic shapes just outside its rules | `packages/core/src/regex-screen.ts:160` | CONFIRMED (run; re-run by lead) |
@@ -66,7 +66,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C17 | High | core / layout transforms, rasterizer | `isocontour` sizes its scan by the `width`/`height` a data row carries, not by `values.length` | `packages/core/src/contour.ts:179-192` | CONFIRMED (run; re-run by lead) |
 | C18 | High | core / scales, time, format, colour | spec text reaches the `Function` constructor | `packages/core/src/scales.ts:103-107` | CONFIRMED (run; re-run by lead) |
 | C19 | High | core / scales, time, format, colour | fatal OOM from a tiny spec with no limits | `packages/core/src/scales.ts:254` | CONFIRMED (run) |
-| C20 | High | core / SVG, DOM patcher, canvas, a11y | An `image` encode channel reaches `xlink:href` without the URL policy | `packages/core/src/render.ts:1420-1421` | CONFIRMED (run; re-run by lead) |
+| C20 | High | core / SVG, DOM patcher, canvas, a11y | An `image` encode channel reaches `xlink:href` without the URL policy | `packages/core/src/render.ts:1420-1421` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
 | C21 | High | tests / core (render … stream) | The escaping suite's patcher coverage skips the cached-descriptor path and every encode-level channel name; its "every channel" table omits at least nine channels the renderer reads (adds… | `packages/core/src/svg-escaping.test.ts:50-67` | CONFIRMED (run) |
 | C22 | High | tests / conformance generators and case tables II | A `tickCount` ≥ 2^32 on a time/utc axis or legend skips the built-in ceiling and exhausts the heap | `packages/core/src/limits.ts:200` | CONFIRMED (run; re-run by lead) |
 | C23 | High | core / runtime: state, signals, reuse keys | The fixed point stops before the scales exist | `packages/core/src/runtime.ts:981-998` | CONFIRMED (run; re-run by lead) |
@@ -83,8 +83,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C34 | High | core / loading, URL policy, add-ons | Mesh `format.filter` (`'interior'` / `'exterior'`) is ignored, and the mesh row has a different shape from vega's | `packages/core/src/addon-load.ts:56-58` | CONFIRMED (run; re-run by lead) |
 | C35 | High | core / compiler, transforms | object-form field parameters are accepted and silently mis-read by almost every transform | `packages/core/src/row-keys.ts:35-36` | CONFIRMED (run; re-run by lead) |
 | C36 | High | core / compiler, transforms | `padding`, `background`, `autosize` as `{signal}` are ignored or stringified | `packages/core/src/compiler.ts:59` | CONFIRMED (run; re-run by lead) |
-| C37 | High | core / SVG, DOM patcher, canvas, a11y | Canvas symbol batching changes the picture for translucent, blended or filled-and-stroked overlapping symbols | `packages/core/src/canvas.ts:1123-1178` | CONFIRMED (run; re-run by lead) |
-| C38 | High | core / SVG, DOM patcher, canvas, a11y | A per-call text-metrics provider is not in force when the scene is serialised | `packages/core/src/index.ts:107-124` | CONFIRMED (run; re-run by lead) |
+| C37 | High | core / SVG, DOM patcher, canvas, a11y | Canvas symbol batching changes the picture for translucent, blended or filled-and-stroked overlapping symbols | `packages/core/src/canvas.ts:1123-1178` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
+| C38 | High | core / SVG, DOM patcher, canvas, a11y | A per-call text-metrics provider is not in force when the scene is serialised | `packages/core/src/index.ts:107-124` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
 | C39 | High | core / hit index, bounds, geometry | A canvas-mode hit index throws on a scene that crossed a structured clone and has an axis or legend | `packages/core/src/bounds.ts:783` | CONFIRMED (run; re-run by lead) |
 | C40 | High | core / signal event loop, transitions | Per-owner state (`{signal}`-handler memory, between/throttle/debounce state, timer streams) is keyed by text (`<scope>\|<index>:<name>:<i>:<JSON events>`), not by chart | `packages/core/src/signals.ts:254` | CONFIRMED (run; re-run by lead) |
 | C41 | High | core / axes, legends, titles | `config.locale` is silently ignored | `packages/core/src/runtime.ts:8022` | CONFIRMED (run; re-run by lead) |
@@ -143,7 +143,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C94 | Medium | core / layout transforms, rasterizer | A round join or cap of a very wide stroke builds millions of points per disk | `packages/core/src/raster-stroke.ts:101-106` | CONFIRMED (run) |
 | C95 | Medium | core / layout transforms, rasterizer | The word cloud's board is `(size[0] >> 5) * size[1]` int32 with no meter (450 MB accepted under `maxRows: 1000`) | `packages/core/src/wordcloud.ts:298-300` | CONFIRMED (run) |
 | C96 | Medium | core / scales, time, format, colour | log-scale ticks: work and allocation driven by `base` | `packages/core/src/scale-warped.ts:81-103` | CONFIRMED (run) |
-| C97 | Medium | core / SVG, DOM patcher, canvas, a11y | The `cursor` channel / signal is handed to the host as any text, `url(https://…)` included | `packages/core/src/cursor.ts:24-36` | CONFIRMED (run) |
+| C97 | Medium | core / SVG, DOM patcher, canvas, a11y | The `cursor` channel / signal is handed to the host as any text, `url(https://…)` included | `packages/core/src/cursor.ts:24-36` | CONFIRMED (run) → FIXED (#191) |
 | C98 | Medium | core / hit index, bounds, geometry | The parse caches are module-level and bounded by 4096 entries, not by size | `packages/core/src/path-data.ts:130-141` | CONFIRMED (run) |
 | C99 | Medium | core / signal event loop, transitions | A `modify` that feeds itself is bounded only by the call stack; `maxTimeMs` and `maxRows` do not stop it | `packages/core/src/signals.ts:678-695` | CONFIRMED (run) |
 | C100 | Medium | react / <Chart>, shells, SSR | `data` rows are not validated at the React boundary | `packages/react/src/ChartCore.tsx:585-586` | CONFIRMED (run) |
@@ -180,11 +180,11 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C131 | Medium | core / layout transforms, rasterizer | Sort ties in the hierarchy layouts follow row position; Vega follows tuple id | `packages/core/src/hierarchy-layout.ts:47-53` | CONFIRMED (run; re-run by lead) |
 | C132 | Medium | core / scales, time, format, colour | calendar intervals that never return | `packages/core/src/time.ts:116-134` | CONFIRMED (run) |
 | C133 | Medium | core / scales, time, format, colour | `{signal: "true" \| "false" \| "null"}` in a scale property is refused as `Unrecognized signal name` | `packages/core/src/scale-domain.ts:53-64` | CONFIRMED (run; re-run by lead) |
-| C134 | Medium | core / SVG, DOM patcher, canvas, a11y | The canvas renderer ignores the view's own `clip` (`scene.frameClip`) | `packages/core/src/canvas.ts:127-158` | CONFIRMED (run) |
-| C135 | Medium | core / SVG, DOM patcher, canvas, a11y | `renderSceneToCanvasAppend` returns true while a full repaint differs | `packages/core/src/canvas.ts:344-352` | CONFIRMED (run) |
-| C136 | Medium | core / SVG, DOM patcher, canvas, a11y | First patch of a string-mounted `<text>` going from one line to several keeps the old text node | `packages/core/src/dom.ts:942-956` | CONFIRMED (run) |
-| C137 | Medium | core / SVG, DOM patcher, canvas, a11y | A gradient paint with its own `id` and no coordinates is drawn bottom-to-top; Vega draws it left-to-right | `packages/core/src/render.ts:1957-1961` | CONFIRMED (run) |
-| C138 | Medium | core / SVG, DOM patcher, canvas, a11y | Legend entry node ids repeat across legends of one scale | `packages/core/src/a11y.ts:305` | CONFIRMED (run) |
+| C134 | Medium | core / SVG, DOM patcher, canvas, a11y | The canvas renderer ignores the view's own `clip` (`scene.frameClip`) | `packages/core/src/canvas.ts:127-158` | CONFIRMED (run) → FIXED (#191) |
+| C135 | Medium | core / SVG, DOM patcher, canvas, a11y | `renderSceneToCanvasAppend` returns true while a full repaint differs | `packages/core/src/canvas.ts:344-352` | CONFIRMED (run) → FIXED (#191) |
+| C136 | Medium | core / SVG, DOM patcher, canvas, a11y | First patch of a string-mounted `<text>` going from one line to several keeps the old text node | `packages/core/src/dom.ts:942-956` | CONFIRMED (run) → FIXED (#191) |
+| C137 | Medium | core / SVG, DOM patcher, canvas, a11y | A gradient paint with its own `id` and no coordinates is drawn bottom-to-top; Vega draws it left-to-right | `packages/core/src/render.ts:1957-1961` | CONFIRMED (run) → FIXED (#191) |
+| C138 | Medium | core / SVG, DOM patcher, canvas, a11y | Legend entry node ids repeat across legends of one scale | `packages/core/src/a11y.ts:305` | CONFIRMED (run) → FIXED (#191) |
 | C139 | Medium | core / hit index, bounds, geometry | A rect with a NaN position is drawn at 0 but left out of the bounds on that axis | `packages/core/src/bounds.ts:271-275` | CONFIRMED (run; re-run by lead) |
 | C140 | Medium | core / hit index, bounds, geometry | `boundIsolated` tests `it.text != null` before the arc and path branches | `packages/core/src/bounds.ts:867` | CONFIRMED (run; re-run by lead) |
 | C141 | Medium | core / hit index, bounds, geometry | A symbol or image with a missing or NaN `x`/`y` is painted at 0, as Vega does, but cannot be picked | `packages/core/src/hit.ts:865` | CONFIRMED (run; re-run by lead) |
@@ -274,7 +274,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C225 | Medium | gallery / official Vega examples I | A numeric top-level `width`/`height` beats the spec's own `width`/`height` signal `update`; vega/horizon-graph renders a wrong frame for any non-default `layers` given as `signals` (adds … | `packages/core/src/runtime.ts:870` | CONFIRMED (run; re-run by lead) |
 | C226 | Medium | gallery / official Vega-Lite examples I | `bar_axis_orient`: an `axis.orient: {expr}` does not drive the label alignment; with "top" the rotated labels point into the plot | `packages/vl/src/compile.ts:5878-5892` | CONFIRMED (run; re-run by lead) |
 | C227 | Medium | gallery / official Vega-Lite examples II | A `select` bind whose options are arrays renders "undefined" seven times and writes `undefined` | `packages/react/src/ChartCore.tsx:190-192` | CONFIRMED (run; re-run by lead) |
-| C228 | Medium | core / SVG, DOM patcher, canvas, a11y | A throw mid-paint leaves the context's save stack, transform and clip behind | `packages/core/src/canvas.ts:134-157` | CONFIRMED (run) |
+| C228 | Medium | core / SVG, DOM patcher, canvas, a11y | A throw mid-paint leaves the context's save stack, transform and clip behind | `packages/core/src/canvas.ts:134-157` | CONFIRMED (run) → FIXED (#191) |
 | C229 | Medium | core / hit index, bounds, geometry | A retained index reads the engine's live items array, so after an append it reports items of a later scene | `packages/core/src/hit.ts:831` | CONFIRMED (run) |
 | C230 | Medium | conformance / scripts and gates | Several gates pass on zero cases | `packages/conformance/scripts/fuzz.mts:119` | CONFIRMED (traced) |
 | C231 | Medium | tooling / gates, CI, release, benchmarks | a partial publish cannot be finished by the workflow, and exact pins make version skew costly | `.github/workflows/release.yml:99-104` | CONFIRMED (traced) → FIXED (#187) |
@@ -287,7 +287,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C238 | Medium | core / compiler, transforms | unknown or missing mark `type` is compiled and rendered silently | `packages/core/src/compiler.ts:760-761` | CONFIRMED (run; re-run by lead) |
 | C239 | Medium | core / layout transforms, rasterizer | The force simulation's own loops are outside `maxTimeMs` | `packages/core/src/force-layout.ts:493` | CONFIRMED (run; re-run by lead) |
 | C240 | Medium | core / layout transforms, rasterizer | Assigning holes to outer rings is quadratic and unmetered | `packages/core/src/contour.ts:202-205` | CONFIRMED (run) |
-| C241 | Medium | core / SVG, DOM patcher, canvas, a11y | The accessible tree has no overall bound | `packages/core/src/a11y.ts:416` | CONFIRMED (run) |
+| C241 | Medium | core / SVG, DOM patcher, canvas, a11y | The accessible tree has no overall bound | `packages/core/src/a11y.ts:416` | CONFIRMED (run) → FIXED (#191) |
 | C242 | Medium | core / geo | geo work is outside every limit | `packages/core/src/geo-resample.ts:17` | CONFIRMED (run) |
 | C243 | Medium | react / <Chart>, shells, SSR | A controlled `view` reaches the scales unvalidated | `packages/react/src/ChartCore.tsx:522-525` | CONFIRMED (run) |
 | C244 | Medium | react / hooks, streams, workers | no deadline; a silent worker leaves `pending: true` forever | `packages/react/src/worker.ts:272-292` | CONFIRMED (run; re-run by lead) |
@@ -332,10 +332,10 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C283 | Medium | core / session, stream, limits | `buildPulseGraph` / `propagatePulse` / `transformNeedsFullRederive` are public, unused by the engine, and wrong | `packages/core/src/pulse.ts:333-335` | CONFIRMED (run) |
 | C284 | Medium | core / expressions, regex screen | `limits.regex: 'refuse'` does not see expressions in the view's own `layout` and `encode` | `packages/core/src/spec-expressions.ts:222-231` | CONFIRMED (run) |
 | C285 | Medium | core / expressions, regex screen | The interpreter-shaped entry points have a weaker sandbox than the file header states, and only tests use them | `packages/core/src/expr-interpreter.ts:14-20` | CONFIRMED (traced) |
-| C286 | Medium | core / loading, URL policy, add-ons | `baseURL` is WHATWG-resolved for data and the policy check, but string-prefixed for the drawn image | `packages/core/src/url-policy.ts:159-169` | CONFIRMED (run) |
+| C286 | Medium | core / loading, URL policy, add-ons | `baseURL` is WHATWG-resolved for data and the policy check, but string-prefixed for the drawn image | `packages/core/src/url-policy.ts:159-169` | CONFIRMED (run) → FIXED (#191) |
 | C287 | Medium | core / loading, URL policy, add-ons | The data format is inferred from the url extension, which vega does not do, and from the post-redirect URL | `packages/core/src/addon-load.ts:365-371` | CONFIRMED (run) |
 | C288 | Medium | core / scales, time, format, colour | a scale `type` in the wrong case is accepted and silently built wrong | `packages/core/src/scales.ts:59` | CONFIRMED (run; re-run by lead) |
-| C289 | Medium | core / SVG, DOM patcher, canvas, a11y | The tree's `label`/`description` read scene fields nothing writes; a spec's `description` is lost | `packages/core/src/a11y.ts:461-462` | CONFIRMED (run) |
+| C289 | Medium | core / SVG, DOM patcher, canvas, a11y | The tree's `label`/`description` read scene fields nothing writes; a spec's `description` is lost | `packages/core/src/a11y.ts:461-462` | CONFIRMED (run) → FIXED (#191) |
 | C290 | Medium | core / signal event loop, transitions | `{scale}` event sources never fire for a host that replaces its element, even with `owner` | `packages/core/src/signals.ts:1385-1386` | CONFIRMED (run; re-run by lead) |
 | C291 | Medium | core / geo | dead and stale pieces around the add-on boundary | `packages/core/src/registry.ts:30` | CONFIRMED (traced) |
 | C292 | Medium | react / <Chart>, shells, SSR | `signals` is compared by identity | `packages/react/src/ChartCore.tsx:805-807` | CONFIRMED (run) |
@@ -433,11 +433,11 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C384 | Low | core / expressions, regex screen | Member reads return built-in prototype objects and host-object getters as values | `packages/core/src/expr-interpreter.ts:279-305` | CONFIRMED (run) |
 | C385 | Low | core / expressions, regex screen | Process-wide expression caches are bounded by entry count, not size, and keyed by full expression text | `packages/core/src/expr-parser.ts:846-860` | CONFIRMED (traced) |
 | C386 | Low | core / layout transforms, rasterizer | `spirals[spiralName]` is a plain-object lookup | `packages/core/src/wordcloud.ts:457-458` | CONFIRMED (run) |
-| C387 | Low | core / SVG, DOM patcher, canvas, a11y | A gradient's own `id` shares the id space of clip paths | `packages/core/src/svg-defs.ts:82` | CONFIRMED (run) |
+| C387 | Low | core / SVG, DOM patcher, canvas, a11y | A gradient's own `id` shares the id space of clip paths | `packages/core/src/svg-defs.ts:82` | CONFIRMED (run) → FIXED (#191) |
 | C388 | Low | core / signal event loop, transitions | A timer of an element that was never in the document has no self-stop | `packages/core/src/signals.ts:1037-1045` | CONFIRMED (run) |
 | C389 | Low | react / <Chart>, shells, SSR | An a11y node id goes into a selector unescaped | `packages/react/src/ChartCore.tsx:1379` | CONFIRMED (run) |
 | C390 | Low | vl / composite marks, selections, transforms | `quotedRef` is a second, weaker field escaper (continues C37) | `packages/vl/src/composite-marks.ts:17` | CONFIRMED (run) |
-| C391 | Low | tests / core (limits, loaders, locale, oracle vectors) | A URL refused for embedded credentials is echoed, password included, in the error message and `.url` | `packages/core/src/url-policy.ts:20-21` | CONFIRMED (run; re-run by lead) |
+| C391 | Low | tests / core (limits, loaders, locale, oracle vectors) | A URL refused for embedded credentials is echoed, password included, in the error message and `.url` | `packages/core/src/url-policy.ts:20-21` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
 | C392 | Low | corpus / specs, range 2 | `image.vg.json` points at a third-party host | `packages/conformance/corpus/image.vg.json:1` | CONFIRMED (traced) |
 | C393 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | Lockfile hygiene: one deprecated package, unhashed `packageManager`, oracle versions held only by the lockfile outside conformance too | `package.json:4` | CONFIRMED (run) → FIXED (#188) |
 | C394 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | `localFileFor` ignores the package and version in a jsDelivr URL and throws on a malformed escape | `packages/conformance/src/gallery/lib.ts:54-58` | CONFIRMED (run) |
@@ -457,10 +457,10 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C408 | Low | core / scales, time, format, colour | an unused `sequential` scale with `range: []` makes `renderSpec` throw a raw TypeError | `packages/core/src/scale-warped.ts:237-240` | CONFIRMED (run) |
 | C409 | Low | core / scales, time, format, colour | colour objects list `opacity` first | `packages/core/src/color.ts:45` | CONFIRMED (run) |
 | C410 | Low | core / scales, time, format, colour | empty literal domain + `domainMax`/`zero` + `padding` gives a `[NaN]` domain | `packages/core/src/scales.ts:181-199` | CONFIRMED (run) |
-| C411 | Low | core / SVG, DOM patcher, canvas, a11y | Mark boxes are approximations, though the module comment promises "a node lies exactly over the mark" | `packages/core/src/a11y.ts:118` | CONFIRMED (run) |
-| C412 | Low | core / SVG, DOM patcher, canvas, a11y | Canvas text with `fill: ''` or `stroke: ''` is painted | `packages/core/src/canvas.ts:1030-1031` | CONFIRMED (run) |
-| C413 | Low | core / SVG, DOM patcher, canvas, a11y | `denseMarks` batches filled-and-stroked symbols into one `<path>` | `packages/core/src/dom.ts:260-273` | CONFIRMED (run) |
-| C414 | Low | core / SVG, DOM patcher, canvas, a11y | Text-width cache key is ambiguous between font and text, and every per-call provider clears the global cache | `packages/core/src/text-metrics.ts:113` | CONFIRMED (traced) |
+| C411 | Low | core / SVG, DOM patcher, canvas, a11y | Mark boxes are approximations, though the module comment promises "a node lies exactly over the mark" | `packages/core/src/a11y.ts:118` | CONFIRMED (run) → FIXED (#191) |
+| C412 | Low | core / SVG, DOM patcher, canvas, a11y | Canvas text with `fill: ''` or `stroke: ''` is painted | `packages/core/src/canvas.ts:1030-1031` | CONFIRMED (run) → FIXED (#191) |
+| C413 | Low | core / SVG, DOM patcher, canvas, a11y | `denseMarks` batches filled-and-stroked symbols into one `<path>` | `packages/core/src/dom.ts:260-273` | CONFIRMED (run) → FIXED (#191) |
+| C414 | Low | core / SVG, DOM patcher, canvas, a11y | Text-width cache key is ambiguous between font and text, and every per-call provider clears the global cache | `packages/core/src/text-metrics.ts:113` | CONFIRMED (traced) → FIXED (#191) |
 | C415 | Low | core / hit index, bounds, geometry | `tracePath` (public, re-exported at `canvas.ts:21`) mis-draws two SVG arc forms the engine never writes | `packages/core/src/path-data.ts:486-492` | CONFIRMED (run) |
 | C416 | Low | core / hit index, bounds, geometry | Zero-area items are picked on their exact coordinates | `packages/core/src/hit.ts:908` | CONFIRMED (run) |
 | C417 | Low | core / hit index, bounds, geometry | `intersect()` ignores a mark's `clip` | `packages/core/src/scene-intersect.ts:70-76` | CONFIRMED (run) |
@@ -524,7 +524,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C475 | Low | tests / conformance generators and case tables II | Decorative floors and non-differentials in the time files | `packages/conformance/scripts/differential-time-format.test.mts:166` | CONFIRMED (run) |
 | C476 | Low | corpus / specs, range 5 | specs whose named property is inert because of the chosen data or value | `packages/conformance/corpus/vlx-mark-order-false.vl.json:118` | CONFIRMED (run) |
 | C477 | Low | corpus / specs, range 5 | interaction properties that a static SVG cannot show | `packages/conformance/corpus/vlx-param-bind-checkbox.vl.json:138` | CONFIRMED (run) |
-| C478 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | A channel key omits the URL policy the mark key holds | `packages/core/src/runtime.ts:5119-5126` | CONFIRMED (run; re-run by lead) |
+| C478 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | A channel key omits the URL policy the mark key holds | `packages/core/src/runtime.ts:5119-5126` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
 | C479 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | The collision renamer in both schema generators produces duplicate names from the third collision on | `packages/conformance/src/sweeps/vega-schema.mjs:1509-1511` | CONFIRMED (run) |
 | C480 | Low | closure / gallery lists, small recorded vectors | `intersect()` moves the box into every nested group without the bounds check Vega makes, so a group at a huge x loses later sibling hits | `packages/core/src/scene-intersect.ts:282-290` | CONFIRMED (run; re-run by lead) → FIXED (#189) |
 | C481 | Low | closure / raster fixtures I | the quarter-pixel test's pattern records that a grid repeats an earlier one, not which one | `packages/conformance/src/raster-vs-chromium.test.ts:54-59` | CONFIRMED (run; re-run by lead) → FIXED (#189) |
@@ -596,8 +596,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C547 | Low | core / layout transforms, rasterizer | `byType.circle` paints a `circle` marktype nothing produces (dead code) | `packages/core/src/label-draw.ts:117-124` | PLAUSIBLE |
 | C548 | Low | core / scales, time, format, colour | dead second "default locale" in the engines | `packages/core/src/format.ts:432` | CONFIRMED (traced) |
 | C549 | Low | core / scales, time, format, colour | `CONTINUOUS_TYPES` is a hand list that disagrees with the registry | `packages/core/src/scales.ts:33-34` | CONFIRMED (traced) |
-| C550 | Low | core / SVG, DOM patcher, canvas, a11y | A non-numeric `angle` is written escaped by the DOM builder | `packages/core/src/render.ts:1119-1122` | CONFIRMED (run) |
-| C551 | Low | core / SVG, DOM patcher, canvas, a11y | Canvas event tables are plain-object lookups by event type; two `fontString` implementations disagree | `packages/core/src/canvas-events.ts:135` | CONFIRMED (traced) |
+| C550 | Low | core / SVG, DOM patcher, canvas, a11y | A non-numeric `angle` is written escaped by the DOM builder | `packages/core/src/render.ts:1119-1122` | CONFIRMED (run) → FIXED (#191) |
+| C551 | Low | core / SVG, DOM patcher, canvas, a11y | Canvas event tables are plain-object lookups by event type; two `fontString` implementations disagree | `packages/core/src/canvas-events.ts:135` | CONFIRMED (traced) → FIXED (#191) |
 | C552 | Low | core / hit index, bounds, geometry | Dead axis-bounds code with a title-length nudge; wrong comment about `shape: "point"`; unbounded "short" side list | `packages/core/src/bounds.ts:784-853` | CONFIRMED (run) |
 | C553 | Low | core / axes, legends, titles | `guide-model.ts` and the runtime disagree with Vega on what is parsed in 5 of 1018 probes (`axis.grid`, `config.axis.labelBound`) | `packages/core/src/guide-model.ts:50` | CONFIRMED (run) |
 | C554 | Low | react / <Chart>, shells, SSR | The error state drops `className` and `ariaLabel` | `packages/react/src/ChartCore.tsx:1637` | CONFIRMED (run) |
@@ -758,7 +758,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C709 | Low | core / compiler, transforms | ARCHITECTURE statements the code contradicts | `docs/ARCHITECTURE.md:322` | CONFIRMED (traced) |
 | C710 | Low | core / scales, time, format, colour | the "Scales" section and file headers describe the layout before the split | `docs/ARCHITECTURE.md:523` | CONFIRMED (traced) |
 | C711 | Low | core / scales, time, format, colour | deviations table omits other resolved `{signal}` positions | `docs/ARCHITECTURE.md:593` | CONFIRMED (run) |
-| C712 | Low | core / SVG, DOM patcher, canvas, a11y | Docs and comments: `renderGroup` named for the wrong file; "neither side owns a list" while `dom.ts` hand-writes four | `docs/ARCHITECTURE.md:545` | CONFIRMED (traced) |
+| C712 | Low | core / SVG, DOM patcher, canvas, a11y | Docs and comments: `renderGroup` named for the wrong file; "neither side owns a list" while `dom.ts` hand-writes four | `docs/ARCHITECTURE.md:545` | CONFIRMED (traced) → FIXED (#191) |
 | C713 | Low | core / hit index, bounds, geometry | Stroke dashes are not part of the tested stroke, so a dash gap is pickable | `packages/core/src/hit.ts:185-196` | PLAUSIBLE |
 | C714 | Low | core / hit index, bounds, geometry | An area with `interpolate: "bundle"` draws; Vega throws `output.areaStart is not a function` | `packages/core/src/curves.ts:63-81` | CONFIRMED (run) |
 | C715 | Low | core / signal event loop, transitions | API.md says the item is "read from the DOM … where mark names are not available"; with a picker the DOM is never consulted | `docs/API.md:552` | CONFIRMED (traced) |
@@ -1296,6 +1296,7 @@ Direction: bind the item under construction into the encode frame (`EntryScope.i
 
 - **Location:** `packages/core/src/canvas.ts:1123-1178`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #191 (647a044,abe8e82). Fixed: canvas symbol runs batch only when batchablePaint (opaque, unblended, fill xor stroke); otherwise painted per item.
 - **Area:** core / SVG, DOM patcher, canvas, a11y
 - **Lane ID / scripts:** `core-render-2` — `core-render/`
 
@@ -1319,6 +1320,7 @@ Direction: bind the item under construction into the encode frame (`EntryScope.i
 
 - **Location:** `packages/core/src/index.ts:107-124`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #191 (85ce62a,647a044,f075640,abe8e82). Fixed: the scene records its per-call text measurer and every renderer entry (SVG, DOM, canvas, append, hit, a11y) runs under it via withSceneOutput.
 - **Area:** core / SVG, DOM patcher, canvas, a11y (also categories 4, 7)
 - **Lane ID / scripts:** `core-render-3` — `core-render/`
 
@@ -2467,6 +2469,7 @@ if (IDENTIFIER.test(reference) && !EXPRESSION_CONSTANTS.has(reference)) raise(`U
 
 - **Location:** `packages/core/src/canvas.ts:127-158`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #191 (647a044,85ce62a,abe8e82). Fixed: canvas clips to frameClipDef (rounded with a corner radius, as vega, which SVG/DOM/hit now also use); checked against vega in view-clip-gradient-vs-vega.test.
 - **Area:** core / SVG, DOM patcher, canvas, a11y
 - **Lane ID / scripts:** `core-render-5` — `core-render/`
 
@@ -2483,6 +2486,7 @@ if (IDENTIFIER.test(reference) && !EXPRESSION_CONSTANTS.has(reference)) raise(`U
 
 - **Location:** `packages/core/src/canvas.ts:344-352`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #191 (647a044,abe8e82). Fixed: the append compares the whole root paint (sameRootPaint) and paints under the same view frame (offset, clip) as a full repaint.
 - **Area:** core / SVG, DOM patcher, canvas, a11y (also categories 7)
 - **Lane ID / scripts:** `core-render-6` — `core-render/`
 
@@ -2499,6 +2503,7 @@ if (IDENTIFIER.test(reference) && !EXPRESSION_CONSTANTS.has(reference)) raise(`U
 
 - **Location:** `packages/core/src/dom.ts:942-956`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #191 (85ce62a,abe8e82). Fixed: a string-mounted element drops non-element children before the child walk, and a tspan text is rewritten to a single line; dom-canon now sees stray text nodes.
 - **Area:** core / SVG, DOM patcher, canvas, a11y
 - **Lane ID / scripts:** `core-render-7` — `core-render/`
 
@@ -2516,6 +2521,7 @@ if (IDENTIFIER.test(reference) && !EXPRESSION_CONSTANTS.has(reference)) raise(`U
 
 - **Location:** `packages/core/src/render.ts:1957-1961`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #191 (85ce62a,647a044,abe8e82). Fixed: an id'd gradient without coordinates is written bare (left to right) in SVG and canvas; legend gradients carry direction 'vertical'; checked against vega.
 - **Area:** core / SVG, DOM patcher, canvas, a11y
 - **Lane ID / scripts:** `core-render-8` — `core-render/`
 
@@ -2534,6 +2540,7 @@ if (IDENTIFIER.test(reference) && !EXPRESSION_CONSTANTS.has(reference)) raise(`U
 
 - **Location:** `packages/core/src/a11y.ts:305`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #191 (85ce62a,abe8e82). Fixed: legend entry ids are prefixed with their guide node id.
 - **Area:** core / SVG, DOM patcher, canvas, a11y
 - **Lane ID / scripts:** `core-render-12` — `core-render/`
 
@@ -4371,6 +4378,7 @@ Source line not traced (found by render); revealed by `packages/conformance/test
 
 - **Location:** `packages/core/src/a11y.ts:118`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #191 (85ce62a,fa54a10,abe8e82). Fixed: a11y boxes are the hit index's item bounds (boundItemOfKind), finite and >=2x2, path-mark items are their point, ids derive from the datum not the position.
 - **Area:** core / SVG, DOM patcher, canvas, a11y (also categories 7)
 - **Lane ID / scripts:** `core-render-14` — `core-render/`
 
@@ -4385,6 +4393,7 @@ Source line not traced (found by render); revealed by `packages/conformance/test
 
 - **Location:** `packages/core/src/canvas.ts:1030-1031`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #191 (647a044,abe8e82). Fixed: one isPaint predicate for every canvas painter, text included.
 - **Area:** core / SVG, DOM patcher, canvas, a11y
 - **Lane ID / scripts:** `core-render-15` — `core-render/`
 
@@ -4398,6 +4407,7 @@ Source line not traced (found by render); revealed by `packages/conformance/test
 
 - **Location:** `packages/core/src/dom.ts:260-273`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #191 (85ce62a,abe8e82). Fixed: denseMarks batches only batchablePaint items (no filled-and-stroked).
 - **Area:** core / SVG, DOM patcher, canvas, a11y (also categories 7)
 - **Lane ID / scripts:** `core-render-16` — `core-render/`
 
@@ -4411,6 +4421,7 @@ Source line not traced (found by render); revealed by `packages/conformance/test
 
 - **Location:** `packages/core/src/text-metrics.ts:113`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #191 (ce64a25,abe8e82). Fixed: one width cache per measurer (scoped providers no longer clear the global one) and unambiguous length-prefixed keys.
 - **Area:** core / SVG, DOM patcher, canvas, a11y
 - **Lane ID / scripts:** `core-render-18` — `core-render/`
 
@@ -5318,6 +5329,7 @@ Deleting the property leaves the oracle SVG byte-identical (`inert.mjs`), althou
 
 - **Location:** `packages/core/src/runtime.ts:5119-5126`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #191 (f075640,1b08c14). Fixed: URL channels' channel keys include the policy and a re-evaluated link is vetted before comparison.
 - **Area:** leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims (also categories 3)
 - **Lane ID / scripts:** `gaps-misc-a-3` — `gaps-misc-a/`
 
@@ -5455,6 +5467,7 @@ Direction: skip a group item whose bounds miss the box, as Vega does, and restor
 
 - **Location:** `packages/core/src/canvas.ts:134-157`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #191 (647a044,abe8e82). Fixed: every canvas save is restored in a finally at both entry points and in every nested save; property-tested over throwing contexts.
 - **Area:** core / SVG, DOM patcher, canvas, a11y (also categories 5)
 - **Lane ID / scripts:** `core-render-9` — `core-render/`
 
@@ -5969,6 +5982,7 @@ Direction: one accounting rule: the pulse path charges what a run from scratch w
 
 - **Location:** `packages/core/src/url-policy.ts:159-169`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #191 (ede341e,f075640,1b08c14). Fixed: image urls are resolved by vega's prefix rule first and allow is asked once about the drawn url (protocol/credential checks still apply to the text as written); TSDoc/LIMITS say baseURL is a prefix.
 - **Area:** core / loading, URL policy, add-ons (also categories 7)
 - **Lane ID / scripts:** `core-load-11` — `core-load/`
 
@@ -6014,6 +6028,7 @@ Direction: one accounting rule: the pulse path charges what a run from scratch w
 
 - **Location:** `packages/core/src/a11y.ts:461-462`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #191 (85ce62a,f075640,abe8e82). Fixed: the scene carries the view description (spec.description || config.description, as vega-parser) and the tree label reads it; dead ariaLabel/ariaRole fields removed.
 - **Area:** core / SVG, DOM patcher, canvas, a11y (also categories 4)
 - **Lane ID / scripts:** `core-render-13` — `core-render/`
 
@@ -7015,6 +7030,7 @@ Process-global mutable tables are public API: `withdrawFunctions` (a test seam) 
 
 - **Location:** `packages/core/src/render.ts:1119-1122`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #191 (85ce62a,abe8e82). Fixed: a word angle makes the transform a vetted/escaped value (v) instead of pre-escaped t() text, so DOM and string agree.
 - **Area:** core / SVG, DOM patcher, canvas, a11y
 - **Lane ID / scripts:** `core-render-17` — `core-render/`
 
@@ -7028,6 +7044,7 @@ Process-global mutable tables are public API: `withdrawFunctions` (a test seam) 
 
 - **Location:** `packages/core/src/canvas-events.ts:135`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #191 (ce64a25,647a044,abe8e82). Fixed: canvas event tables are read by own property; canvas and measurer share one vega-style fontString.
 - **Area:** core / SVG, DOM patcher, canvas, a11y (also categories 6)
 - **Lane ID / scripts:** `core-render-21` — `core-render/`
 
@@ -8842,6 +8859,7 @@ No workflow sets `ASTER_ORACLE_SEEDS` (grep: only the test, `RUNBOOK.md`, `ARCHI
 
 - **Location:** `packages/core/src/a11y.ts:416`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #191 (85ce62a,abe8e82). Fixed: the a11y tree is bounded: over summaryThreshold items every mark summarises, at most summaryThreshold mark/group nodes (rest folded), and legend entries capped.
 - **Area:** core / SVG, DOM patcher, canvas, a11y
 - **Lane ID / scripts:** `core-render-11` — `core-render/`
 
@@ -9797,6 +9815,7 @@ A scenario whose spec fails to evaluate on both sides is green at every step. Th
 
 - **Location:** `packages/core/src/dom.ts:488-501`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #191 (85ce62a,f075640,9a89934,1b08c14,abe8e82). Fixed: the DOM descriptor cache lives in a WeakMap beside the items, the patcher never sets on* attributes, and every encode channel naming engine state (`_*`, scene-type fields that are not vega's) is refused at compile; engine-slots-vs-vega.test derives both lists from types.ts, vega's builds and core's source.
 - **Area:** core / SVG, DOM patcher, canvas, a11y
 - **Lane ID / scripts:** `core-render-1` — `core-render/`
 
@@ -9819,6 +9838,7 @@ A scenario whose spec fails to evaluate on both sides is green at every step. Th
 
 - **Location:** `packages/core/src/runtime.ts:5357-5387`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #191 (f075640,1b08c14). Fixed: the in-place append claims the items array and is undone on any throw until supersede, and URLs are vetted as each item is encoded so a kept item is never written again; url-policy-session.test checks random sessions against fresh evaluations and that no returned scene changes.
 - **Area:** core / runtime: state, signals, reuse keys (also categories 1)
 - **Lane ID / scripts:** `core-rt1-1` — `core-rt1/`
 
@@ -9851,6 +9871,7 @@ A scenario whose spec fails to evaluate on both sides is green at every step. Th
 
 - **Location:** `packages/core/src/url-policy.ts:143-149`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #191 (ede341e,0580f70,85ce62a,1b08c14). Fixed: outputUrl applies vega's file:// strip first and judges the text that is written (WHATWG protocol allowlist); sanitizeHref is that function.
 - **Area:** core / loading, URL policy, add-ons (also categories 7)
 - **Lane ID / scripts:** `core-load-1` — `core-load/`
 - **Lead's note:** Upstream Vega 6.3.1 has the same defect; it is reachable only when neither `urlPolicy` nor `limits` is given, and needs a click on the link.
@@ -9939,6 +9960,7 @@ Scenario (schema-valid):
 
 - **Location:** `packages/core/src/runtime.ts:7899-7906`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #191 (f075640,85ce62a,1b08c14). Fixed: every node of a guide is vetted by the runtime, and every URL is vetted again at the attribute sink; covers title, subtitle, group titles, axes, legends.
 - **Area:** core / runtime: marks, encode, groups
 - **Lane ID / scripts:** `core-rt3-1` — `core-rt3/`
 
@@ -10207,6 +10229,7 @@ A scale is a function object, so `scale[key]` also finds inherited members of `F
 
 - **Location:** `packages/core/src/render.ts:1420-1421`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #191 (f075640,85ce62a,1b08c14). Fixed: the image channel's src is vetted at evaluation and the image href is vetted at the sink (u('xlink:href','image')).
 - **Area:** core / SVG, DOM patcher, canvas, a11y
 - **Lane ID / scripts:** `core-render-4` — `core-render/`
 
@@ -10432,6 +10455,7 @@ Run with `node --max-old-space-size=400 $S/probe.mjs <name> nolimits`.
 
 - **Location:** `packages/core/src/cursor.ts:24-36`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #191 (85ce62a,723730c,36be13b,1b08c14). Fixed: resolveCursor shows only CSS cursor keywords; url() cursors count as no cursor.
 - **Area:** core / SVG, DOM patcher, canvas, a11y
 - **Lane ID / scripts:** `core-render-10` — `core-render/`
 
@@ -10712,6 +10736,7 @@ The differential therefore cannot see a wrong descriptor on exactly the items it
 
 - **Location:** `packages/core/src/svg-defs.ts:82`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #191 (85ce62a,abe8e82). Fixed: clip ids skip the scene's gradient ids (sceneDefIds), and gradient-id url() breakouts are neutralized at the sink.
 - **Area:** core / SVG, DOM patcher, canvas, a11y
 - **Lane ID / scripts:** `core-render-19` — `core-render/`
 
@@ -10757,6 +10782,7 @@ A timer of an element that was never in the document has no self-stop (`wasConne
 
 - **Location:** `packages/core/src/url-policy.ts:20-21`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #191 (ede341e,1b08c14). Fixed: AsterUrlError redacts user-info (redactUrl) in message and .url.
 - **Area:** tests / core (limits, loaders, locale, oracle vectors)
 - **Lane ID / scripts:** `tests-core5-7` — `tests-core5/`
 
@@ -11486,6 +11512,7 @@ Status: **CONFIRMED-TRACE**.
 
 - **Location:** `docs/ARCHITECTURE.md:545`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #191 (85ce62a,9ea19bd). Fixed: ARCHITECTURE names the real dispatch functions; dom.ts's hand-written lists are now shared render.ts attribute functions; dead computeLine/AreaPath paint fields and textItemDesc null branches removed.
 - **Area:** core / SVG, DOM patcher, canvas, a11y
 - **Lane ID / scripts:** `core-render-20` — `core-render/`
 
