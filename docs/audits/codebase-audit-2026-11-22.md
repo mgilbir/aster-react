@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 133 of 766 findings resolved (132 fixed, 1 already fixed on main, 0 disputed with evidence); 633 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 165 of 766 findings resolved (163 fixed, 1 already fixed on main, 1 disputed with evidence); 601 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -55,15 +55,15 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C6 | Critical | vl / composition | A facet of layers draws every facet's rows in every cell when no layer needs a cast dataset | `packages/vl/src/compile.ts:2022-2024` | CONFIRMED (run; re-run by lead) |
 | C7 | Critical | tests / core (incremental oracle, legacy copies I) | A top-level mark drawn from another mark (`from: {data: <mark name>}`) keeps its previous items when the source rows are edited or reordered in place | `packages/core/src/runtime.ts:2961` | CONFIRMED (run; re-run by lead) |
 | C8 | High | core / runtime: marks, encode, groups | A title's and a subtitle's `href` bypass the URL policy | `packages/core/src/runtime.ts:7899-7906` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
-| C9 | High | core / session, stream, limits | A legend's `tickCount` has no built-in ceiling | `packages/core/src/guide-legend.ts:90-92` | CONFIRMED (run; re-run by lead) |
+| C9 | High | core / session, stream, limits | A legend's `tickCount` has no built-in ceiling | `packages/core/src/guide-legend.ts:90-92` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
 | C10 | High | core / expressions, regex screen | The static regex screen never terminates on a pattern containing `\u{` with no closing brace | `packages/core/src/regex-screen.ts:204` | CONFIRMED (run; re-run by lead) |
 | C11 | High | core / expressions, regex screen | The screen passes valid patterns it misreads and catastrophic shapes just outside its rules | `packages/core/src/regex-screen.ts:160` | CONFIRMED (run; re-run by lead) |
 | C12 | High | core / loading, URL policy, add-ons | A wide csv header plus many empty lines allocates `columns × rows` cells before any limit is read | `packages/core/src/dsv.ts:166-167` | CONFIRMED (run; re-run by lead) → FIXED (#192) |
 | C13 | High | core / loading, URL policy, add-ons | The default "non-public hosts are denied" rule lets dotless and internal names through (`http://metadata/`, `*.svc`, `.lan`, `.corp`) and four IPv6 forms | `packages/core/src/addon-load.ts:181-201` | CONFIRMED (run; re-run by lead) → FIXED (#192) |
 | C14 | High | core / loading, URL policy, add-ons | `loadSpecData(spec, {limits})` evaluates the spec's signal expressions with no limits | `packages/core/src/addon-load.ts:389-415` | CONFIRMED (run; re-run by lead) → FIXED (#192) |
 | C15 | High | core / compiler, transforms | `heatmap` over a data-supplied grid loops without bound; ceilings and `limits` do not stop it | `packages/core/src/raster-transforms.ts:183-205` | CONFIRMED (run; re-run by lead) |
-| C16 | High | core / layout transforms, rasterizer | A tiny `strokeDash` on a mark that `label` draws kills the process | `packages/core/src/raster-stroke.ts:75` | CONFIRMED (run; re-run by lead) |
-| C17 | High | core / layout transforms, rasterizer | `isocontour` sizes its scan by the `width`/`height` a data row carries, not by `values.length` | `packages/core/src/contour.ts:179-192` | CONFIRMED (run; re-run by lead) |
+| C16 | High | core / layout transforms, rasterizer | A tiny `strokeDash` on a mark that `label` draws kills the process | `packages/core/src/raster-stroke.ts:75` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
+| C17 | High | core / layout transforms, rasterizer | `isocontour` sizes its scan by the `width`/`height` a data row carries, not by `values.length` | `packages/core/src/contour.ts:179-192` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
 | C18 | High | core / scales, time, format, colour | spec text reaches the `Function` constructor | `packages/core/src/scales.ts:103-107` | CONFIRMED (run; re-run by lead) |
 | C19 | High | core / scales, time, format, colour | fatal OOM from a tiny spec with no limits | `packages/core/src/scales.ts:254` | CONFIRMED (run) |
 | C20 | High | core / SVG, DOM patcher, canvas, a11y | An `image` encode channel reaches `xlink:href` without the URL policy | `packages/core/src/render.ts:1420-1421` | CONFIRMED (run; re-run by lead) → FIXED (#191) |
@@ -75,7 +75,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C26 | High | core / runtime: datasets, scales, fit | A leaf mark inside a group item that reads another pipeline dataset by expression goes permanently stale after an append | `packages/core/src/runtime.ts:5644` | CONFIRMED (run; re-run by lead) |
 | C27 | High | core / runtime: marks, encode, groups | Vega's colour-object encode is silently dropped | `packages/core/src/runtime.ts:6957-6964` | CONFIRMED (run; re-run by lead) |
 | C28 | High | core / runtime: marks, encode, groups | The per-item `zindex` channel does not reorder painting | `packages/core/src/runtime.ts:5597-5616` | CONFIRMED (run; re-run by lead) |
-| C29 | High | core / session, stream, limits | `limits: { maxGeneratedRows }` alone removes the `rows` ceiling for `density` / `quantile` | `packages/core/src/limits.ts:460-463` | CONFIRMED (run; re-run by lead) |
+| C29 | High | core / session, stream, limits | `limits: { maxGeneratedRows }` alone removes the `rows` ceiling for `density` / `quantile` | `packages/core/src/limits.ts:460-463` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
 | C30 | High | core / session, stream, limits | A rejected evaluation or flush leaves its rows in the last good scene's datasets and runtime | `packages/core/src/incremental-engine.ts:128-148` | CONFIRMED (run; re-run by lead) |
 | C31 | High | core / expressions, regex screen | `item` is always `undefined` in the engine's expressions, including encode `signal` expressions where Vega binds the scenegraph item | `packages/core/src/expr-interpreter.ts:573-574` | CONFIRMED (run; re-run by lead) |
 | C32 | High | core / expressions, regex screen | A regex literal with `g` or `y` is a single shared `RegExp`, so `test` advances `lastIndex` from row to row | `packages/core/src/expr-interpreter.ts:445-448` | CONFIRMED (run; re-run by lead) |
@@ -134,14 +134,14 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C85 | High | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | The incremental guarantee ("deep-equals a freshly compiled chart") is not what the oracle checks for any spec with `identifier` (every Vega-Lite point selection) | `packages/core/src/incremental-oracle.test.ts:718` | CONFIRMED (traced; lines re-read by lead) |
 | C86 | High | tests / conformance suites II | `ASTER_ONLY` is run by no test, and its stated reason for the nested-field exclusion is false | `packages/conformance/test/vl-composite-matrix-cases.ts:373-392` | CONFIRMED (run; re-run by lead) |
 | C87 | Medium | core / runtime: marks, encode, groups | A group item's `datum` is the spec's own inline row object | `packages/core/src/runtime.ts:5873` | CONFIRMED (run) |
-| C88 | Medium | core / session, stream, limits | Spec-controlled amplification with no ceiling when no `limits` are given | `packages/core/src/arr.ts:50` | CONFIRMED (run) |
+| C88 | Medium | core / session, stream, limits | Spec-controlled amplification with no ceiling when no `limits` are given | `packages/core/src/arr.ts:50` | CONFIRMED (run) → FIXED (#193) |
 | C89 | Medium | core / expressions, regex screen | `sequence()` with a count ≥ 2^32 skips the built-in ceiling and then wraps via `count \| 0` | `packages/core/src/expression.ts:33-40` | CONFIRMED (run) |
 | C90 | Medium | core / loading, URL policy, add-ons | A mesh geometry naming a huge arc index makes `arcsOf` scan a sparse array from 0 to that index | `packages/core/src/topojson.ts:202-209` | CONFIRMED (run) → FIXED (#192) |
 | C91 | Medium | core / compiler, transforms | `aggregate` `cross: true` builds the whole product before any limit is checked | `packages/core/src/transform-agg.ts:586-604` | CONFIRMED (run) |
 | C92 | Medium | core / compiler, transforms | `regression` `poly` with a large `order` is unmetered | `packages/core/src/curve-fits.ts:220-231` | CONFIRMED (run) |
-| C93 | Medium | core / layout transforms, rasterizer | `label` meters only its occupancy bitmap; the canvases and loops around it are unbounded | `packages/core/src/label.ts:168-171` | CONFIRMED (run) |
-| C94 | Medium | core / layout transforms, rasterizer | A round join or cap of a very wide stroke builds millions of points per disk | `packages/core/src/raster-stroke.ts:101-106` | CONFIRMED (run) |
-| C95 | Medium | core / layout transforms, rasterizer | The word cloud's board is `(size[0] >> 5) * size[1]` int32 with no meter (450 MB accepted under `maxRows: 1000`) | `packages/core/src/wordcloud.ts:298-300` | CONFIRMED (run) |
+| C93 | Medium | core / layout transforms, rasterizer | `label` meters only its occupancy bitmap; the canvases and loops around it are unbounded | `packages/core/src/label.ts:168-171` | CONFIRMED (run) → FIXED (#193) |
+| C94 | Medium | core / layout transforms, rasterizer | A round join or cap of a very wide stroke builds millions of points per disk | `packages/core/src/raster-stroke.ts:101-106` | CONFIRMED (run) → FIXED (#193) |
+| C95 | Medium | core / layout transforms, rasterizer | The word cloud's board is `(size[0] >> 5) * size[1]` int32 with no meter (450 MB accepted under `maxRows: 1000`) | `packages/core/src/wordcloud.ts:298-300` | CONFIRMED (run) → FIXED (#193) |
 | C96 | Medium | core / scales, time, format, colour | log-scale ticks: work and allocation driven by `base` | `packages/core/src/scale-warped.ts:81-103` | CONFIRMED (run) |
 | C97 | Medium | core / SVG, DOM patcher, canvas, a11y | The `cursor` channel / signal is handed to the host as any text, `url(https://…)` included | `packages/core/src/cursor.ts:24-36` | CONFIRMED (run) → FIXED (#191) |
 | C98 | Medium | core / hit index, bounds, geometry | The parse caches are module-level and bounded by 4096 entries, not by size | `packages/core/src/path-data.ts:130-141` | CONFIRMED (run) |
@@ -168,16 +168,16 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C119 | Medium | core / runtime: marks, encode, groups | `{field: {group: …}}` knows `width`/`height`/`x`/`y` and returns `0` for anything else; `level` is ignored | `packages/core/src/runtime.ts:6889-6903` | CONFIRMED (run) |
 | C120 | Medium | core / runtime: marks, encode, groups | A mark `key` is recorded but does not join | `packages/core/src/runtime.ts:5604` | CONFIRMED (run) |
 | C121 | Medium | core / runtime: marks, encode, groups | Three failures leave `evaluateChart` as raw exceptions instead of a logged, stopped pass | `packages/core/src/runtime.ts:5792` | CONFIRMED (run) |
-| C122 | Medium | core / session, stream, limits | Session no-op cache: rows that are not objects after the first are "equal" whatever they hold | `packages/core/src/pulse.ts:88-90` | CONFIRMED (run; re-run by lead) |
-| C123 | Medium | core / session, stream, limits | The session tells specs apart by `JSON.stringify` | `packages/core/src/session.ts:85` | CONFIRMED (run; re-run by lead) |
-| C124 | Medium | core / session, stream, limits | An injected `random` shared by charts: tape sites are keyed by name only | `packages/core/src/random-tape.ts:33-37` | CONFIRMED (run; re-run by lead) |
+| C122 | Medium | core / session, stream, limits | Session no-op cache: rows that are not objects after the first are "equal" whatever they hold | `packages/core/src/pulse.ts:88-90` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
+| C123 | Medium | core / session, stream, limits | The session tells specs apart by `JSON.stringify` | `packages/core/src/session.ts:85` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
+| C124 | Medium | core / session, stream, limits | An injected `random` shared by charts: tape sites are keyed by name only | `packages/core/src/random-tape.ts:33-37` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
 | C125 | Medium | core / expressions, regex screen | `in` (and `instanceof`) parses, passes the compile check, and throws at evaluation; Vega evaluates it | `packages/core/src/expr-interpreter.ts:262-265` | CONFIRMED (run; re-run by lead) |
 | C126 | Medium | core / expressions, regex screen | Several expression sites are not read by the compile-time walk | `packages/core/src/spec-expressions.ts:248-279` | CONFIRMED (run) |
 | C127 | Medium | core / loading, URL policy, add-ons | The add-on detector misses expressions the engine evaluates | `packages/core/src/addons.ts:73` | CONFIRMED (run) → FIXED (#192) |
 | C128 | Medium | core / compiler, transforms | `config.style.<marktype>` applies to every mark of that type | `packages/core/src/compiler.ts:647-648` | CONFIRMED (run; re-run by lead) |
 | C129 | Medium | core / compiler, transforms | an update-only mark loses every spatial default from config and styles | `packages/core/src/compiler.ts:705-712` | CONFIRMED (run) |
 | C130 | Medium | core / compiler, transforms | `dotbin` diverges on missing values, `step: 0`, truthy `smooth`, and never publishes its `signal` | `packages/core/src/transform-extra.ts:385` | CONFIRMED (run) |
-| C131 | Medium | core / layout transforms, rasterizer | Sort ties in the hierarchy layouts follow row position; Vega follows tuple id | `packages/core/src/hierarchy-layout.ts:47-53` | CONFIRMED (run; re-run by lead) |
+| C131 | Medium | core / layout transforms, rasterizer | Sort ties in the hierarchy layouts follow row position; Vega follows tuple id | `packages/core/src/hierarchy-layout.ts:47-53` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
 | C132 | Medium | core / scales, time, format, colour | calendar intervals that never return | `packages/core/src/time.ts:116-134` | CONFIRMED (run) |
 | C133 | Medium | core / scales, time, format, colour | `{signal: "true" \| "false" \| "null"}` in a scale property is refused as `Unrecognized signal name` | `packages/core/src/scale-domain.ts:53-64` | CONFIRMED (run; re-run by lead) |
 | C134 | Medium | core / SVG, DOM patcher, canvas, a11y | The canvas renderer ignores the view's own `clip` (`scene.frameClip`) | `packages/core/src/canvas.ts:127-158` | CONFIRMED (run) → FIXED (#191) |
@@ -279,14 +279,14 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C230 | Medium | conformance / scripts and gates | Several gates pass on zero cases | `packages/conformance/scripts/fuzz.mts:119` | CONFIRMED (traced) |
 | C231 | Medium | tooling / gates, CI, release, benchmarks | a partial publish cannot be finished by the workflow, and exact pins make version skew costly | `.github/workflows/release.yml:99-104` | CONFIRMED (traced) → FIXED (#187) |
 | C232 | Medium | core / runtime: state, signals, reuse keys | An unknown name in a change hint is trusted | `packages/core/src/runtime.ts:962-967` | CONFIRMED (run) |
-| C233 | Medium | core / session, stream, limits | Numeric limits are not validated | `packages/core/src/limits.ts:108-111` | CONFIRMED (run) |
+| C233 | Medium | core / session, stream, limits | Numeric limits are not validated | `packages/core/src/limits.ts:108-111` | CONFIRMED (run) → FIXED (#193) |
 | C234 | Medium | core / expressions, regex screen | `maxStringLength` and `maxGeneratedBytes` meter only `pad` and number-format width | `packages/core/src/expression.ts:205-216` | CONFIRMED (run) |
 | C235 | Medium | core / loading, URL policy, add-ons | `timeoutMs`, `maxTimeMs` and `signal` depend on the `fetch` honouring `init.signal` | `packages/core/src/addon-load.ts:260-273` | CONFIRMED (run) → FIXED (#192) |
 | C236 | Medium | core / loading, URL policy, add-ons | No cap on the number of url datasets, no total-bytes budget, no de-duplication | `packages/core/src/addon-load.ts:516-531` | CONFIRMED (run) → FIXED (#192) |
 | C237 | Medium | core / loading, URL policy, add-ons | `LoadOptions` numbers are not validated | `packages/core/src/addon-load.ts:509-513` | CONFIRMED (run) → FIXED (#192) |
 | C238 | Medium | core / compiler, transforms | unknown or missing mark `type` is compiled and rendered silently | `packages/core/src/compiler.ts:760-761` | CONFIRMED (run; re-run by lead) |
-| C239 | Medium | core / layout transforms, rasterizer | The force simulation's own loops are outside `maxTimeMs` | `packages/core/src/force-layout.ts:493` | CONFIRMED (run; re-run by lead) |
-| C240 | Medium | core / layout transforms, rasterizer | Assigning holes to outer rings is quadratic and unmetered | `packages/core/src/contour.ts:202-205` | CONFIRMED (run) |
+| C239 | Medium | core / layout transforms, rasterizer | The force simulation's own loops are outside `maxTimeMs` | `packages/core/src/force-layout.ts:493` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
+| C240 | Medium | core / layout transforms, rasterizer | Assigning holes to outer rings is quadratic and unmetered | `packages/core/src/contour.ts:202-205` | CONFIRMED (run) → FIXED (#193) |
 | C241 | Medium | core / SVG, DOM patcher, canvas, a11y | The accessible tree has no overall bound | `packages/core/src/a11y.ts:416` | CONFIRMED (run) → FIXED (#191) |
 | C242 | Medium | core / geo | geo work is outside every limit | `packages/core/src/geo-resample.ts:17` | CONFIRMED (run) |
 | C243 | Medium | react / <Chart>, shells, SSR | A controlled `view` reaches the scales unvalidated | `packages/react/src/ChartCore.tsx:522-525` | CONFIRMED (run) |
@@ -313,9 +313,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C264 | Medium | gallery / official Vega-Lite examples II | The gallery gate cannot fail on what 66 of this lane's 313 specs are named for | `packages/conformance/src/gallery/static.ts:42` | CONFIRMED (run) |
 | C265 | Medium | core / runtime: state, signals, reuse keys | In-place change of a host signal is noticed or not depending on an undocumented bound | `packages/core/src/fingerprint.ts:36-37` | CONFIRMED (run) |
 | C266 | Medium | core / runtime: datasets, scales, fit | The documented remedy "pass a new array" fails for mutate-then-`[...rows]`: the diff sees the same row objects and the dev warning does not fire | `packages/core/src/row-watch.ts:145` | CONFIRMED (run) |
-| C267 | Medium | core / session, stream, limits | `session.change()` keeps the last data but silently drops the last size and signals | `packages/core/src/session.ts:415-418` | CONFIRMED (run; re-run by lead) |
+| C267 | Medium | core / session, stream, limits | `session.change()` keeps the last data but silently drops the last size and signals | `packages/core/src/session.ts:415-418` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
 | C268 | Medium | core / loading, URL policy, add-ons | In a browser no redirect hop is vetted before it is requested, and `maxRedirects` is not enforced; the docs promise both | `packages/core/src/addon-load.ts:336-341` | CONFIRMED (run) → FIXED (#192) |
-| C269 | Medium | core / layout transforms, rasterizer | `method: 'resquarify'` is accepted but always lays out as `squarify` after an update | `packages/core/src/treemap-tiling.ts:160-182` | CONFIRMED (run; re-run by lead) |
+| C269 | Medium | core / layout transforms, rasterizer | `method: 'resquarify'` is accepted but always lays out as `squarify` after an update | `packages/core/src/treemap-tiling.ts:160-182` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
 | C270 | Medium | core / signal event loop, transitions | `setSignal` forces, and accepts any name | `packages/core/src/signals.ts:1402-1406` | CONFIRMED (run) |
 | C271 | Medium | core / signal event loop, transitions | An `owner` that is not a DOM node kills the timers it was meant to keep | `packages/core/src/signals.ts:1040-1045` | CONFIRMED (run) |
 | C272 | Medium | react / hooks, streams, workers | `<ChartStream>` / `<ChartWorkerStream>` accept `random` and never pass it to the stream | `packages/react/src/ChartStream.tsx:238-249` | CONFIRMED (traced) |
@@ -328,7 +328,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C279 | Medium | gallery / official Vega-Lite examples I | `interactive_line_brush_cursor`: the view's own `cursor` is dropped and the root group never takes the pointer | `packages/core/src/runtime.ts:2072-2084` | CONFIRMED (run; re-run by lead) |
 | C280 | Medium | core / runtime: state, signals, reuse keys | Registry epoch is in the named key but not the whole-context key | `packages/core/src/runtime.ts:2509` | CONFIRMED (run) |
 | C281 | Medium | core / runtime: datasets, scales, fit | `maxGeneratedRows` is metered per pulse, so a session accepts appends a fresh evaluation rejects, then throws on the next signal change or resize | `packages/core/src/runtime.ts:4036-4045` | CONFIRMED (run; re-run by lead) |
-| C282 | Medium | core / session, stream, limits | The session cache does not know the expression-function registry changed | `packages/core/src/session.ts:194-217` | CONFIRMED (run; re-run by lead) |
+| C282 | Medium | core / session, stream, limits | The session cache does not know the expression-function registry changed | `packages/core/src/session.ts:194-217` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
 | C283 | Medium | core / session, stream, limits | `buildPulseGraph` / `propagatePulse` / `transformNeedsFullRederive` are public, unused by the engine, and wrong | `packages/core/src/pulse.ts:333-335` | CONFIRMED (run) |
 | C284 | Medium | core / expressions, regex screen | `limits.regex: 'refuse'` does not see expressions in the view's own `layout` and `encode` | `packages/core/src/spec-expressions.ts:222-231` | CONFIRMED (run) |
 | C285 | Medium | core / expressions, regex screen | The interpreter-shaped entry points have a weaker sandbox than the file header states, and only tests use them | `packages/core/src/expr-interpreter.ts:14-20` | CONFIRMED (traced) |
@@ -407,7 +407,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C358 | Medium | closure / conformance suites, line by line II | "scalePropApplies is what vega-lite does" checks the table, not the compiler, and leaves properties out | `packages/conformance/test/vl-scale-props.test.ts:96-121` | CONFIRMED (run) |
 | C359 | Medium | closure / vega-time vectors II | 104 of the 480 `timeFloor` vectors (and the same 104 in `utcFloor`) cannot fail: sub-minute units, sub-hour steps and millisecond truncation are never exercised | `packages/core/testdata/vectors/vega-time.json:19450-20649` | CONFIRMED (run; re-run by lead) → FIXED (#189) |
 | C360 | Medium | gallery / official Vega examples II | `vega/projections` is counted as passing on both paths while both engines fail on it | `packages/conformance/src/gallery/static.ts:47-48` | CONFIRMED (run; re-run by lead) |
-| C361 | Medium | core / layout transforms, rasterizer | "`label.ts` places labels as vega-label does" omits two known limits, and neither is in "Deviations from Vega" | `docs/ARCHITECTURE.md:342` | CONFIRMED (traced) |
+| C361 | Medium | core / layout transforms, rasterizer | "`label.ts` places labels as vega-label does" omits two known limits, and neither is in "Deviations from Vega" | `docs/ARCHITECTURE.md:342` | CONFIRMED (traced) → FIXED (#193) |
 | C362 | Medium | core / geo | "matches d3-geo/vega bit for bit" has undocumented exceptions; "No state outlives a call" is not what the code does | `docs/ARCHITECTURE.md:328` | CONFIRMED (run) |
 | C363 | Medium | react / <Chart>, shells, SSR | ADRs 0002/0003/0007 and TSDoc contradict the code (lazy loading, canvas event loop, `interactive` default) | `docs/adr/0007-svgchart-shell-over-lazy-loading.md:21` | CONFIRMED (traced) |
 | C364 | Medium | vl / validate, optimize, predicates | "compiling reads none of [the rows], so it costs the same for 3 rows as for 6,000" is false on three paths | `packages/vl/README.md:41-43` | CONFIRMED (run) |
@@ -432,7 +432,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C383 | Low | core / runtime: marks, encode, groups | Scope ids concatenate data-controlled keys | `packages/core/src/runtime.ts:6248` | PLAUSIBLE |
 | C384 | Low | core / expressions, regex screen | Member reads return built-in prototype objects and host-object getters as values | `packages/core/src/expr-interpreter.ts:279-305` | CONFIRMED (run) |
 | C385 | Low | core / expressions, regex screen | Process-wide expression caches are bounded by entry count, not size, and keyed by full expression text | `packages/core/src/expr-parser.ts:846-860` | CONFIRMED (traced) |
-| C386 | Low | core / layout transforms, rasterizer | `spirals[spiralName]` is a plain-object lookup | `packages/core/src/wordcloud.ts:457-458` | CONFIRMED (run) |
+| C386 | Low | core / layout transforms, rasterizer | `spirals[spiralName]` is a plain-object lookup | `packages/core/src/wordcloud.ts:457-458` | CONFIRMED (run) → FIXED (#193) |
 | C387 | Low | core / SVG, DOM patcher, canvas, a11y | A gradient's own `id` shares the id space of clip paths | `packages/core/src/svg-defs.ts:82` | CONFIRMED (run) → FIXED (#191) |
 | C388 | Low | core / signal event loop, transitions | A timer of an element that was never in the document has no self-stop | `packages/core/src/signals.ts:1037-1045` | CONFIRMED (run) |
 | C389 | Low | react / <Chart>, shells, SSR | An a11y node id goes into a selector unescaped | `packages/react/src/ChartCore.tsx:1379` | CONFIRMED (run) |
@@ -445,15 +445,15 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C396 | Low | core / runtime: marks, encode, groups | An explicit `null` on a defaulted channel is replaced by the default | `packages/core/src/runtime.ts:6497` | CONFIRMED (run) |
 | C397 | Low | core / runtime: marks, encode, groups | Three encode-entry deviations from vega-parser `entry.js` | `packages/core/src/runtime.ts:6963` | CONFIRMED (run) |
 | C398 | Low | core / runtime: marks, encode, groups | A layout `{signal}` that throws is swallowed without a log | `packages/core/src/runtime.ts:6470` | CONFIRMED (run) |
-| C399 | Low | core / session, stream, limits | An explicit pulse whose `from` repeats an index is trusted, not re-derived | `packages/core/src/stream.ts:346-367` | CONFIRMED (run) |
-| C400 | Low | core / session, stream, limits | `rowsEqual` calls `{ a: undefined }` and `{ b: undefined }` equal | `packages/core/src/pulse.ts:144-151` | CONFIRMED (run; re-run by lead) |
-| C401 | Low | core / session, stream, limits | `modify`: a `toggle` that is an array is inserted as one tuple | `packages/core/src/modify.ts:101` | CONFIRMED (traced) |
+| C399 | Low | core / session, stream, limits | An explicit pulse whose `from` repeats an index is trusted, not re-derived | `packages/core/src/stream.ts:346-367` | CONFIRMED (run) → FIXED (#193) |
+| C400 | Low | core / session, stream, limits | `rowsEqual` calls `{ a: undefined }` and `{ b: undefined }` equal | `packages/core/src/pulse.ts:144-151` | CONFIRMED (run; re-run by lead) → FIXED (#193) |
+| C401 | Low | core / session, stream, limits | `modify`: a `toggle` that is an array is inserted as one tuple | `packages/core/src/modify.ts:101` | CONFIRMED (traced) → FIXED (#193) |
 | C402 | Low | core / loading, URL policy, add-ons | raw errors for malformed input (all CONFIRMED-RUN) | `packages/core/src/topojson.ts:124-126` | CONFIRMED (traced) → FIXED (#192) |
 | C403 | Low | core / loading, URL policy, add-ons | `format.parse` is applied to the Topology object before decoding, so `parse: "auto"` reports the object as not found | `packages/core/src/addon-load.ts:42-45` | CONFIRMED (run) → FIXED (#192) |
 | C404 | Low | core / compiler, transforms | `pie` uses `??` where Vega uses `\|\|` | `packages/core/src/transform-extra.ts:283` | CONFIRMED (run) |
 | C405 | Low | core / compiler, transforms | `applyTransforms` charges `maxGeneratedRows` once per later step | `packages/core/src/transform.ts:164-165` | CONFIRMED (traced) |
-| C406 | Low | core / layout transforms, rasterizer | A data-dependent pack failure aborts the whole chart | `packages/core/src/circle-pack.ts:198` | CONFIRMED (run) |
-| C407 | Low | core / layout transforms, rasterizer | `voronoi` with a non-finite `size` silently uses the default ±1e5 extent (Vega logs `invalid bounds`) | `packages/core/src/transform.ts:420-428` | CONFIRMED (run) |
+| C406 | Low | core / layout transforms, rasterizer | A data-dependent pack failure aborts the whole chart | `packages/core/src/circle-pack.ts:198` | CONFIRMED (run) → FIXED (#193) |
+| C407 | Low | core / layout transforms, rasterizer | `voronoi` with a non-finite `size` silently uses the default ±1e5 extent (Vega logs `invalid bounds`) | `packages/core/src/transform.ts:420-428` | CONFIRMED (run) → FIXED (#193) |
 | C408 | Low | core / scales, time, format, colour | an unused `sequential` scale with `range: []` makes `renderSpec` throw a raw TypeError | `packages/core/src/scale-warped.ts:237-240` | CONFIRMED (run) |
 | C409 | Low | core / scales, time, format, colour | colour objects list `opacity` first | `packages/core/src/color.ts:45` | CONFIRMED (run) |
 | C410 | Low | core / scales, time, format, colour | empty literal domain + `domainMax`/`zero` + `padding` gives a `[NaN]` domain | `packages/core/src/scales.ts:181-199` | CONFIRMED (run) |
@@ -530,9 +530,9 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C481 | Low | closure / raster fixtures I | the quarter-pixel test's pattern records that a grid repeats an earlier one, not which one | `packages/conformance/src/raster-vs-chromium.test.ts:54-59` | CONFIRMED (run; re-run by lead) → FIXED (#189) |
 | C482 | Low | closure / raster fixtures II | the engine's stroker puts a miter join on the vertices of a flattened curve, so a tight turn in a stroked curve grows a spike the browser does not draw; the baseline pins it | `packages/core/src/raster-stroke.ts:158-188` | CONFIRMED (run; re-run by lead) |
 | C483 | Low | core / runtime: marks, encode, groups | Scoped derived signals are evaluated n rounds × n signals per group item | `packages/core/src/runtime.ts:6203-6210` | CONFIRMED (run) |
-| C484 | Low | core / session, stream, limits | Coalesce: a `push` made while `flush` runs is acknowledged and lost | `packages/core/src/stream.ts:514` | CONFIRMED (run) |
+| C484 | Low | core / session, stream, limits | Coalesce: a `push` made while `flush` runs is acknowledged and lost | `packages/core/src/stream.ts:514` | CONFIRMED (run) → FIXED (#193) |
 | C485 | Low | core / expressions, regex screen | A compiled expression with a stale registry epoch recompiles on every call (200k evaluations: 3 ms → 600–800 ms) | `packages/core/src/expression.ts:700-705` | CONFIRMED (run) |
-| C486 | Low | core / layout transforms, rasterizer | `nest` recurses once per key | `packages/core/src/hierarchy-nest.ts:28-42` | CONFIRMED (run) |
+| C486 | Low | core / layout transforms, rasterizer | `nest` recurses once per key | `packages/core/src/hierarchy-nest.ts:28-42` | CONFIRMED (run) → FIXED (#193) |
 | C487 | Low | core / signal event loop, transitions | Transition player: `duration: Infinity` requests frames forever; a throwing first `paint` escapes `draw()`; NaN easing paints NaN | `packages/core/src/transition.ts:717` | CONFIRMED (run) |
 | C488 | Low | react / <Chart>, shells, SSR | Wheel zoom ignores `deltaMode` | `packages/react/src/ChartCore.tsx:1153` | CONFIRMED (run; re-run by lead) |
 | C489 | Low | react / <Chart>, shells, SSR | A handle kept past unmount still calls the host's listeners | `packages/react/src/ChartCore.tsx:1609-1618` | CONFIRMED (run; re-run by lead) |
@@ -548,7 +548,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C499 | Low | leftovers / budgets, declarations, demo data, gallery lists | The locale setters accept `undefined` by type, throw a raw `TypeError`, and `defaultLocale(def, undefined)` leaves the process-wide default half replaced | `packages/core/src/locale.ts:151-153` | CONFIRMED (run; re-run by lead) → FIXED (#188) |
 | C500 | Low | core / runtime: state, signals, reuse keys | A fractional or `NaN` `dataChanges` index blanks the chart or throws a bare TypeError | `packages/core/src/runtime.ts:950` | CONFIRMED (run) |
 | C501 | Low | core / runtime: marks, encode, groups | A failed import of the pulse part is swallowed for the life of the page with no log | `packages/core/src/shell-setup.ts:20` | CONFIRMED (traced) |
-| C502 | Low | core / session, stream, limits | Stream bounds accept `NaN` | `packages/core/src/stream.ts:443-444` | CONFIRMED (run) |
+| C502 | Low | core / session, stream, limits | Stream bounds accept `NaN` | `packages/core/src/stream.ts:443-444` | CONFIRMED (run) → FIXED (#193) |
 | C503 | Low | core / session, stream, limits | A session's no-op evaluate still costs O(spec) | `packages/core/src/session.ts:345` | CONFIRMED (traced) |
 | C504 | Low | core / compiler, transforms | wrong-typed `width` / `padding` give garbage | `packages/core/src/compiler.ts:69-70` | CONFIRMED (run) |
 | C505 | Low | react / <Chart>, shells, SSR | `devicePixelRatio` is read through a store that never notifies | `packages/react/src/ChartCore.tsx:57` | CONFIRMED (traced) |
@@ -575,7 +575,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C526 | Low | closure / conformance suites, line by line I | Force generator: 13% of cases have no node, 20% no force; what it never generates | `packages/conformance/test/force-hierarchy-gen.ts:103` | CONFIRMED (run) |
 | C527 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | Gallery static compares an oracle document after Vega logged an error, and drops Vega warnings | `packages/conformance/src/gallery/static.ts:47-48` | CONFIRMED (run) |
 | C528 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | `runPage` leaks the browser when a worker rejects, and creates a temp directory it never uses | `packages/conformance/src/gallery/react.ts:61-63` | CONFIRMED (traced) |
-| C529 | Low | core / session, stream, limits | A queued snapshot is held by reference | `packages/core/src/stream.ts:510` | CONFIRMED (run) |
+| C529 | Low | core / session, stream, limits | A queued snapshot is held by reference | `packages/core/src/stream.ts:510` | CONFIRMED (run) → FIXED (#193) |
 | C530 | Low | core / expressions, regex screen | `guardArgs` exempts any function whose name starts with `is`, host-registered ones included | `packages/core/src/expr-interpreter.ts:331` | CONFIRMED (traced) |
 | C531 | Low | core / loading, URL policy, add-ons | A `{signal}` url resolves against top-level spec defaults only (no group scope, no host signals, no reload) | `packages/core/src/addon-load.ts:389-403` | CONFIRMED (run) |
 | C532 | Low | core / hit index, bounds, geometry | `createPointMapper().map` returns raw client coordinates when there is no element yet | `packages/core/src/pointer.ts:59` | CONFIRMED (traced) |
@@ -593,7 +593,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C544 | Low | core / compiler, transforms | a transform `signal` is declared for every transform but set by five | `packages/core/src/transform.ts:245-248` | CONFIRMED (run) |
 | C545 | Low | core / compiler, transforms | Dead or misleading code in `compiler.ts` (unused `scales` parameter, `bar`/`tick` mark types, "never aliases the spec") | `packages/core/src/compiler.ts:604` | CONFIRMED (traced) |
 | C546 | Low | core / compiler, transforms | `__proto__` as an output name is guarded in `formula` only | `packages/core/src/transform.ts:225` | CONFIRMED (run) |
-| C547 | Low | core / layout transforms, rasterizer | `byType.circle` paints a `circle` marktype nothing produces (dead code) | `packages/core/src/label-draw.ts:117-124` | PLAUSIBLE |
+| C547 | Low | core / layout transforms, rasterizer | `byType.circle` paints a `circle` marktype nothing produces (dead code) | `packages/core/src/label-draw.ts:117-124` | PLAUSIBLE → DISPUTED (#193) |
 | C548 | Low | core / scales, time, format, colour | dead second "default locale" in the engines | `packages/core/src/format.ts:432` | CONFIRMED (traced) |
 | C549 | Low | core / scales, time, format, colour | `CONTINUOUS_TYPES` is a hand list that disagrees with the registry | `packages/core/src/scales.ts:33-34` | CONFIRMED (traced) |
 | C550 | Low | core / SVG, DOM patcher, canvas, a11y | A non-numeric `angle` is written escaped by the DOM builder | `packages/core/src/render.ts:1119-1122` | CONFIRMED (run) → FIXED (#191) |
@@ -750,8 +750,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C701 | Low | closure / vega-time vectors III | the interval suites pin no `count`/`range`/`every` for any UTC or sub-day interval, and the one `timeYear.every(3)` case wants `[]` | `packages/conformance/scripts/gen-vectors.mjs:375-381` | CONFIRMED (run) → FIXED (#189) |
 | C702 | Low | core / runtime: datasets, scales, fit | Stale or orphaned comments and test switches in production modules (`runtime.ts`, `step-reuse.ts`) | `packages/core/src/runtime.ts:2990-2992` | CONFIRMED (traced) |
 | C703 | Low | core / runtime: marks, encode, groups | Misplaced or stale comments in `runtime.ts` (docstrings on the wrong declarations) | `packages/core/src/runtime.ts:5724-5729` | CONFIRMED (traced) |
-| C704 | Low | core / session, stream, limits | `maxStringLength` is documented wider than it is | `packages/core/src/limits.ts:15-16` | CONFIRMED (run) |
-| C705 | Low | core / session, stream, limits | Stale statements in the docs | `docs/LIMITS.md:236-240` | CONFIRMED (run) |
+| C704 | Low | core / session, stream, limits | `maxStringLength` is documented wider than it is | `packages/core/src/limits.ts:15-16` | CONFIRMED (run) → FIXED (#193) |
+| C705 | Low | core / session, stream, limits | Stale statements in the docs | `docs/LIMITS.md:236-240` | CONFIRMED (run) → FIXED (#193) |
 | C706 | Low | core / expressions, regex screen | ERRORS.md says `toString`/`constructor` "are signals everywhere, as upstream"; `compileChart` refuses them | `docs/ERRORS.md:244` | CONFIRMED (run) |
 | C707 | Low | core / expressions, regex screen | Small drift: nesting limit is effectively 500, `prevented()` bypasses the logger, ARCHITECTURE function table incomplete | `packages/core/src/expr-parser.ts:630` | CONFIRMED (traced) |
 | C708 | Low | core / loading, URL policy, add-ons | docs and tests that disagree with the code (CONFIRMED-TRACE) | `packages/core/src/addon-load.ts:76-77` | CONFIRMED (traced) → FIXED (#192) |
@@ -1116,6 +1116,7 @@ Direction: one helper for "this dataset holds the rows it held" (`sameRows` or `
 
 - **Location:** `packages/core/src/limits.ts:460-463`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #193 (c93ceb3 04c0854). Fixed: allot/allotUpTo compare the limit that replaces a ceiling at the site, before allocating; {maxGeneratedRows: 1000} alone refuses 5e7 density steps in 12 ms.
 - **Area:** core / session, stream, limits (also categories 6)
 - **Lane ID / scripts:** `core-incr-2` — `core-incr/`
 
@@ -2273,6 +2274,7 @@ Direction: `boundTypedMark(new Bounds(), { marktype: mark.type, items: [it] })` 
 
 - **Location:** `packages/core/src/pulse.ts:88-90`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #193 (573170f). Fixed: a dataset with any non-object row is not diffed, and rowsEqual compares such a row as a value; the no-op cache no longer returns the old scene for [{data:0},5,6].
 - **Area:** core / session, stream, limits
 - **Lane ID / scripts:** `core-incr-4` — `core-incr/`
 
@@ -2287,6 +2289,7 @@ Direction: `boundTypedMark(new Bounds(), { marktype: mark.type, items: [it] })` 
 
 - **Location:** `packages/core/src/session.ts:85`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #193 (573170f). Fixed: the session skeleton tags Infinity/-Infinity/NaN/-0 and undefined list entries (and escapes NUL-leading strings), so specs JSON writes alike are told apart.
 - **Area:** core / session, stream, limits
 - **Lane ID / scripts:** `core-incr-5` — `core-incr/`
 
@@ -2302,6 +2305,7 @@ Direction: `boundTypedMark(new Bounds(), { marktype: mark.type, items: [it] })` 
 
 - **Location:** `packages/core/src/random-tape.ts:33-37`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #193 (92bb837). Fixed: random tape sites are keyed per compiled chart (held weakly) inside each source's table, so charts sharing a source each draw on from where it stands (Q15).
 - **Area:** core / session, stream, limits (also categories 3)
 - **Lane ID / scripts:** `core-incr-7` — `core-incr/`
 
@@ -2406,6 +2410,7 @@ Direction: `boundTypedMark(new Bounds(), { marktype: mark.type, items: [it] })` 
 
 - **Location:** `packages/core/src/hierarchy-layout.ts:47-53`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #193 (ac7a567). Fixed: hierarchy layouts break sort ties by the order rows were made in (tuple-order), as vega's stableCompare; pinned by a generated differential with collects before stratify.
 - **Area:** core / layout transforms, rasterizer
 - **Lane ID / scripts:** `core-layout-7` — `core-layout/`
 
@@ -4250,6 +4255,7 @@ Source line not traced (found by render); revealed by `packages/conformance/test
 
 - **Location:** `packages/core/src/stream.ts:346-367`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #193 (f51f405 99f0ec4). Fixed: compose refuses a from that names an old row twice (or a non-integer), so the dataset is re-derived.
 - **Area:** core / session, stream, limits (also categories 7)
 - **Lane ID / scripts:** `core-incr-14` — `core-incr/`
 
@@ -4262,6 +4268,7 @@ Source line not traced (found by render); revealed by `packages/conformance/test
 
 - **Location:** `packages/core/src/pulse.ts:144-151`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #193 (573170f). Fixed: rowsEqual and rowsEqualBut treat a field one row lacks as different from the other's undefined field.
 - **Area:** core / session, stream, limits
 - **Lane ID / scripts:** `core-incr-16` — `core-incr/`
 
@@ -4273,6 +4280,7 @@ Source line not traced (found by render); revealed by `packages/conformance/test
 
 - **Location:** `packages/core/src/modify.ts:101`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #193 (c24188b). Fixed: a toggle given a list inserts its elements, as vega's changeset.insert does; the modify differential toggles a list on, another, and off.
 - **Area:** core / session, stream, limits
 - **Lane ID / scripts:** `core-incr-19` — `core-incr/`
 
@@ -4325,6 +4333,7 @@ Source line not traced (found by render); revealed by `packages/conformance/test
 
 - **Location:** `packages/core/src/circle-pack.ts:198`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #193 (795e771). Fixed: the pack enclosing failure is a recoverable data error carrying vega's logged message (Error), not an [aster] usage error; differential compares the logs.
 - **Area:** core / layout transforms, rasterizer (also categories 8)
 - **Lane ID / scripts:** `core-layout-11` — `core-layout/`
 
@@ -4334,6 +4343,7 @@ Source line not traced (found by render); revealed by `packages/conformance/test
 
 - **Location:** `packages/core/src/transform.ts:420-428`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #193 (e3ae5ce). Fixed: voronoi reads a given size as vega does (before extent), so a non-finite size is refused with invalid bounds; the voronoi differential covers such sizes.
 - **Area:** core / layout transforms, rasterizer
 - **Lane ID / scripts:** `core-layout-14` — `core-layout/`
 
@@ -5555,6 +5565,7 @@ Direction: skip a group item whose bounds miss the box, as Vega does, and restor
 
 - **Location:** `packages/core/src/stream.ts:514`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #193 (f51f405 99f0ec4). Fixed: under coalesce the flushed fold is detached while the evaluation runs; a push made meanwhile is delivered by the next flush (restored after the taken fold on failure).
 - **Area:** core / session, stream, limits
 - **Lane ID / scripts:** `core-incr-12` — `core-incr/`
 
@@ -5580,6 +5591,7 @@ Direction: skip a group item whose bounds miss the box, as Vega does, and restor
 
 - **Location:** `packages/core/src/hierarchy-nest.ts:28-42`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #193 (04c0854 99f0ec4). Fixed: nest groups and builds its tree iteratively with a path set (no recursion, no walk up per child); 30000 keys build every level with nothing logged.
 - **Area:** core / layout transforms, rasterizer
 - **Lane ID / scripts:** `core-layout-12` — `core-layout/`
 
@@ -5920,6 +5932,7 @@ Direction: one accounting rule: the pulse path charges what a run from scratch w
 
 - **Location:** `packages/core/src/session.ts:194-217`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #193 (573170f). Fixed: the session cache key carries the expression registry epoch, so a re-registered function is called in its new form.
 - **Area:** core / session, stream, limits
 - **Lane ID / scripts:** `core-incr-6` — `core-incr/`
 
@@ -7006,6 +7019,7 @@ Process-global mutable tables are public API: `withdrawFunctions` (a test seam) 
 
 - **Location:** `packages/core/src/label-draw.ts:117-124`
 - **Status:** PLAUSIBLE
+- **Resolution:** DISPUTED in #193 (-). Not dead code: a spec mark of type 'circle' produces that marktype (renders <circle>, vega throws); the real defect is the accepted non-Vega mark type, to be removed with geoshape (a10, Q9) and unknown types (a30). Evidence: scratch/fix-a03-limits/circle.mjs.
 - **Area:** core / layout transforms, rasterizer
 - **Lane ID / scripts:** `core-layout-15` — `core-layout/`
 
@@ -8267,6 +8281,7 @@ Direction: say "new rows" in the docs; let the watch fingerprint sampled rows wh
 
 - **Location:** `packages/core/src/session.ts:415-418`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #193 (573170f). Fixed: session.change() goes on from the last accepted evaluation's settings (size, signals, limits, urlPolicy, ...), each replaced by one given, an explicit undefined removing it.
 - **Area:** core / session, stream, limits
 - **Lane ID / scripts:** `core-incr-11` — `core-incr/`
 
@@ -8294,6 +8309,7 @@ Direction: say "new rows" in the docs; let the watch fingerprint sampled rows wh
 
 - **Location:** `packages/core/src/treemap-tiling.ts:160-182`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #193 (bf3dbdc). Documented: resquarify across evaluations lays out afresh (ADR 0005: a scene is a pure function of its inputs), listed in Deviations from Vega and pinned by a session test.
 - **Area:** core / layout transforms, rasterizer (also categories 3)
 - **Lane ID / scripts:** `core-layout-8` — `core-layout/`
 
@@ -8510,6 +8526,7 @@ Direction: decide whether `tooltips` is public. If so, rename it for what it doe
 
 - **Location:** `packages/core/src/stream.ts:510`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #193 (f51f405). Fixed: queued snapshots (data) are copied on push, as appends were.
 - **Area:** core / session, stream, limits
 - **Lane ID / scripts:** `core-incr-20` — `core-incr/`
 
@@ -8733,6 +8750,7 @@ No workflow sets `ASTER_ORACLE_SEEDS` (grep: only the test, `RUNBOOK.md`, `ARCHI
 
 - **Location:** `packages/core/src/limits.ts:108-111`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #193 (04c0854 99f0ec4). Fixed: validateLimits runs where a scope opens (renderSpec, sessions, streams, evaluateChart, checkSpecLimits/SceneLimits/SvgLength, createLimitClock): unknown keys and budgets that are not numbers >= 0 are a TypeError.
 - **Area:** core / session, stream, limits (also categories 8)
 - **Lane ID / scripts:** `core-incr-10` — `core-incr/`
 
@@ -8831,6 +8849,7 @@ No workflow sets `ASTER_ORACLE_SEEDS` (grep: only the test, `RUNBOOK.md`, `ARCHI
 
 - **Location:** `packages/core/src/force-layout.ts:493`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #193 (c93ceb3 04c0854). Fixed: every force tick and every pass of a force ticks, and iterations x tick cost is bounded as work; the four 100 ms cases now stop at ~104 ms.
 - **Area:** core / layout transforms, rasterizer (also categories 6)
 - **Lane ID / scripts:** `core-layout-3` — `core-layout/`
 
@@ -8855,6 +8874,7 @@ No workflow sets `ASTER_ORACLE_SEEDS` (grep: only the test, `RUNBOOK.md`, `ARCHI
 
 - **Location:** `packages/core/src/contour.ts:202-205`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #193 (04c0854 dc3f9a1). Fixed: hole matching ticks per hole and holes x outers is bounded as work; the bounding-box reject the audit suggested is not equivalent (a ring's zero-length closing side), so matching stays vega's.
 - **Area:** core / layout transforms, rasterizer
 - **Lane ID / scripts:** `core-layout-6` — `core-layout/`
 
@@ -9428,6 +9448,7 @@ Direction: validate once where pulses are normalised (`runtime.ts:949-960`) with
 
 - **Location:** `packages/core/src/stream.ts:443-444`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #193 (f51f405). Fixed: a stream capacity/maxQueuedRows that is not a number (NaN, text, null) is a TypeError.
 - **Area:** core / session, stream, limits
 - **Lane ID / scripts:** `core-incr-13` — `core-incr/`
 
@@ -9991,6 +10012,7 @@ Axes and legends hand it a flat list of leaves, so they are covered. A title gro
 
 - **Location:** `packages/core/src/guide-legend.ts:90-92`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #193 (c93ceb3 04c0854 f2a5088 acf002a). Fixed: numeric ticks, every calendar interval's range (time ticks as items, timeSequence/utcSequence as rows, counted up front where the interval can count) and the legend entries listed are bounded where they are made, so legend tickCount/gradientLength and interval tickCounts are refused before allocating, with or without limits.
 - **Area:** core / session, stream, limits (also categories 7)
 - **Lane ID / scripts:** `core-incr-1` — `core-incr/`
 
@@ -10158,6 +10180,7 @@ Direction: put the ceiling where the count becomes values, not in one caller. Th
 
 - **Location:** `packages/core/src/raster-stroke.ts:75`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #193 (c93ceb3 04c0854 af50f2f). Fixed: a contour of more than a million dashes is stroked undashed (Skia's rule), and the dash walk ticks per piece; strokeDash [1e-7] / [1e-20] under label complete in ~20 ms under every limits form.
 - **Area:** core / layout transforms, rasterizer
 - **Lane ID / scripts:** `core-layout-1` — `core-layout/`
 
@@ -10174,6 +10197,7 @@ Direction: put the ceiling where the count becomes values, not in one caller. Th
 
 - **Location:** `packages/core/src/contour.ts:179-192`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #193 (c93ceb3 04c0854). Fixed: contourPolygons bounds the declared grid (row buffers as cells, the scan thresholds x cells as work) and ticks per row, for isocontour data grids and contour sizes alike.
 - **Area:** core / layout transforms, rasterizer
 - **Lane ID / scripts:** `core-layout-2` — `core-layout/`
 - **Lead's note:** The lead re-ran scenario B (100,000 × 100,000 declared, 4 values, `maxTimeMs: 200`): still running when killed at 15 s. Scenario A (4 GB RSS) was not re-run.
@@ -10327,6 +10351,7 @@ A scale is a function object, so `scale[key]` also finds inherited members of `F
 
 - **Location:** `packages/core/src/arr.ts:50`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #193 (c93ceb3 04c0854). Fixed: scale bins/range, utcSequence, graticule positions, cross, fold, flatten, impute, pivot cells, aggregate cross, kde groups x steps and the regression order are under the built-in ceilings (what they add beyond their input), with or without limits (Q18).
 - **Area:** core / session, stream, limits (also categories 7)
 - **Lane ID / scripts:** `core-incr-8` — `core-incr/`
 
@@ -10408,6 +10433,7 @@ Run with `node --max-old-space-size=400 $S/probe.mjs <name> nolimits`.
 
 - **Location:** `packages/core/src/label.ts:168-171`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #193 (c93ceb3 04c0854). Fixed: AlphaCanvas allots its pixels (pixels ceiling, 16M), label placement labels x spots is bounded as work, and every label loop ticks (field rows, labels, searched cells).
 - **Area:** core / layout transforms, rasterizer
 - **Lane ID / scripts:** `core-layout-4` — `core-layout/`
 
@@ -10426,6 +10452,7 @@ Run with `node --max-old-space-size=400 $S/probe.mjs <name> nolimits`.
 
 - **Location:** `packages/core/src/raster-stroke.ts:101-106`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #193 (c93ceb3 04c0854 af50f2f). Fixed: a round join/cap of an immense pen is made as the slice of the disk that faces the canvas (exact inside it, pinned by raster-stroke.test.ts); strokeWidth 1e11/1e17 complete in milliseconds.
 - **Area:** core / layout transforms, rasterizer
 - **Lane ID / scripts:** `core-layout-5` — `core-layout/`
 
@@ -10440,6 +10467,7 @@ Run with `node --max-old-space-size=400 $S/probe.mjs <name> nolimits`.
 
 - **Location:** `packages/core/src/wordcloud.ts:298-300`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #193 (c93ceb3 04c0854). Fixed: the word cloud board allots its pixels before the Int32Array (60000^2 refused at once), and the spiral steps of all words are bounded as work as they grow.
 - **Area:** core / layout transforms, rasterizer
 - **Lane ID / scripts:** `core-layout-10` — `core-layout/`
 
@@ -10741,6 +10769,7 @@ The differential therefore cannot see a wrong descriptor on exactly the items it
 
 - **Location:** `packages/core/src/wordcloud.ts:457-458`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #193 (35cf403). Fixed: the spiral lookup reads own entries only; constructor/toString/__proto__ get the unknown-spiral error.
 - **Area:** core / layout transforms, rasterizer
 - **Lane ID / scripts:** `core-layout-13` — `core-layout/`
 
@@ -11003,6 +11032,7 @@ Direction: say "a resolver that applies the `browser` condition" instead of "a b
 
 - **Location:** `docs/ARCHITECTURE.md:342`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #193 (bf3dbdc af50f2f). Fixed: Deviations from Vega lists the label rasterizer's text-as-box rule, the undashed million-dash rule and the measured browser-differential rate (9-10%, gate 15%).
 - **Area:** core / layout transforms, rasterizer
 - **Lane ID / scripts:** `core-layout-9` — `core-layout/`
 
@@ -11432,6 +11462,7 @@ Status: **CONFIRMED-TRACE**.
 
 - **Location:** `packages/core/src/limits.ts:15-16`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #193 (04c0854 99f0ec4). Fixed: checkSceneLimits compares every drawn string property of an item (href, description, paints, font, cursor, url, ...) with maxStringLength, not only text.
 - **Area:** core / session, stream, limits
 - **Lane ID / scripts:** `core-incr-17` — `core-incr/`
 
@@ -11444,6 +11475,7 @@ Status: **CONFIRMED-TRACE**.
 
 - **Location:** `docs/LIMITS.md:236-240`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #193 (f51f405 acf002a). Fixed: push after close returns false whatever the batch, initial.data rows are checked; LIMITS/API stale statements (5000-term signal, rowsEqual by JSON) corrected.
 - **Area:** core / session, stream, limits
 - **Lane ID / scripts:** `core-incr-18` — `core-incr/`
 
