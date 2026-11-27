@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 573 of 766 findings resolved (558 fixed, 12 already fixed on main, 3 disputed with evidence); 193 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 594 of 766 findings resolved (579 fixed, 12 already fixed on main, 3 disputed with evidence); 172 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -391,13 +391,13 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C342 | Medium | tests / core (render … stream) | "named scheme/range/curve/projection/linkpath lookups ignore inherited names" runs no assertion and tries two of the five lookups | `packages/core/src/sandbox.test.ts:186-197` | CONFIRMED (run) |
 | C343 | Medium | tests / core (render … stream) | "two-argument toDate never calls its second argument" never reaches `toDate` | `packages/core/src/sandbox.test.ts:35-43` | CONFIRMED (run; re-run by lead) |
 | C344 | Medium | tests / core (render … stream) | Two prototype-safety assertions pass under the bug they name | `packages/core/src/sandbox.test.ts:179-184` | CONFIRMED (run) |
-| C345 | Medium | tests / react I | The "no recoverable hydration error" assertions cannot see a chart whose markup differs from the server's | `packages/react/src/Chart.corpus-parity.test.tsx:62-73` | CONFIRMED (run; re-run by lead) |
-| C346 | Medium | tests / react I | The shell anti-drift guard accepts the drift it names | `packages/react/src/Chart.shells.test.ts:35-51` | CONFIRMED (run) |
-| C347 | Medium | tests / react I | The matrix guard is disabled for any file that mentions `forEachVariant(`, and one file already renders `<Chart>` outside the matrix | `packages/react/src/Chart.matrix.test.ts:26-35` | CONFIRMED (run; re-run by lead) |
-| C348 | Medium | tests / react II | the tooltip render counter mocks a module `ChartCore` does not import, so the guard cannot fail | `packages/react/src/Chart.tooltip-renders.test.tsx:14-18` | CONFIRMED (run; re-run by lead) |
-| C349 | Medium | tests / react II | "parity.assert.ts compiles as it stands" checks a program that does not include `parity.assert.ts` | `packages/react/src/Chart.types.test.ts:55-57` | CONFIRMED (run; re-run by lead) |
-| C350 | Medium | tests / react II | every worker fake answers at once; four skip the clone boundary; none holds a stream flush (adds to the test-gap notes of C77 (react-hooks-4) / C244 (react-hooks-6) and report line 7160) | `packages/react/src/worker.protocol.test.tsx:212` | CONFIRMED (traced) |
-| C351 | Medium | tests / react II | "uses a supplied Worker" tests pass unchanged if the hook ignored the Worker; worker ownership is untested | `packages/react/src/worker.test.tsx:43-71` | CONFIRMED (traced) |
+| C345 | Medium | tests / react I | The "no recoverable hydration error" assertions cannot see a chart whose markup differs from the server's | `packages/react/src/Chart.corpus-parity.test.tsx:62-73` | CONFIRMED (run; re-run by lead) → FIXED (#212) |
+| C346 | Medium | tests / react I | The shell anti-drift guard accepts the drift it names | `packages/react/src/Chart.shells.test.ts:35-51` | CONFIRMED (run) → FIXED (#212) |
+| C347 | Medium | tests / react I | The matrix guard is disabled for any file that mentions `forEachVariant(`, and one file already renders `<Chart>` outside the matrix | `packages/react/src/Chart.matrix.test.ts:26-35` | CONFIRMED (run; re-run by lead) → FIXED (#212) |
+| C348 | Medium | tests / react II | the tooltip render counter mocks a module `ChartCore` does not import, so the guard cannot fail | `packages/react/src/Chart.tooltip-renders.test.tsx:14-18` | CONFIRMED (run; re-run by lead) → FIXED (#212) |
+| C349 | Medium | tests / react II | "parity.assert.ts compiles as it stands" checks a program that does not include `parity.assert.ts` | `packages/react/src/Chart.types.test.ts:55-57` | CONFIRMED (run; re-run by lead) → FIXED (#212) |
+| C350 | Medium | tests / react II | every worker fake answers at once; four skip the clone boundary; none holds a stream flush (adds to the test-gap notes of C77 (react-hooks-4) / C244 (react-hooks-6) and report line 7160) | `packages/react/src/worker.protocol.test.tsx:212` | CONFIRMED (traced) → FIXED (#212) |
+| C351 | Medium | tests / react II | "uses a supplied Worker" tests pass unchanged if the hook ignored the Worker; worker ownership is untested | `packages/react/src/worker.test.tsx:43-71` | CONFIRMED (traced) → FIXED (#212) |
 | C352 | Medium | tests / conformance generators and case tables I | The geo differential excludes empty-ring shapes from the spherical measures entirely (why C152 (core-geo-6) was not caught) | `packages/conformance/scripts/differential-geo-generated.test.mts:341` | CONFIRMED (traced) |
 | C353 | Medium | tests / conformance generators and case tables II | The spec-level scale differentials draw no literal-as-signal, no case variant of `type` and no hostile `bins`/tick count (adds to C133 (core-scale-5), C288 (core-scale-6)) | `packages/conformance/scripts/differential-scale-spec-gen.test.mts:112-145` | CONFIRMED (traced) |
 | C354 | Medium | tests / conformance suites I | The parity gate's case table, not its oracle, let all twelve mis-compiles through (adds to C719 (vl-c3-23), C635 (vl-c2-23)) | `packages/conformance/test/vl-compiler-parity.test.ts:77-865` | CONFIRMED (run) |
@@ -705,19 +705,19 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C656 | Low | tests / core (render … stream) | "absent signal named %s behaves exactly like any other absent signal" compares one validator message with itself | `packages/core/src/sandbox.test.ts:199-209` | CONFIRMED (run) |
 | C657 | Low | tests / core (render … stream) | The `render.ts` source guard misses attribute templates that have text before the interpolation | `packages/core/src/svg-escaping.test.ts:347-384` | CONFIRMED (traced) |
 | C658 | Low | tests / core (render … stream) | Titles that assert less than they say | `packages/core/src/scales.test.ts:170-180` | CONFIRMED (traced) |
-| C659 | Low | tests / react I | The `lite` import-graph walker reads only single-quoted, column-0 specifiers and exact package names | `packages/react/src/Chart.shells.test.ts:95-125` | CONFIRMED (run) |
-| C660 | Low | tests / react I | `Chart.differential.test.tsx:56` passes on the DOM from before the update | `packages/react/src/Chart.differential.test.tsx:56` | CONFIRMED (run) |
-| C661 | Low | tests / react I | The frozen-rows test's clicks never toggle a point selection | `packages/react/src/Chart.frozen-input.test.tsx:127-136` | CONFIRMED (run) |
-| C662 | Low | tests / react I | Four titles claim more than their tests assert | `packages/react/src/Chart.dense.test.tsx:87-106` | CONFIRMED (traced) |
-| C663 | Low | tests / react I | Corpus parity would stay green if every spec mounted as the error state; its coverage floor is 794 of 1,063 | `packages/react/src/Chart.corpus-parity.test.tsx:93-95` | CONFIRMED (run) |
-| C664 | Low | tests / react I | Canvas tests without a stubbed context never reach the paint path | `packages/react/src/Chart.canvas.test.tsx:38-113` | CONFIRMED (run) |
-| C665 | Low | tests / react I | Why the seven first-pass defects were not caught (adds to C631 (react-chart-27)) | `packages/react/src/Chart.scales.test.tsx:61-119` | CONFIRMED (traced) |
-| C666 | Low | tests / react I | Global state changed and not restored; one order-dependent test | `packages/react/src/Chart.advanced.test.tsx:42-43` | CONFIRMED (traced) |
-| C667 | Low | tests / react II | the spec-swap corpus sample is described as "every mark type"; it has 9 of 12 and nothing checks it | `packages/react/src/Chart.spec-swap.test.tsx:8` | CONFIRMED (run) |
-| C668 | Low | tests / react II | titles that promise more than the body asserts | `packages/react/src/Chart.test.tsx:133-196` | CONFIRMED (traced) |
-| C669 | Low | tests / react II | vacuous selection assertion in the tab-stop suite | `packages/react/src/Chart.tabstop.test.tsx:194` | CONFIRMED (traced) |
-| C670 | Low | tests / react II | `loadOptions.test.tsx` wraps a hook test in the variant matrix and shadows the variant | `packages/react/src/loadOptions.test.tsx:58-76` | CONFIRMED (traced) |
-| C671 | Low | tests / react II | 23 of the 41 files call `act` without setting `IS_REACT_ACT_ENVIRONMENT` | `packages/react/src/testing/variants.tsx:143` | CONFIRMED (traced) |
+| C659 | Low | tests / react I | The `lite` import-graph walker reads only single-quoted, column-0 specifiers and exact package names | `packages/react/src/Chart.shells.test.ts:95-125` | CONFIRMED (run) → FIXED (#212) |
+| C660 | Low | tests / react I | `Chart.differential.test.tsx:56` passes on the DOM from before the update | `packages/react/src/Chart.differential.test.tsx:56` | CONFIRMED (run) → FIXED (#212) |
+| C661 | Low | tests / react I | The frozen-rows test's clicks never toggle a point selection | `packages/react/src/Chart.frozen-input.test.tsx:127-136` | CONFIRMED (run) → FIXED (#212) |
+| C662 | Low | tests / react I | Four titles claim more than their tests assert | `packages/react/src/Chart.dense.test.tsx:87-106` | CONFIRMED (traced) → FIXED (#212) |
+| C663 | Low | tests / react I | Corpus parity would stay green if every spec mounted as the error state; its coverage floor is 794 of 1,063 | `packages/react/src/Chart.corpus-parity.test.tsx:93-95` | CONFIRMED (run) → FIXED (#212) |
+| C664 | Low | tests / react I | Canvas tests without a stubbed context never reach the paint path | `packages/react/src/Chart.canvas.test.tsx:38-113` | CONFIRMED (run) → FIXED (#212) |
+| C665 | Low | tests / react I | Why the seven first-pass defects were not caught (adds to C631 (react-chart-27)) | `packages/react/src/Chart.scales.test.tsx:61-119` | CONFIRMED (traced) → FIXED (#212) |
+| C666 | Low | tests / react I | Global state changed and not restored; one order-dependent test | `packages/react/src/Chart.advanced.test.tsx:42-43` | CONFIRMED (traced) → FIXED (#212) |
+| C667 | Low | tests / react II | the spec-swap corpus sample is described as "every mark type"; it has 9 of 12 and nothing checks it | `packages/react/src/Chart.spec-swap.test.tsx:8` | CONFIRMED (run) → FIXED (#212) |
+| C668 | Low | tests / react II | titles that promise more than the body asserts | `packages/react/src/Chart.test.tsx:133-196` | CONFIRMED (traced) → FIXED (#212) |
+| C669 | Low | tests / react II | vacuous selection assertion in the tab-stop suite | `packages/react/src/Chart.tabstop.test.tsx:194` | CONFIRMED (traced) → FIXED (#212) |
+| C670 | Low | tests / react II | `loadOptions.test.tsx` wraps a hook test in the variant matrix and shadows the variant | `packages/react/src/loadOptions.test.tsx:58-76` | CONFIRMED (traced) → FIXED (#212) |
+| C671 | Low | tests / react II | 23 of the 41 files call `act` without setting `IS_REACT_ACT_ENVIRONMENT` | `packages/react/src/testing/variants.tsx:143` | CONFIRMED (traced) → FIXED (#212) |
 | C672 | Low | tests / conformance differentials II | which canonicalizer behaviours `normalize.test.ts` pins and which it does not (adds to C192 (harness-src-6)) | `packages/conformance/src/normalize.test.ts:24-93` | CONFIRMED (run) |
 | C673 | Low | tests / conformance generators and case tables I | The "informative" floors of two generated differentials cannot fail | `packages/conformance/scripts/differential-d3-interpolate-gen.test.mts:145` | CONFIRMED (run) |
 | C674 | Low | tests / conformance generators and case tables I | `differential-item-datum` compares only the keys Vega has | `packages/conformance/scripts/differential-item-datum.test.mts:156-160` | CONFIRMED (run) |
@@ -789,7 +789,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C740 | Low | tests / core (render … stream) | The property test's header says pause/resume run against a real stream; the stream has no such API | `packages/core/src/stream.property.test.ts:4` | CONFIRMED (traced) |
 | C741 | Low | tests / core (render … stream) | The DOM escaping tests use 4 of the 13 hostile strings while the comment says coverage is unchanged | `packages/core/src/svg-escaping.test.ts:317-319` | CONFIRMED (traced) |
 | C742 | Low | tests / core (text … url) | the animation refusals title overclaims what vega-lite does | `packages/vl/test/animation.test.ts:76` | CONFIRMED (run) → FIXED (#190) |
-| C743 | Low | tests / react II | stale debugging comments contradict the assertion | `packages/react/src/interaction.test.ts:131-142` | CONFIRMED (traced) |
+| C743 | Low | tests / react II | stale debugging comments contradict the assertion | `packages/react/src/interaction.test.ts:131-142` | CONFIRMED (traced) → FIXED (#212) |
 | C744 | Low | tests / conformance differentials I | stale structure-only filter and "separate defect" comment for the discrete legend | `packages/conformance/src/guide-structure-vs-vega.test.ts:89-91` | CONFIRMED (run) |
 | C745 | Low | tests / conformance differentials I | headers and titles that claim more than the file asserts | `packages/conformance/src/addons-needed.test.ts:4` | CONFIRMED (traced) |
 | C746 | Low | tests / conformance differentials II | stale skip in `signals-guides`: "which the engine does not model; 'sideways' is left out" | `packages/conformance/src/signals-guides-vs-vega.test.ts:145-152` | CONFIRMED (run) |
@@ -12423,6 +12423,7 @@ Direction: split the table into "vega-lite output is broken" and "not supported 
 
 - **Location:** `packages/react/src/interaction.test.ts:131-142`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #212 (93f83a71). Fixed: the comments now state the arithmetic the assertion checks (x = 5 + padding 5 = 10) and 'max last'.
 - **Area:** tests / react II
 - **Lane ID / scripts:** `tests-react2-10` — `tests-react2/`
 
@@ -13208,6 +13209,7 @@ Two smaller effects:
 
 - **Location:** `packages/react/src/Chart.corpus-parity.test.tsx:62-73`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #212 (3297f031). Fixed: corpus-parity hydration fails on any console.error and on a hydrated DOM that differs from a client mount (style spelling and useId set aside), a separate pass hydrates other-position server markup with all three shells and a11y on/off (fails with the hydration patch disabled), and Chart.lean's two hydration tests spy console.error and compare the final svg.
 - **Area:** tests / react I
 - **Lane ID / scripts:** `tests-react1-1` — `tests-react1/`
 
@@ -13227,6 +13229,7 @@ Two smaller effects:
 
 - **Location:** `packages/react/src/Chart.shells.test.ts:35-51`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #212 (cc3e7682). Fixed: shellProblems parses with the TypeScript API and requires exactly <ChartCore {...props} [injected capabilities] ref={ref}>; the five planted drifts and eight more are rejected.
 - **Area:** tests / react I
 - **Lane ID / scripts:** `tests-react1-2` — `tests-react1/`
 
@@ -13246,6 +13249,7 @@ Two smaller effects:
 
 - **Location:** `packages/react/src/Chart.matrix.test.ts:26-35`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #212 (0ae31988). Fixed: directChartUse follows the file's symbols (Chart is the variant only as the forEachVariant callback's first parameter; renamed, dynamic, namespace, destructured, ChartCore and shadowing locals are flagged); the streaming SSR test moved into the matrix; the stale allow-list entries are gone.
 - **Area:** tests / react I
 - **Lane ID / scripts:** `tests-react1-3` — `tests-react1/`
 
@@ -13262,6 +13266,7 @@ Two smaller effects:
 
 - **Location:** `packages/react/src/Chart.tooltip-renders.test.tsx:14-18`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #212 (f080334d). Fixed: the counter mocks @aster-charts/core/lean (where ChartCore imports checkChartRows from), asserts it moves at mount and on a forced re-render; planted every-move re-render fails it.
 - **Area:** tests / react II
 - **Lane ID / scripts:** `tests-react2-1` — `tests-react2/`
 
@@ -13281,6 +13286,7 @@ Two smaller effects:
 
 - **Location:** `packages/react/src/Chart.types.test.ts:55-57`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #212 (f080334d). Fixed: parity.assert.ts is the compiled root of 'compiles as it stands' and the bite fixtures must produce exactly one diagnostic, on the named assertion; planted undecided ChartProps member fails both.
 - **Area:** tests / react II
 - **Lane ID / scripts:** `tests-react2-2` — `tests-react2/`
 
@@ -13298,6 +13304,7 @@ Two smaller effects:
 
 - **Location:** `packages/react/src/worker.protocol.test.tsx:212`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #212 (f6b61ce3). Fixed: one testing/fake-worker.ts (clones both ways, later-turn answers, hold/release fifo or reverse, silent, error/messageerror, terminate) replaces the seven fakes; new tests for out-of-order answers, a held stream flush and a silent worker with unmount (planted apply-last-arrival fails).
 - **Area:** tests / react II
 - **Lane ID / scripts:** `tests-react2-3` — `tests-react2/`
 
@@ -13323,6 +13330,7 @@ Seven separate `FakeWorker` classes:
 
 - **Location:** `packages/react/src/worker.test.tsx:43-71`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #212 (f6b61ce3). Fixed: the supplied-Worker tests assert what the worker received (and for the one-shot hook that nothing draws while its answer is held), supplied workers are never terminated and factory workers are terminated on unmount; planted ignore-worker, terminate-supplied and never-terminate-owned each fail.
 - **Area:** tests / react II
 - **Lane ID / scripts:** `tests-react2-4` — `tests-react2/`
 
@@ -14078,6 +14086,7 @@ All CONFIRMED-TRACE.
 
 - **Location:** `packages/react/src/Chart.shells.test.ts:95-125`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #212 (cc3e7682). Fixed: valueImports reads import/export/dynamic import/require from the syntax tree (any quote, template literal, indentation, re-export), forbidden packages match by prefix (lean/, dist/, src/) and a computed specifier fails closed.
 - **Area:** tests / react I
 - **Lane ID / scripts:** `tests-react1-4` — `tests-react1/`
 
@@ -14099,6 +14108,7 @@ All CONFIRMED-TRACE.
 
 - **Location:** `packages/react/src/Chart.differential.test.tsx:56`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #212 (8a1e5937). Fixed: the test asserts the exact transforms before and after (moved point translate(80,150), others unchanged) and that the svg is the element from before.
 - **Area:** tests / react I
 - **Lane ID / scripts:** `tests-react1-5` — `tests-react1/`
 
@@ -14116,6 +14126,7 @@ All CONFIRMED-TRACE.
 
 - **Location:** `packages/react/src/Chart.frozen-input.test.tsx:127-136`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #212 (8a1e5937). Fixed: clicks go to each mark's own coordinates and the pointSelection spec must change the DOM (nearestHover for the moves); planted (20,20) clicks fail it.
 - **Area:** tests / react I
 - **Lane ID / scripts:** `tests-react1-6` — `tests-react1/`
 
@@ -14132,6 +14143,7 @@ All CONFIRMED-TRACE.
 
 - **Location:** `packages/react/src/Chart.dense.test.tsx:87-106`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #212 (8a1e5937). Fixed: dense and ChartStream hydration assert no recoverable error, no console.error and the kept svg element (planted replace fails); the selection test clicks on nothing and sees it cleared; the autoload-error test re-renders twice for real.
 - **Area:** tests / react I
 - **Lane ID / scripts:** `tests-react1-7` — `tests-react1/`
 
@@ -14146,6 +14158,7 @@ All CONFIRMED-TRACE.
 
 - **Location:** `packages/react/src/Chart.corpus-parity.test.tsx:93-95`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #212 (3297f031). Fixed: every spec of the server, client and hydration passes must be a drawn chart (svg with a drawn element, never role=alert) and the floor is the corpus itself (every file loaded, >= 1129).
 - **Area:** tests / react I
 - **Lane ID / scripts:** `tests-react1-8` — `tests-react1/`
 
@@ -14162,6 +14175,7 @@ All CONFIRMED-TRACE.
 
 - **Location:** `packages/react/src/Chart.canvas.test.tsx:38-113`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #212 (78495668). Fixed: Chart.canvas.test records a 2D context and requires the repaint to clear and to draw what a fresh mount of the new spec draws (planted no-repaint fails). Chart.canvas-events stays as the finding found it (it asserts signals and scene items, not pixels).
 - **Area:** tests / react I
 - **Lane ID / scripts:** `tests-react1-9` — `tests-react1/`
 
@@ -14178,6 +14192,7 @@ All CONFIRMED-TRACE.
 
 - **Location:** `packages/react/src/Chart.scales.test.tsx:61-119`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #212 (78495668). Fixed: Chart.scales runs wheel, keyboard and brush on linear, time, utc, log, sqrt, pow and symlog (planted brush without the Date coercion fails); the other rows are covered by a12's tests (Chart.incremental-dense 3e4b8d1, conformance/react-panzoom-vs-vega 28331f3, Chart.gesture-props 4816311 incl. select and keys in bound inputs, Chart.error-channel f75cbb0, Chart.vl-errors f75cbb0, Chart.signals-controlled ceef5d4).
 - **Area:** tests / react I
 - **Lane ID / scripts:** `tests-react1-10` — `tests-react1/`
 
@@ -14197,6 +14212,7 @@ All CONFIRMED-TRACE.
 
 - **Location:** `packages/react/src/Chart.advanced.test.tsx:42-43`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #212 (2f28fb56 8a1e5937). Fixed: pointer-capture stubs (testing/pointer-capture.ts) and console.error (quiet.ts via vi.spyOn) are restored, Chart.random unmounts its roots in act, and the failed-import test gives each variant its own add-on so it no longer depends on variant order.
 - **Area:** tests / react I
 - **Lane ID / scripts:** `tests-react1-11` — `tests-react1/`
 
@@ -14212,6 +14228,7 @@ All CONFIRMED-TRACE.
 
 - **Location:** `packages/react/src/Chart.spec-swap.test.tsx:8`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #212 (93f83a71). Fixed: the sample is stratified (>= 3 specs of each of the 12 mark types, asserted; every spec is the old spec of one pair); with perType 0 the coverage assertion fails.
 - **Area:** tests / react II
 - **Lane ID / scripts:** `tests-react2-5` — `tests-react2/`
 
@@ -14227,6 +14244,7 @@ All CONFIRMED-TRACE.
 
 - **Location:** `packages/react/src/Chart.test.tsx:133-196`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #212 (93f83a71 0ae31988). Fixed: container-style assertions read the chart's first tag, the signals test also re-renders a mounted chart against a fresh mount, a drop-newest rejection is asserted, limits-rows checks the changeset row is drawn, the stream limits/base tests assert what they claim, two canvas titles say what jsdom lets them check, loadOptions asserts width/height/limits reach the chart.
 - **Area:** tests / react II
 - **Lane ID / scripts:** `tests-react2-6` — `tests-react2/`
 
@@ -14244,6 +14262,7 @@ All CONFIRMED-TRACE.
 
 - **Location:** `packages/react/src/Chart.tabstop.test.tsx:194`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #212 (93f83a71). Fixed: the tab-stop test makes a brush selection, requires the interval value and the one stop (and the tab order) after it.
 - **Area:** tests / react II
 - **Lane ID / scripts:** `tests-react2-7` — `tests-react2/`
 
@@ -14256,6 +14275,7 @@ All CONFIRMED-TRACE.
 
 - **Location:** `packages/react/src/loadOptions.test.tsx:58-76`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #212 (0ae31988). Fixed: the hook tests left the matrix and the local probe is named Probe; the matrix guard flags a local declaration named Chart.
 - **Area:** tests / react II
 - **Lane ID / scripts:** `tests-react2-8` — `tests-react2/`
 
@@ -14270,6 +14290,7 @@ All CONFIRMED-TRACE.
 
 - **Location:** `packages/react/src/testing/variants.tsx:143`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #212 (93c562b2). Fixed: scripts/vitest-react-act.setup.mjs sets IS_REACT_ACT_ENVIRONMENT before any file and fails a test during which React reports an update outside act (planted: fails; act-environment.test.tsx pins the flag); three silent sites fixed.
 - **Area:** tests / react II
 - **Lane ID / scripts:** `tests-react2-9` — `tests-react2/`
 
