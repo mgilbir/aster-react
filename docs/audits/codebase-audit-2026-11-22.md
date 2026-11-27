@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 669 of 766 findings resolved (648 fixed, 18 already fixed on main, 3 disputed with evidence); 97 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 671 of 766 findings resolved (650 fixed, 18 already fixed on main, 3 disputed with evidence); 95 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -254,7 +254,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C205 | Medium | tests / conformance differentials I | mark `role` values where Aster differs from Vega are excluded from the ARIA matrix or judged on structure only | `packages/conformance/src/aria-guides-vs-vega.test.ts:112-116` | CONFIRMED (run; re-run by lead) |
 | C206 | Medium | tests / conformance differentials II | canonicalizer collapses NBSP and all Unicode spaces as if they were XML whitespace | `packages/conformance/src/normalize.ts:469-470` | CONFIRMED (run; re-run by lead) → FIXED (#215) |
 | C207 | Medium | tests / conformance differentials II | "stack keeps the input row order" shares its rows with Vega, which writes `y0`/`y1` onto them first | `packages/conformance/src/renderer-vs-vega.test.ts:33-35` | CONFIRMED (run; re-run by lead) → ALREADY FIXED (#215) |
-| C208 | Medium | tests / conformance differentials II | raster fixtures: loose hand tolerances and a self-recorded baseline that accepts large disagreement (adds to C191 (harness-src-5)) | `packages/conformance/src/raster-vs-chromium.test.ts:43-47` | CONFIRMED (run) |
+| C208 | Medium | tests / conformance differentials II | raster fixtures: loose hand tolerances and a self-recorded baseline that accepts large disagreement (adds to C191 (harness-src-5)) | `packages/conformance/src/raster-vs-chromium.test.ts:43-47` | CONFIRMED (run) → FIXED (#216) |
 | C209 | Medium | tests / conformance generators and case tables II | `dom-string-parity` does not exercise the path its header names, and its comparator is blind to mixed content | `packages/conformance/scripts/dom-string-parity.test.mts:5-9` | CONFIRMED (run) → FIXED (#213) |
 | C210 | Medium | tests / conformance generators and case tables II | `graticule` on a dataset that already has rows drops the rows; Vega keeps them | `packages/core/src/transform.ts:361-366` | CONFIRMED (run; re-run by lead) → FIXED (#213) |
 | C211 | Medium | tests / conformance suites I | A throw in a dataset re-ranked past the marks: Vega draws the marks that read nothing late, Aster draws none | `packages/conformance/test/dataflow-failure-vs-vega.test.ts:213-233` | CONFIRMED (run; re-run by lead) |
@@ -528,7 +528,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C479 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | The collision renamer in both schema generators produces duplicate names from the third collision on | `packages/conformance/src/sweeps/vega-schema.mjs:1509-1511` | CONFIRMED (run) → FIXED (#205) |
 | C480 | Low | closure / gallery lists, small recorded vectors | `intersect()` moves the box into every nested group without the bounds check Vega makes, so a group at a huge x loses later sibling hits | `packages/core/src/scene-intersect.ts:282-290` | CONFIRMED (run; re-run by lead) → FIXED (#189) |
 | C481 | Low | closure / raster fixtures I | the quarter-pixel test's pattern records that a grid repeats an earlier one, not which one | `packages/conformance/src/raster-vs-chromium.test.ts:54-59` | CONFIRMED (run; re-run by lead) → FIXED (#189) |
-| C482 | Low | closure / raster fixtures II | the engine's stroker puts a miter join on the vertices of a flattened curve, so a tight turn in a stroked curve grows a spike the browser does not draw; the baseline pins it | `packages/core/src/raster-stroke.ts:158-188` | CONFIRMED (run; re-run by lead) |
+| C482 | Low | closure / raster fixtures II | the engine's stroker puts a miter join on the vertices of a flattened curve, so a tight turn in a stroked curve grows a spike the browser does not draw; the baseline pins it | `packages/core/src/raster-stroke.ts:158-188` | CONFIRMED (run; re-run by lead) → FIXED (#216) |
 | C483 | Low | core / runtime: marks, encode, groups | Scoped derived signals are evaluated n rounds × n signals per group item | `packages/core/src/runtime.ts:6203-6210` | CONFIRMED (run) |
 | C484 | Low | core / session, stream, limits | Coalesce: a `push` made while `flush` runs is acknowledged and lost | `packages/core/src/stream.ts:514` | CONFIRMED (run) → FIXED (#193) |
 | C485 | Low | core / expressions, regex screen | A compiled expression with a stale registry epoch recompiles on every call (200k evaluations: 3 ms → 600–800 ms) | `packages/core/src/expression.ts:700-705` | CONFIRMED (run) → FIXED (#197) |
@@ -3876,6 +3876,7 @@ All five specs below are schema-valid (`role` is a plain string on a mark):
 
 - **Location:** `packages/conformance/src/raster-vs-chromium.test.ts:43-47`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #216 (c44f6b7a). Fixed: a pen of <= 1 px is drawn as Skia's anti-aliased hairline (two pixels per column, alpha scaled by width, per-segment source-over, no joins); ratchet missing 124->94, extra 356->326, abs 66901->60374, 6 drawings improved and none worse; planted bugs (no hairline, unstable/dropped-edge sort) fail the new tests Earlier work: #215.
 - **Area:** tests / conformance differentials II
 - **Lane ID / scripts:** `tests-confsrc2-4` — `tests-confsrc2/`
 
@@ -5609,6 +5610,7 @@ Direction: skip a group item whose bounds miss the box, as Vega does, and restor
 
 - **Location:** `packages/core/src/raster-stroke.ts:158-188`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #216 (e7b7991d). Fixed at the scan (80% of stroked-curve time): crossings sorted in place, same arithmetic, ratchet pixel-identical on 122 drawings; stroked curves -21% cold / -55% warm CPU vs 7d438d0 (8 alternating pairs, control unchanged), e2e label spec warm -37%, cold +6..10% within noise (stack-wide, not raster) Earlier work: #189.
 - **Area:** closure / raster fixtures II
 - **Lane ID / scripts:** `w3-raster-b-1` — `w3-raster-b/`
 
