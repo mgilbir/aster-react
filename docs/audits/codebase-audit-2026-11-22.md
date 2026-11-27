@@ -5,7 +5,7 @@ Tree audited: `main` at `d30ead9` (v0.4.2, clean apart from the untracked `docs/
 **Result: 766 findings — 7 Critical, 79 High, 296 Medium, 384 Low.** 50 further reports were the same defect found independently by a second lane and are folded into the finding they confirm. Status: 205 CONFIRMED (run; re-run by lead), 381 CONFIRMED (run), 4 CONFIRMED (traced; lines re-read by lead), 170 CONFIRMED (traced), 6 PLAUSIBLE.
 
 <!-- resolution-progress -->
-**Resolution progress:** 23 of 766 findings resolved (23 fixed, 0 already fixed on main, 0 disputed with evidence); 743 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
+**Resolution progress:** 50 of 766 findings resolved (50 fixed, 0 already fixed on main, 0 disputed with evidence); 716 open. Each resolved row names the PR; each finding's section carries a **Resolution** line.
 <!-- /resolution-progress -->
 
 ## Bottom line
@@ -155,7 +155,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C106 | Medium | tests / core (incremental oracle, legacy copies I) | Legacy and new DOM builders cache descriptors in the same `__domDesc` slot, so "old vs new" on reused items compares an object with itself | `packages/core/src/legacy-dom.testlib.ts:397-409` | CONFIRMED (run; re-run by lead) |
 | C107 | Medium | tests / core (limits, loaders, locale, oracle vectors) | Under any `limits` object, a spec that shares sub-objects makes the pre-flight walk exponential; the "spec size" ceiling only holds without limits | `packages/core/src/limits.ts:547-585` | CONFIRMED (run; re-run by lead) |
 | C108 | Medium | tests / core (render … stream) | Escape classes with no case in `sandbox.test.ts` (adds to C4 (core-signals-1), C18 (core-scale-1), C384 (core-expr-11), C285 (core-expr-10)) | `packages/core/src/signals.test.tsx:151-161` | CONFIRMED (run) |
-| C109 | Medium | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | vega-tooltip code is followed without a notice, and the notices test cannot see it | `packages/react/src/tooltip-content.ts:7-18` | CONFIRMED (run) |
+| C109 | Medium | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | vega-tooltip code is followed without a notice, and the notices test cannot see it | `packages/react/src/tooltip-content.ts:7-18` | CONFIRMED (run) → FIXED (#188) |
 | C110 | Medium | core / runtime: state, signals, reuse keys | An update whose re-encode throws is not the fresh scene | `packages/core/src/runtime.ts:5339-5400` | CONFIRMED (run) |
 | C111 | Medium | core / runtime: state, signals, reuse keys | A transient text-measurer failure is swallowed and kept | `packages/core/src/text-metrics.ts:112-130` | CONFIRMED (run) |
 | C112 | Medium | core / runtime: state, signals, reuse keys | `=== DEFAULT_SIZE` (500) stands for "no size given", and an explicit size splits from its signal | `packages/core/src/runtime.ts:1004` | CONFIRMED (run) |
@@ -263,8 +263,8 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C214 | Medium | corpus / specs, range 5 | `vlx-geo-repeat-map-color-fields` draws zero shapes; the repeated colour fields do not exist on the rows | `packages/conformance/corpus/vlx-geo-repeat-map-color-fields.vl.json:5` | CONFIRMED (run; re-run by lead) |
 | C215 | Medium | corpus / specs, range 5 | `vlx-image-value-url` draws zero images; `url:{value}` and mark `opacity` are never rendered | `packages/conformance/corpus/vlx-image-value-url.vl.json:39` | CONFIRMED (run; re-run by lead) |
 | C216 | Medium | corpus / specs, range 5 | `vlx-hdr-label-expr` is inert in the oracle, and it is the only `labelExpr` in the corpus | `packages/conformance/corpus/vlx-hdr-label-expr.vl.json:130` | CONFIRMED (run) |
-| C217 | Medium | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | The process-wide text measurer is keyed for guides only; kept marks keep bounds measured by the previous one | `packages/core/src/runtime.ts:1745` | CONFIRMED (run; re-run by lead) |
-| C218 | Medium | leftovers / budgets, declarations, demo data, gallery lists | `translatePathData` gives wrong or `NaN` output for valid SVG path strings | `packages/core/src/dom.ts:122-172` | CONFIRMED (run; re-run by lead) |
+| C217 | Medium | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | The process-wide text measurer is keyed for guides only; kept marks keep bounds measured by the previous one | `packages/core/src/runtime.ts:1745` | CONFIRMED (run; re-run by lead) → FIXED (#188) |
+| C218 | Medium | leftovers / budgets, declarations, demo data, gallery lists | `translatePathData` gives wrong or `NaN` output for valid SVG path strings | `packages/core/src/dom.ts:122-172` | CONFIRMED (run; re-run by lead) → FIXED (#188) |
 | C219 | Medium | closure / conformance suites, line by line I | `firstDiff` skips any left-hand object it has met before, so the force comparison is blind to a wrong link endpoint and to node row order | `packages/conformance/test/force-hierarchy-gen.ts:46-47` | CONFIRMED (run) |
 | C220 | Medium | closure / conformance suites, line by line I | `expressionsOf` drops every in-place cast from both sides, so the expression diff cannot see a cast one compiler lacks or two different casts | `packages/conformance/test/vl-expressions.ts:152-153` | CONFIRMED (run) |
 | C221 | Medium | closure / conformance suites, line by line I | Product: an area over a measure and a pre-binned position with no second channel draws nothing | `packages/vl/src/compile.ts:4376-4379` | CONFIRMED (run) |
@@ -308,7 +308,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C259 | Medium | corpus / specs, range 6 | UTC time-unit specs cannot be told from local time in any zone the gates use | `packages/conformance/corpus/vlx-timeunit-utc-month.vl.json:121` | CONFIRMED (run) |
 | C260 | Medium | corpus / specs, range 6 | `vlx-tr-loess-groupby` is the identity transform | `packages/conformance/corpus/vlx-tr-loess-groupby.vl.json:118-123` | CONFIRMED (run; re-run by lead) |
 | C261 | Medium | corpus / specs, range 6 | Selection consumers are unobservable in 10 `vlx-sel-*` specs | `packages/conformance/corpus/vlx-sel-layer-brush-filter.vl.json:80` | CONFIRMED (run) |
-| C262 | Medium | leftovers / budgets, declarations, demo data, gallery lists | Nothing guards the gallery ratchet files against being lowered; the gate compares a run to the files, never the files to their history | `packages/conformance/src/gallery/run.ts:51` | CONFIRMED (traced) |
+| C262 | Medium | leftovers / budgets, declarations, demo data, gallery lists | Nothing guards the gallery ratchet files against being lowered; the gate compares a run to the files, never the files to their history | `packages/conformance/src/gallery/run.ts:51` | CONFIRMED (traced) → FIXED (#188) |
 | C263 | Medium | closure / gallery, sweeps, canvas helpers, corpus-tz | Both schema sweeps return at the first enum branch, so the other branches of a mixed property are never generated | `packages/conformance/src/sweeps/vega-schema.mjs:1410-1423` | CONFIRMED (run; re-run by lead) |
 | C264 | Medium | gallery / official Vega-Lite examples II | The gallery gate cannot fail on what 66 of this lane's 313 specs are named for | `packages/conformance/src/gallery/static.ts:42` | CONFIRMED (run) |
 | C265 | Medium | core / runtime: state, signals, reuse keys | In-place change of a host signal is noticed or not depending on an undocumented bound | `packages/core/src/fingerprint.ts:36-37` | CONFIRMED (run) |
@@ -324,7 +324,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C275 | Medium | docs / README, API, ERRORS | `ChartStreamHandle.flush/pending/pulse/stats` are typed `() => unknown` | `packages/react/src/ChartStream.tsx:42-45` | CONFIRMED (run) |
 | C276 | Medium | docs / README, API, ERRORS | `hydrateChart`: `tooltips` shows no tooltip and writes row JSON into the DOM; the result is undocumented | `packages/react/src/ssr.ts:26-27` | CONFIRMED (run) |
 | C277 | Medium | docs / ARCHITECTURE, ADRs, CHANGELOG, demo | the configuration LIMITS.md recommends for untrusted specs disables signal-scoped reuse, kept builds, instance marks, kept group marks, channel re-encode, kept guides and scale-settings r… | `docs/ARCHITECTURE.md:125` | CONFIRMED (run; re-run by lead) |
-| C278 | Medium | leftovers / budgets, declarations, demo data, gallery lists | `diffRows`' result is not assignable to `dataPulse` or `StreamBatch.pulse`, though API.md says to pass it | `docs/API.md:224-229` | CONFIRMED (run) |
+| C278 | Medium | leftovers / budgets, declarations, demo data, gallery lists | `diffRows`' result is not assignable to `dataPulse` or `StreamBatch.pulse`, though API.md says to pass it | `docs/API.md:224-229` | CONFIRMED (run) → FIXED (#188) |
 | C279 | Medium | gallery / official Vega-Lite examples I | `interactive_line_brush_cursor`: the view's own `cursor` is dropped and the root group never takes the pointer | `packages/core/src/runtime.ts:2072-2084` | CONFIRMED (run; re-run by lead) |
 | C280 | Medium | core / runtime: state, signals, reuse keys | Registry epoch is in the named key but not the whole-context key | `packages/core/src/runtime.ts:2509` | CONFIRMED (run) |
 | C281 | Medium | core / runtime: datasets, scales, fit | `maxGeneratedRows` is metered per pulse, so a session accepts appends a fresh evaluation rejects, then throws on the next signal change or resize | `packages/core/src/runtime.ts:4036-4045` | CONFIRMED (run; re-run by lead) |
@@ -377,7 +377,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C328 | Medium | corpus / specs, range 3 | Three `config.scale` specs where the config has no effect in real Vega-Lite | `packages/conformance/corpus/vlx-cfgs-clamp.vl.json:129` | CONFIRMED (run) |
 | C329 | Medium | corpus / specs, range 3 | Tooltip specs are invisible to the corpus gate | `packages/conformance/corpus/vlx-chan-tooltip-mark-true.vl.json:118` | CONFIRMED (run; re-run by lead) |
 | C330 | Medium | corpus / specs, range 5 | 42 `vlx-invalid-<mark>-<mode>` specs are 15 distinct tests; the `*-domains` modes are never distinguished | `packages/conformance/corpus/vlx-invalid-point-break-paths-show-domains.vl.json:41` | CONFIRMED (run) |
-| C331 | Medium | leftovers / budgets, declarations, demo data, gallery lists | React budget rows are the gzip of concatenated chunks and stop at the first `import()`; the "whole bundle" label is no longer true | `packages/benchmarks/scripts/budget.mjs:24` | CONFIRMED (run) |
+| C331 | Medium | leftovers / budgets, declarations, demo data, gallery lists | React budget rows are the gzip of concatenated chunks and stop at the first `import()`; the "whole bundle" label is no longer true | `packages/benchmarks/scripts/budget.mjs:24` | CONFIRMED (run) → FIXED (#188) |
 | C332 | Medium | closure / gallery, sweeps, canvas helpers, corpus-tz | The Vega sweep never sweeps scale `reverse` or legend `type`; the skip reasons are false for those families | `packages/conformance/src/sweeps/vega-schema.mjs:939` | CONFIRMED (run) |
 | C333 | Medium | core / scales, time, format, colour | unknown or misspelt scale properties are dropped silently | `packages/core/src/scales.ts:103-107` | CONFIRMED (run; re-run by lead) |
 | C334 | Medium | tests / core (a11y … curves) | The canvas/SVG corpus parity test silently skips 42 of 391 specs, covers no Vega-Lite spec, and has no floor on passes | `packages/core/src/canvas.test.ts:626-631` | CONFIRMED (run; re-run by lead) |
@@ -428,7 +428,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C379 | Medium | tests / core (limits, loaders, locale, oracle vectors) | `docs/TESTING.md` says the default run pins `TZ=UTC`; it does not, and `locale-font-matrix.test.ts` fails off UTC | `docs/TESTING.md:143` | CONFIRMED (run; re-run by lead) |
 | C380 | Medium | tests / conformance generators and case tables II | A derived dataset that opens with a sort re-orders its source in Vega; Aster does not, and the deviation is recorded only in a test comment | `packages/conformance/scripts/differential-sort-ties.test.mts:53-55` | CONFIRMED (run; re-run by lead) |
 | C381 | Medium | tests / conformance suites I | `docs/ERRORS.md:182` misdescribes what a throwing dataset transform leaves | `docs/ERRORS.md:182` | CONFIRMED (run; re-run by lead) |
-| C382 | Medium | leftovers / budgets, declarations, demo data, gallery lists | `SignalBindOptions.pick` TSDoc recommends `HitIndex.query`; that is not vega's `event.item` | `packages/core/src/signals.ts:164` | CONFIRMED (run; re-run by lead) |
+| C382 | Medium | leftovers / budgets, declarations, demo data, gallery lists | `SignalBindOptions.pick` TSDoc recommends `HitIndex.query`; that is not vega's `event.item` | `packages/core/src/signals.ts:164` | CONFIRMED (run; re-run by lead) → FIXED (#188) |
 | C383 | Low | core / runtime: marks, encode, groups | Scope ids concatenate data-controlled keys | `packages/core/src/runtime.ts:6248` | PLAUSIBLE |
 | C384 | Low | core / expressions, regex screen | Member reads return built-in prototype objects and host-object getters as values | `packages/core/src/expr-interpreter.ts:279-305` | CONFIRMED (run) |
 | C385 | Low | core / expressions, regex screen | Process-wide expression caches are bounded by entry count, not size, and keyed by full expression text | `packages/core/src/expr-parser.ts:846-860` | CONFIRMED (traced) |
@@ -439,7 +439,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C390 | Low | vl / composite marks, selections, transforms | `quotedRef` is a second, weaker field escaper (continues C37) | `packages/vl/src/composite-marks.ts:17` | CONFIRMED (run) |
 | C391 | Low | tests / core (limits, loaders, locale, oracle vectors) | A URL refused for embedded credentials is echoed, password included, in the error message and `.url` | `packages/core/src/url-policy.ts:20-21` | CONFIRMED (run; re-run by lead) |
 | C392 | Low | corpus / specs, range 2 | `image.vg.json` points at a third-party host | `packages/conformance/corpus/image.vg.json:1` | CONFIRMED (traced) |
-| C393 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | Lockfile hygiene: one deprecated package, unhashed `packageManager`, oracle versions held only by the lockfile outside conformance too | `package.json:4` | CONFIRMED (run) |
+| C393 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | Lockfile hygiene: one deprecated package, unhashed `packageManager`, oracle versions held only by the lockfile outside conformance too | `package.json:4` | CONFIRMED (run) → FIXED (#188) |
 | C394 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | `localFileFor` ignores the package and version in a jsDelivr URL and throws on a malformed escape | `packages/conformance/src/gallery/lib.ts:54-58` | CONFIRMED (run) |
 | C395 | Low | core / runtime: state, signals, reuse keys | Every evaluation with `input.textMetrics` clears the process-wide width cache | `packages/core/src/text-metrics.ts:30-34` | CONFIRMED (traced) |
 | C396 | Low | core / runtime: marks, encode, groups | An explicit `null` on a defaulted channel is replaced by the default | `packages/core/src/runtime.ts:6497` | CONFIRMED (run) |
@@ -545,7 +545,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C496 | Low | tooling / gates, CI, release, benchmarks | `check-bundle-shaking --only <typo>` passes with zero patterns | `scripts/check-bundle-shaking.mjs:42-43` | CONFIRMED (traced) → FIXED (#187) |
 | C497 | Low | tooling / gates, CI, release, benchmarks | `pnpm test:tz <misspelt zone>` runs in UTC and reports "all zones passed" | `scripts/test-tz.mjs:34-45` | CONFIRMED (run) → FIXED (#187) |
 | C498 | Low | tests / conformance differentials II | `projection-scope-vs-vega` empties the module-level `sphere` dataset for every later test | `packages/conformance/src/projection-scope-vs-vega.test.ts:54-58` | CONFIRMED (traced) |
-| C499 | Low | leftovers / budgets, declarations, demo data, gallery lists | The locale setters accept `undefined` by type, throw a raw `TypeError`, and `defaultLocale(def, undefined)` leaves the process-wide default half replaced | `packages/core/src/locale.ts:151-153` | CONFIRMED (run; re-run by lead) |
+| C499 | Low | leftovers / budgets, declarations, demo data, gallery lists | The locale setters accept `undefined` by type, throw a raw `TypeError`, and `defaultLocale(def, undefined)` leaves the process-wide default half replaced | `packages/core/src/locale.ts:151-153` | CONFIRMED (run; re-run by lead) → FIXED (#188) |
 | C500 | Low | core / runtime: state, signals, reuse keys | A fractional or `NaN` `dataChanges` index blanks the chart or throws a bare TypeError | `packages/core/src/runtime.ts:950` | CONFIRMED (run) |
 | C501 | Low | core / runtime: marks, encode, groups | A failed import of the pulse part is swallowed for the life of the page with no log | `packages/core/src/shell-setup.ts:20` | CONFIRMED (traced) |
 | C502 | Low | core / session, stream, limits | Stream bounds accept `NaN` | `packages/core/src/stream.ts:443-444` | CONFIRMED (run) |
@@ -568,10 +568,10 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C519 | Low | corpus / specs, range 6 | Three schema-invalid specs | `packages/conformance/corpus/vlx-sel-mv-concat-layer-child.vl.json:49` | CONFIRMED (run) |
 | C520 | Low | corpus / specs, range 6 | `wordcloud.vg.json` draws nothing (adds to C366 (harness-scripts-11)) | `packages/conformance/corpus/wordcloud.vg.json:1` | CONFIRMED (run) |
 | C521 | Low | corpus / specs, range 6 | Redundant projections in four selection specs | `packages/conformance/corpus/vlx-sel-interval-ordinal.vl.json:50` | CONFIRMED (run) |
-| C522 | Low | leftovers / budgets, declarations, demo data, gallery lists | Budget rows built on a bare import print PASS at 0.00 kB when the import is shaken out; warnings are discarded; a `BUDGETS` key without an entry is never noticed | `packages/benchmarks/scripts/budget.mjs:465-479` | CONFIRMED (run) |
-| C523 | Low | leftovers / budgets, declarations, demo data, gallery lists | A failing budget run leaves `packages/benchmarks/.tmp` in the working tree, and the path is not ignored | `packages/benchmarks/scripts/budget.mjs:678` | CONFIRMED (traced) |
-| C524 | Low | leftovers / budgets, declarations, demo data, gallery lists | `bindSceneSignals` on a scene without `runtime`/`compiled` returns a dead binding and reports nothing | `packages/core/src/signals.ts:1801-1804` | CONFIRMED (run) |
-| C525 | Low | leftovers / budgets, declarations, demo data, gallery lists | The swap floor lets 23 of the 223 committed pairs go unrun; duplicates in the gallery denominator | `packages/conformance/src/gallery/swap-plan.ts:35` | CONFIRMED (run) |
+| C522 | Low | leftovers / budgets, declarations, demo data, gallery lists | Budget rows built on a bare import print PASS at 0.00 kB when the import is shaken out; warnings are discarded; a `BUDGETS` key without an entry is never noticed | `packages/benchmarks/scripts/budget.mjs:465-479` | CONFIRMED (run) → FIXED (#188) |
+| C523 | Low | leftovers / budgets, declarations, demo data, gallery lists | A failing budget run leaves `packages/benchmarks/.tmp` in the working tree, and the path is not ignored | `packages/benchmarks/scripts/budget.mjs:678` | CONFIRMED (traced) → FIXED (#188) |
+| C524 | Low | leftovers / budgets, declarations, demo data, gallery lists | `bindSceneSignals` on a scene without `runtime`/`compiled` returns a dead binding and reports nothing | `packages/core/src/signals.ts:1801-1804` | CONFIRMED (run) → FIXED (#188) |
+| C525 | Low | leftovers / budgets, declarations, demo data, gallery lists | The swap floor lets 23 of the 223 committed pairs go unrun; duplicates in the gallery denominator | `packages/conformance/src/gallery/swap-plan.ts:35` | CONFIRMED (run) → FIXED (#188) |
 | C526 | Low | closure / conformance suites, line by line I | Force generator: 13% of cases have no node, 20% no force; what it never generates | `packages/conformance/test/force-hierarchy-gen.ts:103` | CONFIRMED (run) |
 | C527 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | Gallery static compares an oracle document after Vega logged an error, and drops Vega warnings | `packages/conformance/src/gallery/static.ts:47-48` | CONFIRMED (run) |
 | C528 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | `runPage` leaks the browser when a worker rejects, and creates a temp directory it never uses | `packages/conformance/src/gallery/react.ts:61-63` | CONFIRMED (traced) |
@@ -584,7 +584,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C535 | Low | vl / scales, stacking, guides | `axis.style` is emitted as a raw Vega `style`; vega-lite resolves `config.style.<name>` into axis properties | `packages/vl/src/compile.ts:5906-5910` | CONFIRMED (run) |
 | C536 | Low | vl / mark encoding | `mark.ariaRole` is dropped; vega-lite encodes it | `packages/vl/src/compile.ts:6915` | CONFIRMED (run) |
 | C537 | Low | conformance / harness | `--print-passing` rewrites the baseline in the run that found the regression | `packages/conformance/src/gallery/run.ts:147-152` | CONFIRMED (traced) |
-| C538 | Low | leftovers / budgets, declarations, demo data, gallery lists | Scene types omit fields the docs and the engine use: `item.image`, `item.tooltip`, `scene.signalParams`, `scene.__limits` | `docs/API.md:650` | CONFIRMED (run) |
+| C538 | Low | leftovers / budgets, declarations, demo data, gallery lists | Scene types omit fields the docs and the engine use: `item.image`, `item.tooltip`, `scene.signalParams`, `scene.__limits` | `docs/API.md:650` | CONFIRMED (run) → FIXED (#188) |
 | C539 | Low | core / runtime: state, signals, reuse keys | `types.ts` shapes that do not match what runs (`CompiledScale.type` union, `autoChanges`, orphaned TSDoc, `__source`) | `packages/core/src/types.ts:381` | CONFIRMED (run) |
 | C540 | Low | core / runtime: state, signals, reuse keys | `valueKey` and `valuesEqual` disagree | `packages/core/src/fingerprint.ts:70` | CONFIRMED (traced) |
 | C541 | Low | core / runtime: marks, encode, groups | The instance-mark diff misses a nested change that the top-level path sees | `packages/core/src/runtime.ts:5653-5654` | CONFIRMED (run) |
@@ -666,7 +666,7 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C617 | Low | closure / conformance suites, line by line II | the "by a list of values" sort names values no field holds | `packages/conformance/test/vl-sort-channels.test.ts:26` | CONFIRMED (run) |
 | C618 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | `corpus-tz/tz-text-format-utc.vg.json` cannot test what its name says | `packages/conformance/corpus-tz/tz-text-format-utc.vg.json:49-53` | CONFIRMED (run; re-run by lead) |
 | C619 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | The value sweep's stack journey never stacks | `packages/conformance/src/sweeps/values.mjs:192` | CONFIRMED (traced) |
-| C620 | Low | closure / showcase, ADRs, engine parts, type fixtures | The core-parts test setup and `parts-all.ts` leave the `signals` slot empty, although both say they fill every part (adds to C737 (tests-core3-10)) | `scripts/vitest-core-parts.setup.mjs:18-19` | CONFIRMED (run; re-run by lead) |
+| C620 | Low | closure / showcase, ADRs, engine parts, type fixtures | The core-parts test setup and `parts-all.ts` leave the `signals` slot empty, although both say they fill every part (adds to C737 (tests-core3-10)) | `scripts/vitest-core-parts.setup.mjs:18-19` | CONFIRMED (run; re-run by lead) → FIXED (#188) |
 | C621 | Low | closure / d3-format vectors | `invalidFormatSpecs` is half valid, and those three specs are never applied to a value (adds to `C461 (tests-core7-5)`) | `packages/conformance/scripts/gen-vectors.mjs:512` | CONFIRMED (run) |
 | C622 | Low | closure / vega-format vectors | the `localeTimeParse` case `'%G-W11-4'` is not an ISO week-date parse; the week and weekday are literals | `packages/core/testdata/vectors/vega-format.json:5753-5762` | CONFIRMED (traced) |
 | C623 | Low | closure / vega-time vectors I | `date` and `day` record the same 88 results twice, while the third alias `dayofyear` is never recorded | `packages/conformance/scripts/gen-vectors.mjs:320` | CONFIRMED (run) |
@@ -733,12 +733,12 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C684 | Low | corpus / specs, range 1 | Near-duplicate specs that differ only in data values | `packages/conformance/corpus/area-vl.vl.json:1` | CONFIRMED (traced) |
 | C685 | Low | corpus / specs, range 2 | `$schema` hygiene | `packages/conformance/corpus/t-crossfilter.vg.json:1` | CONFIRMED (run) |
 | C686 | Low | corpus / specs, range 4 | Lane boundary depends on sort collation | `packages/conformance/corpus/vlx-geo-proj-albers.vl.json:1` | CONFIRMED (run) |
-| C687 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | Ten notice sections are outside the notices test; five licence texts cannot be checked in this repo | `scripts/notices.test.mjs:15` | CONFIRMED (traced) |
-| C688 | Low | leftovers / budgets, declarations, demo data, gallery lists | `@aster-charts/core`'s declarations need the DOM lib, even for `renderSpec` alone | `packages/core/src/index.ts:1` | CONFIRMED (run) |
-| C689 | Low | leftovers / budgets, declarations, demo data, gallery lists | No test reads `apps/demo/src/showcase/`; five of the fourteen specs are in no corpus and no gate | `apps/demo/src/showcase.tsx:22-26` | CONFIRMED (run) |
+| C687 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | Ten notice sections are outside the notices test; five licence texts cannot be checked in this repo | `scripts/notices.test.mjs:15` | CONFIRMED (traced) → FIXED (#188) |
+| C688 | Low | leftovers / budgets, declarations, demo data, gallery lists | `@aster-charts/core`'s declarations need the DOM lib, even for `renderSpec` alone | `packages/core/src/index.ts:1` | CONFIRMED (run) → FIXED (#188) |
+| C689 | Low | leftovers / budgets, declarations, demo data, gallery lists | No test reads `apps/demo/src/showcase/`; five of the fourteen specs are in no corpus and no gate | `apps/demo/src/showcase.tsx:22-26` | CONFIRMED (run) → FIXED (#188) |
 | C690 | Low | closure / conformance suites, line by line I | `vl-orient`: the orientation with no orient asked is never compared for tick or line, and the per-case tests cannot fail | `packages/conformance/test/vl-orient.test.ts:56-59` | CONFIRMED (run) |
-| C691 | Low | closure / showcase, ADRs, engine parts, type fixtures | The empty-slot error says "import @aster-charts/core, which carries it"; the main entry leaves six slots empty | `packages/core/src/engine-parts.ts:157` | CONFIRMED (run; re-run by lead) |
-| C692 | Low | closure / showcase, ADRs, engine parts, type fixtures | The "accepts every prop" type fixture exercises 24 of 33 shared props and 3 of 9 handle methods | `packages/react/type-fixtures/svg-chart-accepts.fixture.tsx:12-19` | CONFIRMED (run) |
+| C691 | Low | closure / showcase, ADRs, engine parts, type fixtures | The empty-slot error says "import @aster-charts/core, which carries it"; the main entry leaves six slots empty | `packages/core/src/engine-parts.ts:157` | CONFIRMED (run; re-run by lead) → FIXED (#188) |
+| C692 | Low | closure / showcase, ADRs, engine parts, type fixtures | The "accepts every prop" type fixture exercises 24 of 33 shared props and 3 of 9 handle methods | `packages/react/type-fixtures/svg-chart-accepts.fixture.tsx:12-19` | CONFIRMED (run) → FIXED (#188) |
 | C693 | Low | closure / gallery lists, small recorded vectors | (test cannot fail) — d3-dsv vectors: the `dropOdd` case never drops a row, and the `dsvParseSemi` / `dsvParseTab` suites record `parseRows`, not `parse` | `packages/core/testdata/vectors/d3-dsv.json:467-477` | CONFIRMED (run) |
 | C694 | Low | closure / d3-format vectors | 8 of 108 `formatPrefix` cases are exact duplicates, and 12 record the same degenerate `"NaN"` | `packages/conformance/scripts/gen-vectors.mjs:548-553` | CONFIRMED (run) |
 | C695 | Low | closure / d3-format vectors | 8 recorded strings depend on the recording engine's Intl data, not on d3 | `packages/core/testdata/vectors/d3-format.json:113` | PLAUSIBLE |
@@ -799,15 +799,15 @@ The React layer has its own cluster: errors that escape `onError` by being throw
 | C750 | Low | tests / conformance suites II | `vl-scale-forwarding` excludes fillOpacity / strokeOpacity on a premise that is no longer true | `packages/conformance/test/vl-scale-forwarding.test.ts:8` | CONFIRMED (run) |
 | C751 | Low | tests / conformance suites II | `vl-inline-data-sharing` header contradicts its assertions | `packages/conformance/test/vl-inline-data-sharing.test.ts:9-10` | CONFIRMED (run) |
 | C752 | Low | corpus / specs, range 5 | the one coarse-signature difference: Aster emits one `<clipPath>` where Vega emits two | `packages/conformance/corpus/vlx-sel-config-selection.vl.json:1` | CONFIRMED (run) |
-| C753 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | ARCHITECTURE contradicts itself and the code on whether guides are kept | `docs/ARCHITECTURE.md:128` | CONFIRMED (run; re-run by lead) |
-| C754 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | Reuse conditions the code enforces that ARCHITECTURE 117-193 and 556-565 omit, and two misplaced names | `docs/ARCHITECTURE.md:121` | CONFIRMED (traced) |
-| C755 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | The time-grain-detector notice points at the wrong file, and the right file has no attribution | `THIRD_PARTY_NOTICES.md:942` | CONFIRMED (traced) |
-| C756 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | CHANGELOG 0.3.x and older: one misleading placement, unmarked behaviour changes, one untested fix | `CHANGELOG.md:578-586` | CONFIRMED (run) |
-| C757 | Low | leftovers / budgets, declarations, demo data, gallery lists | Every ceiling equals its last comment + 0.5, but the comments no longer describe the tree; seven rows have 0.01-0.12 kB of headroom (adds to C449 (docs-arch-15)) | `packages/benchmarks/scripts/budget.mjs:299-400` | CONFIRMED (run) |
+| C753 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | ARCHITECTURE contradicts itself and the code on whether guides are kept | `docs/ARCHITECTURE.md:128` | CONFIRMED (run; re-run by lead) → FIXED (#188) |
+| C754 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | Reuse conditions the code enforces that ARCHITECTURE 117-193 and 556-565 omit, and two misplaced names | `docs/ARCHITECTURE.md:121` | CONFIRMED (traced) → FIXED (#188) |
+| C755 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | The time-grain-detector notice points at the wrong file, and the right file has no attribution | `THIRD_PARTY_NOTICES.md:942` | CONFIRMED (traced) → FIXED (#188) |
+| C756 | Low | leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims | CHANGELOG 0.3.x and older: one misleading placement, unmarked behaviour changes, one untested fix | `CHANGELOG.md:578-586` | CONFIRMED (run) → FIXED (#188) |
+| C757 | Low | leftovers / budgets, declarations, demo data, gallery lists | Every ceiling equals its last comment + 0.5, but the comments no longer describe the tree; seven rows have 0.01-0.12 kB of headroom (adds to C449 (docs-arch-15)) | `packages/benchmarks/scripts/budget.mjs:299-400` | CONFIRMED (run) → FIXED (#188) |
 | C758 | Low | leftovers / budgets, declarations, demo data, gallery lists | Declaration hygiene: one TSDoc that is false, dead exported types, stray comments, `@internal` members shipped | `packages/core/src/types.ts:741` | CONFIRMED (run) |
 | C759 | Low | closure / gallery, sweeps, canvas helpers, corpus-tz | Comment and table drift in `vega-schema.mjs` | `packages/conformance/src/sweeps/vega-schema.mjs:936` | CONFIRMED (traced) |
-| C760 | Low | closure / showcase, ADRs, engine parts, type fixtures | ADR 0009 says generated suites scale with `ASTER_DIFF_SCALE`; four of thirteen do not | `docs/adr/0009-live-differentials-over-recorded-vectors.md:22` | CONFIRMED (traced) |
-| C761 | Low | closure / showcase, ADRs, engine parts, type fixtures | ADR 0001 still states recorded vectors as the gate for every ported surface; no amendment points at ADR 0009 | `docs/adr/0001-own-the-engine.md:36-43` | CONFIRMED (traced) |
+| C760 | Low | closure / showcase, ADRs, engine parts, type fixtures | ADR 0009 says generated suites scale with `ASTER_DIFF_SCALE`; four of thirteen do not | `docs/adr/0009-live-differentials-over-recorded-vectors.md:22` | CONFIRMED (traced) → FIXED (#188) |
+| C761 | Low | closure / showcase, ADRs, engine parts, type fixtures | ADR 0001 still states recorded vectors as the gate for every ported surface; no amendment points at ADR 0009 | `docs/adr/0001-own-the-engine.md:36-43` | CONFIRMED (traced) → FIXED (#188) |
 | C762 | Low | closure / gallery lists, small recorded vectors | The stall fixture is not the scene its test describes: the refusal comes from a NaN box left by a sibling group, and depends on mark order | `packages/core/src/scene-intersect-limits.test.ts:35-38` | CONFIRMED (run) |
 | C763 | Low | closure / vega-format vectors | the "DST-straddling" date set never crosses either 2024 transition and has no fractional second, so the `%Z`, `%L` and `%f` groups are inert for what they suggest | `packages/conformance/scripts/gen-vectors.mjs:301-308` | CONFIRMED (run; re-run by lead) |
 | C764 | Low | closure / raster fixtures I | `raster-shapes.ts` comment says the circle moves "a sixteenth of a pixel at a time"; the step is an eighth | `packages/conformance/src/raster-shapes.ts:18` | CONFIRMED (traced) |
@@ -3942,6 +3942,7 @@ Direction: rank marks against the failed dataset (those reading nothing ranked a
 
 - **Location:** `packages/core/src/runtime.ts:1745`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #188 (2ef3770). Fixed: the text measurer in force (input.textMetrics or the global one) is in extraFp and the session meta key; guideKeyOf's special case dropped; 16 scenarios (text, group text, axis, legend x four ways to ask), 8 fail without the change.
 - **Area:** leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims
 - **Lane ID / scripts:** `gaps-misc-a-1` — `gaps-misc-a/`
 
@@ -3970,6 +3971,7 @@ Direction: rank marks against the failed dataset (those reading nothing ranked a
 
 - **Location:** `packages/core/src/dom.ts:122-172`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #188 (a55f4f9). Fixed: translatePathData walks the engine's own path reader (vega's grammar), a first m is absolute, packed flags and .5.5 are read right; 2000 generated paths against vega pathRender.
 - **Area:** leftovers / budgets, declarations, demo data, gallery lists
 - **Lane ID / scripts:** `gaps-misc-b-3` — `gaps-misc-b/`
 
@@ -5700,6 +5702,7 @@ Positional zones are passed to `TZ` unchecked. Node treats an unknown zone as UT
 
 - **Location:** `packages/core/src/locale.ts:151-153`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #188 (dd46ad3,37c91dc). Fixed: both locale halves are built before either default is assigned, a non-definition is refused with a named error, declarations are overloads (explicit undefined no longer type checks).
 - **Area:** leftovers / budgets, declarations, demo data, gallery lists
 - **Lane ID / scripts:** `gaps-misc-b-9` — `gaps-misc-b/`
 
@@ -6849,6 +6852,7 @@ For the lead: the whole-corpus list (54 groups) is in `render-identical-groups.t
 
 - **Location:** `packages/benchmarks/scripts/budget.mjs:24`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #188 (0e65f18,6a88509). Fixed: each file gzipped on its own, React rows gate up front + on demand, useChartWorker / hydrateChart / ssr have rows; ceilings re-set in their own commit.
 - **Area:** leftovers / budgets, declarations, demo data, gallery lists
 - **Lane ID / scripts:** `gaps-misc-b-5` — `gaps-misc-b/`
 
@@ -8040,6 +8044,7 @@ All from `inert.mjs` (deletion leaves the oracle's canonical SVG identical):
 
 - **Location:** `scripts/vitest-core-parts.setup.mjs:18-19`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #188 (5cfc295). Fixed: the setup and installAllParts fill the signals slot, parts-all.ts says what it carries; engine-parts-setup.test.ts checks ENGINE_PARTS against the slots.
 - **Area:** closure / showcase, ADRs, engine parts, type fixtures
 - **Lane ID / scripts:** `w3-rest-1` — `w3-rest/`
 
@@ -8425,6 +8430,7 @@ Direction: decide whether `tooltips` is public. If so, rename it for what it doe
 
 - **Location:** `docs/API.md:224-229`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #188 (37c91dc). Fixed: dataPulse and StreamBatch.pulse accept diffRows' RowDiff (read by addedRanges/removedRanges); PulseChangeInput and PulseRange exported; compile and stream tests.
 - **Area:** leftovers / budgets, declarations, demo data, gallery lists
 - **Lane ID / scripts:** `gaps-misc-b-2` — `gaps-misc-b/`
 
@@ -8563,6 +8569,7 @@ Status: **CONFIRMED-RUN** `ax.mjs style`.
 
 - **Location:** `docs/API.md:650`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #188 (37c91dc,66a6d53). Fixed: SceneItem.image/.tooltip and SceneRoot.signalParams/.__limits declared, runtime/compiled typed; declarations-consumer.test.ts compiles the documented uses; API.md names where bindSignalEvents' arguments come from.
 - **Area:** leftovers / budgets, declarations, demo data, gallery lists
 - **Lane ID / scripts:** `gaps-misc-b-10` — `gaps-misc-b/`
 
@@ -9280,6 +9287,7 @@ Direction: add those properties and path forms to `randomItems`, a clipped, fram
 
 - **Location:** `packages/conformance/src/gallery/run.ts:51`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #188 (799afba). Fixed: ratchet.test.ts compares floors, passing lists, swap pairs and the manifest with the base revision on every PR (overrides need a reason), ties manifest tags to the pinned vega/vega-lite, and a run above its floor fails.
 - **Area:** leftovers / budgets, declarations, demo data, gallery lists
 - **Lane ID / scripts:** `gaps-misc-b-1` — `gaps-misc-b/`
 
@@ -9650,6 +9658,7 @@ A scenario whose spec fails to evaluate on both sides is green at every step. Th
 
 - **Location:** `packages/benchmarks/scripts/budget.mjs:465-479`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #188 (0e65f18). Fixed: a measure of 0 or outside 0.3-0.7 kB under its ceiling fails, esbuild warnings fail, rows/BUDGETS/TOTALS are cross-checked, stale-dist reads each package's tsconfig excludes and finds outputs without a source; ASTER_BUDGET_SIDE_EFFECTS=none proves it.
 - **Area:** leftovers / budgets, declarations, demo data, gallery lists
 - **Lane ID / scripts:** `gaps-misc-b-6` — `gaps-misc-b/`
 
@@ -9673,6 +9682,7 @@ A scenario whose spec fails to evaluate on both sides is green at every step. Th
 
 - **Location:** `packages/benchmarks/scripts/budget.mjs:678`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #188 (0e65f18). Fixed: the runner sets exitCode and falls through its finally (the .gitignore already covered .tmp*/ at the base); a test asserts the directory is gone after a failing run.
 - **Area:** leftovers / budgets, declarations, demo data, gallery lists
 - **Lane ID / scripts:** `gaps-misc-b-8` — `gaps-misc-b/`
 
@@ -9687,6 +9697,7 @@ A scenario whose spec fails to evaluate on both sides is green at every step. Th
 
 - **Location:** `packages/core/src/signals.ts:1801-1804`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #188 (37c91dc). Fixed: bindSceneSignals warns once through hooks.logger when the scene has no runtime/compiled chart (a JSON copy keeps an object without its functions as runtime).
 - **Area:** leftovers / budgets, declarations, demo data, gallery lists
 - **Lane ID / scripts:** `gaps-misc-b-12` — `gaps-misc-b/`
 
@@ -9702,6 +9713,7 @@ A scenario whose spec fails to evaluate on both sides is green at every step. Th
 
 - **Location:** `packages/conformance/src/gallery/swap-plan.ts:35`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #188 (799afba). Fixed: swap.minRunnable is 223 (the pair count) and the ratchet test holds it there; the gate prints the 624 distinct of 627 and a fourth byte-identical pair fails ratchet.test.ts.
 - **Area:** leftovers / budgets, declarations, demo data, gallery lists
 - **Lane ID / scripts:** `gaps-misc-b-15` — `gaps-misc-b/`
 
@@ -10622,6 +10634,7 @@ The differential therefore cannot see a wrong descriptor on exactly the items it
 
 - **Location:** `packages/react/src/tooltip-content.ts:7-18`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #188 (7fb05fb). Fixed: vega-tooltip has a notice (verbatim LICENSE) and a header line in tooltip-content.ts; the notices test reads every comment line and requires each installed upstream name to be listed or mentioned-not-derived with a reason.
 - **Area:** leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims (also categories 7)
 - **Lane ID / scripts:** `gaps-misc-a-2` — `gaps-misc-a/`
 
@@ -10755,6 +10768,7 @@ A timer of an element that was never in the document has no self-stop (`wasConne
 
 - **Location:** `package.json:4`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #188 (388edb7). Fixed: glob deprecation removed by a test-exclude>glob override (coverage still runs), packageManager has its sha512, vega/vega-lite/vega-embed/react-vega exact in benchmarks, demo and conformance; lockfile-hygiene.test.mjs.
 - **Area:** leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims
 - **Lane ID / scripts:** `gaps-misc-a-8` — `gaps-misc-a/`
 
@@ -11313,6 +11327,7 @@ Direction: rewrite the row as "the pass stops at the dataset: no dataset, scale,
 
 - **Location:** `packages/core/src/signals.ts:164`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #188 (37c91dc). Fixed: SignalBindOptions.pick TSDoc recommends buildHitIndex(scene).pick and says the element's origin (svg or canvas).
 - **Area:** leftovers / budgets, declarations, demo data, gallery lists
 - **Lane ID / scripts:** `gaps-misc-b-4` — `gaps-misc-b/`
 
@@ -12090,6 +12105,7 @@ Both carry a "HANDOFF (lane 3 -> lane 7) … Fails today; belongs in packages/co
 
 - **Location:** `docs/ARCHITECTURE.md:128`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #188 (6f0e361). Fixed: the two stale ARCHITECTURE clauses and the canReuseMarkGroup comment now say guides and group marks are kept.
 - **Area:** leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims
 - **Lane ID / scripts:** `gaps-misc-a-4` — `gaps-misc-a/`
 
@@ -12106,6 +12122,7 @@ Both carry a "HANDOFF (lane 3 -> lane 7) … Fails today; belongs in packages/co
 
 - **Location:** `docs/ARCHITECTURE.md:121`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #188 (6f0e361). Fixed: the refusals of keptGroupMark, reencodeChannels, keptOverMarkItems and evaluateInstanceMark, the abort points and stepOf order are stated; architecture-claims.test.mjs checks every 'name in file' claim.
 - **Area:** leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims
 - **Lane ID / scripts:** `gaps-misc-a-5` — `gaps-misc-a/`
 
@@ -12122,6 +12139,7 @@ Every function the section names exists, and I found no stated refusal missing f
 
 - **Location:** `THIRD_PARTY_NOTICES.md:942`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #188 (7fb05fb). Fixed: the notice names transform-timeunit.ts, which carries a header line and is in the rewritten list.
 - **Area:** leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims
 - **Lane ID / scripts:** `gaps-misc-a-6` — `gaps-misc-a/`
 
@@ -12138,6 +12156,7 @@ Every function the section names exists, and I found no stated refusal missing f
 
 - **Location:** `CHANGELOG.md:578-586`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #188 (ac43919). Fixed: every Object.prototype member tested at ten validator sites; the CHANGELOG placement/breaking-marker corrections are in the fragment for the lead (CHANGELOG.md is not edited by lanes).
 - **Area:** leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims
 - **Lane ID / scripts:** `gaps-misc-a-9` — `gaps-misc-a/`
 
@@ -12152,6 +12171,7 @@ Every function the section names exists, and I found no stated refusal missing f
 
 - **Location:** `packages/benchmarks/scripts/budget.mjs:299-400`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #188 (0e65f18,6a88509). Fixed: history comments removed (git has them), ceilings re-set at measure + 0.5 and the gate enforces the 0.3-0.7 kB band with measure, ceiling and headroom printed.
 - **Area:** leftovers / budgets, declarations, demo data, gallery lists
 - **Lane ID / scripts:** `gaps-misc-b-7` — `gaps-misc-b/`
 
@@ -12232,6 +12252,7 @@ Each ceiling is its last dated note + 0.5 exactly; no row breaks the rule on pap
 
 - **Location:** `docs/adr/0009-live-differentials-over-recorded-vectors.md:22`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #188 (7b273d8). Fixed: six generated suites (arc, selections, both expression generators, d3-shape, geo) now call scaled(); differential-scale.test.mts requires it of every *-gen / *-generated suite.
 - **Area:** closure / showcase, ADRs, engine parts, type fixtures
 - **Lane ID / scripts:** `w3-rest-3` — `w3-rest/`
 
@@ -12250,6 +12271,7 @@ Each ceiling is its last dated note + 0.5 exactly; no row breaks the rule on pap
 
 - **Location:** `docs/adr/0001-own-the-engine.md:36-43`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #188 (7b273d8). Fixed: dated amendment in ADR 0001 points at ADR 0009.
 - **Area:** closure / showcase, ADRs, engine parts, type fixtures
 - **Lane ID / scripts:** `w3-rest-4` — `w3-rest/`
 
@@ -14000,6 +14022,7 @@ Measured by rendering every spec with real Vega (and Aster) under different `TZ`
 
 - **Location:** `scripts/notices.test.mjs:15`
 - **Status:** CONFIRMED (traced)
+- **Resolution:** FIXED in #188 (7fb05fb). Fixed: every notice section is installed, header-sourced, fixture-sourced (fetched files with URL, commit and sha256 committed) or named prose; a section outside all four fails.
 - **Area:** leftovers / CHANGELOG, notices, lockfile, ARCHITECTURE claims
 - **Lane ID / scripts:** `gaps-misc-a-7` — `gaps-misc-a/`
 
@@ -14016,6 +14039,7 @@ Measured by rendering every spec with real Vega (and Aster) under different `TZ`
 
 - **Location:** `packages/core/src/index.ts:1`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #188 (37c91dc). Fixed: host-types.ts gives each web-platform type its own type where present and a structural one where absent; declarations-consumer.test.ts compiles every core and vl entry with lib es2022, types [], skipLibCheck off.
 - **Area:** leftovers / budgets, declarations, demo data, gallery lists
 - **Lane ID / scripts:** `gaps-misc-b-11` — `gaps-misc-b/`
 
@@ -14031,6 +14055,7 @@ Measured by rendering every spec with real Vega (and Aster) under different `TZ`
 
 - **Location:** `apps/demo/src/showcase.tsx:22-26`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #188 (f076f59,babb92c). Fixed: the five specs are corpus specs (pass conformance-vl), the demo imports all 14 from the corpus and keeps no copy; showcase-corpus.test.ts; docs counts follow (1068).
 - **Area:** leftovers / budgets, declarations, demo data, gallery lists
 - **Lane ID / scripts:** `gaps-misc-b-14` — `gaps-misc-b/`
 
@@ -14064,6 +14089,7 @@ Measured by rendering every spec with real Vega (and Aster) under different `TZ`
 
 - **Location:** `packages/core/src/engine-parts.ts:157`
 - **Status:** CONFIRMED (run; re-run by lead)
+- **Resolution:** FIXED in #188 (4b1b232,f45eacd). Fixed: CARRIED_BY names per part the entry that fills the slot (or none) and the message follows it; engine-parts-entries.test.ts imports each entry into a fresh registry.
 - **Area:** closure / showcase, ADRs, engine parts, type fixtures
 - **Lane ID / scripts:** `w3-rest-2` — `w3-rest/`
 
@@ -14082,6 +14108,7 @@ Measured by rendering every spec with real Vega (and Aster) under different `TZ`
 
 - **Location:** `packages/react/type-fixtures/svg-chart-accepts.fixture.tsx:12-19`
 - **Status:** CONFIRMED (run)
+- **Resolution:** FIXED in #188 (4606a8d). Fixed: the accepts fixture passes every shared/interaction prop and png and calls every handle method; Chart.types.test.ts reads the fixture's AST against the lists.
 - **Area:** closure / showcase, ADRs, engine parts, type fixtures
 - **Lane ID / scripts:** `w3-rest-5` — `w3-rest/`
 
