@@ -171,7 +171,42 @@ function diff(a: unknown, b: unknown, path = '$', seen = new Map<unknown, Set<un
 }
 
 
-interface Tally { cases: number; compared: number; threw: number; crashed: number; crashedAlike: number; answered: number; refused: number; draws: number }
+interface Tally { cases: number; compared: number; threw: number; crashed: number; crashedEngineOrdered: number; crashedAlike: number; answered: number; refused: number; draws: number }
+
+/**
+ * Whether the order vega gives a window's partitions is the engine's choice: its sort comparator (vega-util `compare` over the sort's
+ * fields, ties broken by input order, as Window's `stableCompare`) is not a strict total order over some partition's rows. Mixed
+ * types make it so (`'abc'` and `0` compare equal to each other and unequal to `'7'`, which is not transitive), and
+ * Array.prototype.sort with an inconsistent comparator is implementation-defined: V8 versions order such a partition differently,
+ * and vega's frames over it crash on one engine and answer on another (TupleStore removing a row it never added: "Invalid array
+ * length"). Only a lone window over the generated rows is judged (in a chain the window's input is another transform's output).
+ */
+function windowOrderIsEngineDefined(c: Case): boolean {
+  if (c.t.length !== 1) return false
+  const t = c.t[0] as { type?: string; sort?: { field: string | string[]; order?: string | string[] }; groupby?: string[] }
+  if (t.type !== 'window' || !t.sort) return false
+  const fields = ([] as string[]).concat(t.sort.field)
+  const orders = t.sort.order === undefined ? undefined : ([] as string[]).concat(t.sort.order)
+  const cmp = vega.compare(fields, orders as never) as (a: unknown, b: unknown) => number
+  const keys = (t.groupby ?? []).map((f) => vega.field(f) as (r: unknown) => unknown)
+  const parts = new Map<string, Array<{ row: unknown; id: number }>>()
+  c.rows.forEach((row, id) => {
+    const k = JSON.stringify(keys.map((f) => f(row)))
+    let p = parts.get(k)
+    if (!p) parts.set(k, (p = []))
+    p.push({ row, id })
+  })
+  const less = (a: { row: unknown; id: number }, b: { row: unknown; id: number }): boolean => (cmp(a.row, b.row) || a.id - b.id) < 0
+  for (const p of parts.values()) {
+    for (const a of p) for (const b of p) {
+      if (a === b) continue
+      if (less(a, b) === less(b, a)) return true // (two distinct rows: exactly one is before the other)
+      if (!less(a, b)) continue
+      for (const d of p) if (d !== a && d !== b && less(b, d) && !less(a, d)) return true
+    }
+  }
+  return false
+}
 
 /** Run one case through both sides; the mismatch description, or null. `crashed` counts Vega's incidental TypeErrors (not comparable). */
 async function check(c: Case, tally: Tally): Promise<string | null> {
@@ -182,15 +217,21 @@ async function check(c: Case, tally: Tally): Promise<string | null> {
     // an error of the engine (a TypeError reading a property of undefined), not one vega words: its text is not part of any contract.
     // (`AggregateOps[op] is not a function` is one too, but Aster quotes it in its own message for an unknown op: compared)
     if (want.error instanceof TypeError && !/^AggregateOps\[op\]/.test(msg)) {
-      tally.crashed++
+      // a crash over a partition whose order the engine chooses is counted apart, unpinned: whether vega crashes there depends on
+      // the V8 version (Aster's outcome on it is still checked below)
+      const engineOrdered = windowOrderIsEngineDefined(c)
+      if (engineOrdered) tally.crashedEngineOrdered++
+      else tally.crashed++
       if (process.env.ASTER_GEN_DEBUG) console.log('CRASH', JSON.stringify(c.t).slice(0, 300), msg)
       // Aster runs the case too, and is counted: it answers (the documented "oracle crashes are not reproduced"), refuses with a
       // message of its own (`[aster] ...`: what a user can act on), or fails with the engine's own TypeError, as vega does -- the
       // last is no outcome it may have, and none is pinned
       const got = runAster(c, false)
-      if (!got.error) tally.answered++
-      else if (/^\[aster\] /.test(got.error.message)) tally.refused++
-      else tally.crashedAlike++
+      if (got.error && !/^\[aster\] /.test(got.error.message)) tally.crashedAlike++
+      else if (!engineOrdered) {
+        if (!got.error) tally.answered++
+        else tally.refused++
+      }
       return null
     }
     tally.threw++
@@ -597,12 +638,14 @@ function genTimeunit(r: Rng): Case {
  * REFUSES with a message of its own (`refused`: `[aster] ...`). None may fail with the engine's own TypeError (`crashedAlike` is 0
  * for every suite). The answered ones are the window frames that end outside the partition (a frame over peers reads the rows at
  * both of its ends; an empty one has no first or last value, `null`, as `nth_value` of a frame too short); the refused ones are a
- * `flatten` of a field a row does not hold.
+ * `flatten` of a field a row does not hold. Crashes over a window partition whose order the engine chooses (an inconsistent sort
+ * comparator, `windowOrderIsEngineDefined`) are not pinned: there are 8 at the default count on Node 20, 22 and 26 and 7 on Node 27,
+ * where V8 sorts such a partition differently; the pinned counts are the same on all four.
  */
 const SUITES: Array<{ name: string; seed: number; count: number; gen: (r: Rng) => Case; crashes: number; answered: number; refused?: number }> = [
   { name: 'aggregate', seed: 0xa601, count: 700, gen: (r) => genAggregateLike(r, 'aggregate'), crashes: 0, answered: 0 },
   { name: 'joinaggregate', seed: 0xa602, count: 350, gen: (r) => genAggregateLike(r, 'joinaggregate'), crashes: 0, answered: 0 },
-  { name: 'window', seed: 0xa603, count: 900, gen: genWindow, crashes: 133, answered: 133 },
+  { name: 'window', seed: 0xa603, count: 900, gen: genWindow, crashes: 125, answered: 125 },
   { name: 'window stores over several fields', seed: 0xa60b, count: 500, gen: genWindowStores, crashes: 0, answered: 0 },
   { name: 'transform chains', seed: 0xa60c, count: 1500, gen: genChain, crashes: 0, answered: 0 },
   { name: 'sort ties after a re-ordering', seed: 0xa60d, count: 1500, gen: genTieChain, crashes: 29, answered: 0, refused: 29 },
@@ -619,7 +662,7 @@ describe('generated transform differential vs real Vega (live, same engine)', { 
   for (const s of SUITES) {
     it(`${s.name}: ${scaled(s.count)} seeded cases`, async () => {
       const r = makeRng(s.seed)
-      const tally: Tally = { cases: 0, compared: 0, threw: 0, crashed: 0, crashedAlike: 0, answered: 0, refused: 0, draws: 0 }
+      const tally: Tally = { cases: 0, compared: 0, threw: 0, crashed: 0, crashedEngineOrdered: 0, crashedAlike: 0, answered: 0, refused: 0, draws: 0 }
       const bad: string[] = []
       let failures = 0
       const prevTz = process.env.TZ
@@ -656,6 +699,7 @@ describe('generated transform differential vs real Vega (live, same engine)', { 
       if (failures) throw new Error(`${s.name}: ${failures}/${tally.cases} cases differ from vega (seed 0x${s.seed.toString(16)})\n${bad.join('\n')}`)
       // the generator must exercise the transform, not mostly be refused or skipped
       expect(tally.compared, `${s.name} compared ${tally.compared} of ${tally.cases} (threw ${tally.threw}, vega crashed ${tally.crashed})`).toBeGreaterThan(tally.cases * 0.6)
+      if (process.env.ASTER_GEN_DEBUG) console.log('TALLY', s.name, JSON.stringify(tally))
       if (scaled(1) === 1) {
         expect(tally.crashed, `vega crashed on ${tally.crashed} of ${tally.cases}`).toBe(s.crashes)
         expect(tally.answered, `Aster answered ${tally.answered} of the ${tally.crashed} cases on which vega crashed`).toBe(s.answered)

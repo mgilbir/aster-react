@@ -5,6 +5,10 @@ import { compileExpr } from './expression.js'
 import { withLimits, AsterLimitError, REGEX_MAX_INPUT, REGEX_RUN_BUDGET_MS } from './limits.js'
 import { attack, expectLimit, expectReturned, SLACK_MS } from './attack.testkit.js'
 
+/** A modifier group, `(?i:...)` or `(?-i:...)` (ES2025): syntax only the engines that have it accept. */
+const MODIFIER_GROUP = /\(\?(?:[ims]+(?:-[ims]*)?|-[ims]+):/
+const ENGINE_HAS_MODIFIERS = ((): boolean => { try { return new RegExp('(?i:a)').test('A') } catch { return false } })()
+
 /** Known catastrophic patterns from published ReDoS lists (OWASP, Davis et al. "The Impact of Regular Expression Denial of Service", regexlib). */
 const REDOS: Array<[string, string?]> = [
   ['^(a+)+$'], ['^(a*)*$'], ['^(a|a)*$'], ['^(a|aa)+$'], ['(x+x+)+y'], ['^(\\w+\\s?)*$'],
@@ -58,6 +62,13 @@ describe('static regex screen (heuristic)', () => {
     expect(BENIGN.length).toBeGreaterThanOrEqual(30)
   })
   it.each(REDOS)('rejects %s', (src, flags) => {
+    if (MODIFIER_GROUP.test(src) && !ENGINE_HAS_MODIFIERS) {
+      // an engine without modifier groups (Node 22's V8) rejects the pattern itself: the screen leaves it to the constructor, whose
+      // SyntaxError is what surfaces, so nothing runs
+      expect(() => new RegExp(src, flags ?? '')).toThrow(SyntaxError)
+      expect(regexHazard(src, flags ?? ''), src).toBeNull()
+      return
+    }
     expect(regexHazard(src, flags ?? ''), src).not.toBeNull()
   })
   it.each(BENIGN)('accepts %s on 1000 characters', (src, flags) => {

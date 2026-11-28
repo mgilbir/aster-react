@@ -144,6 +144,10 @@ function check(source: string, flags: string): { read: boolean } {
   return { read: true }
 }
 
+/** A modifier group, `(?i:...)` or `(?-i:...)` (ES2025): syntax only the engines that have it accept. */
+const MODIFIER_GROUP = /\(\?(?:[ims]+(?:-[ims]*)?|-[ims]+):/
+const ENGINE_HAS_MODIFIERS = ((): boolean => { try { return new RegExp('(?i:a)').test('A') } catch { return false } })()
+
 /** Syntax that fooled the screen (C10, C11a) and the corners of each mode. */
 const HAND: Array<[string, string]> = [
   ['a\\u{', ''], ['[\\u{]a', ''], ['\\u{3}', ''], ['\\u{41}', 'u'], ['\\x(a+)+$', ''], ['\\u(a+)+$', ''], ['\\k<(a+)+$', ''], ['\\k<a>(?<a>x)', ''],
@@ -173,7 +177,9 @@ function rng(seed: number): () => number {
 
 describe('the regex screen reads a pattern as a reference parser does', () => {
   it.each(HAND)('/%s/%s', (source, flags) => {
-    expect(valid(source, flags), `/${source}/${flags} is valid on this engine`).toBe(true)
+    // (a modifier group is ES2025 syntax: on an engine without it -- Node 22's V8 -- the pattern is invalid, and `check` asserts the
+    // screen leaves it to the constructor; the reading itself is compared where the engine has the syntax)
+    expect(valid(source, flags), `/${source}/${flags} is valid on this engine`).toBe(!MODIFIER_GROUP.test(source) || ENGINE_HAS_MODIFIERS)
     check(source, flags)
   })
 

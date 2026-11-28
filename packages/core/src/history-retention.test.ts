@@ -6,6 +6,12 @@
  *
  * Measured, not inferred: after many evaluations, each with a new array of rows, and minor collections between them, only the
  * arrays the session still holds survive a minor GC.
+ *
+ * The measurement needs an engine whose minor GC frees an unreachable array that a WeakRef points at. The V8 of Node 22 keeps
+ * WeakRef targets through scavenges: there, a control array that nothing references survives as long as a given one, so the count
+ * says nothing about the session, and the test is skipped, saying why. The control is made the same way as the given arrays, at the
+ * same moments, so the engine decides for both alike. It runs where the engine can measure it (Node 26 and 27 were checked;
+ * CI's latest-Node unit leg runs it).
  */
 import { setFlagsFromString } from 'node:v8'
 import { runInNewContext } from 'node:vm'
@@ -26,22 +32,26 @@ const spec = {
 
 describe('a session does not keep the rows it was given alive through minor collections', () => {
   for (const kind of ['same-length edit', 'append'] as const) {
-    it(kind, async () => {
+    it(kind, async (ctx) => {
       const session = createChartSession()
       let cur = rows(2000)
       session.evaluate(spec as never, { data: { t: cur } })
       const given: Array<WeakRef<object>> = []
+      const control: Array<WeakRef<object>> = [] // the same arrays, never given to the session
       for (let i = 0; i < 60; i++) {
         const next = kind === 'append' ? [...cur, { x: 0.5, y: i % 10 }] : cur.slice()
         if (kind !== 'append') next[i] = { x: 0.5, y: i % 10 }
         session.evaluate(spec as never, { data: { t: next } })
         given.push(new WeakRef(next))
+        control.push(new WeakRef(next.slice()))
         cur = next
         await tick()
         gc({ type: 'minor' })
       }
       for (let k = 0; k < 3; k++) { await tick(); gc({ type: 'minor' }) }
       const alive = given.filter((w) => w.deref() !== undefined).length
+      const controlAlive = control.filter((w) => w.deref() !== undefined).length
+      if (controlAlive > 10) ctx.skip(`this engine's minor GC kept ${controlAlive} of 60 unreferenced control arrays (WeakRef targets survive scavenges here): it cannot measure what the session keeps`)
       // (the session holds the last array it was given; a minor GC may run before a young array is old enough to die: a handful, whatever the number of evaluations)
       expect(alive).toBeLessThanOrEqual(10)
     })

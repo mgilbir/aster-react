@@ -1,9 +1,4 @@
 /** Resolve `canvas` (the optional native module vega-canvas imports) to the pixel-keeping stand-in next to this file. */
-import { registerHooks } from 'node:module'
+import { resolveCanvasTo } from '../canvas-stand-in.mjs'
 
-const stand = new URL('./canvas-module.mjs', import.meta.url).href
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    return specifier === 'canvas' ? { url: stand, shortCircuit: true } : nextResolve(specifier, context)
-  },
-})
+resolveCanvasTo(new URL('./canvas-module.mjs', import.meta.url).href)
