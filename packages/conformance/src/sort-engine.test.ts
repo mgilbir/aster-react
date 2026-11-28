@@ -95,5 +95,7 @@ describe('a band / ordinal domain sorted on a column of mixed types', () => {
       if (i % 250 === 0) expect(asterDomain(probe), `after ${i} charts`).toEqual(want)
     }
     expect(asterDomain(probe)).toEqual(want)
-  })
+    // (6000 charts: about 1 s alone, 4-6 s on a CI runner with the whole suite in parallel, past vitest's default 5 s; what is
+    // asserted is the answer, not the time)
+  }, 60_000)
 })
