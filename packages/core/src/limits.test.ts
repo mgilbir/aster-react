@@ -2,10 +2,11 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import {
   AsterLimitError, checkSpecLimits, checkSceneLimits, renderSpec, compileChart, evaluateChart,
-  defaultLocale, resetDefaultLocale, locale, compileExpr,
+  defaultLocale, resetDefaultLocale, locale, compileExpr, applyTransforms,
 } from './index.js'
 import { createChartSession } from './addon-dom.js'
-import { withLimits, activeMeter, boundedCount, ceiling } from './limits.js'
+import { withLimits, activeMeter, allot, checkRowCount, meterTick, unboundedForParity } from './limits.js'
+import { range, ticks } from './arr.js'
 import { FORMATTER_CACHE_MAX as CACHE_MAX } from './locale.js'
 import type { VgSpec } from './types.js'
 
@@ -54,12 +55,19 @@ describe('checkSceneLimits', () => {
     expect(lim(() => checkSceneLimits(scene, { maxStringLength: 100 })).message).toMatch(/maxStringLength 120 > 100/)
     expect(() => checkSceneLimits(scene, { maxStringLength: 120 })).not.toThrow()
   })
+  it('exempts only the bookkeeping keys the engine writes: __gen is skipped, the retired __domDesc is an ordinary string', () => {
+    const long = 'x'.repeat(200)
+    const sceneWith = (key: string) => ({ items: [{ marktype: 'rect', items: [{ [key]: long }] }] })
+    expect(() => checkSceneLimits(sceneWith('__gen'), { maxStringLength: 100 })).not.toThrow()
+    expect(lim(() => checkSceneLimits(sceneWith('__domDesc'), { maxStringLength: 100 })).message).toMatch(/maxStringLength 200 > 100 \(__domDesc\)/)
+  })
 })
 
 describe('the meter is ambient, nests, and a swallowed violation still fails the call', () => {
-  it('no scope: every helper is a no-op', () => {
+  it('no scope: the budget-only helpers (data the host gave, the clock) are no-ops', () => {
     expect(activeMeter()).toBeNull()
-    expect(boundedCount(1e12, 'x')).toBe(1e12)
+    expect(() => checkRowCount(1e12, 'x')).not.toThrow()
+    expect(() => meterTick('x', 1e12)).not.toThrow()
   })
 
   it('scopes with the same limits object share one meter; others get their own and restore', () => {
@@ -149,6 +157,21 @@ describe('generated rows are budgeted cumulatively (maxGeneratedRows)', () => {
     expect(() => renderSpec(spec, { limits: { maxRows: 1000 } })).not.toThrow()
     expect(lim(() => renderSpec(spec, { limits: { maxRows: 1000, maxGeneratedRows: 1000 } })).message).toMatch(/maxGeneratedRows/)
   })
+
+  it('the rows a step makes are charged once, by that step, not again by every step after it (C405)', () => {
+    // 100 rows folded over 3 fields make 200 more; every later step keeps them: 200 generated, whatever follows
+    const rows = Array.from({ length: 100 }, (_, i) => ({ a: i, b: i, c: i }))
+    const runtime = { scale: () => undefined, data: () => [], expr: (e: string) => compileExpr(e, runtime as never) }
+    const ctx = { runtime, signals: Object.create(null) }
+    const after = [{ type: 'formula', expr: '1', as: 'f' }, { type: 'formula', expr: '2', as: 'g' }, { type: 'filter', expr: 'true' }]
+    for (const tail of [[], after]) {
+      const pipeline = [{ type: 'fold', fields: ['a', 'b', 'c'] }, ...tail] as never
+      expect(() => withLimits({ maxGeneratedRows: 200 }, () => applyTransforms(rows, pipeline, ctx as never))).not.toThrow()
+      const spent = withLimits({ maxGeneratedRows: 1e6 }, () => { applyTransforms(rows, pipeline, ctx as never); return activeMeter()!.generatedRows })
+      expect(spent, JSON.stringify(tail)).toBe(200)
+      expect(lim(() => withLimits({ maxGeneratedRows: 199 }, () => applyTransforms(rows, pipeline, ctx as never))).message).toMatch(/maxGeneratedRows/)
+    }
+  })
 })
 
 describe('expression locale follows the default locale', () => {
@@ -189,10 +212,14 @@ describe('formatter caches are bounded LRU', () => {
 
   it('a flood of distinct specifiers stays bounded (heap does not retain 100k closures)', () => {
     const l = locale()
-    for (let i = 0; i < 100_000; i++) l.timeFormat(`%Y-${i}`)
-    // observable bound: the oldest key is gone, so asking again builds a new formatter
-    const a = l.timeFormat('%Y-0')
-    expect(l.timeFormat('%Y-0')).toBe(a) // cached again after the rebuild
+    const oldest = l.timeFormat('%Y-0')
+    for (let i = 1; i < 100_000; i++) l.timeFormat(`%Y-${i}`)
+    // The table holds at most CACHE_MAX formatters, so the oldest is gone (asking again builds another) and the newest is held.
+    // On an unbounded table both are the objects first made.
+    const newest = l.timeFormat('%Y-99999')
+    expect(l.timeFormat('%Y-99999')).toBe(newest)
+    expect(l.timeFormat('%Y-0')).not.toBe(oldest)
+    expect(l.timeFormat('%Y-99999')).toBe(newest)
   })
 })
 
@@ -236,7 +263,7 @@ describe('built-in ceilings (no limits given)', () => {
 
   it('a ceiling swallowed inside a no-limits scope still fails the call when the scope exits', () => {
     const swallowed = (): string => {
-      try { ceiling('rows', 5e6, 'swallowed') } catch { /* a defensive catch */ }
+      try { allot('rows', 5e6, 'swallowed') } catch { /* a defensive catch */ }
       return 'carried on'
     }
     expect(lim(() => withLimits(undefined, swallowed)).message).toMatch(/swallowed 5000000 > 1000000/)
@@ -250,7 +277,12 @@ describe('built-in ceilings (no limits given)', () => {
     expect(() => renderSpec(seqSpec(10))).not.toThrow()
   })
 
-  it('leave the library layer alone: boundedCount without a scope is still a no-op', () => {
-    expect(boundedCount(1e12, 'x')).toBe(1e12)
+  it('hold in the allocating primitives themselves, so a library function is bounded whoever calls it', () => {
+    expect(lim(() => range(0, 5e6)).message).toMatch(/range 5000000 > 1000000 \(built-in ceiling/)
+    expect(lim(() => ticks(0, 1e9, 5e6)).message).toMatch(/ticks \d+ > 100000 \(built-in ceiling/)
+    expect(lim(() => allot('rows', 5e9, 'past 2^32')).message).toMatch(/past 2\^32 5000000000 > 1000000/)
+    // only a parity test turns them off, by name
+    expect(unboundedForParity(() => range(0, 1_500_000)).length).toBe(1_500_000)
+    expect(() => range(0, 1_500_000)).toThrow(/built-in ceiling/)
   })
 })

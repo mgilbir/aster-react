@@ -183,13 +183,47 @@ function CHARTS() {
     },
     {
       name: 'linear-rect-stacked',
-      note: 'a stack, whose groups are keyed by JSON and whose totals are a scale domain',
+      // (`g` puts two rows in every group, so the swept values are summed onto each other: a stack of one row per group never
+      // accumulates anything)
+      note: 'a stack of the swept values, two rows per group, whose totals are a scale domain',
       spec: base({
         data: [
           {
             name: 't',
             values: [],
-            transform: [{ type: 'stack', groupby: ['k'], field: 'v' }],
+            transform: [{ type: 'stack', groupby: ['g'], field: 'v' }],
+          },
+        ],
+        scales: [
+          { name: 'x', type: 'band', domain: { data: 't', field: 'g' }, range: 'width', padding: 0.1 },
+          { name: 'y', type: 'linear', domain: { data: 't', field: 'y1' }, range: 'height', nice: true },
+        ],
+        axes: [{ orient: 'left', scale: 'y', tickCount: 4 }],
+        marks: [
+          {
+            type: 'rect',
+            from: { data: 't' },
+            encode: {
+              enter: {
+                x: { scale: 'x', field: 'g' },
+                width: { scale: 'x', band: 1 },
+                y: { scale: 'y', field: 'y0' },
+                y2: { scale: 'y', field: 'y1' },
+              },
+            },
+          },
+        ],
+      }),
+    },
+    {
+      name: 'stacked-by-the-values',
+      note: "a stack GROUPED BY the swept values: its groups are keyed by JSON.stringify, so a NaN groups with a null",
+      spec: base({
+        data: [
+          {
+            name: 't',
+            values: [],
+            transform: [{ type: 'stack', groupby: ['v'], field: 'n' }],
           },
         ],
         scales: [
@@ -569,7 +603,8 @@ function CHARTS() {
 
 function withColumn(chart, column) {
   const spec = JSON.parse(JSON.stringify(chart.spec));
-  spec.data[0].values = column.values.map((v, i) => ({ v, k: `r${i}`, n: i + 1 }));
+  // (`k` is one per row, `g` one per pair of rows)
+  spec.data[0].values = column.values.map((v, i) => ({ v, k: `r${i}`, g: `g${Math.floor(i / 2)}`, n: i + 1 }));
   if (chart.extraScales) spec.scales = [...(spec.scales || []), ...chart.extraScales];
   return spec;
 }

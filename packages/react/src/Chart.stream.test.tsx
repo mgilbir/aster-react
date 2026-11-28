@@ -3,12 +3,13 @@ import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import type { ChartStream as CoreChartStream } from '@aster-charts/core'
-import { ChartStream, ChartWorkerStream, type ChartStreamHandle } from './ChartStream'
-import { handleWorkerMessage, type ChartWorkerStreamRequest } from './worker'
+import { ChartStream, type ChartStreamHandle } from './ChartStream'
+import { ChartWorkerStream, type ChartWorkerStreamHandle } from './ChartWorkerStream'
 import { useChartStream, type UseChartStreamResult } from './useChartStream'
 import type { ViewDomain } from './interaction'
 import { forEachVariant } from './testing/variants'
+import { FakeWorker } from './testing/fake-worker'
+import { stubPointerCapture, type PointerCaptureStub } from './testing/pointer-capture'
 
 const RECT = { left: 0, top: 0, width: 210, height: 110, right: 210, bottom: 110, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
 
@@ -30,22 +31,6 @@ const dataSpec = (rows: Array<{ a: number; b: number }>, extra: Record<string, u
 }) as never
 
 const base = [{ a: 0, b: 0 }, { a: 10, b: 10 }]
-
-class FakeWorker {
-  listeners = new Set<(event: unknown) => void>()
-  streams = new Map<number, CoreChartStream>()
-  posted: ChartWorkerStreamRequest[] = []
-  addEventListener(type: string, fn: (event: unknown) => void): void { if (type === 'message') this.listeners.add(fn) }
-  removeEventListener(type: string, fn: (event: unknown) => void): void { if (type === 'message') this.listeners.delete(fn) }
-  postMessage(request: ChartWorkerStreamRequest): void {
-    const wire = structuredClone(request)
-    this.posted.push(wire)
-    const response = handleWorkerMessage(wire, this.streams)
-    // A real worker clones the response: functions and live scale maps never arrive.
-    if (response) queueMicrotask(() => { for (const fn of this.listeners) fn({ data: structuredClone(response) }) })
-  }
-  terminate(): void { /* no-op */ }
-}
 
 const wait = (ms = 30): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -78,11 +63,11 @@ const xDomain = (ref: React.RefObject<ChartStreamHandle | null>): number[] =>
 const scaleInfo = (scene: unknown, name: string): { domain: number[] } | undefined =>
   ((scene as Record<string, unknown>).__scaleInfo as Array<{ name: string; domain: number[] }> | undefined)?.find((s) => s.name === name)
 
+let pointerCapture: PointerCaptureStub
 beforeEach(() => {
-  ;(Element.prototype as unknown as Record<string, unknown>).setPointerCapture = vi.fn()
-  ;(Element.prototype as unknown as Record<string, unknown>).releasePointerCapture = vi.fn()
+  pointerCapture = stubPointerCapture()
 })
-afterEach(() => { document.body.innerHTML = '' })
+afterEach(() => { pointerCapture.restore(); document.body.innerHTML = '' })
 
 describe('<ChartStream> honours the Chart props its type accepts', () => {
   it('a controlled view reaches the stream: the scale domain and the SVG change', async () => {
@@ -135,7 +120,7 @@ describe('<ChartStream> honours the Chart props its type accepts', () => {
     expect(m.container.querySelector('[role="alert"]')).not.toBeNull()
   })
 
-  it('limits tightened on a live stream take effect on the next flush', async () => {
+  it('limits tightened on a live stream are applied to it at once: the chart reports the violation, once', async () => {
     const onStreamError = vi.fn()
     const ref = React.createRef<ChartStreamHandle>()
     const node = (limits: { maxItems: number }) => <ChartStream ref={ref} spec={dataSpec(base)} width={200} height={100} limits={limits} onStreamError={onStreamError} />
@@ -143,7 +128,11 @@ describe('<ChartStream> honours the Chart props its type accepts', () => {
     await m.render(node({ maxItems: 1000 }))
     expect(onStreamError).not.toHaveBeenCalled()
     await m.render(node({ maxItems: 1 }))
-    expect(onStreamError).toHaveBeenCalled()
+    expect(onStreamError).toHaveBeenCalledTimes(1)
+    expect(onStreamError.mock.calls[0]![0]).toMatchObject({ code: 'ASTER_LIMIT' })
+    // rows pushed afterwards are held to the same limit (the error is the same one: reported once per error)
+    await act(async () => { ref.current!.push({ append: { t: [{ a: 20, b: 5 }] } }); ref.current!.flush(); await wait() })
+    expect(onStreamError.mock.calls.every((c) => (c[0] as { code?: string }).code === 'ASTER_LIMIT')).toBe(true)
   })
 
   it('textMetrics reaches the stream evaluation', async () => {
@@ -166,7 +155,7 @@ describe('<ChartStream> honours the Chart props its type accepts', () => {
 
   it('<ChartWorkerStream> routes view and limits through the worker', async () => {
     const worker = new FakeWorker()
-    const ref = React.createRef<ChartStreamHandle>()
+    const ref = React.createRef<ChartWorkerStreamHandle>()
     const node = (view: ViewDomain | null) => (
       <ChartWorkerStream ref={ref} spec={dataSpec(base)} width={200} height={100} view={view} panZoom streamOptions={{ worker: worker as unknown as Worker }} />
     )
@@ -202,7 +191,7 @@ describe('pan/zoom/brush use the streamed or supplied data, not just the spec', 
 
   it('a worker stream: scales survive the clone, so brush and the a11y slider see the new extent', async () => {
     const worker = new FakeWorker()
-    const ref = React.createRef<ChartStreamHandle>()
+    const ref = React.createRef<ChartWorkerStreamHandle>()
     const onSelect = vi.fn()
     const node = <ChartWorkerStream ref={ref} spec={dataSpec(base)} width={200} height={100} panZoom onSelect={onSelect} streamOptions={{ worker: worker as unknown as Worker }} />
     const m = mount(node)
@@ -247,10 +236,14 @@ describe('pan/zoom/brush use the streamed or supplied data, not just the spec', 
       await key(m.host(), 'ArrowRight')
       const view = onViewChange.mock.calls.at(-1)![0] as ViewDomain
       expect(view.x![0]).toBeGreaterThan(100)
-      // zooming out is capped by the data extent (0..500), proving the base came from the data prop
+      // zooming out is capped by the data extent (0..500), proving the base came from the data prop (a view that came back to null would
+      // have lost the base: it is the zoomed-out view that must be reported, at most the extent wide)
       for (let i = 0; i < 20; i++) await key(m.host(), '-')
       const out = onViewChange.mock.calls.at(-1)![0] as ViewDomain | null
-      expect(out?.x == null || out.x[1] - out.x[0] <= 500 + 1e-6).toBe(true)
+      expect(out, 'a view is still reported after zooming out').not.toBeNull()
+      expect(out!.x![1] - out!.x![0]).toBeLessThanOrEqual(500 + 1e-6)
+      expect(out!.x![0]).toBeGreaterThanOrEqual(0 - 1e-6)
+      expect(out!.x![1]).toBeLessThanOrEqual(500 + 1e-6)
     })
   })
 

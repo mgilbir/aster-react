@@ -17,11 +17,41 @@ import { isEngineNode, keptInto } from './scene-registry.js'
 export const DEFAULT_CURSOR = 'default'
 
 /**
+ * The cursor keywords of CSS (CSS Basic User Interface 4, `cursor`). A cursor is shown only as one of these: a CSS cursor may
+ * also be a `url()` list, an image the viewer's browser fetches, which no URL policy would ever see, so a value that is not a
+ * keyword is not a cursor (as if it were not given).
+ */
+const CURSOR_KEYWORDS: ReadonlySet<string> = new Set([
+  'auto', 'default', 'none', 'context-menu', 'help', 'pointer', 'progress', 'wait', 'cell', 'crosshair', 'text', 'vertical-text',
+  'alias', 'copy', 'move', 'no-drop', 'not-allowed', 'grab', 'grabbing', 'all-scroll', 'col-resize', 'row-resize', 'n-resize',
+  'e-resize', 's-resize', 'w-resize', 'ne-resize', 'nw-resize', 'se-resize', 'sw-resize', 'ew-resize', 'ns-resize', 'nesw-resize',
+  'nwse-resize', 'zoom-in', 'zoom-out',
+])
+
+/** A cursor value as a host may show it: a CSS cursor keyword (ASCII case-insensitive, as CSS reads it), else null. */
+export function cursorKeyword(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const k = value.trim().toLowerCase()
+  return CURSOR_KEYWORDS.has(k) ? k : null
+}
+
+/**
  * The cursor to show for the value of the `cursor` signal and the item's cursor, or null for none (vega then removes the
  * container's `cursor` style). A signal value that is the view's own `{user, item}` object (what vega writes into a spec
  * signal named `cursor` at its first pointermove) carries its item.
+ *
+ * This is the one place a cursor reaches a host, so it is where a cursor is vetted: the cursor vega's rule picks is shown only
+ * when it is a CSS keyword ({@link cursorKeyword}); anything else is no cursor. A browser drops a value that is not a cursor at
+ * all (vega's container then has none, as here); a `url(...)` cursor it would fetch, past the URL policy, so it is not shown
+ * either. (vega hands the text on as it is.)
  */
 export function resolveCursor(signal: unknown, item: string | null): string | null {
+  const shown = pickCursor(signal, item)
+  return shown === null ? null : cursorKeyword(shown)
+}
+
+/** vega-view's rule as it is: the cursor text it writes to its container, keyword or not (null: it removes the style). */
+function pickCursor(signal: unknown, item: string | null): string | null {
   let user: unknown = DEFAULT_CURSOR
   let held = item
   if (typeof signal === 'string') {
@@ -85,7 +115,10 @@ export function createCursorTracker(opts: CursorTrackerOptions): CursorTracker {
   }
   let shown: string | null = resolveCursor(opts.user(), null)
   const report = (): void => {
-    const next = resolveCursor(signal(), item)
+    const picked = pickCursor(signal(), item)
+    // (a text that is no cursor keyword: vega writes it, and the browser ignores the assignment -- the cursor stays as it was)
+    if (picked !== null && cursorKeyword(picked) === null) return
+    const next = picked === null ? null : cursorKeyword(picked)
     if (next === shown) return
     shown = next
     opts.onCursor(next)

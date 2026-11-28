@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
 import { renderSpec } from '@aster-charts/core'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
+import { turn } from '../../../scripts/lib/turn.mjs'
 
 type Spec = Record<string, unknown>
 
@@ -99,6 +100,7 @@ describe('a guide whose encode throws keeps what the encode wrote before it, as 
     let failed = 0
     const byPart = new Map<string, number>()
     for (const { label, spec } of cases) {
+      await turn()
       const want = await onVega(spec)
       const got = onAster(spec)
       if (want.errors.length) {

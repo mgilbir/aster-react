@@ -2,7 +2,7 @@
 
 Aster separates **host controls** (a budget, a URL policy, a backpressure bound) from **spec errors** and from
 **recovered expression errors**. The first group has typed classes with stable `code`s; the rest are plain `Error`s
-whose message starts with `[aster]` (or `[aster/vl]` for the Vega-Lite compiler).
+whose message starts with `[aster]` (or `[aster/vl]` for the Vega-Lite compiler), apart from the few that say they are vega's: a `SpecParseError` carries vega-parser's message as vega writes it (`Undefined data set name: ...`), the expression engine quotes vega-expression's (`Unrecognized function: ...`), and `defaultLocale` with one argument throws `defaultLocale expects either zero or two arguments.`
 
 ```ts
 import { AsterLimitError, renderSpec, type VgSpec } from '@aster-charts/core'
@@ -36,12 +36,14 @@ Catch the typed errors by `code` (see "`instanceof` or `code`?" below); everythi
 | `AsterUrlError` (`ASTER_URL_DENIED`) | the URL policy refused a URL (protocol, credentials, non-public host, relative URL, the `allow` hook), or `urlData: 'refuse'` refused a url dataset | fix the URL, or widen the policy deliberately; a refused url dataset is the host's rule, so give the spec inline rows ([URL errors](#url-errors)) |
 | `AsterStreamBackpressureError` (`ASTER_STREAM_BACKPRESSURE`) | a `push` would overflow the queue under `policy: 'error'` | flush before pushing, slow the producer, or choose another policy ([Stream errors](#stream-errors)) |
 | `AsterStreamClosedError` (`ASTER_STREAM_CLOSED`) | `stream.session()` was called after `close()` | stop using the stream after closing it |
+| `AsterUnstableLoadOptionError` (`ASTER_UNSTABLE_LOAD_OPTION`) | `useSpecData` / `loadSpecDataResource` got a function option (`fetch`, `allow`) that is a new function on every render, so a suspended component would start a new load on every retry; thrown after a bounded number of loads | hoist the function (or keep it in a stable reference), or pass a `cacheKey` that names the load ([Other runtime errors](#other-runtime-errors)) |
+| `AsterWorkerTimeoutError` (`ASTER_WORKER_TIMEOUT`) | a worker hook's request was not answered within `timeoutMs` (default 30 s): the worker was terminated | show an error state; a worker from `workerFactory` is already replaced, a supplied `worker` must be replaced by you ([Worker errors](#worker-errors)) |
 | `SpecParseError` | the spec was refused when it was compiled, as `vega.parse` refuses it | fix the spec; the message is vega's ([Expressions are refused when the spec is compiled](#expressions-are-refused-when-the-spec-is-compiled)) |
 | `ExpressionParseError` | an expression does not parse, or a function was removed after the compile | fix the expression or the registration |
-| `VLCompileError` (`[aster/vl] <path>: <message>`) | the Vega-Lite spec has an unknown key or a feature `@aster-charts/vl` does not implement | fix the spec at `<path>` ([Deliberate differences from Vega](#deliberate-differences-from-vega)) |
+| `VLCompileError` (`[aster/vl] <path>: <message>`) | the Vega-Lite spec has an unknown key or a feature `@aster-charts/vl` does not implement (`<path>: is valid Vega-Lite but @aster-charts/vl does not implement it here, so it would be ignored` for a property the compile does not read), or names of the spec collide in the compiled Vega (`... declares the Vega signal "x" twice`), or a field / dataset / parameter is named as a member of Object.prototype where Vega mistakes it for one (`a field named "constructor" is not supported: ...`), or a field holds a backslash where vega-lite does not escape it (`a field named "x\\\\y" is not supported here: it holds a backslash ...`) | fix the spec at `<path>`, or rename the colliding or prototype-named name ([Deliberate differences from Vega](#deliberate-differences-from-vega)) |
 | `[aster] ... load the addon first` | the spec needs an add-on that is not loaded, and the entry point cannot wait | `await loadAddonsFor(spec)`, or import the add-on ([Unsupported and unknown features](#unsupported-and-unknown-features)) |
 | a report on `logger` | an expression threw at run time and the render carried on, as vega's does | route `logger` to your own log; the chart is partial ([Recovered expression errors](#recovered-expression-errors-logger)) |
-| `<div role="alert">` in `<Chart>` | the render failed, or a limit was exceeded | read the message; `onError` receives the error ([Other runtime errors](#other-runtime-errors)) |
+| `<div role="alert">` in `<Chart>` | the render failed: the spec is not a spec object (`null`, a JSON string), a Vega-Lite spec without `@aster-charts/react/vl` or one its compiler refuses, a rejected spec promise, `data` that is not datasets of row arrays, a size prop that is not a size, an evaluation error, or a limit was exceeded | read the message; `onError` receives the error once ([Other runtime errors](#other-runtime-errors)) |
 
 ## Typed errors at a glance
 
@@ -51,12 +53,15 @@ Catch the typed errors by `code` (see "`instanceof` or `code`?" below); everythi
 | `AsterUrlError` | `@aster-charts/core`, `@aster-charts/core/load` | `AsterUrlError` | `ASTER_URL_DENIED` | `url`, `reason` |
 | `AsterStreamBackpressureError` | `@aster-charts/core` | `AsterStreamBackpressureError` | `ASTER_STREAM_BACKPRESSURE` | `bound` (`'batches'` or `'rows'`), `limit` |
 | `AsterStreamClosedError` | `@aster-charts/core` | `AsterStreamClosedError` | `ASTER_STREAM_CLOSED` | none |
+| `AsterUnstableLoadOptionError` | `@aster-charts/react` | `AsterUnstableLoadOptionError` | `ASTER_UNSTABLE_LOAD_OPTION` | `options` (the function options that changed) |
+| `AsterWorkerTimeoutError` | `@aster-charts/react`, `@aster-charts/react/worker` | `AsterWorkerTimeoutError` | `ASTER_WORKER_TIMEOUT` | `timeoutMs` |
 | `ExpressionParseError` | `@aster-charts/core` | `ExpressionParseError` | none | `expression`, `cause` |
 | `SpecParseError` | `@aster-charts/core` | `SpecParseError` | none | `cause` |
 | `VLCompileError` | `@aster-charts/vl` | `VLCompileError` | none | none |
 
 Everything else the packages throw is a plain `Error` (or a `TypeError` for a malformed stream batch or worker
-message) with an `[aster]` prefix and **no `code`**. Do not claim a `code` for an error that is not in this table.
+message, a stream bound that is no number, or a `limits` object a budget cannot be read from: a key that is no
+limit, a budget that is not a number `>= 0`) with an `[aster]` prefix (most of them: the exceptions are named above and in the sections below) and **no `code`**. Do not claim a `code` for an error that is not in this table.
 
 ### `instanceof` or `code`?
 
@@ -86,10 +91,12 @@ anywhere in a render is never swallowed by a defensive `catch`: the call fails w
 | `maxRows`, `maxMarks`, `maxDepth`, `maxStringLength` | pre-flight spec budget; `maxRows` also caps any dataset a transform produces, `maxDepth` also covers expression nesting (`(expression nesting)`) and, with a cyclic spec, the separate message `spec contains a cycle` |
 | `maxGeneratedRows`, `maxGeneratedBytes` | cumulative rows / characters generated during one evaluation |
 | `maxItems`, `maxPathLength` | generated scene budget (also tick counts and generated paths) |
-| `regexSafety: ...` | a regular expression pattern with a catastrophic-backtracking shape was refused (only under `limits`) |
-| `timeoutMs`, `maxBytes`, `maxRedirects` | `loadSpecData` request caps |
+| `... > N (built-in ceiling that applies even without limits ...)` | a ceiling of `HARD_CAPS` (`rows`, `cells`, `items`, `bytes`, `coords`, `work`, `pixels`, `vertices`, `latticeTests`) or the spec size; the message names the limit that raises it, when one does (`docs/LIMITS.md`, "Built-in ceilings") |
+| `regexSafety: ...` | a regular expression was refused (only under `limits`): an exponential shape whatever its input, or one run whose cost on the text it was given would take longer than the time left under `maxTimeMs` (default 100 ms per run), refused before it starts; see LIMITS.md |
+| `timeoutMs`, `maxBytes`, `maxTotalBytes`, `maxRequests`, `maxRedirects` | `loadSpecData` request caps |
+| `csv cells filled in for missing fields N > 1000000 (built-in ceiling ...)` | a delimited text whose lines are shorter than its header would fill in more cells than the ceiling (`maxGeneratedRows` replaces it); `maxRows N > M (csv rows)` is the row budget, checked as the rows are read |
 | `maxSvgLength` | serialized output budget |
-| `maxTimeMs exceeded during <phase>` | wall-clock deadline; the phase is `pre-flight`, `compile`, `evaluate`, `render`, `change`, `mark encoding`, `loadSpecData`, `regular expression` or the name of the transform that was running |
+| `maxTimeMs exceeded during <phase>` | wall-clock deadline; the phase is the stage that was running when the clock was read, for example `pre-flight`, `compile`, `startup`, `evaluate`, `dataset build`, `range`, `transform`, `render`, `change`, `mark encoding`, `signal event loop`, `loadSpecData`, `regular expression` or the name of the transform that was running (the set grows with the sites that read the clock: do not match on it) |
 
 ## URL errors
 
@@ -97,7 +104,21 @@ anywhere in a render is never swallowed by a defensive `catch`: the call fails w
 allowed, embedded credentials, non-public host, relative URL without `baseURL`, refused by the `allow` hook. It is
 thrown by `loadSpecData` before the request is made, and by image and `href` marks under `urlPolicy` or `limits`
 (unless `onDeny` is set, which drops the image or link instead). It is never recovered by the `logger` mechanism
-below.
+below. The URL it carries (`url`, and the copy in the message) has any user name and password replaced by `***`, so a host
+that logs the error never writes a credential out. (The renderers vet every URL they write too, and never throw: a URL
+refused there is not written; see `docs/LIMITS.md`, "Every URL in the output".)
+
+`loadSpecData` adds these reasons (see "Loading URL data" in `docs/LIMITS.md`):
+
+| Reason | It means |
+|---|---|
+| `loadSpecData needs an explicit URL policy for network urls: pass \`allow\` ...` | a network url with no `allow` and not on the `baseURL` origin: give an allowlist (`allowOrigins([...])`) |
+| `the response is a redirect whose target this environment hides (a browser), ...` | a browser answered `redirect: 'manual'` with an opaque redirect: the next hop cannot be vetted before it is requested, so it is not followed |
+| `the fetch followed a redirect on its own, ...` | a custom `fetch` ignored `redirect: 'manual'`; the data is refused |
+| `the redirect from <url> has a Location that is not a valid URL` / `HTTP 302 redirect without a Location` | an unusable redirect |
+
+An option of the wrong type or out of range is a `TypeError` before anything is requested: `[aster] loadSpecData: maxConcurrent must
+be an integer from 1 to Number.MAX_SAFE_INTEGER, got NaN`. `allowOrigins([...])` throws a `TypeError` for an entry with no origin.
 
 Under `urlData: 'refuse'` a spec with a url dataset is refused with an `AsterUrlError` before any add-on loads and before
 evaluation: `[aster] url denied: dataset "source_0" loads its rows from a url, and url data is not allowed here (urlData:
@@ -133,7 +154,11 @@ worker boundary or duplicated bundles):
 | `AsterStreamClosedError` | `ASTER_STREAM_CLOSED` | `stream.session()` after `close()` (`push` returns `false` and `flush` returns `null` after close; neither throws) |
 
 A batch that is not an object, or whose `data.<name>` / `append.<name>` is not an array, makes `push` throw a
-`TypeError` (`[aster] stream batch must be an object`, `[aster] stream batch.append.<name> must be an array`).
+`TypeError` (`[aster] stream batch must be an object`, `[aster] stream batch.append.<name> must be an array`), and so does a batch key that
+is no batch field (`[aster] stream batch.rows is not a batch field (known: data, append, ...)`: a typo is no empty flush). The options are
+checked when the stream is made: `[aster] stream policy must be one of coalesce, drop-oldest, drop-newest, error, got "drop_oldest"`,
+`[aster] stream capacity must be at least 1 (or Infinity for no bound), got 0` (also `maxQueuedRows`). A queue that is full under a
+policy that throws is `[aster] stream queue full (capacity N); ...`, and a batch pushed to a closed stream is refused with `false`, not an error.
 
 A `flush()` that throws (any error, including `AsterLimitError`) leaves the stream
 exactly as it was before the call, with its batches still queued, and rethrows the
@@ -179,10 +204,12 @@ it). Nothing is swallowed without a report, and each report is the original `Err
 | a `signal` or a scale of a group's scope | the instance of the scope is made without anything in it, and nothing after it |
 | an entry that calls a scale the spec never declared (`{scale, field}`, `{scale, value}`, `{scale, signal}`, `{scale, range}`, the `extra` of a band) | `TypeError: _.%<name> is not a function`, then as the encode row above ([details](#reference-to-a-scale-the-spec-never-declared)) |
 | a facet `cross` over a nested group-by path | the aggregate throws (`Cannot read properties of undefined`), the mark is not made and the run stops (as above) |
-| a dataset transform (`filter`, `formula`, ...) | the dataset publishes no rows; marks sourced from it are not built |
+| a dataset transform (`filter`, `formula`, ...) | the pass stops at the dataset: it publishes no rows, and no dataset, scale, mark or guide ranked after it is made, so a healthy dataset declared before or after it, and the marks that read it, are not drawn either (`dataflow-failure-vs-vega.test.ts` pins this against vega). The exception is a dataset vega re-ranked past the marks (it reads a signal a later dataset writes: vega-runtime makes every operator before it connects any, so such a dataset, and what reads it, is ranked after all of them): the datasets, scales, marks, guides, title and layout that read nothing re-ranked are made, a mark drawn from a re-ranked dataset is not there, one whose encode reads a scale over data (also re-ranked) is joined and not encoded, and the run's post-run resize is lost, as for a late signal |
 | a mark-level `transform`, a mark `sort` (a group's too: a facet's cells, a header or footer group) | the mark is made in full, the error is logged once and the pass stops there: the marks after it, the legends and the title are not made ([details](#mark-transform-or-sort-failure)) |
 | a signal of the view that reads data or a scale (or is declared after one that does) | everything that does not read the signal is made; what reads it is made bare; the error is logged once; nothing below the view is made ([details](#a-view-signal-that-reads-data-or-a-scale)) |
-| a scale that cannot be built (bad `scheme`, unrecognised scale `type`, non-array `range`, ...) | the run stops there: this and later scales are absent and nothing is encoded |
+| a scale that cannot be built (bad `scheme`, unrecognised scale `type` -- the name is matched as written, `BAND` is none --, non-array `range`, ...) | the run stops there: this and later scales are absent and nothing is encoded |
+| a projection parameter whose `{signal}` throws (`scale: {signal: "null.x"}`, a `fit` list with a `null` in it) | the error is logged once and the pass stops at the projection, as vega's operator does: no dataset, scale or mark after it is made. (A signal two lists deep that reads a dataset fails after the marks are made, as in vega: logged, and the projection is made without it) |
+| a `shape` mark whose items hold no shape (no mark `geoshape` transform and no `shape` encode: a datum's `shape` or `path` is not one) | `TypeError: Cannot read properties of undefined (reading 'context')` (vega's renderer fails there), logged once; the items draw nothing |
 | the `format` of an axis or a legend that its label format refuses (`zzz%%`, `{signal: '0/0'}`, `{}` for numbers; `true` for dates) | a refused format makes the guide's operator throw: logged once, the guide and what comes after it are not made ([details](#a-label-format-the-guide-refuses)) |
 | a `{signal}` given to the ticks of an axis or the entries of a legend (`tickCount`, `values`, `tickMinStep`, `format`, `formatType`, `symbolLimit`, a band's `extra`) that throws | each is an operator of its own ranked just before the guide's: logged once, and the pass stops at the guide |
 | a grid layout (`layout`) it cannot take: a `columns` that is no count (fractional, negative, text: `RangeError: Invalid array length`), a column header or footer with no cell at or before its place (`TypeError: Cannot read properties of undefined (reading 'x')`, `'bounds'` with a band); a symbol legend's `columns` that is no count | logged once; the pass stops at the layout, so no scope around the mark is laid out ([details](#a-grid-layout-that-cannot-be-laid-out)) |
@@ -218,7 +245,7 @@ console.log(reports.length, svg.includes('<svg')) // 1 true: the filter failed, 
 ## Expressions are refused when the spec is compiled
 
 `vega.parse` reads every expression of a spec before a view exists and refuses the spec, whole, at the first one it cannot
-use. `compileChart` does the same, and so do `renderSpec`, `evaluateChart` of a spec, `useChart` and the mount of a `<Chart>`,
+use. `compileChart` does the same, and so do `renderSpec`, `evaluateChart(compileChart(spec))`, `useChart` and the mount of a `<Chart>`,
 at the same time, in the same order, with the same message. The error is a `SpecParseError` (an `Error`; vega throws a
 plain `Error`), thrown before anything is drawn and never recovered into a log entry. (The few refusals where vega fails with a
 message of the JavaScript engine, a call such as `upper()` with no argument, are `TypeError`s with that message, as in vega.) In
@@ -241,13 +268,22 @@ one of the add-ons' (loaded or not: see below), `if`, or an event function; name
 that vega's own encode entries are written with (`_scale`, `_bandwidth`, `_range`). A name is a signal of a scope when the spec,
 its config or a transform with a `signal` declared it before the expression (or after it, for a `{signal: text}` property), in
 that scope or one around it; a group also has `parent`, and a view has `width`, `height`, `padding`, `autosize` and
-`background`. The names every object has (`toString`, `constructor`) are signals everywhere, as upstream.
+`background`. The names every object has (`toString`, `constructor`, `hasOwnProperty`, ...) are names like any other: one the
+spec does not declare is `Unrecognized signal name`. (`vega.parse` resolves them to the `Object.prototype` members and accepts
+the spec, handing the expression a built-in function: the sandbox does not.)
 
 Selectors and streams of a signal's `on` are refused the same way: `Signal update missing events specification.`, a
 selector the parser refuses (`Between selector must have two elements: ...`), `Invalid stream specification: ...`,
 `Stream "between" parameter must have 2 entries: ...`, `Unrecognized scale name: "<name>"` for a scale that triggers a
 handler, `Signal encode and update are mutually exclusive.`, `Invalid signal update specification.`, and for the signal itself
-`Signals can not include both init and update expressions.`.
+`Signals can not include both init and update expressions.`. A stream that merges nothing (`{merge: []}`) is refused once when
+the spec is compiled, with vega's `Invalid stream specification: ...` (vega fails on it as it builds the view), rather than
+reported by every binding of the chart.
+
+A facet's keys are read as vega-parser reads them: `field` and each of `groupby` a name or a `{signal}` (a signal of the scope, or
+an expression of its own), and its `aggregate`'s `fields`, `ops`, `as` and `cross` as the parameters of an aggregate transform,
+any of them a `{signal}`. A key written `{expr: ...}` is `Unsupported field reference: <the key>` (vega's message for a `field`;
+for a `groupby` vega's parser lets it through and its view fails to build).
 
 **Add-on functions.** A function of an add-on (`geoCentroid`, `sampleNormal`, `treePath`, ...) is known to the compile whether
 or not the add-on has been loaded: vega knows it, so the spec is not refused. When the add-on is not loaded the call fails
@@ -276,7 +312,11 @@ positions of a band, the offsets of ticks and labels, the flush of labels, the t
 `symbolOffset` and the number of columns into longer expressions that depend on the config, the orient and the scale; Aster reads
 them (an unknown function or signal in one is refused with vega's message) but quotes a syntax error in them as the author's text
 alone (`(1 +)`, where vega gives `round(_scale("x", datum["value"])+_bandwidth("x")*((1 +))+0)`). The order of two broken properties
-of one guide is that of the spec's keys, where vega's is that of the marks it makes.
+of one guide is that of the spec's keys, where vega's is that of the marks it makes. **Not reproduced, where vega's parser breaks:** a
+config that sets `legend.gridAlign`, `rowPadding`, `columnPadding` or `gradientLength` to `null` makes vega-parser write `undefined` into an
+expression and `vega.parse` throws `Unrecognized signal name: "undefined"`; a list of styles on a title's `encode.group.style` or
+`encode.subtitle.style` makes it throw `Unrecognized signal name: "nullnull"`. Aster renders these (a null config value is no value; a list of
+styles applies in order). Both are held, still differing, by `guide-null-vs-vega.test.ts` and `guide-encode-vs-vega.test.ts`.
 
 **Names and parameters.** In the same walk, at the place vega meets them, the compile refuses what `vega.parse` refuses of the names a
 spec uses and of the parameters of its transforms (`differential-transform-params` and `differential-parse-errors` generate these from the
@@ -294,6 +334,8 @@ pinned vega's definitions):
 | a facet without a name, or without `groupby` or `field` | `Facet must have a name: <facet>`, `Facet must specify groupby or field: <facet>` |
 | a signal pushed to an outer scope that no scope around declared before, or that says its own `value`, `update`, `init`, `react` or `bind` | `No prior signal definition for "outer" push: "<name>"`, `Invalid property  for "outer" push: "<property>"` |
 | a discrete scale's domain sorted by an aggregate `op` (other than `count`) without a `field`; a `domainMin`/`domainMax` with no domain | `No field provided for sort aggregate op: <op>`, `No scale domain defined for domainMin/domainMax to override.` |
+| a scale `type` vega does not register (`diverging` without its interpolation, a typo) | `Unrecognized scale type: "<type>"` |
+| signals whose `update` / `init` read each other in a circle (a `react: false` reader is no edge; a signal reading itself is none), thrown when the chart is first evaluated | `Cycle detected in dataflow graph.` |
 
 What the compile does not check: other refusals of `vega.parse` that are not about names or required parameters -- a name declared twice
 in one scope as a signal, scale or projection (`Duplicate signal name`, `Duplicate scale or projection name`), an object where a scale
@@ -309,7 +351,12 @@ names like any other (upstream treats them as signals everywhere or fails on the
 Most of these are thrown by the **runtime** while the chart is evaluated, not by `compileChart`. Besides the expressions (see
 above), the compiler checks the shape of the spec (`[aster] compileChart expects a Vega spec object`, `[aster] spec.scales must be
 an array of scale definitions`, `[aster] a scale definition must be an object`) and, as `vega.parse` does, the names a spec uses:
-an unknown transform `type` is a `SpecParseError` from `compileChart` (so from every host, before any data is read). The
+an unknown transform `type` is a `SpecParseError` from `compileChart` (so from every host, before any data is read). So is a mark
+`type` vega does not draw -- an unknown name, a Vega-Lite mark (`circle`, `square`, `bar`, `tick`, `point`, `geoshape`), another
+spelling, a non-string or a missing type: `SpecParseError: Cannot read properties of undefined (reading 'tag')`, the text vega's
+renderer fails with on such a mark. A transform field that is no access path (an object that is neither `{signal}`, `{expr}`
+nor `{field}`, a number, a `{field}` naming none, an empty comparator field) is `SyntaxError: Unexpected token ']'`, as vega's
+runtime refuses it building the view. The
 rows below are plain `Error`s with an `[aster]` prefix and no `code`, thrown on the first `renderSpec`/`evaluateChart`.
 
 | Situation | Error |
@@ -319,6 +366,8 @@ rows below are plain `Error`s with an `[aster]` prefix and no `code`, thrown on 
 | a geo projection used without the add-on | `[aster] this spec uses a geo projection; load the addon first: await import("@aster-charts/core/geo")` |
 | a rare transform (`kde`, `linkpath`, `treemap`, ...) without the add-on | `[aster] this spec uses the "kde" transform; load the addon first: await import("@aster-charts/core/transforms")` |
 | `csv`/`tsv`/`dsv`/`topojson` data format without the add-on | `[aster] this spec reads "csv" data; load the addon first: await import("@aster-charts/core/load")` |
+| a `format.type` no reader knows (`jsno`, `CSV`: the name is case-sensitive), with or without the add-on | `[aster] Unknown data format type: jsno` (vega's message) |
+| a malformed topology: an arc index out of range or not an integer, a `GeometryCollection` without `geometries`, an arc of fewer than two positions, a `transform` without `scale` / `translate`, a list that is not one | `[aster] topojson: <what is wrong>`, e.g. `[aster] topojson: arc index 300000000 refers to arc 300000000, but the topology has 1 arcs` (vega throws a raw `TypeError`, or walks a sparse array up to the index first) |
 | an unknown symbol `shape` (not a built-in name, not a valid SVG path) | `Invalid SVG path, incorrect parameter count` (the same message vega gives) |
 | a Vega-Lite spec without the VL add-on (`<Chart>`, `useChart`, the worker handlers) | `A Vega-Lite spec was passed but the compiler is not loaded. Add ...` followed by the import to add, `import '@aster-charts/react/vl'` (no `[aster]` prefix) |
 
@@ -338,6 +387,11 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
   Aster does not reproduce that.) An unknown signal name is `SpecParseError: Unrecognized signal name: "<name>"` at the same
   time (see "Expressions are refused when the spec is compiled"). An unknown scale `type` is not fatal at compile: vega throws at parse
   time, Aster logs it and stops building scales (see the table above).
+- **A `{signal}` where vega's parser has no scope is refused when the spec is compiled.** vega-parser reads a scale's `interpolate`
+  (its type, its `gamma`) and the `interval` / `step` of an object `nice` with no scope, so a `{signal}` in one of those positions
+  crashes `vega.parse` with a TypeError (`Cannot read properties of undefined (reading 'signalRef')`). `compileChart` (so every host)
+  throws a `SpecParseError` with that message, after the scale's domain and in vega's order (interpolation, then `nice`). A `nice`
+  that is itself a `{signal}`, and a `{signal}` in any other scale property, are read as vega reads them.
 - **Spec lists follow vega-util `array()`.** `data`, `scales`, `marks`, ... may be a lone object (a one-element list)
   or `null` (empty), as in `vega-parser`: `data: { values: [...] }` is accepted.
 - **Unknown expression functions are fatal, everywhere.** A call to a function vega does not know is
@@ -353,8 +407,33 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
   feature it does not implement (`` a wrapped facet (a single `facet` field) around or inside another facet is not
   supported yet ``) and an unknown mark.
   vega-lite itself compiles the first three (it ignores the key or property) and crashes on the unknown mark.
+- **A trail with a negative `size` throws.** A trail's size is a radius, and a negative one is `negative radius: <n>` (a plain
+  `Error`, no `[aster]` prefix, no `code`), thrown out of `renderSpec`, every renderer and `buildHitIndex`; nothing is logged. d3-path
+  and `vega.toSVG` throw the same message, so the chart is not drawn at all, as in Vega (pinned by `geometry-differential.test.ts`).
+- **A group mark whose `role` is a guide's is refused when the spec is compiled.** A `group` mark with the role `axis`, `legend` or
+  `title` (vega lays it out as that guide), or a prefixed one (`axis-label`, `legend-entry`, `title-text`, ...) that holds marks,
+  signals, data, scales, projections, axes, legends or a title, is a `SpecParseError` whose message starts
+  `[aster] a group mark with the role "<role>"`, raised after every error vega's own parser raises for the spec (a duplicate name inside such a group mark is vega's message). vega-parser makes no scope of it: what it holds is parsed in the scope around it and
+  its marks are attached to the scenegraph by their place among the marks of their container (the group's one item when it has exactly
+  one row, else the root frame, over whatever mark held that place), so what is drawn depends on how many rows its data has and drops
+  marks that were not the group's. Drop the role, give the group a `layout` or a facet (vega then makes a scope of it), or name the
+  role something else. A prefixed role with nothing in it, and one with a layout or a facet, is an ordinary group mark. The roles of
+  a leaf mark (`axis`, `legend`, `title`, `frame`, `scope`) are laid out as vega's view layout reads them.
 - **Safety refusals.** Limits, the regular-expression screen, the URL policy, the hard spec-depth ceiling and the
   `bin`/`stratify` refusals are Aster additions; see `docs/LIMITS.md`.
+- **An encode channel may not name the engine's own item state.** An encode writes each channel onto the scene item under its
+  name, so a channel named like a property the engine keeps on an item for itself would be taken for it. A channel that starts
+  with `_`, or that is a field of the engine's scene types and not one of vega's (`items`, `marktype`, `role`, `datum`, `mark`,
+  `dataDatum`, `urlDenied`, `hasLinks`, `box`, `clipPathD`, ...: `ENGINE_ITEM_SLOTS` in core's `item-slots.ts`), in any encode
+  block (a mark's, a guide part's, a title's) or a config style or mark default, is `SpecParseError: Encode channel "<name>"
+  (<where>) names a property the engine keeps on its scene items for itself; it cannot be encoded.` when the spec is
+  compiled. vega accepts such a channel (and breaks on `items` or `marktype`). Every other channel name is accepted, as in
+  vega: the channels of vega's schema, those vega's scenegraph reads besides (`href`, `fontVariant`, `image`, `noBound`, a
+  guide group's `offset`, `position`, `translate`, `padding`, `format`, `formatType`), and any other name, which nothing reads.
+- **A url body that is not JSON, for a dataset with no `format.type`, is an error.** The format of a url dataset is its
+  `format.type`, `json` by default (the url's extension is not read, as in vega). When the body does not parse, vega logs
+  `Data ingestion failed` and goes on with the text itself as one datum; `loadSpecData` rejects with `[aster] invalid JSON
+  data: ...`. Name the format (`format: { type: 'csv' }`).
 
 ### Known differences not yet matched
 
@@ -373,6 +452,14 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
 - **Invalid URL/data** — `loadSpecData` rejects with `[aster] failed to load dataset url <url>: HTTP <status>`, an
   `AsterUrlError`, an `AsterLimitError` (timeout, size, redirects, rows), or a parse error such as `[aster] invalid
   JSON data: ...`.
+- **Host `data` the chart does not declare** — `[aster] input.data names dataset "<name>", which the chart does not declare (it
+  declares: ...; Vega refuses it too: Unrecognized data set)`, a `TypeError` thrown before anything is evaluated (by `renderSpec`,
+  `evaluateChart`, sessions and streams; reported through `onError` by the React components); and `[aster] input.data must be an
+  object of rows by dataset name ({ <name>: rows }), got a list` for `data: rows`. React validates what the rows are before that
+  (`[aster] data must be an object of datasets ({ name: rows[] }); got ...`).
+- **Doors that take the wrong thing** — `[aster] compileChart | ChartSession.evaluate | createChartStream expects a Vega spec object`
+  for a value that is no object; `[aster] evaluateChart expects a CompiledChart (compileChart(spec) makes one), got ...` for a spec or
+  anything else that is no compiled chart. A `logger` without `error` or `warn` is completed from the console.
 - **Unloaded `url` dataset** — rendering a spec whose `url` dataset was never loaded throws `[aster] dataset "t" has a
   url but no data was loaded for it; resolve url datasets first: import { loadSpecData } from "@aster-charts/core/load" and
   render await loadSpecData(spec, { baseURL, ... }), or pass the rows as input.data["t"]`. A url dataset in a group mark fails the
@@ -390,9 +477,13 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
   It is **logged** (the `logger`), and the pass stops there as vega's does, for a group mark's inline values (the group item
   is made, nothing inside it), for `setdata`, and for a `{signal}` values: there the mark that joins the row fails (the marks
   before it are made, it and the ones after it are not), and a dataset no mark joins raises nothing.
-- **Stratify** — `[aster] stratify: cycle | multiple roots | missing: id | ambiguous: id | no root` (vega's messages
-  with the prefix), and `[aster] stratify requires a key field`.
-- **Circular data reference** — named datasets cannot form a cycle: `[aster] circular data reference: <name>`.
+- **Stratify** — vega's messages with the prefix: `[aster] stratify: missing: <id>` (a parent id no row has),
+  `[aster] stratify: ambiguous: <id>` (a parent id two rows have), `[aster] stratify: multiple roots`, `[aster] stratify: no root`, and
+  `[aster] stratify: cycle`. A `stratify` with no `key` (or `parentKey`) is refused when the spec is compiled, as vega-parser refuses it:
+  `SpecParseError: Missing required "stratify" parameter: "key"`; `[aster] stratify requires a key field` is the guard behind that check.
+- **Circular data reference** — a dataset cannot read one that is declared after it, itself included, so a cycle of named datasets never
+  reaches the evaluation: it is refused when the spec is compiled, as vega-parser refuses it, `SpecParseError: Undefined data set name: "<name>"`
+  (`[aster] circular data reference: <name>` is the guard of the dataset builder behind that check; no spec reaches it).
 - **Scale domain with a non-string `data`** — `SpecParseError` (`Undefined data set name: ...`), as vega's parser.
 - **Unknown expression function** — a call to a name that is not a built-in, a registered function (see
   `registerExpressionFunction`), an add-on's, `if` or an event function is `SpecParseError("Unrecognized function:
@@ -404,12 +495,60 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
 - **`bin`** — `[aster] bin: cannot derive a step size from base, maxbins and the data span` where vega would loop
   forever.
 - **Render failure** — `<Chart>` renders `<div role="alert">` with `Chart render failed` (the message is in the
-  `title`) or, for an `AsterLimitError`, the limit message itself, and calls `onError`; `useChart` returns `{ error }`
-  (and `scene: null`).
+  `title`) or, for an `AsterLimitError`, the limit message itself, INSIDE its own element (which keeps its `className`,
+  `style` and `ariaLabel`), and calls `onError` once for the error (a re-evaluation that fails the same way is not reported
+  again; a success ends it). Every failure takes this one way: an evaluation error, a limit, a spec that is not a spec object
+  (`[aster] spec must be a Vega or Vega-Lite spec object; got null`), a Vega-Lite spec without the compiler, a
+  `VLCompileError`, a rejected spec promise, `[aster] data["t"] must be an array of rows; got …` (a dataset of `undefined`
+  rows is not given, not an error) and `[aster] width must be a finite number of pixels (0 or more) or 'container'; got …`.
+  Nothing is thrown to the host's error boundary. `useChart` returns `{ error }` (and `scene: null`); the stream hooks and
+  components return it as `error` / `onStreamError`.
+- **Controlled values** — `[aster] view.x must be two finite, different numbers; got [5,5]` (also `brush.*`,
+  `selection.*`, `select.*`): reported through `onError` once per value; that axis is drawn unzoomed / not drawn.
 - **Rejected `dataChanges`** — an unknown dataset, a non-integer or out-of-range index, or a changed row count makes
   `<Chart>` ignore the whole changeset (the update is diffed in full, the chart stays correct) and call `onError` with
   `[aster] dataChanges["<name>"]: ...`.
 - **`@aster-charts/vl`** — `compile()` throws `VLCompileError` for anything it validates (see above).
+
+### Messages by area
+
+The other `[aster]` messages a host can meet, by the stem each starts with (the rest is the particular name or number).
+`scripts/docs-claims.test.mjs` fails when a message of the sources has a stem this file does not list, so a new one is documented
+with the change that adds it.
+
+| Stem | Where, and what it means |
+|---|---|
+| `[aster] loadAddons takes an array of add-on names (` | `loadAddons(names)` was not given a list |
+| `[aster] not an add-on: ` | a name that is not `geo`, `transforms` or `load`, given to `loadAddons` |
+| `[aster] not a part of the engine a spec reads: ` | a name `specNeeds` / `preloadParts` does not know (a `TypeError`; the canvas renderer and the signal loop are preloaded by `preloadParts` of `@aster-charts/react`) |
+| `[aster] not a part of the engine: ` | the same, from `preloadParts(names)` in `@aster-charts/react` |
+| `[aster] the canvas part is loaded by the canvas capability (` | `loadAddons` / `specNeeds` was asked for the canvas renderer, which the shells' capability loads |
+| `[aster] the signals part is loaded by the interaction capability (` | the same for the signal loop |
+| `[aster] no fetch implementation available; pass one via loadSpecData(spec, { fetch })` | `loadSpecData` found no `fetch` (an old Node, a sandbox) |
+| `[aster] allowOrigins: ` | an entry that is not an absolute URL with an origin |
+| `[aster] topojson data must be a Topology object` | a `topojson` dataset whose rows are no topology |
+| `[aster] topojson format requires "feature" or "mesh"` | a `topojson` format with neither |
+| `[aster] topojson object "<name>" not found` | the named object is not in the topology |
+| `[aster] illegal format pattern: <field>:<type>` | a `format.parse` entry whose type is not one of vega's parsers (`number`, `boolean`, `date`, `string`, `date:...`) |
+| `[aster] invalid JSON data: ` | a JSON dataset (or `values` text) that does not parse |
+| `[aster] limits must be an object, got ` / `[aster] limits.<key> is not a limit` / `[aster] limits.regex must be ` | a `limits` that cannot be read (see [LIMITS.md](LIMITS.md)); `regex` is `'refuse'` or absent |
+| `[aster] patchSceneDom expects an <svg> element` | `patchSceneDom` was given another element |
+| `[aster] renderSceneToPng: no 2D context for a ` / `[aster] renderSceneToPng: a W x H image is too large` / `[aster] renderSceneToPng: this canvas cannot encode an image` | the PNG export's canvas could not be made, is past 32,767 px a side or 268,435,456 px in all, or has no `toBlob` / `convertToBlob` ([PNG export errors](#png-export-errors)) |
+| `[aster] flatten: a row holds ` | a `flatten` of a field a row holds as `null` or `undefined` (vega: `Cannot read properties of undefined`) |
+| `[aster] unsupported transform type "<type>"` | a transform that reached the dispatch without being refused at compile (an add-on's transform before its add-on is loaded says `load the addon` instead) |
+| `[aster] linkpath unsupported type: ` | a `linkpath` shape that is not `line`, `arc`, `curve`, `diagonal` or `orthogonal` |
+| `[aster] pack: unable to find enclosing circle` | the circle packer met a configuration it cannot enclose |
+| `[aster] geopoint: unknown projection ` / `geopath: unknown projection ` | a geo transform names a projection the spec does not declare |
+| `[aster] unknown time interval: ` | a `timeunit` / `bin` / expression names an interval that is not one of vega's |
+| `[aster] unknown easing ` | `transition.easing` names a curve `EASING_NAMES` does not list (a `RangeError`) |
+| `[aster] the transition easing answered ` | a function easing returned a number that is not finite |
+| `[aster] an evaluation that keeps incremental state needs the incremental engine` | `evaluateChartPending` was handed no engine: use `evaluateChart` or a session |
+| `[aster] the ticks of the axis over scale "<name>" failed` / `... read a signal that threw` / `... were never made: the pass stopped before the scale was evaluated` | an axis whose ticks cannot be made is refused as vega's own `toSVG` fails on its half-built axis: the ticks failed, read a signal that threw, or the pass stopped at an operator ranked before the scale (a scale whose domain reads data is ranked after every operator that reads none) |
+| `[aster] data must be an object of datasets ({ name: rows[] }); got ` | the React `data` prop is not a record of rows |
+| `[aster] initial.random is a function and cannot be sent to a worker; ` | `<ChartWorkerStream random>` with a Worker |
+| `[aster] a urlPolicy with allow/onDeny functions cannot be sent to a worker; ` | a function policy with a Worker: register hooks by name (`registerWorkerUrlPolicy`) |
+| `[aster] timeoutMs must be a finite number of milliseconds above 0; got ` | a worker deadline that is no deadline |
+| `[aster/vl] mark type not supported yet: ` | a Vega-Lite mark the compiler does not know (`VLCompileError`) |
 
 ## Worker errors
 
@@ -417,9 +556,20 @@ reported through `onError` (the hook's `error`), and it is remembered for the pa
 `failure: { batches, queuedRows, discarded }`. The hooks rehydrate it with `errorFromWire` (see
 [`instanceof` or `code`?](#instanceof-or-code) for what survives). In addition:
 
-- A Worker `error` event ends the pending request with `Error('[aster] worker error: <message>')`, and a
-  `messageerror` event with `Error('[aster] worker message could not be deserialized (messageerror)')`; a failing
+- **The deadline** (`timeoutMs`, default 30 000 ms, DECISIONS Q4). A request (a one-shot render, a stream's start or flush) not
+  answered in time terminates the worker and fails with `AsterWorkerTimeoutError` (`[aster] the worker did not answer within
+  <n> ms and was terminated`, `code: 'ASTER_WORKER_TIMEOUT'`, `timeoutMs`); `pending` becomes `false`. A worker the hook made
+  with `workerFactory` is replaced at once; the request that ran away is not sent again by itself (a new input sends one). A
+  stream whose flush ran away reports it with `failure` (the flush's batches as `discarded`) and starts afresh on the new
+  worker with what is still queued; one whose start ran away stays in the error until an input changes. A supplied `worker`
+  cannot be replaced by the hook: later requests to it fail at once with the same error until a new `worker` is given. Every
+  other hook using the terminated worker ends its own request in flight with the error.
+- A Worker `error` event (it names no request) ends the request IN FLIGHT of each hook listening, if any, with
+  `Error('[aster] worker error: <message>')`, and a `messageerror` event with `Error('[aster] worker message could not be
+  deserialized (messageerror)')`; a hook whose answer already came is not affected, and a late answer still applies. A failing
   `postMessage` surfaces its own error. The hook's `error` is set and `pending` becomes `false`.
+- A response the worker cannot post (it cannot be structured-cloned: a host-registered expression function or provider that
+  returned a function) answers that request with the error instead; the worker keeps answering the messages after it.
 - A `textMetrics` object (or a `urlPolicy` with `allow`/`onDeny` functions) cannot be posted to a Worker: the hook
   fails with `[aster] a textMetrics provider object cannot be sent to a worker; register it in the worker with
   registerWorkerTextMetrics and pass its name` (respectively `... registerWorkerUrlPolicy ...`). An unregistered name

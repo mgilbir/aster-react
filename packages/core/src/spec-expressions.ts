@@ -25,22 +25,49 @@
  * a few of them (`WRAPPED` there) when it is the author's text that is wrong in them is not reproduced.
  */
 import { SpecParseError } from './parse-error.js'
+import { engineSlotMessage, isEngineSlot } from './item-slots.js'
 import { checkExpression } from './expr-check.js'
 import { parseEventSelectorString } from './event-selector.js'
 import { filterCode } from './stream-defs.js'
 import {
-  checkFrom, checkScale, dataInputOf, dataWithoutRows, legendType, LEGEND_CHANNELS, Names, need, needDataRef, parseAxisNames, parseLegendNames, parseTitleNames, specList, stringValue,
+  axisValue, checkFrom, checkScale, dataInputOf, dataWithoutRows, legendType, LEGEND_CHANNELS, Names, need, needDataRef, parseAxisNames, parseLegendNames, parseTitleNames, specList, stringValue,
 } from './spec-structure.js'
 import { transformParams, type ParamKind, type TransformParam } from './transform-params.js'
 import { TUPLE_MAKING_TRANSFORMS, transformTypeOf } from './transform-names.js'
 import { guideReading, legendLayout, legendSizeExpression, type GuideEnv, type GuideKind } from './guide-model.js'
-import { splitAccessPath } from './util.js'
+import { splitAccessPath, TextTable } from './util.js'
+import { dataKey, expressionReads, unitIndexedIn } from './expr-reads.js'
+import { follow, node, Propagation, type SignalNode } from './signal-propagation.js'
 import { isSignalRef as isSignalObject, VIEW_SIGNALS, viewSignals } from './view-props.js'
 
 type Rec = Record<string, unknown>
 
 const isRecord = (v: unknown): v is Rec => v !== null && typeof v === 'object' && !Array.isArray(v)
 const isObject = (v: unknown): v is Rec => v !== null && typeof v === 'object'
+
+
+/**
+ * A group mark whose `role` is a guide's is read by vega as that guide, not as a group (vega-parser `parseMark`: a role that starts with
+ * `axis`, `legend` or `title` is no `scope`, so unless the mark has a `layout` or a facet it is no scope either): what it holds is
+ * parsed once, in the scope around it, and its marks are attached to the scenegraph by their place among the marks of their container
+ * -- the one group item the mark has when it has exactly one, else the root frame, over whatever mark held that place before. What is
+ * drawn then depends on how many rows the mark's data has and on the marks around it, and a role of exactly `axis`, `legend` or `title`
+ * is also laid out by the view as the guide it names (a half pixel, the legend grid, the title's anchor). Aster does not follow that:
+ * the mark is refused when the spec is compiled, after the errors vega's parser raises for it (ERRORS.md, ROADMAP.md).
+ */
+const GUIDE_ROLE_GROUP_CONTENT = ['marks', 'signals', 'data', 'scales', 'projections', 'axes', 'legends', 'title'] as const
+function guideRoleGroupRefusal(m: Rec, facet: boolean): SpecParseError | undefined {
+  const role = m.role
+  if (typeof role !== 'string' || !(role.startsWith('axis') || role.startsWith('legend') || role.startsWith('title'))) return
+  const holds = GUIDE_ROLE_GROUP_CONTENT.filter((k) => { const v = m[k]; return Array.isArray(v) ? v.length > 0 : v != null && v !== false && v !== '' })
+  if (role === 'axis' || role === 'legend' || role === 'title') {
+    return new SpecParseError(`[aster] a group mark with the role "${role}" is not supported: vega lays a mark of that role out as the guide it names, and Aster draws a group mark as a group mark`)
+  }
+  if (!m.layout && !facet && holds.length > 0) {
+    return new SpecParseError(`[aster] a group mark with the role "${role}" that holds ${holds.join(', ')} is not supported: vega parses what it holds in the scope around it and attaches its marks over the marks of the root frame, or of its one group item, so what it draws depends on how many rows its data has`)
+  }
+  return undefined
+}
 
 /**
  * What a scope of vega-parser knows by name when its expressions are read: its signals and scales (projections are scales) and
@@ -88,7 +115,9 @@ class Scope {
  * few turn up in chart after chart. A selector that does not parse is not kept. `null` is the refusal's message.
  */
 interface SelectorTexts { readonly texts: readonly string[] }
-const selectors: Record<'view' | 'scope', Map<string, SelectorTexts>> = { view: new Map(), scope: new Map() }
+const selectors: Record<'view' | 'scope', TextTable<SelectorTexts>> = {
+  view: new TextTable('view selectors', 1024, 1_000_000), scope: new TextTable('scope selectors', 1024, 1_000_000),
+}
 
 /** The text of an expression given as a value of any type: a string as it is, anything else as its JSON. */
 const textOf = (v: unknown): string => (typeof v === 'string' ? v : stringValue(v) + '')
@@ -103,8 +132,109 @@ class Check {
    * pattern): what `limits.regex: 'refuse'` refuses it for (limits.ts `checkChartRegex`).
    */
   readonly regexSites: string[] = []
+  /** The first group mark a guide's role makes Aster refuse (see `guideRoleGroupRefusal`), thrown once the walk found no error of vega's. */
+  refusal: SpecParseError | undefined
+  /** The data sets an expression has vega index by `unit` (expr-reads.ts `unitIndexedIn`). */
+  readonly unitIndexed = new Set<string>()
 
   constructor(private readonly config: Rec) {}
+
+  // -- the view's dataflow graph: what reads what, for the cycle vega refuses (C145) ----------------------------------------
+  //
+  // vega builds the operators of the view's own scope, ranks them, and throws `Cycle detected in dataflow graph.` when connecting
+  // one to what it reads would place it after itself (vega-dataflow `rerank`). Which cycles it finds depends on that order, not
+  // on the shape of the graph alone (a handler takes its source's rank and is never re-ranked: `a` on `{signal: "a"}` is
+  // accepted), so the walk records what vega-runtime builds and replays its ranking (`assertNoCycle`, with the event loop's own
+  // ranking, signal-propagation.ts): the operators in the order vega-runtime makes them (the view's signals, its data sets,
+  // scales, the expressions handlers follow, named marks), each then connected to what it reads (a signal with `react: false`
+  // reads its sources without being among their targets), then the handlers of `{signal}` / `{scale}` sources, each following its
+  // source and feeding its signal (what its update reads is a parameter that reacts to nothing). A group's scope is a subflow, whose cycle vega logs rather than
+  // throws (the event loop does the same: signals.ts); handlers of event streams and data triggers are ranked after nothing.
+
+  /** the operator whose definition is being read (null: none of the view's, or one whose reads are not ranked) */
+  private owner: string | null = null
+  /** the view's operators in the order vega-runtime makes them, by kind, and what each reads */
+  private readonly made = { signal: [] as string[], data: [] as string[], scale: [] as string[], lambda: [] as string[], mark: [] as string[] }
+  private readonly graph = new Map<string, Set<string>>()
+  private readonly unreactive = new Set<string>()
+  private readonly handlers: Array<{ source: string; target: string }> = []
+  /** the owner of each lambda waiting to be read, per list (a `{signal}` property is read last, for the operator it belongs to) */
+  private readonly lambdaOwners = new WeakMap<string[], Array<string | null>>()
+
+  private edge(source: string, target: string): void {
+    if (this.scope.isGroup) return
+    let s = this.graph.get(target)
+    if (!s) this.graph.set(target, (s = new Set()))
+    s.add(source)
+  }
+  private make(kind: keyof Check['made'], id: string): void {
+    if (this.scope.isGroup) return
+    const list = this.made[kind]
+    if (!list.includes(id)) list.push(id)
+  }
+  /** Read `fn` as part of the definition of `owner`. */
+  private as<T>(owner: string | null, fn: () => T): T {
+    const outer = this.owner
+    this.owner = this.scope.isGroup ? null : owner
+    try { return fn() } finally { this.owner = outer }
+  }
+  /** The view's signals and the data sets an expression reads (expr-reads.ts); none when it does not parse (it is refused anyway). */
+  private readsOf(text: string): Set<string> {
+    const out = new Set<string>()
+    let reads: ReadonlySet<string>
+    try { reads = expressionReads(text) } catch { return out }
+    for (const id of reads) {
+      if (id.startsWith('data:')) out.add(id)
+      else if (this.scope.hasSignal(id)) out.add('signal:' + id)
+    }
+    return out
+  }
+  /** What the current owner reads in an expression. */
+  private reads(text: string): void {
+    if (this.owner === null) return
+    for (const id of this.readsOf(text)) this.edge(id, this.owner)
+  }
+  private pushLambda(lambdas: string[], text: string): void {
+    lambdas.push(text)
+    let owners = this.lambdaOwners.get(lambdas)
+    if (!owners) this.lambdaOwners.set(lambdas, (owners = []))
+    owners[lambdas.length - 1] = this.owner
+  }
+  /** Replay vega's ranking of the view's operators; throw its error on the cycle it finds. */
+  assertNoCycle(): void {
+    if (!this.handlers.length && !this.graph.size) return
+    const flow = new Propagation(() => {})
+    const nodes = new Map<string, SignalNode>()
+    const get = (id: string): SignalNode => {
+      let n = nodes.get(id)
+      if (!n) nodes.set(id, (n = flow.add(node(id))))
+      return n
+    }
+    const { signal, data, scale, lambda, mark } = this.made
+    const order = [...signal, ...data, ...scale, ...lambda, ...mark]
+    for (const id of order) get(id)
+    try {
+      for (const id of order) {
+        const n = get(id)
+        const sources = [...(this.graph.get(id) ?? [])].map(get).filter((x) => x !== n)
+        if (!this.unreactive.has(id)) for (const src of sources) follow(src, n)
+        flow.connect(n, sources)
+      }
+      for (const h of this.handlers) {
+        const source = get(h.source)
+        // (vega-dataflow onOperator: the handler is ranked with its source, follows it, and feeds its signal; what its update reads
+        // is a parameter made with `react: false`, which counts it among nobody's targets)
+        const hn = node('handler')
+        hn.order = source.order
+        follow(source, hn)
+        const target = get(h.target)
+        follow(hn, target)
+        flow.connect(target, [hn])
+      }
+    } catch (e) {
+      throw new SpecParseError(e instanceof Error ? e.message : String(e), { cause: e })
+    }
+  }
 
   private get env(): GuideEnv {
     return { config: this.config, scaleType: (name) => this.scope.scaleType(name) }
@@ -125,6 +255,8 @@ class Check {
     else {
       const text = textOf(value)
       if (checkExpression(text, this.isSignal)) this.regexSites.push(text)
+      this.reads(text)
+      if (text.includes('intersect')) for (const name of unitIndexedIn(text)) this.unitIndexed.add(name)
     }
   }
 
@@ -146,7 +278,6 @@ class Check {
       this.collecting = texts
       try { this.stream(defs.length > 1 ? { merge: defs } : defs[0]) } finally { this.collecting = null }
       found = { texts }
-      if (cache.size >= 1024) cache.clear()
       cache.set(selector, found)
     }
     return found.texts
@@ -163,19 +294,24 @@ class Check {
       return
     }
     const signal = node.signal
-    if (typeof signal === 'string' && signal && !this.scope.hasSignal(signal) && !skip.has('signal')) out.push(signal)
+    if (typeof signal === 'string' && signal && !skip.has('signal')) {
+      if (this.scope.hasSignal(signal)) { if (this.owner !== null) this.edge('signal:' + signal, this.owner) } else this.pushLambda(out, signal)
+    }
     for (const key of Object.keys(node)) if (!skip.has(key)) this.lambdas(node[key], out, NONE, depth + 1)
   }
 
   /** `scope.signalRef(name)`: a signal of the scope is itself, anything else an expression of its own, read last. */
   private signalRef(name: unknown, lambdas: string[]): void {
     const text = String(name)
-    if (!this.scope.hasSignal(text)) lambdas.push(text)
+    if (!this.scope.hasSignal(text)) this.pushLambda(lambdas, text)
+    else if (this.owner !== null) this.edge('signal:' + text, this.owner)
   }
 
   flush(lambdas: string[]): void {
-    for (const text of lambdas) this.expression(text)
+    const owners = this.lambdaOwners.get(lambdas) ?? []
+    lambdas.forEach((text, i) => this.as(owners[i] ?? null, () => this.expression(text)))
     lambdas.length = 0
+    this.lambdaOwners.delete(lambdas)
   }
 
   // -- a scope, in the order vega reads it -------------------------------------------------------------------------
@@ -186,10 +322,17 @@ class Check {
     const signals = viewSignals(spec, config)
     for (const name of VIEW_SIGNALS) this.scope.addSignal(name)
     this.declare(signals)
+    for (const sig of signals) if (sig.push !== 'outer') this.make('signal', 'signal:' + String(sig.name))
+    // vega-parser parseView: the legends' layout of the config, the view's own encode, its layout; then the rest of the spec (C284)
+    this.objectProperty(isRecord(config.legend) ? config.legend.layout : undefined, lambdas)
+    this.encode(spec.encode)
+    this.objectProperty(spec.layout, lambdas)
     this.contents(spec, signals, lambdas)
     this.flush(lambdas)
     // the view registers its own root item last
     this.names.declare('root')
+    // (vega ranks the view's operators when it builds the view, after its parser has read every expression)
+    this.assertNoCycle()
   }
 
   /**
@@ -214,9 +357,27 @@ class Check {
     for (const d of specList(spec.data)) if (isRecord(d)) this.dataset(d, lambdas)
     for (const s of specList(spec.scales)) {
       checkScale(s, this.names)
-      this.lambdas(s, lambdas)
+      if (isRecord(s)) {
+        this.make('scale', 'scale:' + String(s.name))
+        this.as('scale:' + String(s.name), () => this.scaleDefinition(s, lambdas))
+      }
     }
     for (const s of signals) this.signal(s, lambdas)
+    this.guidesAndMarks(spec, lambdas)
+  }
+
+  private scaleDefinition(s: Rec, lambdas: string[]): void {
+    {
+      // (vega-parser parseScaleBins: an object of bins is one expression, written out with its signals in it)
+      const bins = isRecord(s) ? s.bins : undefined
+      if (isRecord(bins) && !bins.signal) {
+        this.lambdas(s, lambdas, BINS)
+        this.objectProperty(bins, lambdas)
+      } else this.lambdas(s, lambdas)
+    }
+  }
+
+  private guidesAndMarks(spec: Rec, lambdas: string[]): void {
     for (const a of specList(spec.axes)) {
       if (!isRecord(a)) continue
       // (the axis's configuration is looked up by the type of its scale, first)
@@ -247,11 +408,27 @@ class Check {
 
   /** `parseData`: its transforms, its triggers, the data sets it is derived from (when it has no values of its own), then its name. */
   private dataset(d: Rec, lambdas: string[]): void {
+    this.make('data', 'data:' + String(d.name))
+    this.as('data:' + String(d.name), () => this.datasetDefinition(d, lambdas))
+  }
+
+  private datasetDefinition(d: Rec, lambdas: string[]): void {
     for (const t of specList(d.transform)) if (isRecord(t)) this.transform(t, lambdas)
-    for (const on of specList(d.on)) if (isRecord(on)) this.trigger(on, String(d.name))
-    this.lambdas({ url: d.url, async: d.async, values: dataWithoutRows(d).values }, lambdas)
-    this.objectProperty(d.format, lambdas)
-    if (dataInputOf(d) === 'source') for (const source of specList(d.source)) need(this.names, source)
+    // (a trigger is an operator of its own that pulses the data set when it runs: nothing reads it)
+    for (const on of specList(d.on)) if (isRecord(on)) this.as(null, () => this.trigger(on, String(d.name)))
+    // vega-parser analyze: a data set's url, async, values and format are read only when it has a dynamic loader (its values or
+    // its url is a signal, or its format holds one); a source data set, or a static one, reads none of them
+    const values = dataWithoutRows(d).values
+    if (d.values ? isSignalObject(d.values) || holdsSignal(d.format) : d.url ? holdsSignal(d.url) || holdsSignal(d.format) : false) {
+      for (const v of [d.url, d.async, values]) if (isRecord(v) && v.signal) this.signalRef(v.signal, lambdas)
+      this.objectProperty(d.format, lambdas)
+    }
+    if (dataInputOf(d) === 'source') {
+      for (const source of specList(d.source)) {
+        need(this.names, source)
+        if (this.owner !== null) this.edge(dataKey(String(source)), this.owner)
+      }
+    }
     this.names.declare(d.name)
   }
 
@@ -281,6 +458,7 @@ class Check {
       if (p.ref === 'index') {
         if (typeof owner.from !== 'string') throw new SpecParseError('Lookup "from" parameter must be a string literal.')
         need(this.names, owner.from)
+        if (this.owner !== null) this.edge(dataKey(owner.from), this.owner)
         continue
       }
       const value = owner[p.name]
@@ -301,7 +479,11 @@ class Check {
         throw new TypeError(value === null ? "Cannot read properties of null (reading 'map')" : 'value.map is not a function')
       }
       if (p.ref === 'data' && !isSignalObject(value)) {
-        for (const name of p.list ? (value as unknown[]) : [value]) if (!isSignalObject(name)) need(this.names, name)
+        for (const name of p.list ? (value as unknown[]) : [value]) {
+          if (isSignalObject(name)) continue
+          need(this.names, name)
+          if (this.owner !== null) this.edge(dataKey(String(name)), this.owner)
+        }
       }
       if (p.kind === 'expression' || (p.kind !== 'value' && isObject(value))) this.parameter(value, p.kind)
       if (isObject(value)) this.lambdas(value, lambdas)
@@ -349,14 +531,46 @@ class Check {
         if (expr) throw new SpecParseError('Signals can not include both init and update expressions.')
         expr = s.init
       }
-      if (expr) this.expression(expr)
+      // (`react: false`: the signal reads its sources, but they do not count it among their targets)
+      if (s.react === false && !this.scope.isGroup) this.unreactive.add('signal:' + String(s.name))
+      if (expr) this.as('signal:' + String(s.name), () => this.expression(expr))
     }
-    if (Array.isArray(s.on)) for (const h of s.on) this.handler(h, lambdas)
+    if (Array.isArray(s.on)) s.on.forEach((h, i) => this.handler(h, lambdas, String(s.name), i))
   }
 
   /** One entry of a signal's `on`: vega-parser's `parseUpdate`. */
-  private handler(h: unknown, lambdas: string[]): void {
+  private handler(h: unknown, lambdas: string[], target = '', index = 0): void {
     if (!isRecord(h)) return
+    // a handler of an operator (a signal, a scale) is an operator itself: it follows its source and writes its signal (vega-dataflow
+    // `on`); one of event streams is not ranked
+    void index
+    this.as(null, () => this.handlerBody(h, lambdas))
+    if (this.scope.isGroup || typeof h.events === 'string') return
+    // vega-parser parseUpdate: several operators are one expression (`[a, scale("x")]`), one is the signal it names, the scale,
+    // or the expression it is (an operator of its own, made after the data sets and scales)
+    const operators = specList(h.events).filter((e): e is Rec => isRecord(e) && !!(e.signal || e.scale))
+    if (!operators.length) return
+    let source: string
+    if (operators.length > 1) {
+      const text = '[' + operators.map((o) => (o.scale ? 'scale("' + (o.scale as string) + '")' : (o.signal as string))).join(',') + ']'
+      source = 'lambda:' + text
+      this.make('lambda', source)
+      for (const id of this.readsOf(text)) this.edge(id, source)
+      for (const o of operators) if (o.scale) this.edge('scale:' + String(o.scale), source)
+    } else if (operators[0]!.scale) source = 'scale:' + String(operators[0]!.scale)
+    else {
+      const text = String(operators[0]!.signal)
+      if (this.scope.hasSignal(text)) source = 'signal:' + text
+      else {
+        source = 'lambda:' + text
+        this.make('lambda', source)
+        for (const id of this.readsOf(text)) this.edge(id, source)
+      }
+    }
+    this.handlers.push({ source, target: 'signal:' + target })
+  }
+
+  private handlerBody(h: Rec, lambdas: string[]): void {
     if (!h.events) throw new SpecParseError('Signal update missing events specification.')
     let events: unknown = h.events
     // (a selector gives streams alone: what they hold is worked out once, and read after the update)
@@ -382,6 +596,7 @@ class Check {
     let update = h.update
     if (h.encode != null) {
       if (update) throw new SpecParseError('Signal encode and update are mutually exclusive.')
+      // vega-parser update.js: the handler's update is `encode(item(), <set>)` (encode-handlers.ts)
       update = 'encode(item(),' + stringValue(h.encode) + ')'
     }
     if (typeof update === 'string') this.expression(update)
@@ -410,6 +625,8 @@ class Check {
   private stream(stream: unknown): void {
     const s = isRecord(stream) ? stream : null
     if (s?.merge) {
+      // (an empty merge makes no stream: vega fails on it as it builds the view, `reading 'merge'` of nothing; refused here, C629)
+      if (!Array.isArray(s.merge) || s.merge.length === 0) throw new SpecParseError('Invalid stream specification: ' + stringValue(stream))
       for (const m of s.merge as unknown[]) this.stream(m)
       this.streamParameters(s)
     } else if (s?.stream) {
@@ -443,7 +660,12 @@ class Check {
   private guide(kind: GuideKind, g: Rec, lambdas: string[]): void {
     // a guide that holds no signal, no encode, nothing but values has no expression to read
     const keys = Object.keys(g)
-    if (!keys.some((key) => key !== 'scale' && isObject(g[key]))) return
+    // (a parameter of the guide's data vega looks up in the config when the guide has none: see CONFIG_VALUES)
+    const fromConfig = kind === 'axis' || kind === 'legend'
+      ? CONFIG_VALUES[kind].filter((key) => g[key] == null).map((key) => [key, kind === 'axis' ? axisValue(g, key, (name) => this.scope.scaleType(name), this.config)
+        : isRecord(this.config.legend) ? this.config.legend[key] : undefined] as const).filter(([, v]) => isObject(v))
+      : []
+    if (!fromConfig.length && !keys.some((key) => key !== 'scale' && isObject(g[key]))) return
     const reading = guideReading(kind, g, this.env)
     const symbols = kind === 'legend' && legendType(g, this.scope.scaleType(LEGEND_CHANNELS.map((c) => g[c]).find((s) => !!s))) === 'symbol'
     // a symbol legend measures its entries as soon as they are made: before any of its marks are read
@@ -457,6 +679,7 @@ class Check {
       else if (how === 'value') this.lambdas(v, lambdas)
       else if (how === 'entry') entries.push(key)
     }
+    for (const [key, v] of fromConfig) if (reading(key) === 'value') this.lambdas(v, lambdas)
     // the entries of a symbol legend lie in a group of their own
     for (const key of entries) {
       if (symbols && ENTRY_PARTS.test(key)) this.within(new Scope(this.scope), () => this.guideEntries(g[key]))
@@ -489,15 +712,29 @@ class Check {
   private objectProperty(value: unknown, lambdas: string[]): void {
     if (!isObject(value)) return
     if (!Array.isArray(value) && value.signal) { this.lambdas(value, lambdas); return }
-    if (holdsSignal(value)) lambdas.push(propertyLambda(value))
+    if (holdsSignal(value)) this.pushLambda(lambdas, propertyLambda(value))
   }
 
   /** `parseMark`, in the order its parts are read: interactivity and clip, the encode sets, the transforms, the sort, the layout, the content of a group, the triggers. */
   private mark(m: Rec, lambdas: string[]): void {
+    // a named mark of the view is a data set (its items) that expressions can read: it reads what its definition reads
+    if (m.name != null) this.make('mark', dataKey(String(m.name)))
+    this.as(m.name != null ? dataKey(String(m.name)) : null, () => this.markDefinition(m, lambdas))
+  }
+
+  private markDefinition(m: Rec, lambdas: string[]): void {
+    if (this.owner !== null && isRecord(m.from) && typeof m.from.data === 'string') this.edge(dataKey(m.from.data), this.owner)
     const group = m.type === 'group'
     const facet = isRecord(m.from) && isRecord(m.from.facet) ? m.from.facet : undefined
     checkFrom(m.from, group, this.names)
-    for (const key of ['interactive', 'clip']) this.lambdas(m[key], lambdas)
+    // vega-parser parseData: a facet with no data of its own aggregates its data set by its groupby, the facet's `aggregate` being
+    // that transform's parameters (`fields`, `ops`, `as`, `cross`: any of them a signal); then its keys (C126)
+    if (facet !== undefined && facet.field == null && !(isRecord(m.from) && m.from.data)) {
+      this.transform({ type: 'aggregate', groupby: specList(facet.groupby), ...(isRecord(facet.aggregate) ? facet.aggregate : {}) }, lambdas)
+    }
+    if (facet !== undefined) this.facetKeys(facet, lambdas)
+    this.lambdas(m.interactive, lambdas)
+    this.clip(m.clip, lambdas)
     this.encode(m.encode)
     for (const t of specList(m.transform)) {
       if (!isRecord(t)) continue
@@ -518,7 +755,8 @@ class Check {
         if (!facet.field && !facet.groupby) throw new SpecParseError('Facet must specify groupby or field: ' + stringValue(facet))
       }
       // a group is a scope of data sets of its own, unless its role is a guide's and it has no layout and no facet: then it is parsed in
-      // its parent's (a facet's name is a data set of the group's scope)
+      // its parent's (a facet's name is a data set of the group's scope). Such a group mark is refused below, once vega's own errors
+      // for what it holds have been raised in vega's order.
       const role = typeof m.role === 'string' ? m.role : ''
       const guideRole = role.startsWith('axis') || role.startsWith('legend') || role.startsWith('title')
       const names = !guideRole || !!m.layout || facet !== undefined ? new Names(this.names) : this.names
@@ -534,8 +772,40 @@ class Check {
     }
     this.lambdas(m.overlap, lambdas)
     if (m.name != null) this.names.declare(m.name)
-    // a named mark's triggers are read last, in the scope the mark is in
-    if (m.name != null) for (const on of specList(m.on)) if (isRecord(on) && !(on.insert || on.remove || on.toggle)) this.trigger(on, String(m.name))
+    // a named mark's triggers are read last, in the scope the mark is in; a mark only takes `modify` triggers
+    if (m.name != null) {
+      for (const on of specList(m.on)) {
+        if (!isRecord(on)) continue
+        if (on.insert || on.remove || on.toggle) throw new SpecParseError('Marks only support modify triggers.')
+        this.trigger(on, String(m.name))
+      }
+    }
+    // (what vega accepts and Aster does not draw as vega does is refused after everything vega's parser refuses in the spec: the first of
+    // them, once the walk is done)
+    if (group) this.refusal ??= guideRoleGroupRefusal(m, facet !== undefined)
+  }
+
+  /**
+   * The keys of a facet: `field` (vega-parser `fieldRef`: a name or a `{signal}`) and `groupby` (`keyRef`: names and `{signal}`s).
+   * A field written `{expr}` is refused with vega's message; vega's `keyRef` takes an `{expr}` in `groupby` too and fails on it
+   * as it writes its code, which the same refusal stands for. A `{signal}` whose text names no signal is an expression of its own
+   * (vega fails on it as well: it is read, and evaluated, here).
+   */
+  private facetKeys(facet: Rec, lambdas: string[]): void {
+    const key = (ref: unknown): void => {
+      if (isRecord(ref) && ref.signal) { this.signalRef(ref.signal, lambdas); return }
+      if (isObject(ref)) throw new SpecParseError('Unsupported field reference: ' + stringValue(ref))
+    }
+    if (facet.field != null) key(facet.field)
+    else for (const ref of specList(facet.groupby)) key(ref)
+  }
+
+  /** vega-parser `clip`: a `{signal}`, or a clip path or sphere written into the call that draws it (`pathShape(...)`, `geoShape(...)`). */
+  private clip(clip: unknown, lambdas: string[]): void {
+    if (!isRecord(clip)) return
+    const param = (v: unknown): string => (isRecord(v) && v.signal ? `${v.signal as string}` : stringValue(v))
+    const expr = clip.signal ? `${clip.signal as string}` : clip.path ? 'pathShape(' + param(clip.path) + ')' : clip.sphere ? 'geoShape(' + param(clip.sphere) + ', {type: "Sphere"})' : undefined
+    if (expr !== undefined) this.signalRef(expr, lambdas)
   }
 
   // -- encode entries ----------------------------------------------------------------------------------------------
@@ -552,6 +822,8 @@ class Check {
         continue
       }
       for (const channel of Object.keys(block)) {
+        // (a channel is written onto the item under its own name: none may name the engine's own slots, item-slots.ts)
+        if (isEngineSlot(channel)) throw new SpecParseError(engineSlotMessage(channel, `encode block "${key}"`))
         const entry = block[channel]
         if (entry == null) continue
         this.entry(entry)
@@ -572,6 +844,7 @@ const ENTRY_PARTS = /^(symbol|label|entries$)/
 /** What a signal that pushes to an outer scope may not say (its value is the outer signal's). */
 const OUTER_INVALID = ['value', 'update', 'init', 'react', 'bind'] as const
 const NONE: ReadonlySet<string> = new Set()
+const BINS: ReadonlySet<string> = new Set(['bins'])
 const BLOCKS: ReadonlySet<string> = new Set(['enter', 'update', 'exit', 'hover', 'leave', 'select', 'release', 'name', 'interactive', 'style'])
 
 // -- the text vega makes of an encode entry ----------------------------------------------------------------------------
@@ -587,9 +860,18 @@ function holdsSignal(node: unknown, depth = 0): boolean {
 /** Whether an entry (or list of rules) has a signal or a test anywhere in it, or is a gradient (its start, stop and count may leave a hole in the call). */
 function holdsExpression(node: unknown, depth = 0): boolean {
   if (!isObject(node) || depth > 8) return false
-  if (!Array.isArray(node) && (node.signal || node.test || node.gradient != null)) return true
+  if (!Array.isArray(node) && (node.signal || node.test || node.gradient != null || node.color || writesText(node))) return true
   for (const key of Object.keys(node)) if (holdsExpression(node[key], depth + 1)) return true
   return false
+}
+
+/**
+ * Whether an entry pastes a property into its code as text (vega's `property`: anything but an object goes in as it is written), so
+ * the code may not parse (`offset: "1+"`) or name a signal that is not there (`band: "abc"`).
+ */
+function writesText(e: Rec): boolean {
+  const raw = (p: unknown): boolean => p != null && !isObject(p) && typeof p !== 'number'
+  return raw(e.exponent) || raw(e.mult) || raw(e.offset) || (e.scale != null && e.range == null && Boolean(e.band) && +(e.band as number) !== 1 && raw(e.band))
 }
 
 /** A field reference as vega writes it into the expression of an entry: `datum["a"]`, `item.mark.group["a"]`, `datum[signal]`. */
@@ -613,16 +895,43 @@ function fieldText(ref: unknown): string | null {
 const scaleText = (scale: unknown): string | null =>
   typeof scale === 'string' ? stringValue(scale) : isRecord(scale) && scale.signal ? `(${scale.signal as string})` : fieldText(scale)
 
-const propertyText = (p: unknown): string | null => (isRecord(p) ? (() => { const t = entryText(p); return t === null ? null : `(${t})` })() : `${p as string}`)
+/** A property (`exponent`, `mult`, `offset`, `band`) as vega writes it: an object (a list too) is an entry in parentheses, anything else its text. */
+const propertyText = (p: unknown): string | null => (isObject(p) ? (() => { const t = entryText(p); return t === null ? null : `(${t})` })() : `${p as string}`)
 
+/**
+ * A colour object's call (`(rgb(r,g,b)+'')`): each part is an entry, and an entry with no value is vega's `null`, which its list
+ * of arguments writes as nothing (`rgb(,0,0)`, a parse error, as in vega). A part that is not there fails as vega's parser does.
+ */
 const colorText = (type: string, parts: unknown[]): string | null => {
-  const texts = parts.map((p) => (isObject(p) ? entryText(p) : 'null'))
-  return texts.some((t) => t === null) ? null : `(${type}(${texts.join(',')})+'')`
+  const texts: string[] = []
+  for (const p of parts) {
+    if (p == null) throw new TypeError(`Cannot read properties of ${p === null ? 'null' : 'undefined'} (reading 'gradient')`)
+    const t = entryCode(p)
+    if (t === null) return null
+    texts.push(t === VNULL ? '' : t)
+  }
+  return `(${type}(${texts.join(',')})+'')`
 }
 
 /** The expression vega builds for an entry (null: for one it would refuse in another way, which is not this check's). */
+/** The parameters of a guide's data vega looks up in the config too (`_(name)`); `tickMinStep`, `tickCount`, `values` it reads off the guide alone. */
+const CONFIG_VALUES: Readonly<Record<'axis' | 'legend', readonly string[]>> = {
+  axis: ['labelBound', 'labelOverlap', 'labelSeparation', 'tickExtra'],
+  legend: ['symbolLimit'],
+}
+
 export function entryText(spec: unknown): string | null {
-  if (!isObject(spec) || Array.isArray(spec)) return 'null'
+  const code = entryCode(spec)
+  return code === VNULL ? 'null' : code
+}
+
+/** vega's `null` as the code of an entry: the value null, which a template writes as `null` and a list of arguments as nothing. */
+const VNULL = Symbol('null')
+
+/** vega-parser encode/entry.js `entry`: the code of an entry, `VNULL` where vega's is the value `null`, `null` as for `entryText`. */
+function entryCode(spec: unknown): string | null | typeof VNULL {
+  // (vega reads the keys of whatever it is given: anything but an object with them gives no value)
+  if (!isObject(spec)) return VNULL
   const e = spec as Rec
   if (e.gradient != null) {
     const args: Array<string | null> = [e.start, e.stop, e.count].map((v) => (v == null ? null : stringValue(v)))
@@ -630,33 +939,38 @@ export function entryText(spec: unknown): string | null {
     const scale = scaleText(e.gradient)
     return scale === null ? null : `gradient(${[scale, ...args].join(',')})`
   }
-  let value: string | undefined | null
+  let value: string | null | typeof VNULL | undefined
   if (e.signal) value = `(${e.signal as string})`
   else if (e.color) {
     const c = e.color as Rec
-    value = c.c ? colorText('hcl', [c.h, c.c, c.l]) : c.h || c.s ? colorText('hsl', [c.h, c.s, c.l]) : c.l || c.a ? colorText('lab', [c.l, c.a, c.b]) : c.r || c.g || c.b ? colorText('rgb', [c.r, c.g, c.b]) : 'null'
+    value = c.c ? colorText('hcl', [c.h, c.c, c.l]) : c.h || c.s ? colorText('hsl', [c.h, c.s, c.l]) : c.l || c.a ? colorText('lab', [c.l, c.a, c.b]) : c.r || c.g || c.b ? colorText('rgb', [c.r, c.g, c.b]) : VNULL
   } else if (e.field != null) value = fieldText(e.field)
   else if (e.value !== undefined) value = stringValue(e.value)
   if (value === null) return null
+  const text = (v: string | typeof VNULL): string => (v === VNULL ? 'null' : v)
   if (e.scale != null) {
     const scale = scaleText(e.scale)
     if (scale === null) return null
     if (e.range != null) value = `lerp(_range(${scale}), ${+(e.range as number)})`
     else {
-      if (value !== undefined) value = `_scale(${scale}, ${value})`
+      if (value !== undefined) value = `_scale(${scale}, ${text(value)})`
       if (e.band) {
-        const band = +(e.band as number) === 1 ? '' : '*' + propertyText(e.band)
-        value = (value ? value + '+' : '') + `_bandwidth(${scale})` + band
+        const band = +(e.band as number) === 1 ? '' : propertyText(e.band)
+        if (band === null) return null
+        value = (typeof value === 'string' && value ? value + '+' : '') + `_bandwidth(${scale})` + (band === '' ? '' : '*' + band)
         if (e.extra) value = `(datum.extra ? _scale(${scale}, datum.extra.value) : ${value})`
       }
-      if (value == null) value = '0'
+      if (value === undefined) value = '0'
     }
   }
-  if (value === undefined) value = 'null'
-  if (e.exponent != null) value = `pow(${value},${propertyText(e.exponent)})`
-  if (e.mult != null) value += `*${propertyText(e.mult)}`
-  if (e.offset != null) value += `+${propertyText(e.offset)}`
-  if (e.round) value = `round(${value})`
+  if (value === undefined) value = VNULL
+  for (const [key, wrap] of [['exponent', (v: string, p: string) => `pow(${v},${p})`], ['mult', (v: string, p: string) => `${v}*${p}`], ['offset', (v: string, p: string) => `${v}+${p}`]] as const) {
+    if (e[key] == null) continue
+    const p = propertyText(e[key])
+    if (p === null) return null
+    value = wrap(text(value), p)
+  }
+  if (e.round) value = `round(${text(value)})`
   return value
 }
 
@@ -677,9 +991,15 @@ function ruleText(rules: unknown[]): string | null {
  */
 /** Check every expression of `spec` (see the file header); returns where it makes regular expressions (`Check.regexSites`). */
 export function checkExpressions(spec: Rec, config: Rec = {}): readonly string[] {
+  return checkSpecExpressions(spec, config).regexSites
+}
+
+/** Check every expression of `spec`; what the walk found: the regular expressions it makes, the data sets it indexes by unit. */
+export function checkSpecExpressions(spec: Rec, config: Rec = {}): { regexSites: readonly string[]; unitIndexed: readonly string[] } {
   const check = new Check(config)
   check.view(spec, config)
-  return check.regexSites
+  if (check.refusal !== undefined) throw check.refusal
+  return { regexSites: check.regexSites, unitIndexed: [...check.unitIndexed] }
 }
 
 /** vega-parser's `propertyLambda`: an object or array written out as an expression, a `{signal}` in it standing for its text. */

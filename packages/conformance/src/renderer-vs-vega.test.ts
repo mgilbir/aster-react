@@ -18,7 +18,7 @@ type Spec = Record<string, unknown>
 
 async function oracleSvg(spec: Spec): Promise<string> {
   const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(
-    vega.parse(spec as never),
+    vega.parse(structuredClone(spec) as never),
     { renderer: 'none' },
   )
   try {
@@ -117,9 +117,17 @@ describe('custom SVG path strings as symbol shapes', () => {
     expect(() => renderSpec(spec as never)).toThrow(/Invalid SVG path/)
   })
 
-  it('a path that parses is re-serialized from numbers: no input text reaches the document', () => {
-    const svg = renderSpec(markSpec('symbol', { shape: { value: 'M0,0L1,1z' + '<img src=x onerror=alert(1)>'.replace(/[mlhvzcsqta]/gi, '') } }) as never)
-    expect(svg).not.toMatch(/onerror|<img/)
+  it('a path that parses is re-serialized from numbers: no input text reaches the document', async () => {
+    // (the text a path parser accepts has no `<` or `=` in it: the letters of the markup that are path commands are dropped from the
+    // payload, so what is left is read, as `M L z`, by vega and by Aster alike; an `<img` can never survive the parse, which is why only
+    // `onerror` and the shape of every `d` are asserted, not a tag)
+    const spec = markSpec('symbol', { shape: { value: 'M0,0L1,1z' + '<img src=x onerror=alert(1)>'.replace(/[mlhvzcsqta]/gi, '') } })
+    const svg = renderSpec(structuredClone(spec) as never)
+    expect(svg).not.toMatch(/onerror/)
+    const ds = [...svg.matchAll(/ d="([^"]*)"/g)].map((m) => m[1]!)
+    expect(ds.length, 'the symbol is drawn').toBeGreaterThan(0)
+    for (const d of ds) expect(d, 'a path attribute holds commands and numbers only').toMatch(/^[MLHVCSQTAZmlhvcsqtaz0-9.,eE+\-\s]*$/)
+    expect(await compare(spec)).toEqual([])
   })
 })
 

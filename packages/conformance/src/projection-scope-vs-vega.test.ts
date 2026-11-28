@@ -16,6 +16,7 @@ import '@aster-charts/core/transforms'
 import { renderSpec } from '@aster-charts/core'
 import { addonsNeeded } from '@aster-charts/core/addons'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
+import { deepFreeze } from './engines.js'
 
 type Spec = Record<string, unknown>
 
@@ -51,11 +52,12 @@ const LAND = [
   { type: 'Polygon', coordinates: [[[170, -10], [-170, -10], [-170, 20], [170, 20], [170, -10]]] },
   { type: 'Polygon', coordinates: [[[100, 30], [140, 30], [140, 60], [100, 60], [100, 30]]] },
 ]
-const DATA = [
+// (frozen: the module's one table, copied at every use: a test that edits its spec (the identity one empties the sphere) edits its own copy)
+const DATA = deepFreeze([
   { name: 'sphere', values: [{ type: 'Sphere' }] },
   { name: 'land', values: LAND },
   { name: 'graticule', transform: [{ type: 'graticule', step: [30, 30] }] },
-]
+])
 const shapes = (clip: unknown = false, label = false): unknown[] => [
   { type: 'shape', from: { data: 'sphere' }, encode: { enter: { fill: { value: 'aliceblue' } } }, transform: [{ type: 'geoshape', projection: 'projection' }] },
   { type: 'shape', from: { data: 'graticule' }, clip, encode: { enter: { stroke: { value: '#ddd' } } }, transform: [{ type: 'geoshape', projection: 'projection' }] },
@@ -66,7 +68,7 @@ const shapes = (clip: unknown = false, label = false): unknown[] => [
 const cells = (types: string[], clip: unknown = false, extra: Spec = {}): Spec => ({
   autosize: 'pad',
   signals: [{ name: 'scale0', value: 38 }],
-  data: [{ name: 'types', values: types }, ...DATA],
+  data: [{ name: 'types', values: types }, ...structuredClone(DATA)],
   layout: { columns: 3, padding: 10 },
   marks: [{
     type: 'group', from: { data: 'types' },
@@ -141,12 +143,12 @@ describe('a type vega has not registered stops the pass', () => {
     expect(r.errors).toEqual(['Error: Unrecognized projection type: robinson'])
   })
   it('an unknown type at the view\'s scope: no dataset, scale or mark is made', async () => {
-    const spec: Spec = { width: 200, height: 100, padding: 5, data: DATA, projections: [{ name: 'projection', type: 'airy', scale: 40, translate: [100, 50] }], marks: shapes() }
+    const spec: Spec = { width: 200, height: 100, padding: 5, data: structuredClone(DATA), projections: [{ name: 'projection', type: 'airy', scale: 40, translate: [100, 50] }], marks: shapes() }
     const r = await same(spec)
     expect(r.errors).toEqual(['Error: Unrecognized projection type: airy'])
   })
   it('an unknown type given by a signal, at the view\'s scope', async () => {
-    const spec: Spec = { width: 200, height: 100, padding: 5, signals: [{ name: 'kind', value: 'wagner6' }], data: DATA, projections: [{ name: 'projection', type: { signal: 'kind' }, scale: 40, translate: [100, 50] }], marks: shapes() }
+    const spec: Spec = { width: 200, height: 100, padding: 5, signals: [{ name: 'kind', value: 'wagner6' }], data: structuredClone(DATA), projections: [{ name: 'projection', type: { signal: 'kind' }, scale: 40, translate: [100, 50] }], marks: shapes() }
     const r = await same(spec)
     expect(r.errors).toEqual(['Error: Unrecognized projection type: wagner6'])
   })
@@ -156,7 +158,7 @@ describe('a type vega has not registered stops the pass', () => {
 })
 
 describe('a mark\'s clip', () => {
-  const view = (clip: unknown): Spec => ({ width: 200, height: 100, padding: 5, data: DATA, projections: [{ name: 'projection', type: 'orthographic', scale: 45, translate: [100, 50] }], marks: shapes(clip) })
+  const view = (clip: unknown): Spec => ({ width: 200, height: 100, padding: 5, data: structuredClone(DATA), projections: [{ name: 'projection', type: 'orthographic', scale: 45, translate: [100, 50] }], marks: shapes(clip) })
   for (const [name, clip] of [
     ['true', true], ['false', false],
     ['the sphere of a projection', { sphere: 'projection' }],

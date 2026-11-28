@@ -9,13 +9,24 @@
  *   import x = require('a')      export * from 'a'         export { x } from 'a'
  *   import('a')                  import(`a`)               import('a' + '/b')
  *   require('a')                 require.resolve('a')      import.meta.resolve('a')
- *   importScripts('a')           type X = import('a').Y    /// <reference types="a" />
+ *   importScripts('a')           type X = import('a').Y    a triple-slash `types` directive
+ *   new URL('a', import.meta.url)                          a triple-slash `path` directive
+ *   declare module 'a' { }       a triple-slash `amd-dependency` directive
+ *   m['require']('a')            globalThis['require']('a')
  *
  * Specifiers that cannot be resolved statically (a computed `import(name)`, a
- * template with a substitution before the package name, a bare `require`
- * reference, `createRequire`) are returned as `unanalyzable` so the caller can
- * fail loudly instead of letting them through.
+ * template with a substitution before the package name) and every way of
+ * reaching a loader without calling it on a literal (`const r = require`,
+ * `x.require` read without a call, `createRequire` under any access path including
+ * `m.createRequire` and `m['createRequire']`, `process.getBuiltinModule`, `eval`,
+ * `new Function`) are returned as `unanalyzable` so the caller can fail loudly
+ * instead of letting them through.
+ *
+ * `classifySpec` then sorts a specifier into what the boundary cares about: a banned package,
+ * a URL or other non-package scheme (a browser library pulling Vega from a CDN), or a relative or
+ * absolute path that leaves the package directory (into the oracle's node_modules).
  */
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import ts from 'typescript'
 
 const SCRIPT_KINDS = {
@@ -66,21 +77,32 @@ function fold(node) {
   return null
 }
 
-/** `require`, `require.resolve`, `module.require`, `import.meta.resolve`, `importScripts`. */
+/** The name an access reads: `x.name`, `x['name']` and ``x[`name`]`` all read `name`. */
+function accessName(expr) {
+  if (ts.isPropertyAccessExpression(expr)) return expr.name.text
+  if (ts.isElementAccessExpression(expr) && ts.isStringLiteralLike(unwrap(expr.argumentExpression))) return unwrap(expr.argumentExpression).text
+  return null
+}
+
+/** `require`, `require.resolve`, `module.require`, `globalThis['require']`, `import.meta.resolve`, `importScripts`. */
 function isLoaderCallee(expr) {
   expr = unwrap(expr)
   if (ts.isIdentifier(expr)) return expr.text === 'require' || expr.text === 'importScripts'
-  if (ts.isPropertyAccessExpression(expr)) {
-    const name = expr.name.text
-    const obj = unwrap(expr.expression)
-    if (name === 'require') return true // module.require, globalThis.require, ...
-    if (name === 'resolve') {
-      if (ts.isIdentifier(obj) && obj.text === 'require') return true
-      if (ts.isMetaProperty(obj) && obj.keywordToken === ts.SyntaxKind.ImportKeyword) return true
-    }
+  const name = accessName(expr)
+  if (name === null) return false
+  const obj = unwrap(expr.expression)
+  if (name === 'require') return true // module.require, globalThis.require, globalThis['require'], ...
+  if (name === 'resolve') {
+    if (ts.isIdentifier(obj) && obj.text === 'require') return true
+    if (ts.isMetaProperty(obj) && obj.keywordToken === ts.SyntaxKind.ImportKeyword) return true
   }
   return false
 }
+
+/** Names that hand out a module loader: reading one anywhere (not just calling it) lets a specifier escape analysis. */
+const LOADER_NAMES = new Set(['require', 'createRequire', 'getBuiltinModule'])
+/** Calls that compile source text, which can hold any import. */
+const CODE_EVAL = new Set(['eval', 'Function'])
 
 /**
  * @returns {{ specs: string[], unanalyzable: { line: number, text: string }[] }}
@@ -106,23 +128,23 @@ export function scanSource(text, fileName) {
     flag(call, 'non-static module specifier')
   }
 
+  // The identifiers of a loader call the scanner read the specifier of (`require`, `module.require`, `require.resolve`, `m['require']`).
   const handled = new Set()
   function markHandled(callee) {
     callee = unwrap(callee)
     if (ts.isIdentifier(callee)) handled.add(callee)
     else if (ts.isPropertyAccessExpression(callee)) {
+      handled.add(callee.name)
       const obj = unwrap(callee.expression)
       if (ts.isIdentifier(obj)) handled.add(obj)
-    }
+    } else if (ts.isElementAccessExpression(callee)) handled.add(callee)
   }
-  /** `x.require`, `{ require: 1 }`, `interface { require }`: a name, not a reference. */
+  /** `{ require: 1 }`, `interface { require }`, `class { require() {} }`: the name of a declaration, not a reference to a loader. */
   function isNameOnly(id) {
     const p = id.parent
     if (!p) return false
-    if (ts.isPropertyAccessExpression(p) && p.name === id) return true
-    if ((ts.isPropertyAssignment(p) || ts.isPropertySignature(p) || ts.isMethodDeclaration(p) ||
-      ts.isPropertyDeclaration(p)) && p.name === id) return true
-    return false
+    return (ts.isPropertyAssignment(p) || ts.isPropertySignature(p) || ts.isMethodDeclaration(p) ||
+      ts.isMethodSignature(p) || ts.isPropertyDeclaration(p)) && p.name === id
   }
 
   function visit(node) {
@@ -144,27 +166,49 @@ export function scanSource(text, fileName) {
         markHandled(callee)
       }
     } else if (
-      ts.isIdentifier(node) && (node.text === 'require' || node.text === 'createRequire') &&
+      ts.isIdentifier(node) && LOADER_NAMES.has(node.text) &&
       !handled.has(node) && !isNameOnly(node)
     ) {
-      // `const r = require; r('vega')`, `createRequire(import.meta.url)`: the loader escapes analysis.
+      // `const r = require; r('vega')`, `createRequire(import.meta.url)`, `m.createRequire(...)('vega')`, `const r = m.require`:
+      // the loader escapes analysis.
       flag(node, 'indirect module loader')
+    }
+    if (ts.isElementAccessExpression(node) && !handled.has(node)) {
+      const n = accessName(node)
+      if (n !== null && LOADER_NAMES.has(n)) flag(node, 'indirect module loader')
+    }
+    if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
+      const c = unwrap(node.expression)
+      if (ts.isIdentifier(c) && CODE_EVAL.has(c.text)) flag(node, 'dynamic code evaluation')
+      // `new URL('./x.js', import.meta.url)`: the module URL a worker or a dynamic import is handed.
+      if (ts.isNewExpression(node) && ts.isIdentifier(c) && c.text === 'URL' && node.arguments?.length === 2) {
+        const base = unwrap(node.arguments[1])
+        if (ts.isPropertyAccessExpression(base) && ts.isMetaProperty(base.expression) && base.name.text === 'url') {
+          const f = fold(node.arguments[0])
+          if (f && f.value !== undefined) specs.push(f.value.startsWith('.') || /^[a-z][a-z0-9+.-]*:/i.test(f.value) || f.value.startsWith('/') ? f.value : `./${f.value}`)
+        }
+      }
+    } else if (ts.isModuleDeclaration(node) && ts.isStringLiteral(node.name)) {
+      // `declare module 'vega' { ... }` in a shipped .d.ts pulls the oracle's surface into the public types.
+      specs.push(node.name.text)
     }
     ts.forEachChild(node, visit)
   }
   visit(sf)
 
-  // /// <reference types="a" /> and /// <reference path>
+  // the triple-slash directives: `types`, `path` and `amd-dependency`
   const pre = ts.preProcessFile(text, true, true)
   for (const ref of pre.typeReferenceDirectives) specs.push(ref.fileName)
+  for (const ref of pre.referencedFiles) specs.push(/^(\.|\/|[a-z][a-z0-9+.-]*:)/i.test(ref.fileName) ? ref.fileName : `./${ref.fileName}`)
+  for (const m of text.matchAll(/^[ \t]*\/\/\/[ \t]*<amd-dependency\s+path\s*=\s*["']([^"']+)["']/gm)) specs.push(m[1])
 
   return { specs, unanalyzable }
 }
 
-/** Package name of an import specifier, or null for relative/absolute/builtin-protocol paths. */
+/** Package name of an import specifier, or null for relative/absolute paths and URLs (`node:` builtins and URL schemes). */
 export function packageName(spec) {
   if (spec.startsWith('.') || spec.startsWith('/')) return null
-  if (/^(node|data|file|http|https):/.test(spec)) return null
+  if (/^[a-z][a-z0-9+.-]*:/i.test(spec)) return null
   const parts = spec.split('/')
   if (spec.startsWith('@')) return parts.length >= 2 ? parts.slice(0, 2).join('/') : spec
   return parts[0]
@@ -181,4 +225,37 @@ export const BANNED = /^(?:@types\/)?(?:vega|d3|topojson)(?:-|$)/
 
 export function isBanned(name) {
   return BANNED.test(name)
+}
+
+/**
+ * What a specifier written in `file` (a path inside `packageDir`) is, for the boundary:
+ *   { kind: 'banned', name }   a banned package (the caller applies its baseline);
+ *   { kind: 'scheme', why }    a URL or other non-`node:` scheme (`https://esm.sh/vega`, `data:text/javascript,...`, `npm:vega`):
+ *                              fetched at run time or resolved by the platform, so the check cannot see what it loads;
+ *   { kind: 'escape', why }    a relative or absolute path that leaves `packageDir` or enters a `node_modules` (the oracle in
+ *                              `../../conformance/node_modules/vega/...`);
+ *   null                       anything else (a package that is not banned, a relative path inside the package).
+ * A test file (`allowSiblings`) never ships and reads the sibling packages' built output by path, so leaving the package directory is
+ * allowed for it; reaching into a `node_modules` (the oracle) is not.
+ * @param {string} spec
+ * @param {{ file: string, packageDir: string, allowSiblings?: boolean }} where absolute paths
+ */
+export function classifySpec(spec, { file, packageDir, allowSiblings = false }) {
+  if (/^node:/i.test(spec)) return null
+  if (/^[a-z][a-z0-9+.-]*:/i.test(spec)) {
+    const npm = /^npm:\/*(@[^/@]+\/[^/@]+|[^/@]+)/i.exec(spec) // npm:<name>[@<range>][/<subpath>]
+    if (npm && isBanned(npm[1])) return { kind: 'banned', name: npm[1] }
+    return { kind: 'scheme', why: `"${spec.slice(0, 60)}" is not a package or a relative path` }
+  }
+  if (spec.startsWith('.') || spec.startsWith('/')) {
+    const target = resolve(dirname(file), spec)
+    const rel = relative(packageDir, target)
+    const outside = rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)
+    // inside the package only the part below it counts; outside it, the whole path (the oracle is `<repo>/packages/conformance/node_modules/vega`)
+    if ((outside ? target : rel).split(sep).includes('node_modules')) return { kind: 'escape', why: `"${spec}" reaches into node_modules` }
+    if (!allowSiblings && outside) return { kind: 'escape', why: `"${spec}" leaves the package directory` }
+    return null
+  }
+  const name = packageName(spec)
+  return name && isBanned(name) ? { kind: 'banned', name } : null
 }

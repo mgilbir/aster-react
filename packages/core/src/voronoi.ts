@@ -80,6 +80,7 @@ function connect(points: Float64Array): Mesh {
     const first = byPosition[0]!
     const last = byPosition[n - 1]!
     const nudge = 1e-8 * Math.hypot(points[2 * last + 1]! - points[2 * first + 1]!, points[2 * last]! - points[2 * first]!)
+    // bounded: one pass over the points
     for (let i = 0; i < n; i++) {
       const x = points[2 * i]!
       const y = points[2 * i + 1]!
@@ -140,6 +141,7 @@ function buildDiagram(mesh: Mesh, rect: Rect): Diagram {
       if (hullCenterX === undefined) {
         let sx = 0
         let sy = 0
+        // bounded: the hull's points, once for the first flat triangle
         for (const h of hull) {
           sx += points[h * 2]!
           sy += points[h * 2 + 1]!
@@ -239,6 +241,7 @@ function clipSegment(r: Rect, x0: number, y0: number, x1: number, y1: number, c0
   if (swapped) {
     ;[x0, y0, x1, y1, c0, c1] = [x1, y1, x0, y0, c1, c0]
   }
+  // bounded: Cohen-Sutherland: every pass puts an end on a side of the box, which its code then lacks: at most 4 passes per end
   for (;;) {
     if (c0 === 0 && c1 === 0) return swapped ? [x1, y1, x0, y0] : [x0, y0, x1, y1]
     if (c0 & c1) return null
@@ -284,6 +287,7 @@ function addCorners(d: Diagram, i: number, from: number, to: number, polygon: nu
   const r = d.rect
   let k = RING.indexOf(from)
   if (RING.indexOf(to) < 0) return at
+  // bounded: at most once round the 8 corners and sides of the box
   while (k >= 0 && RING[k] !== to) {
     if (k & 1) {
       const x = k < 4 ? r.xmax : r.xmin
@@ -410,6 +414,7 @@ function clipOpen(d: Diagram, i: number, corners: number[], startVx: number, sta
   if (hit) polygon.push(hit[0], hit[1])
   polygon = clipClosed(d, i, polygon)
   if (polygon) {
+    // bounded: the corners of one cell's clipped polygon
     for (let j = 0, n = polygon.length, c1 = edgeOf(r, polygon[n - 2]!, polygon[n - 1]!); j < n; j += 2) {
       const c0 = c1
       c1 = edgeOf(r, polygon[j]!, polygon[j + 1]!)
@@ -427,6 +432,7 @@ function clipOpen(d: Diagram, i: number, corners: number[], startVx: number, sta
 /** Drop corners that continue a straight horizontal or vertical run. */
 function simplify(polygon: number[] | null): number[] | null {
   if (polygon && polygon.length > 4) {
+    // bounded: the corners of one cell's polygon; a splice removes a corner, so the pass shrinks the list it walks
     for (let i = 0; i < polygon.length; i += 2) {
       const j = (i + 2) % polygon.length
       const k = (i + 4) % polygon.length
@@ -478,10 +484,12 @@ export function voronoi(points: Float64Array, bounds: Rect): VoronoiDiagram {
       const x = corners[0]!
       const y = corners[1]!
       let end = corners.length
+      // bounded: the corners of one cell's polygon
       while (end > 2 && corners[end - 2] === x && corners[end - 1] === y) end -= 2
       // pieces are joined at the end: one flat string per cell (a chain of concatenations leaves a rope of tens of nodes that
       // stays alive with the row), and join writes an undefined coordinate (see `castRay`) as nothing
       const parts: Array<number | string | undefined> = ['M', x, ',', y]
+      // bounded: the corners of one cell's polygon
       for (let k = 2; k < end; k += 2) {
         if (corners[k] !== corners[k - 2] || corners[k + 1] !== corners[k - 1]) parts.push('L', corners[k], ',', corners[k + 1])
       }

@@ -12,25 +12,43 @@
  * checks it over the whole conformance corpus. The one deliberate exception is
  * `denseMarks`, which batches symbols into chunked paths.
  */
+import type { HostDocument, HostElement } from './host-types.js'
 import { SYMBOL_DEFAULT_SIZE, pushAll } from './util.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
-import { ClipCollector } from './svg-defs.js'
+import { ClipCollector, sceneDefIds } from './svg-defs.js'
 import { isEngineNode, keptInto } from './scene-registry.js'
 import { getTextMetricsProvider } from './text-metrics.js'
 import { formatEnvironmentKey } from './locale.js'
+import { drawnPathCommands } from './path-data.js'
 import { symbolGeometry, type PathData, type SymbolGeometry } from './geometry.js'
+import { paintOrder } from './paint-order.js'
+import { DisjointBatch, disjointBatchable, disjointEnd } from './overlap-batch.js'
+import { isGradientPaint } from './svg-defs.js'
 import {
   PairAttrSink,
   areaMarkAttrs,
   arcItemAttrs,
   backgroundRectAttrs,
+  backgroundPathAttrs,
+  batchablePaint,
   circleAttrs,
+  foregroundAttrs,
+  radialPatternAttrs,
+  radialPatternRectAttrs,
+  rectMarkContainerAttrs,
+  rootFrameGroupAttrs,
+  roundedScopeBox,
+  scopeGroupAttrs,
+  translateAttrs,
+  tspanAttrs,
+  type GeneratedPath,
   clipIdAttrs,
   clipRefAttrs,
   clipShapeAttrs,
   computeAreaPath,
   computeLinePath,
   frameAttrs,
+  frameClipDef,
   gradientAttrs,
   groupClipId,
   imageAttrs,
@@ -70,8 +88,8 @@ import {
   itemHref,
   linkAttrs,
   type AttrSink,
-  num,
 } from './render.js'
+import { withSceneOutput } from './scene-output.js'
 
 import './guide-caption.js' // (installs the guide captions the structure tree quotes in aria-label)
 
@@ -92,92 +110,57 @@ export interface DomDesc {
 }
 
 /**
- * Translate every absolute coordinate in an SVG path by (dx, dy). Relative
- * commands are deltas and need no change. Used by the dense-mark batcher to
- * bake a symbol's position into its `d` instead of emitting a per-item
- * `transform` (Chrome makes transformed SVG nodes ~3x more expensive to
- * mutate: 145ms vs 45ms per append in a 100k-node scene).
+ * A coordinate baked into a batch's path, to three decimals, half away from zero with a nudge of 1e-9: a position that is a tie in
+ * one order of float operations (320.5855) and a hair under it in the other (the group's translate added to the item's own, as an
+ * element's `transform` does) lands on the same thousandth as the element it replaces.
  */
 function round3(v: number): string {
-  const r = Math.round(v * 1000) / 1000
+  const r = Math.round((v + Math.sign(v) * 1e-9) * 1000) / 1000
   return Object.is(r, -0) ? '0' : String(r)
 }
 
-/** True for a letter (SVG path command); numbers never start with one. */
-function isLetter(c: number): boolean {
-  return (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
-}
-
-function isDigit(c: number): boolean {
-  return c >= 48 && c <= 57
-}
-
 /**
- * Translate every absolute coordinate in an SVG path by (dx, dy). Relative
- * commands are deltas and need no change, and arguments that do not move
- * (arc radii/flags, relative deltas) are copied verbatim instead of being
- * parsed and reformatted — a 100k-symbol dense mount spends ~170ms here, so
- * this is a hand-written scanner rather than a regex tokenizer.
+ * Translate every absolute coordinate in an SVG path by (dx, dy), and write the path as the commands the text holds. Relative
+ * commands are deltas and need no change; the one exception is a path's first moveto, which SVG defines as absolute even when
+ * written `m` (its extra pairs are relative linetos). The text is read by the engine's own reader of path text (`drawnPathCommands`:
+ * vega's grammar, so `.5.5` is two numbers, an arc's flags need no separator, `1e1` is ten), and as far as it reads: what a
+ * malformed path holds after its first error is not drawn by a browser and is not written. Arguments that do not move (arc radii,
+ * rotation and flags, relative deltas) are written as read. The reader caches per text, so a symbol shape shared by 100k items is
+ * read once. Used by the dense-mark batcher to bake a symbol's position into its `d` instead of emitting a per-item `transform`
+ * (Chrome makes transformed SVG nodes ~3x more expensive to mutate: 145ms vs 45ms per append in a 100k-node scene).
  */
 export function translatePathData(d: string, dx: number, dy: number): string {
   if (!d || (dx === 0 && dy === 0)) return d
   let out = ''
-  let cmd = '' // current command letter ('' before the first one)
-  let argi = 0
-  let afterCommand = true
-  const n = d.length
-  let i = 0
-  while (i < n) {
-    const c = d.charCodeAt(i)
-    if (isLetter(c)) {
-      cmd = d[i]!
-      argi = 0
-      afterCommand = true
-      out += cmd
-      i++
-      continue
-    }
-    if (c === 44 || c === 32 || c === 9 || c === 10 || c === 13) { i++; continue } // , space 	 
- 
-    // A number token: [+-]? digits ('.' digits)? ([eE][+-]?digits)?
-    const start = i
-    if (c === 45 || c === 43) i++
-    while (i < n && (isDigit(d.charCodeAt(i)) || d.charCodeAt(i) === 46)) i++
-    if (i < n && (d.charCodeAt(i) === 101 || d.charCodeAt(i) === 69)) {
-      i++
-      if (i < n && (d.charCodeAt(i) === 43 || d.charCodeAt(i) === 45)) i++
-      while (i < n && isDigit(d.charCodeAt(i))) i++
-    }
-    const relative = cmd !== '' && cmd === cmd.toLowerCase()
-    // Which argument of which command moves?
-    let moves = false
-    let axisX = true
-    if (!relative) {
-      switch (cmd) {
-        case 'A':
-          // rx ry rotation large-arc sweep x y — only the endpoint moves.
-          if (argi === 5) moves = true
-          else if (argi === 6) { moves = true; axisX = false }
-          break
-        case 'H':
-          if (argi === 0) moves = true
-          break
-        case 'V':
-          if (argi === 0) { moves = true; axisX = false }
-          break
-        default:
-          moves = true
-          if (argi % 2 === 1) axisX = false
-      }
-    }
-    if (moves) {
-      const v = Number(d.slice(start, i))
-      out += (afterCommand ? '' : ',') + round3(axisX ? v + dx : v + dy)
+  let prev = '' // the letter the last command was written with, so a repeat of it can share it
+  let first = true
+  for (const c of drawnPathCommands(d)) {
+    const letter = c[0]
+    const type = letter.toLowerCase()
+    // (a first `m` is absolute: it is read from the origin, where a relative moveto and an absolute one agree)
+    const absolute = letter === letter.toUpperCase() || (first && type === 'm')
+    first = false
+    if (letter === prev && type !== 'm' && type !== 'z') {
+      out += ','
     } else {
-      out += (afterCommand ? '' : ',') + d.slice(start, i)
+      out += letter
+      prev = letter
     }
-    afterCommand = false
-    argi++
+    for (let k = 1; k < c.length; k++) {
+      const v = c[k] as number
+      if (k > 1) out += ','
+      let moves = false
+      let axisX = true
+      if (absolute) {
+        switch (type) {
+          case 'a': moves = k >= 6; axisX = k === 6; break // rx ry rotation large-arc sweep x y: only the endpoint moves
+          case 'h': moves = true; break
+          case 'v': moves = true; axisX = false; break
+          default: moves = true; axisX = k % 2 === 1
+        }
+      }
+      out += moves ? round3(v + (axisX ? dx : dy)) : String(v)
+    }
   }
   return out
 }
@@ -234,7 +217,11 @@ const DENSE_SYMBOL_CHUNK = 256
  * `gen`: the scene generation it was built in; `stamped`: every item in it carried a generation then (an unstamped item is
  * never clean, see `isClean`); `d`: its path data; `open`: it ended at the end of the items, short of the size bound.
  */
-interface DenseChunk { from: number; to: number; first: SceneItem; last: SceneItem; desc: DomDesc; gen: number | undefined; stamped: boolean; d: string; open: boolean }
+interface DenseChunk {
+  from: number; to: number; first: SceneItem; last: SceneItem; desc: DomDesc; gen: number | undefined; stamped: boolean; d: string; open: boolean
+  /** A batch of translucent, blended or stroked symbols apart from one another (`overlap-batch.ts`): what ended it is the item after it. */
+  disjoint?: { stop: SceneItem | undefined }
+}
 
 /**
  * Whether every item of a chunk is clean (`isClean`), proved without reading them when the items array is one the engine
@@ -260,23 +247,13 @@ const DENSE = new WeakMap<SceneItem[], DenseCache>()
 function batchableSymbol(it: SceneItem): boolean {
   const x = it.x
   const y = it.y
-  // Translucent marks cannot batch: one path composites once where per-item
-  // elements composite each overlap, so alpha would visibly change.
-  const rec = it as Record<string, unknown>
-  const opaque = (it.opacity == null || it.opacity === 1)
-    && (it.fillOpacity == null || it.fillOpacity === 1)
-    && (it.strokeOpacity == null || it.strokeOpacity === 1)
-    && rec.blend == null
-  return opaque
+  // Translucent, blended, or filled-and-stroked marks cannot batch: one path composites once where per-item elements
+  // composite each overlap, and draws every fill under every stroke (render.ts `batchablePaint`, shared with canvas).
+  return batchablePaint(it)
     && x != null && y != null && Number.isFinite(x) && Number.isFinite(y)
     && Number.isFinite(Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2)
 }
 
-function symbolAttrs(it: SceneItem): Array<[string, string]> {
-  const w = new PairAttrSink()
-  paintAttrs(it, w)
-  return w.out
-}
 
 /**
  * Chunk consecutive same-paint symbols into one `<path>` each. Chunks are
@@ -284,7 +261,7 @@ function symbolAttrs(it: SceneItem): Array<[string, string]> {
  * array of a scene group, so a streamed append rebuilds a single ~256-item path string instead
  * of every descriptor in the mark.
  */
-function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: number): DomDesc[] {
+function denseSymbolItems(items: SceneItem[], chunkSize: number): DomDesc[] {
   const prev = DENSE.get(items)
   const cachedChunks = prev && prev.items === items && prev.chunkSize === chunkSize ? prev.chunks : null
   const chunks = new Map<number, DenseChunk>()
@@ -293,8 +270,10 @@ function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: numb
   while (i < items.length) {
     const first = items[i]!
     if (!batchableSymbol(first)) {
-      // Translucent or degenerate items keep their own element (batching would
-      // change overlap compositing); never drop them.
+      // A translucent, blended or filled-and-stroked symbol shares a path only with symbols it cannot overlap (below); one
+      // that none can join, and a degenerate one, keep their own element; never dropped.
+      const run = disjointSymbolRun(items, i, chunkSize, cachedChunks, chunks, out)
+      if (run > i) { i = run; continue }
       out.push(symbolItemDesc(first))
       i++
       continue
@@ -313,7 +292,7 @@ function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: numb
     // is skipped. Only the growing tail chunk is ever re-scanned, which keeps an
     // append at one pass of cheap flag reads instead of two property-heavy ones.
     const full = cachedChunks?.get(from)
-    if (full && full.first === first && full.to - from === chunkSize && full.to <= items.length
+    if (full && full.disjoint === undefined && full.first === first && full.to - from === chunkSize && full.to <= items.length
       && items[full.to - 1] === full.last) {
       if (chunkClean(items, full, from, full.to)) {
         full.desc.clean = true
@@ -327,7 +306,7 @@ function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: numb
     // ended: its own items need neither the batchable / paint scan nor translating again (see the full-chunk case above), so
     // an append costs the appended items, not the tail chunk.
     const open = cachedChunks?.get(from)
-    const resume = open !== undefined && open.open && open.first === first && open.to <= items.length && items[open.to - 1] === open.last
+    const resume = open !== undefined && open.disjoint === undefined && open.open && open.first === first && open.to <= items.length && items[open.to - 1] === open.last
       && chunkClean(items, open, from, open.to) ? open : null
     let to = resume !== null ? resume.to : i + 1
     while (to < items.length && to - from < chunkSize) {
@@ -339,7 +318,7 @@ function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: numb
       to++
     }
     const cached = cachedChunks?.get(from)
-    if (cached && cached.to === to && cached.first === first) {
+    if (cached && cached.disjoint === undefined && cached.to === to && cached.first === first) {
       if (resume === cached || chunkClean(items, cached, from, to)) {
         cached.desc.clean = true
         chunks.set(from, cached)
@@ -359,7 +338,7 @@ function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: numb
     }
     // A fresh desc object (never mutate a cached one): the patcher compares
     // against the previous descriptor, so reusing the object would hide the write.
-    const desc: DomDesc = { tag: 'path', attrs: [['d', d], ...symbolAttrs(first)] }
+    const desc: DomDesc = { tag: 'path', attrs: pairs((w) => { w.t('d', d); paintAttrs(first, w) }) }
     const chunk: DenseChunk = { from, to, first, last: items[to - 1]!, desc, gen: CURRENT_GEN, stamped, d, open: to === items.length && to - from < chunkSize }
     chunks.set(from, chunk)
     out.push(desc)
@@ -367,6 +346,59 @@ function denseSymbolItems(group: SceneGroup, items: SceneItem[], chunkSize: numb
   }
   DENSE.set(items, { items, chunkSize, chunks })
   return out
+}
+
+/** The batch under construction (one at a time: reset for each). */
+const DISJOINT = new DisjointBatch()
+
+/**
+ * An item a disjoint batch may carry: a symbol at a finite position and size, upright, with a paint that does not depend on its own
+ * box, and no accessible name of its own (a `description` is the item's aria-label and role: vega's SVG gives each such item an
+ * element for it, and so does a batch of none).
+ */
+function disjointMember(it: SceneItem): boolean {
+  const x = it.x
+  const y = it.y
+  return (it.description == null || it.aria === false) && x != null && y != null && Number.isFinite(x) && Number.isFinite(y)
+    && Number.isFinite(Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2)
+    && disjointBatchable(it, isGradientPaint)
+}
+
+/**
+ * The batch of symbols from `from` that `batchableSymbol` refuses for their paint (translucent, blended, filled and stroked):
+ * consecutive items of one paint whose ink boxes (`overlap-batch.ts`) are pairwise apart, so that one path draws the pixels the
+ * elements draw one by one. Pushes its descriptor and returns the index after it; `from` itself when it would hold fewer than two
+ * items (the caller gives that one an element of its own). A batch built before is reused when its items, and the item that ended
+ * it, are unchanged.
+ */
+function disjointSymbolRun(items: SceneItem[], from: number, chunkSize: number, cachedChunks: Map<number, DenseChunk> | null,
+  chunks: Map<number, DenseChunk>, out: DomDesc[]): number {
+  const first = items[from]!
+  if (!disjointMember(first)) return from
+  const cached = cachedChunks?.get(from)
+  if (cached !== undefined && cached.disjoint !== undefined && cached.first === first && cached.to <= items.length
+    && items[cached.to - 1] === cached.last
+    && (cached.disjoint.stop === undefined ? cached.to === items.length : items[cached.to] === cached.disjoint.stop && isClean(cached.disjoint.stop))
+    && chunkClean(items, cached, from, cached.to)) {
+    cached.desc.clean = true
+    chunks.set(from, cached)
+    out.push(cached.desc)
+    return cached.to
+  }
+  const to = disjointEnd(DISJOINT, items, from, chunkSize, (it) => disjointMember(it) && (it === first || (samePaint(first, it) && !batchablePaint(it))))
+  if (to - from < 2) return from
+  let d = ''
+  let stamped = true
+  for (let j = from; j < to; j++) {
+    const it = items[j]!
+    if (it.__gen == null) stamped = false
+    const r = Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
+    d += symbolTranslated(symbolGeometry((it as Record<string, unknown>).shape as string | undefined, r), it.x as number, it.y as number, translatePathData)
+  }
+  const desc: DomDesc = { tag: 'path', attrs: pairs((w) => { w.t('d', d); paintAttrs(first, w) }) }
+  chunks.set(from, { from, to, first, last: items[to - 1]!, desc, gen: CURRENT_GEN, stamped, d, open: false, disjoint: { stop: items[to] } })
+  out.push(desc)
+  return to
 }
 
 function symbolItemDesc(it: SceneItem): DomDesc {
@@ -401,7 +433,7 @@ function freshSymbolDesc(it: SceneItem, i: number, dirty: number[]): DomDesc {
   return symbolItemDesc(it)
 }
 
-function symbolItems(group: SceneGroup, items: SceneItem[]): { descs: DomDesc[]; appendFrom?: { prev: DomDesc[]; count: number } } {
+function symbolItems(items: SceneItem[]): { descs: DomDesc[]; appendFrom?: { prev: DomDesc[]; count: number } } {
   const prev = SYMBOL_ITEMS.get(items)
   const reuse = prev && prev.items === items ? prev : null
   // An append to an array the engine advances in place, nothing re-encoded since the last build (the dense chunks' proof,
@@ -484,19 +516,26 @@ function isClean(it: SceneItem): boolean {
   return CURRENT_GEN != null && it.__gen != null && it.__gen !== CURRENT_GEN
 }
 
+/**
+ * The descriptor last built for each scene item. Beside the item, never on it: an item holds what its encode wrote, and an
+ * encode channel can be given any name, so nothing the renderer trusts may live in an item's own properties (a channel named
+ * like a slot there would be taken for the renderer's own state).
+ */
+const ITEM_DESCS = new WeakMap<SceneItem, DomDesc>()
+
 /** Build (or reuse, for a clean item) the DOM descriptor for a scene item. */
 function cachedDesc(it: SceneItem, build: () => DomDesc): DomDesc {
-  const cached = it.__domDesc as DomDesc | undefined
-  if (isClean(it) && cached) {
+  const cached = ITEM_DESCS.get(it)
+  if (cached !== undefined && isClean(it)) {
     // Reuse the cached descriptor in place: the patcher compares it against
     // itself (all attributes equal, nothing written) and the clean flag lets
     // it skip the subtree. Mutating the flag is safe — a dirty item always
-    // rebuilds and overwrites __domDesc below.
+    // rebuilds and replaces its entry below.
     cached.clean = true
     return cached
   }
   const desc = build()
-  it.__domDesc = desc
+  ITEM_DESCS.set(it, desc)
   return desc
 }
 
@@ -526,7 +565,6 @@ function pairs(fill: (w: AttrSink) => void): Pairs {
   return w.out
 }
 
-const FOREGROUND: Pairs = [['class', 'foreground'], ['aria-hidden', 'true'], ['d', ''], ['display', 'none']]
 
 function leafDesc(it: SceneItem): DomDesc {
   failOnUnmeasured(it)
@@ -539,10 +577,7 @@ function leafDesc(it: SceneItem): DomDesc {
     symbolElementAttrs(it, leafSymbolPath(it), w)
     return { tag: 'path', attrs: w.out, clean: isClean(it) }
   }
-  if (it._kind === 'text' || (it._kind === undefined && it.text != null)) {
-    const d = textDesc(it)
-    if (d) return d
-  }
+  if (it._kind === 'text' || (it._kind === undefined && it.text != null)) return textDesc(it)
   const [x1, y1, x2, y2] = leafLineEnds(it)
   itemDatumAttr(it, w)
   lineElementAttrs(x1, y1, x2, y2, it, w)
@@ -550,20 +585,15 @@ function leafDesc(it: SceneItem): DomDesc {
 }
 
 /** A text element's descriptor (the renderer's `textElement`): attributes, then the text or one tspan per line. */
-function textDesc(it: SceneItem): DomDesc | null {
+function textDesc(it: SceneItem): DomDesc {
   const w = new PairAttrSink()
   const d = textAttrs(it, w)
-  if (d == null) return null
   if (d.lines.length === 1) return { tag: 'text', attrs: w.out, text: d.text, clean: isClean(it) }
   return {
     tag: 'text',
     attrs: w.out,
     clean: isClean(it),
-    children: d.lines.map((line, i) => ({
-      tag: 'tspan',
-      attrs: i === 0 ? [] : ([['x', '0'], ['dy', num(d.lineHeight)]] as Pairs),
-      text: line,
-    })),
+    children: d.lines.map((line, i) => ({ tag: 'tspan', attrs: pairs((w) => tspanAttrs(i, d.lineHeight, w)), text: line })),
   }
 }
 
@@ -576,16 +606,16 @@ function clippedRoundedRectDescs(group: SceneGroup, clips: ClipCollector): DomDe
       continue
     }
     const clipId = clips.id({ d: e.round })
-    const background = (d: string): DomDesc => ({ tag: 'path', attrs: [['class', 'background'], ['aria-hidden', 'true'], ['d', d]] })
-    const foreground = (): DomDesc => ({ tag: 'path', attrs: FOREGROUND.map((p) => [p[0], p[1]] as [string, string]) })
-    out.push(g('g', [['transform', `translate(${num(e.g.x)},${num(e.g.y)})`]], [
+    const background = (d: GeneratedPath): DomDesc => ({ tag: 'path', attrs: pairs((w) => backgroundPathAttrs(d, w)) })
+    const foreground = (): DomDesc => ({ tag: 'path', attrs: pairs(foregroundAttrs) })
+    out.push(g('g', pairs((w) => translateAttrs(e.g.x, e.g.y, w)), [
       background(e.round),
       g('g', pairs((w) => clipRefAttrs(clipId, w)), [
-        g('g', [['class', 'mark-group role-scope'], ['role', 'graphics-object'], ['aria-roledescription', 'group mark container']], [
-          g('g', [['transform', `translate(0,${num(-e.g.y)})`]], [
-            background(`M0,0h${num(e.g.w)}v0h-${num(e.g.w)}Z`),
+        g('g', pairs(scopeGroupAttrs), [
+          g('g', pairs((w) => translateAttrs(0, -e.g.y, w)), [
+            background(roundedScopeBox(e.g.w)),
             g('g', [], [
-              g('g', [['class', 'mark-rect role-mark marks'], ['role', 'graphics-object'], ['aria-roledescription', 'rect mark container']], [
+              g('g', pairs(rectMarkContainerAttrs), [
                 linked(e.item, { tag: 'path', attrs: pairs((w) => rectPathAttrs(e.item, e.plain, w)) }),
               ]),
             ]),
@@ -605,7 +635,10 @@ function linkedFirst(items: SceneItem[], desc: DomDesc): DomDesc {
 }
 
 function markItems(group: SceneGroup, type: string, options?: DomRenderOptions): DomDesc[] {
-  const items = group.items ?? []
+  // (a line, an area and a trail are one element drawn through the items in their order; the items of the other marks are one
+  // element each, in the order vega paints them: paint-order.ts -- a reordered copy, which the caches keyed by the engine's array
+  // never take for it)
+  const items = type === 'line' || type === 'area' || type === 'trail' ? group.items ?? [] : paintOrder(group.items ?? []) as SceneItem[]
   switch (type) {
     case 'line': {
       const info = computeLinePath(group)
@@ -626,8 +659,8 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
     case 'symbol': {
       // a hyperlinked mark keeps one element (and <a>) per symbol
       const chunkSize = group.hasLinks === true ? 0 : denseSymbolsEnabled(options, items)
-      if (chunkSize > 0) return denseSymbolItems(group, items, chunkSize)
-      const { descs, appendFrom } = symbolItems(group, items)
+      if (chunkSize > 0) return denseSymbolItems(items, chunkSize)
+      const { descs, appendFrom } = symbolItems(items)
       if (appendFrom) APPEND_OF.set(descs, appendFrom)
       return descs
     }
@@ -663,7 +696,7 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
       const out: DomDesc[] = []
       for (const it of items) {
         const d = cachedDesc(it, () => {
-          const t = textDesc(it)!
+          const t = textDesc(it)
           return linked(it, t)
         })
         out.push(d)
@@ -671,11 +704,10 @@ function markItems(group: SceneGroup, type: string, options?: DomRenderOptions):
       return out
     }
     case 'path':
-    case 'shape':
-    case 'geoshape': {
+    case 'shape': {
       const out: DomDesc[] = []
       for (const it of items) {
-        out.push(cachedDesc(it, () => linked(it, { tag: 'path', attrs: pairs((w) => pathItemAttrs(it, w, type === 'geoshape' ? 'shape' : type)), clean: isClean(it) })))
+        out.push(cachedDesc(it, () => linked(it, { tag: 'path', attrs: pairs((w) => pathItemAttrs(it, w, type)), clean: isClean(it) })))
       }
       return out
     }
@@ -805,27 +837,28 @@ function nodeDescs(nodes: readonly SvgNode[], clips: ClipCollector, options: Dom
 }
 
 export function sceneToDomDesc(scene: SceneRoot, options: DomRenderOptions = {}): DomDesc {
+  // (under what the scene was evaluated under: the URL policy at the attribute sink, render.ts `writtenText`, and the text measurer)
+  return withSceneOutput(scene, () => describeScene(scene, options))
+}
+
+function describeScene(scene: SceneRoot, options: DomRenderOptions): DomDesc {
   CURRENT_GEN = (scene as unknown as { __itemGen?: number }).__itemGen
   describing = scene
   const { plotW, plotH } = scenePlotSize(scene)
   // Clip regions are registered while building; ids are content-addressed (svg-defs.ts).
-  const clips = new ClipCollector()
-  const frameClipId = scene.frameClip ? clips.id({ x: 0, y: 0, w: plotW, h: plotH }) : null
+  const clips = new ClipCollector(sceneDefIds(scene.defs))
+  const frameClipId = scene.frameClip ? clips.id(frameClipDef(scene, plotW, plotH)) : null
 
   const children: DomDesc[] = []
   if (scene.background) children.push({ tag: 'rect', attrs: pairs((w) => backgroundRectAttrs(scene, w)) })
   const marks: DomDesc[] = []
-  pushAll(marks, nodeDescs(childNodes(scene.items, plotW, plotH, { snaps: scene.__scales }, clips), clips, options))
+  pushAll(marks, nodeDescs(childNodes(scene.items, plotW, plotH, { snaps: scene.__scales, ...(scene.__locale ? { locale: scene.__locale } : {}) }, clips), clips, options))
   children.push(g('g', pairs((w) => viewGroupAttrs(scene, w)), [
-    g('g', [
-      ['class', 'mark-group role-frame root'],
-      ['role', 'graphics-object'],
-      ['aria-roledescription', 'group mark container'],
-    ], [
+    g('g', pairs(rootFrameGroupAttrs), [
       g('g', pairs((w) => groupItemAttrs(scene.frameX ?? 0, scene.frameY ?? 0, w, scene.frameAria)), [
         { tag: 'path', attrs: pairs((w) => frameAttrs(scene, w)) },
         g('g', frameClipId ? pairs((w) => clipRefAttrs(frameClipId, w)) : [], marks),
-        { tag: 'path', attrs: FOREGROUND.map((p) => [p[0], p[1]] as [string, string]) },
+        { tag: 'path', attrs: pairs(foregroundAttrs) },
       ]),
     ]),
   ]))
@@ -834,11 +867,7 @@ export function sceneToDomDesc(scene: SceneRoot, options: DomRenderOptions = {})
     const defsChildren: DomDesc[] = []
     for (const def of scene.defs ?? []) {
       if (def.kind === 'radial') {
-        defsChildren.push({
-          tag: 'pattern',
-          attrs: [['id', 'p_' + def.id], ['viewBox', '0,0,1,1'], ['width', '100%'], ['height', '100%'], ['preserveAspectRatio', 'xMidYMid slice']],
-          children: [{ tag: 'rect', attrs: [['width', '1'], ['height', '1'], ['fill', `url(#${def.id})`]] }],
-        })
+        defsChildren.push({ tag: 'pattern', attrs: pairs((w) => radialPatternAttrs(def, w)), children: [{ tag: 'rect', attrs: pairs((w) => radialPatternRectAttrs(def, w)) }] })
       }
       defsChildren.push({
         tag: def.kind === 'radial' ? 'radialGradient' : 'linearGradient',
@@ -863,10 +892,7 @@ export function sceneToDomDesc(scene: SceneRoot, options: DomRenderOptions = {})
 
 function createEl(desc: DomDesc, doc: Document): Element {
   const el = doc.createElementNS(SVG_NS, desc.tag)
-  for (const [k, v] of desc.attrs) {
-    if (k === 'xlink:href') el.setAttributeNS(XLINK_NS, 'xlink:href', v)
-    else el.setAttribute(k, v)
-  }
+  for (const [k, v] of desc.attrs) writeAttr(el, k, v)
   if (desc.text !== undefined) el.textContent = desc.text
   else for (const c of desc.children ?? []) el.appendChild(createEl(c, doc))
   LAST.set(el, desc)
@@ -880,8 +906,13 @@ function createEl(desc: DomDesc, doc: Document): Element {
  */
 const LAST = new WeakMap<Element, DomDesc>()
 
+/**
+ * The one place the patcher sets an attribute. Every name and value comes from render.ts's attribute lists through the sink that
+ * vets them (`writtenText`); as a last line, no event-handler attribute (`on...`) is ever set, whatever a descriptor says.
+ */
 function writeAttr(el: Element, k: string, v: string): void {
   if (k === 'xlink:href') el.setAttributeNS(XLINK_NS, 'xlink:href', v)
+  else if (k.charCodeAt(0) === 111 /* o */ && k.charCodeAt(1) === 110 /* n */) return
   else el.setAttribute(k, v)
 }
 
@@ -896,13 +927,14 @@ function syncAttrsFromDom(el: Element, desc: DomDesc): void {
   const keep = new Set<string>()
   for (const [k, v] of desc.attrs) {
     keep.add(k)
-    const cur = k === 'xlink:href' ? el.getAttributeNS(XLINK_NS, 'xlink:href') : el.getAttribute(k)
+    // (the namespaced accessors take the LOCAL name: 'href', not the qualified 'xlink:href', which no attribute has)
+    const cur = k === 'xlink:href' ? el.getAttributeNS(XLINK_NS, 'href') : el.getAttribute(k)
     if (cur !== v) writeAttr(el, k, v)
   }
   for (let i = el.attributes.length - 1; i >= 0; i--) {
     const a = el.attributes.item(i)!
     if (keep.has(a.name) || a.name === 'xmlns' || a.name === 'xmlns:xlink') continue
-    if (a.name === 'xlink:href') el.removeAttributeNS(XLINK_NS, 'xlink:href')
+    if (a.name === 'xlink:href') el.removeAttributeNS(XLINK_NS, 'href')
     else el.removeAttribute(a.name)
   }
 }
@@ -942,7 +974,8 @@ function patchEl(el: Element, desc: DomDesc): void {
   if (desc.text !== undefined) {
     if (last) {
       if (last.text !== desc.text) el.textContent = desc.text
-    } else if (el.textContent !== desc.text) {
+    } else if (el.childElementCount > 0 || el.textContent !== desc.text) {
+      // (an element from markup: a text it holds as elements -- tspans whose text happens to be the same -- is not this text)
       el.textContent = desc.text
     }
     return
@@ -953,6 +986,16 @@ function patchEl(el: Element, desc: DomDesc): void {
     el.textContent = ''
     for (const c of want) el.appendChild(createEl(c, el.ownerDocument))
     return
+  }
+  // An element this patcher never wrote (it came from markup: a string mount, SSR) holds what the markup held. Its children are
+  // all the descriptor describes, so anything else in it -- the text of a `<text>` that was one line and is now several -- goes
+  // (a patched element never holds any: `createEl` and the paths above write a text or elements, not both).
+  if (last === undefined) {
+    for (let node = el.firstChild; node !== null;) {
+      const next: ChildNode | null = node.nextSibling
+      if (node.nodeType !== 1) el.removeChild(node)
+      node = next
+    }
   }
   // Traverse children via sibling links, not index access: HTMLCollection
   // .item(i) is a linear scan in several DOM implementations (jsdom: ~19us per
@@ -1010,7 +1053,7 @@ function patchEl(el: Element, desc: DomDesc): void {
  * touching only changed attributes. First call vs. string-rendered DOM is
  * fine: the comparison is against live attribute values.
  */
-export function patchSceneDom(svg: Element, scene: SceneRoot, options: DomRenderOptions = {}): void {
+export function patchSceneDom(svg: HostElement, scene: SceneRoot, options: DomRenderOptions = {}): void {
   const root = sceneToDomDesc(scene, options)
   // The root <svg> may legitimately be a different element (e.g. re-created);
   // patch assumes matching tag. Guard for callers wiring the wrong node.
@@ -1021,8 +1064,8 @@ export function patchSceneDom(svg: Element, scene: SceneRoot, options: DomRender
 /** Build the full SVG element from a scene (mount path if you don't want the string). */
 export function renderSceneToDomElement(
   scene: SceneRoot,
-  doc: Document = globalThis.document,
+  doc: HostDocument = globalThis.document,
   options: DomRenderOptions = {},
-): Element {
+): HostElement {
   return createEl(sceneToDomDesc(scene, options), doc)
 }

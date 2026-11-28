@@ -5,14 +5,16 @@
  * UTC cases; the local-time case is derived from the zone the runner asked for.
  *
  * Run under several zones with `pnpm test:tz` (the repo used to run only under
- * TZ=UTC, which hides every zone-dependent bug). In the default run this file
- * simply runs in the machine's zone.
+ * TZ=UTC, which hides every zone-dependent bug). A run that names no zone is
+ * pinned to UTC, so a laptop in any zone passes; `pnpm test:tz` names its zones
+ * (scripts/lib/tz-zones.mjs) and each of them has a recorded table below. A zone
+ * with no recorded table fails: it would otherwise pass checking nothing.
+ * The tables are what `packages/conformance/scripts/gen-tz-hours.mjs` records.
  */
 import { describe, expect, it } from 'vitest'
 import { renderSpec } from './index.js'
+import { ZONES } from '../../../scripts/lib/tz-zones.mjs'
 
-// A run that names no zone is pinned to UTC (so a laptop in any zone passes);
-// `pnpm test:tz` names the zone explicitly and it is honoured.
 process.env.TZ ??= 'UTC'
 
 const H = 3600000
@@ -35,12 +37,14 @@ function axisLabels(scale: Record<string, unknown>, axis: Record<string, unknown
 }
 
 /** getTimezoneOffset() at the epoch (minutes) of the zones `pnpm test:tz` runs under. */
-const EPOCH_OFFSET: Record<string, number> = { UTC: 0, 'America/New_York': 300, 'Asia/Kolkata': -330 }
+const EPOCH_OFFSET: Record<string, number> = { UTC: 0, 'America/New_York': 300, 'Asia/Kolkata': -330, 'Australia/Lord_Howe': -600 }
 
 describe('time zone of the test run', () => {
   it('honours the zone the runner asked for', () => {
     const asked = process.env.TZ
-    if (asked && asked in EPOCH_OFFSET) expect(new Date(0).getTimezoneOffset()).toBe(EPOCH_OFFSET[asked])
+    expect(asked, 'a zone this file has no record of').toBeDefined()
+    expect(Object.keys(EPOCH_OFFSET)).toContain(asked)
+    expect(new Date(0).getTimezoneOffset()).toBe(EPOCH_OFFSET[asked!])
   })
 })
 
@@ -85,15 +89,17 @@ const LOCAL_HOURS: Record<string, string[]> = {
   UTC: ['1970', '12:30', '01 AM', '01:30', '02 AM', '02:30', '03 AM', '03:30', '04 AM', '04:30', '05 AM', '05:30', '06 AM'],
   'America/New_York': ['07 PM', '07:30', '08 PM', '08:30', '09 PM', '09:30', '10 PM', '10:30', '11 PM', '11:30', '1970', '12:30', '01 AM'],
   'Asia/Kolkata': ['05:30', '06 AM', '06:30', '07 AM', '07:30', '08 AM', '08:30', '09 AM', '09:30', '10 AM', '10:30', '11 AM', '11:30'],
+  'Australia/Lord_Howe': ['10 AM', '10:30', '11 AM', '11:30', '12 PM', '12:30', '01 PM', '01:30', '02 PM', '02:30', '03 PM', '03:30', '04 PM'],
 }
 
 describe('time scales format in the local zone', () => {
   const zone = process.env.TZ ?? 'UTC'
-  const known = LOCAL_HOURS[zone]
-  it.skipIf(!known)(`hour ticks in ${zone}`, () => {
-    expect(axisLabels({ type: 'time', domain: [0, 6 * H] })).toEqual(known)
+  it(`hour ticks in ${zone}`, () => {
+    expect(Object.keys(LOCAL_HOURS), 'a zone this file has no record of').toContain(zone)
+    expect(axisLabels({ type: 'time', domain: [0, 6 * H] })).toEqual(LOCAL_HOURS[zone])
   })
-  it('the recorded zones are all covered by pnpm test:tz', () => {
-    expect(Object.keys(LOCAL_HOURS)).toEqual(['UTC', 'America/New_York', 'Asia/Kolkata'])
+  it('the recorded zones are the zones pnpm test:tz runs, and UTC (the default run)', () => {
+    expect(Object.keys(LOCAL_HOURS)).toEqual(['UTC', ...ZONES])
+    expect(Object.keys(EPOCH_OFFSET)).toEqual(['UTC', ...ZONES])
   })
 })

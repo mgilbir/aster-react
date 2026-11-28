@@ -14,7 +14,7 @@ const q = (field: string, extra: Record<string, unknown> = {}) => ({ field, type
 const n = (field: string, extra: Record<string, unknown> = {}) => ({ field, type: 'nominal', ...extra })
 
 type Param = Record<string, any>
-type Variant = [name: string, param: Param, encoding?: Record<string, unknown>]
+type Variant = [name: string, param: Param]
 
 const sel = (select: Record<string, unknown> | string, extra: Record<string, unknown> = {}): Param => ({ name: 'sel', select, ...extra })
 
@@ -86,7 +86,7 @@ const INTERVAL: Variant[] = [
   ['interval bound scales, clear', sel({ type: 'interval', clear: 'dblclick' }, { bind: 'scales' })],
   ['interval bound scales, initial', sel({ type: 'interval', encodings: ['x'] }, { value: { x: [2, 4] }, bind: 'scales' })],
 ]
-const SCALES: Array<[string, Record<string, unknown>]> = [
+export const SCALES: Array<[string, Record<string, unknown>]> = [
   ['log', { type: 'log' }],
   ['pow', { type: 'pow', exponent: 2 }],
   ['sqrt', { type: 'sqrt' }],
@@ -101,20 +101,21 @@ const UNIT_ENCODING = (extra: Record<string, unknown> = {}) => ({
   color: { condition: { param: 'sel', field: 'c', type: 'nominal' }, value: 'grey' },
   ...extra,
 })
-const withEnc = (v: Variant, enc: Record<string, unknown> | undefined) => ({ ...UNIT_ENCODING(), ...(enc ?? {}) })
+/** The encoding of a selection's view: the colour condition, `enc` over it, and an x scale `sx` (every composer takes it, so an x scale type reaches every composition). */
+const unitEncoding = (enc: Record<string, unknown> | undefined, sx: Record<string, unknown> | undefined) => ({ ...UNIT_ENCODING(), ...(sx ? { x: q('x', { scale: sx }) } : {}), ...(enc ?? {}) })
 
 type Composer = (param: Param, resolve: string | undefined, mark?: string, enc?: Record<string, unknown>, scaleX?: Record<string, unknown>) => Record<string, any>
 const withResolve = (p: Param, resolve: string | undefined): Param => (resolve && typeof p.select === 'object' ? { ...p, select: { ...p.select, resolve } } : resolve ? { ...p, select: { type: p.select, resolve } } : p)
 const COMPOSERS: Array<[string, Composer]> = [
-  ['unit', (p, r, mark = 'point', enc, sx) => ({ data: DATA, params: [withResolve(p, r)], mark, encoding: { ...UNIT_ENCODING(), ...(sx ? { x: q('x', { scale: sx }) } : {}), ...(enc ?? {}) } })],
-  ['layer', (p, r, mark = 'point', enc) => ({ data: DATA, layer: [{ params: [withResolve(p, r)], mark, encoding: { ...UNIT_ENCODING(), ...(enc ?? {}) } }, { mark: 'line', encoding: { x: q('x'), y: q('y') } }] })],
-  ['layer, selection on the second', (p, r, mark = 'point', enc) => ({ data: DATA, layer: [{ mark: 'line', encoding: { x: q('x'), y: q('y') } }, { params: [withResolve(p, r)], mark, encoding: { ...UNIT_ENCODING(), ...(enc ?? {}) } }] })],
-  ['hconcat', (p, r, mark = 'point', enc) => ({ data: DATA, hconcat: [{ params: [withResolve(p, r)], mark, encoding: { ...UNIT_ENCODING(), ...(enc ?? {}) } }, { mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } }] })],
-  ['vconcat of two selections', (p, r, mark = 'point', enc) => ({ data: DATA, vconcat: [{ params: [withResolve(p, r)], mark, encoding: { ...UNIT_ENCODING(), ...(enc ?? {}) } }, { params: [withResolve({ ...p, name: 'sel' }, r)], mark, encoding: { ...UNIT_ENCODING(), ...(enc ?? {}), y: q('v') } }] })],
-  ['column facet', (p, r, mark = 'point', enc) => ({ data: DATA, facet: { column: n('g') }, spec: { params: [withResolve(p, r)], mark, encoding: { ...UNIT_ENCODING(), ...(enc ?? {}) } } })],
-  ['row and column facet', (p, r, mark = 'point', enc) => ({ data: DATA, facet: { row: n('g'), column: n('c') }, spec: { params: [withResolve(p, r)], mark, encoding: { ...UNIT_ENCODING(), ...(enc ?? {}) } } })],
-  ['repeat', (p, r, mark = 'point', enc) => ({ data: DATA, repeat: { column: ['y', 'v'] }, spec: { params: [withResolve(p, r)], mark, encoding: { ...UNIT_ENCODING(), y: q('y', { field: { repeat: 'column' } } as never), ...(enc ?? {}) } } })],
-  ['facet of layers', (p, r, mark = 'point', enc) => ({ data: DATA, facet: { column: n('g') }, spec: { layer: [{ params: [withResolve(p, r)], mark, encoding: { ...UNIT_ENCODING(), ...(enc ?? {}) } }, { mark: 'rule', encoding: { y: q('y', { aggregate: 'mean' }) } }] } })],
+  ['unit', (p, r, mark = 'point', enc, sx) => ({ data: DATA, params: [withResolve(p, r)], mark, encoding: unitEncoding(enc, sx) })],
+  ['layer', (p, r, mark = 'point', enc, sx) => ({ data: DATA, layer: [{ params: [withResolve(p, r)], mark, encoding: { ...unitEncoding(enc, sx) } }, { mark: 'line', encoding: { x: q('x'), y: q('y') } }] })],
+  ['layer, selection on the second', (p, r, mark = 'point', enc, sx) => ({ data: DATA, layer: [{ mark: 'line', encoding: { x: q('x'), y: q('y') } }, { params: [withResolve(p, r)], mark, encoding: { ...unitEncoding(enc, sx) } }] })],
+  ['hconcat', (p, r, mark = 'point', enc, sx) => ({ data: DATA, hconcat: [{ params: [withResolve(p, r)], mark, encoding: { ...unitEncoding(enc, sx) } }, { mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'sum' }) } }] })],
+  ['vconcat of two selections', (p, r, mark = 'point', enc, sx) => ({ data: DATA, vconcat: [{ params: [withResolve(p, r)], mark, encoding: { ...unitEncoding(enc, sx) } }, { params: [withResolve({ ...p, name: 'sel' }, r)], mark, encoding: { ...unitEncoding(enc, sx), y: q('v') } }] })],
+  ['column facet', (p, r, mark = 'point', enc, sx) => ({ data: DATA, facet: { column: n('g') }, spec: { params: [withResolve(p, r)], mark, encoding: { ...unitEncoding(enc, sx) } } })],
+  ['row and column facet', (p, r, mark = 'point', enc, sx) => ({ data: DATA, facet: { row: n('g'), column: n('c') }, spec: { params: [withResolve(p, r)], mark, encoding: { ...unitEncoding(enc, sx) } } })],
+  ['repeat', (p, r, mark = 'point', enc, sx) => ({ data: DATA, repeat: { column: ['y', 'v'] }, spec: { params: [withResolve(p, r)], mark, encoding: { ...unitEncoding(enc, sx), y: q('y', { field: { repeat: 'column' } } as never), ...(enc ?? {}) } } })],
+  ['facet of layers', (p, r, mark = 'point', enc, sx) => ({ data: DATA, facet: { column: n('g') }, spec: { layer: [{ params: [withResolve(p, r)], mark, encoding: { ...unitEncoding(enc, sx) } }, { mark: 'rule', encoding: { y: q('y', { aggregate: 'mean' }) } }] } })],
 ]
 
 
@@ -129,16 +130,16 @@ function group(title: string, body: (add: (name: string, spec: Record<string, an
 
 group('@aster-charts/vl == vega-lite: point selections, every option x composition', (add) => {
   for (const [cname, compose] of COMPOSERS) {
-    for (const [vname, param, enc] of POINT) {
-      add(`${vname} in a ${cname}`, compose(param, undefined, 'point', enc))
+    for (const [vname, param] of POINT) {
+      add(`${vname} in a ${cname}`, compose(param, undefined, 'point'))
     }
   }
 })
 
 group('@aster-charts/vl == vega-lite: interval selections, every option x composition', (add) => {
   for (const [cname, compose] of COMPOSERS) {
-    for (const [vname, param, enc] of INTERVAL) {
-      add(`${vname} in a ${cname}`, compose(param, undefined, 'point', enc))
+    for (const [vname, param] of INTERVAL) {
+      add(`${vname} in a ${cname}`, compose(param, undefined, 'point'))
     }
   }
 })
@@ -153,8 +154,8 @@ group('@aster-charts/vl == vega-lite: resolve x type x composition', (add) => {
     ['interval x', sel({ type: 'interval', encodings: ['x'] })],
   ]
   for (const [cname, compose] of COMPOSERS) {
-    for (const [vname, param, enc] of CASES) {
-      for (const resolve of RESOLVES) add(`${vname}, resolve ${resolve}, in a ${cname}`, compose(param, resolve, 'point', enc))
+    for (const [vname, param] of CASES) {
+      for (const resolve of RESOLVES) add(`${vname}, resolve ${resolve}, in a ${cname}`, compose(param, resolve, 'point'))
     }
   }
 })
@@ -222,4 +223,41 @@ group('@aster-charts/vl == vega-lite: a selection used by a filter, an opacity a
     ['a top-level config.selection', { data: DATA, config: { selection: { interval: { mark: { fill: 'red' }, clear: false }, point: { toggle: false, on: 'pointerover' } } }, params: [P(), { name: 'pt', select: 'point' }], mark: 'point', encoding: { x: q('x'), y: q('y'), color: { condition: { param: 'pt', value: 'red' }, value: 'grey' } } }],
   ]
   for (const [name, spec] of CASES) add(name, spec)
+})
+
+group('@aster-charts/vl == vega-lite: a selection projected over an escaped field (a column whose name holds a dot, a bracket, an escape)', (add) => {
+  // (`c\.d` is the column `c.d`, `x\[0\]` the column `x[0]`, `g\h` the column `gh`: one column of the row each, as vega-lite reads them; C83)
+  const rows = DATA.values.map((r) => ({ 'c.d': r.c, 'x[0]': r.x, gh: r.g, y: r.y }))
+  const data = { values: rows }
+  const C = 'c\\.d', X = 'x\\[0\\]', G = 'g\\h'
+  const CASES: Array<[string, Record<string, any>]> = [
+    ['point fields', { data, params: [sel({ type: 'point', fields: [C] })], mark: 'point', encoding: { x: q(X), y: q('y'), color: { condition: { param: 'sel', field: C, type: 'nominal' }, value: 'grey' } } }],
+    ['point two fields', { data, params: [sel({ type: 'point', fields: [C, G] })], mark: 'point', encoding: { x: q(X), y: q('y'), color: { condition: { param: 'sel', value: 'red' }, value: 'grey' } } }],
+    ['point encodings x', { data, params: [sel({ type: 'point', encodings: ['x'] })], mark: 'point', encoding: { x: q(X), y: q('y'), color: { condition: { param: 'sel', value: 'red' }, value: 'grey' } } }],
+    ['point encodings color, bound legend', { data, params: [sel({ type: 'point', encodings: ['color'] }, { bind: 'legend' })], mark: 'point', encoding: { x: q(X), y: q('y'), color: n(C), opacity: { condition: { param: 'sel', value: 1 }, value: 0.2 } } }],
+    ['point fields, bound legend', { data, params: [sel({ type: 'point', fields: [C] }, { bind: 'legend' })], mark: 'point', encoding: { x: q(X), y: q('y'), color: n(C), opacity: { condition: { param: 'sel', value: 1 }, value: 0.2 } } }],
+    ['point bound select', { data, params: [sel({ type: 'point', fields: [C] }, { bind: { input: 'select', options: ['A', 'B', 'C'] } })], mark: 'point', encoding: { x: q(X), y: q('y'), color: { condition: { param: 'sel', value: 'red' }, value: 'grey' } } }],
+    ['point initial values', { data, params: [sel({ type: 'point', fields: [C] }, { value: [{ [C]: 'A' }] })], mark: 'point', encoding: { x: q(X), y: q('y'), color: { condition: { param: 'sel', value: 'red' }, value: 'grey' } } }],
+    ['interval', { data, params: [sel('interval')], mark: 'point', encoding: { x: q(X), y: q('y'), color: { condition: { param: 'sel', value: 'red' }, value: 'grey' } } }],
+    ['interval bound to the scales', { data, params: [sel('interval', { bind: 'scales' })], mark: 'point', encoding: { x: q(X), y: q('y') } }],
+    ['interval, initial value', { data, params: [sel({ type: 'interval', encodings: ['x'] }, { value: { x: [2, 4] } })], mark: 'point', encoding: { x: q(X), y: q('y'), color: { condition: { param: 'sel', value: 'red' }, value: 'grey' } } }],
+    ['a filter and a scale domain in another view', { data, vconcat: [{ params: [sel({ type: 'interval', encodings: ['x'] })], mark: 'point', encoding: { x: q(X), y: q('y') } }, { transform: [{ filter: { param: 'sel' } }], mark: 'point', encoding: { x: q(X, { scale: { domain: { param: 'sel' } } }), y: q('y') } }] }],
+  ]
+  for (const [name, spec] of CASES) add(name, spec)
+})
+
+// The selections over fields whose names are paths, spaced or escaped (C357): vega-lite projects each as written.
+group('@aster-charts/vl == vega-lite: selections over nested, spaced and escaped field names', (add) => {
+  const NESTED = { values: DATA.values.map((d) => ({ ...d, o: { c: d.c, v: d.v, x: d.x }, 'a.b': d.v, 'my c': d.c })) }
+  const view = (param: Param, encoding: Record<string, unknown>): Record<string, any> => ({ data: NESTED, params: [param], mark: 'point', encoding: { color: { condition: { param: 'sel', field: 'c', type: 'nominal' }, value: 'grey' }, ...encoding } })
+  add('a point selection over a nested field', view(sel({ type: 'point', fields: ['o.c'] }), { x: q('x'), y: q('y') }))
+  add('a point selection over a spaced field', view(sel({ type: 'point', fields: ['my c'] }), { x: q('x'), y: q('y') }))
+  add('a point selection over an escaped field', view(sel({ type: 'point', fields: ['a\\.b'] }), { x: q('x'), y: q('y') }))
+  add('a point selection over the encoding of a nested field', view(sel({ type: 'point', encodings: ['x'] }), { x: q('o.x'), y: q('y') }))
+  add('an interval over a nested x', view(sel({ type: 'interval', encodings: ['x'] }), { x: q('o.x'), y: q('y') }))
+  add('an interval over a nested x and y', view(sel({ type: 'interval' }), { x: q('o.x'), y: q('o.v') }))
+  add('an interval over an escaped y', view(sel({ type: 'interval', encodings: ['y'] }), { x: q('x'), y: q('a\\.b') }))
+  add('bound scales over a nested x', view(sel({ type: 'interval' }, { bind: 'scales' }), { x: q('o.x'), y: q('y') }))
+  add('bound scales over an escaped y', view(sel({ type: 'interval' }, { bind: 'scales' }), { x: q('x'), y: q('a\\.b') }))
+  add('a point selection by nested fields, resolve union, in a facet', { data: NESTED, facet: { column: n('g') }, spec: { params: [sel({ type: 'point', fields: ['o.c'], resolve: 'union' } as never)], mark: 'point', encoding: { x: q('x'), y: q('y'), color: { condition: { param: 'sel', field: 'c', type: 'nominal' }, value: 'grey' } } } })
 })

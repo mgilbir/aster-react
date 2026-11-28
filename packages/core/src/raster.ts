@@ -26,7 +26,8 @@
 import { color as parseColor } from './color.js'
 import type { CanvasLike, GradientLike } from './canvas.js'
 import { arcConics, conicQuads, pathEdges, polygonEdges, type Edge, type Pt, type Sub } from './raster-edges.js'
-import { strokePolygons } from './raster-stroke.js'
+import { strokeHairlines, strokePolygons } from './raster-stroke.js'
+import { allot, meterTick } from './limits.js'
 
 interface State {
   m: [number, number, number, number, number, number]
@@ -57,6 +58,61 @@ function paintAlpha(style: unknown): number {
   return Number.isFinite(o) ? o : 1
 }
 
+/**
+ * Sort the first `m` crossings (x, with the winding direction riding along, and the edge that made it) by x, stably. The edges
+ * stay in the order of the last sub-row's crossings, and crossings move little from one sub-row to the next, so an insertion sort
+ * does it in about m steps with no comparator call or allocation. A drawing whose edges cross each other over and over (a dense
+ * polygon) would make that quadratic: past a budget of moves it is the engine's own sort instead.
+ */
+export function sortCrossings(x: Float64Array, wd: Int8Array, ed: Edge[], m: number): void {
+  let budget = 4 * m + 64
+  // bounded: one pass over the m crossings, each moving at most as far as the budget allows
+  for (let i = 1; i < m; i++) {
+    const xi = x[i]!
+    const wi = wd[i]!
+    const ei = ed[i]!
+    let j = i - 1
+    // bounded: j counts down from i - 1, and the budget ends it
+    while (j >= 0 && x[j]! > xi) {
+      if (--budget < 0) { sortWhole(x, wd, ed, m, xi, wi, ei, j); return }
+      x[j + 1] = x[j]!; wd[j + 1] = wd[j]!; ed[j + 1] = ed[j]!
+      j--
+    }
+    x[j + 1] = xi
+    wd[j + 1] = wi
+    ed[j + 1] = ei
+  }
+}
+
+/** The rest of {@link sortCrossings} when its moves ran out: the crossing in hand is put down where it stopped, then everything is sorted. */
+function sortWhole(x: Float64Array, wd: Int8Array, ed: Edge[], m: number, xi: number, wi: number, ei: Edge, j: number): void {
+  x[j + 1] = xi
+  wd[j + 1] = wi
+  ed[j + 1] = ei
+  const order = Array.from({ length: m }, (_, i) => i).sort((p, q) => x[p]! - x[q]!)
+  const sx = order.map((i) => x[i]!)
+  const sw = order.map((i) => wd[i]!)
+  const se = order.map((i) => ed[i]!)
+  // bounded: m crossings, at most as many as the edges (the sub-row's tick has them as its cost)
+  for (let i = 0; i < m; i++) { x[i] = sx[i]!; wd[i] = sw[i]!; ed[i] = se[i]! }
+}
+
+/**
+ * The coverage a stroke of `width` under the transform `m` is drawn with when Skia draws it as a hairline (every stroke whose pen
+ * is a pixel or less across, both ways: SkDrawTreatAsHairline), else 0. A hairline is one pixel wide whatever the pen's width, and
+ * the alpha it is drawn with is scaled by this.
+ */
+function hairlineCoverage(width: number, m: readonly number[]): number {
+  const len = (x: number, y: number): number => {
+    const ax = Math.abs(x)
+    const ay = Math.abs(y)
+    return Math.max(ax, ay) + Math.min(ax, ay) / 2
+  }
+  const l0 = len(m[0]! * width, m[1]! * width)
+  const l1 = len(m[2]! * width, m[3]! * width)
+  return l0 <= 1 && l1 <= 1 ? (l0 + l1) / 2 : 0
+}
+
 export class AlphaCanvas implements CanvasLike {
   readonly width: number
   readonly height: number
@@ -84,11 +140,14 @@ export class AlphaCanvas implements CanvasLike {
   private cur: Sub | null = null
   private row: Float32Array
   private sum: Int32Array
+  private crossX = new Float64Array(0)
+  private crossW = new Int8Array(0)
 
   constructor(width: number, height: number) {
     this.width = Math.max(0, Math.floor(width))
     this.height = Math.max(0, Math.floor(height))
-    this.alpha = new Uint8Array(this.width * this.height)
+    // the size is a transform's (`label` / `wordcloud` `size`, from the spec): bounded before a byte of it is allocated
+    this.alpha = new Uint8Array(allot('pixels', this.width * this.height, 'raster canvas'))
     this.row = new Float32Array(this.width + 1)
     this.sum = new Int32Array(this.width + 1)
   }
@@ -238,6 +297,7 @@ export class AlphaCanvas implements CanvasLike {
     const m = this.m
     const tol = 0.25 / Math.max(1e-6, radius * Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])))
     for (const c of conics) {
+      // bounded: at most 4 quarter arcs of at most 32 quads each (conicQuads stops at 5 halvings)
       for (const q of conicQuads(c, tol)) {
         const [c1x, c1y] = this.pt(x + radius * q[0], y + radius * q[1])
         const [ex, ey] = this.pt(x + radius * q[2], y + radius * q[3])
@@ -268,15 +328,79 @@ export class AlphaCanvas implements CanvasLike {
     const m = this.m
     const scale = Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2]))
     if (!(scale > 0)) return
-    const polys = strokePolygons(this.subs, {
+    const pen = {
       half: (this.lineWidth * scale) / 2,
       cap: this.lineCap,
       join: this.lineJoin,
       miterLimit: this.miterLimit,
       dash: this.dash.map((d) => d * scale),
       dashOffset: this.lineDashOffset * scale,
-    })
-    this.scan(polygonEdges(polys), 'nonzero', a)
+      canvas: [0, 0, this.width, this.height] as [number, number, number, number],
+    }
+    // a pen of a pixel or less is a hairline to Skia: a line one pixel thick whose alpha is scaled by the pen's width (SkDraw)
+    const wide = hairlineCoverage(this.lineWidth, m)
+    if (wide > 0) {
+      const hairs = strokeHairlines(this.subs, pen)
+      // (the colour's alpha as 8 bits, then scaled by the coverage and cut, as the paint of a hairline is)
+      const alpha = Math.min(255, Math.max(0, Math.floor(Math.round(a * 255) * wide + 1e-9)))
+      if (alpha === 0) return
+      const lines = hairs.lines
+      // bounded: the segments the stroker made (it ticks as it makes them)
+      for (let i = 0; i < lines.length; i += 4) this.hairline(lines[i]!, lines[i + 1]!, lines[i + 2]!, lines[i + 3]!, alpha)
+      for (const cap of hairs.caps) this.scan(polygonEdges([cap]), 'nonzero', alpha / 255)
+      return
+    }
+    this.scan(polygonEdges(strokePolygons(this.subs, pen)), 'nonzero', a)
+  }
+
+  /**
+   * One segment as Skia's anti-aliased hairline draws it (SkScan_Antihair): along the axis it runs more along, every pixel of the
+   * line takes the position of the line across it at its centre, in 1/64ths, and splits the pixel's share of the line's length
+   * between the two pixels the one-pixel-thick line covers there, the nearer row or column more. The ends count the part of their
+   * pixel the line covers. `alpha` is the paint's, 0..255; each pixel is blended source-over.
+   */
+  private hairline(x0: number, y0: number, x1: number, y1: number, alpha: number): void {
+    let X0 = Math.trunc(x0 * 64)
+    let Y0 = Math.trunc(y0 * 64)
+    let X1 = Math.trunc(x1 * 64)
+    let Y1 = Math.trunc(y1 * 64)
+    if (![X0, Y0, X1, Y1].every(Number.isFinite)) return
+    const across = Math.abs(X1 - X0) <= Math.abs(Y1 - Y0) // the segment runs more along y: pixels are walked down it
+    if (across) { [X0, Y0] = [Y0, X0]; [X1, Y1] = [Y1, X1] }
+    if (X0 > X1) { [X0, X1] = [X1, X0]; [Y0, Y1] = [Y1, Y0] }
+    const major = across ? this.height : this.width // the extent along the walked axis
+    const minor = across ? this.width : this.height
+    const first = Math.max(0, Math.floor(X0 / 64)) // (not a shift: the coordinates may be past 32 bits)
+    const stop = Math.min(major, Math.ceil(X1 / 64))
+    if (!(stop > first)) return
+    meterTick('raster', stop - first)
+    // 16.16 fixed point as the scan walks it: the slope per pixel, and the line's position at the centre of the first pixel
+    const slope = X1 === X0 ? 0 : Math.trunc(((Y1 - Y0) * 65536) / (X1 - X0))
+    const start = Math.floor(X0 / 64)
+    const fstart = Y0 * 1024 + (Y0 === Y1 ? 0 : Math.floor((slope * (32 - (((X0 % 64) + 64) % 64)) + 32) / 64))
+    // (a pixel's share of the line, 0..255, scaled by the paint's alpha the way a blitter scales a coverage: (c + 1) of 256ths)
+    const alphaOf = (c: number): number => ((c + 1) * alpha) >> 8
+    // bounded: pixels of one row or column of the canvas, ticked for above
+    for (let i = first; i < stop; i++) {
+      const lo = Math.max(X0, i * 64)
+      const hi = Math.min(X1, (i + 1) * 64)
+      const share = X1 === X0 ? 64 : hi - lo // 1/64ths of the pixel the segment spans
+      if (share <= 0) continue
+      const at = fstart + slope * (i - start) + 32768 // the line's position at the pixel's centre, a whole number a boundary
+      const near = Math.floor(at / 65536)
+      const a8 = Math.floor(at / 256) & 255
+      const cLow = (a8 * share) >> 6
+      const cHigh = ((255 - a8) * share) >> 6
+      if (near >= 0 && near < minor) this.blend(across ? near : i, across ? i : near, alphaOf(cLow))
+      if (near - 1 >= 0 && near - 1 < minor) this.blend(across ? near - 1 : i, across ? i : near - 1, alphaOf(cHigh))
+    }
+  }
+
+  private blend(x: number, y: number, srcA: number): void {
+    if (srcA === 0) return
+    const k = y * this.width + x
+    const dst = this.alpha[k]!
+    this.alpha[k] = srcA + ((dst * (256 - srcA)) >> 8)
   }
 
   /** Text is a box from its advance width and font size (glyph coverage is not modelled); `fillText` and `strokeText` draw it. */
@@ -321,31 +445,40 @@ export class AlphaCanvas implements CanvasLike {
     const sum = this.sum
     let next = 0
     let active: Edge[] = []
-    const xs: Array<{ x: number; w: number }> = []
+    // the crossings of one sub-row, x and winding direction side by side (a sub-row is at most as wide as the edges are many)
+    if (this.crossX.length < edges.length) { this.crossX = new Float64Array(edges.length); this.crossW = new Int8Array(edges.length) }
+    const crossX = this.crossX
+    const crossW = this.crossW
     for (let row = rowStart; row <= rowEnd; row++) {
+      meterTick('raster', w)
       let lo = w
       let hi = -1
       for (let k = 0; k < SUBY; k++) {
         const y = row + (k + 0.5) / SUBY
+        meterTick('raster', active.length + 1)
+        // bounded: each edge enters the active list once over the whole scan
         while (next < edges.length && edges[next]!.y0 <= y) active.push(edges[next++]!)
         if (active.length) {
           let kept = 0
-          xs.length = 0
+          let m = 0
+          // bounded: the active edges, which the sub-row's tick above has as its cost
           for (let i = 0; i < active.length; i++) {
             const e = active[i]!
             if (e.y1 <= y) continue
             active[kept++] = e
-            xs.push({ x: e.x0 + (y - e.y0) * e.slope, w: e.dir })
+            crossX[m] = e.x0 + (y - e.y0) * e.slope
+            crossW[m++] = e.dir
           }
           active.length = kept
-          if (xs.length >= 2) {
-            xs.sort((p, q) => p.x - q.x)
+          if (m >= 2) {
+            sortCrossings(crossX, crossW, active, m)
             let wind = 0
-            for (let i = 0; i < xs.length - 1; i++) {
-              wind = rule === 'evenodd' ? wind ^ 1 : wind + xs[i]!.w
+            // bounded: the crossings of this sub-row, one per active edge ticked for above
+            for (let i = 0; i < m - 1; i++) {
+              wind = rule === 'evenodd' ? wind ^ 1 : wind + crossW[i]!
               if (wind === 0) continue
-              const xa = Math.max(0, xs[i]!.x)
-              const xb = Math.min(w, xs[i + 1]!.x)
+              const xa = Math.max(0, crossX[i]!)
+              const xb = Math.min(w, crossX[i + 1]!)
               if (!(xb > xa)) continue
               const ia = Math.floor(xa)
               const ib = Math.min(w - 1, Math.floor(xb))
@@ -354,6 +487,7 @@ export class AlphaCanvas implements CanvasLike {
               if (ia === ib) cov[ia] = cov[ia]! + (xb - xa) * PER_SUB
               else {
                 cov[ia] = cov[ia]! + (ia + 1 - xa) * PER_SUB
+                // bounded: a run of pixels of this row: at most the canvas width the row ticked for
                 for (let px = ia + 1; px < ib; px++) cov[px] = cov[px]! + PER_SUB
                 if (xb > ib) cov[ib] = cov[ib]! + (xb - ib) * PER_SUB
               }
@@ -362,6 +496,7 @@ export class AlphaCanvas implements CanvasLike {
         }
         // the end of a quarter of the row: analytic coverage is made a quarter row at a time and each is cut to whole 1/256ths
         if ((k + 1) % QUARTER === 0) {
+          // bounded: the pixels of this row the edges reached: at most the canvas width the row ticked for
           for (let px = lo; px <= hi; px++) {
             const c = cov[px]!
             if (c === 0) continue
@@ -371,6 +506,7 @@ export class AlphaCanvas implements CanvasLike {
         }
       }
       const base = row * w
+      // bounded: the pixels of this row the edges reached: at most the canvas width the row ticked for
       for (let px = lo; px <= hi; px++) {
         const aa = Math.min(255, sum[px]!)
         sum[px] = 0

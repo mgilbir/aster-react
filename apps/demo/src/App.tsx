@@ -21,12 +21,11 @@ import {
   CompiledRadarSpec,
 } from './compiled'
 import { compile } from '@aster-charts/vl'
-import { loadSpecData } from '@aster-charts/core/load'
+import { allowOrigins, loadSpecData } from '@aster-charts/core/load'
 // The playground takes any spec, so it loads the opt-in addons an app would (rare transforms such as pie, and maps).
 import '@aster-charts/core/transforms'
 import '@aster-charts/core/geo'
 import { Chart, ChartStream, type ChartStreamHandle } from '@aster-charts/react'
-import type { SelectionInterval } from '@aster-charts/react'
 import {
   LineSpec,
   ParamBoundSpec,
@@ -94,6 +93,16 @@ function specSize(spec: Record<string, unknown>): { width?: number; height?: num
 // ---------------------------------------------------------------------------
 
 /** A gallery card: the same spec input rendered by both engines side by side. */
+/**
+ * A boundary for the Aster column. `<Chart>` suspends once when its spec needs a part of the engine or an add-on that the app has not
+ * bundled (a legend, a time scale, an aggregate...: ADR 0011), so every `<Chart>` of this page sits under one; without a boundary the
+ * new root commits only when the chart is ready. (`import '@aster-charts/react/all'` would make the first paint synchronous, for the
+ * price of the whole engine in the bundle.)
+ */
+function AsterSuspense({ children }: { children: React.ReactNode }) {
+  return <React.Suspense fallback={<div className="vega-loading" aria-busy="true">loading aster…</div>}>{children}</React.Suspense>
+}
+
 function CompareCard({ title, desc, spec, aster, wide }: {
   title: string
   desc: string
@@ -119,7 +128,7 @@ function CompareCard({ title, desc, spec, aster, wide }: {
         </div>
         <div className="pane">
           <div className="pane-head"><span className="badge aster">aster · react</span></div>
-          <div className="chart-container">{aster}</div>
+          <div className="chart-container"><AsterSuspense>{aster}</AsterSuspense></div>
         </div>
       </div>
     </div>
@@ -210,6 +219,7 @@ function StreamingCompare() {
     <div className="pane">
       <div className="pane-head"><span className={`badge ${renderer === 'canvas' ? 'aster' : 'oracle'}`}>{title}</span></div>
       <div className="chart-container">
+        <AsterSuspense>
         <ChartStream
           key={runId}
           ref={ref}
@@ -220,6 +230,7 @@ function StreamingCompare() {
           a11y={false}
           streamOptions={{ initial: { data: { table: initial } }, flushPolicy: 'raf', autoFlush: true }}
         />
+        </AsterSuspense>
       </div>
     </div>
   )
@@ -288,6 +299,9 @@ function resolveDataUrls<T extends Record<string, unknown>>(spec: T): T {
   return out
 }
 
+/** The demo loads data from the official data hosts only (loadSpecData needs an explicit URL policy). */
+const DATA_POLICY = allowOrigins(VEGA_DATA_BASES)
+
 /** Try the second official data host when the first returns a 404. */
 const dataFetch: typeof fetch = async (input, init) => {
   const first = await fetch(input, init)
@@ -319,7 +333,7 @@ function SpecPlayground() {
         // are fetched + inlined for the aster column (the oracle fetches its own).
         const resolved = resolveDataUrls(parsed)
         let inlined = resolved
-        try { inlined = await loadSpecData(structuredClone(resolved), { fetch: dataFetch }) } catch { /* bad URL: surface via the oracle/render error paths */ }
+        try { inlined = await loadSpecData(structuredClone(resolved), { fetch: dataFetch, allow: DATA_POLICY }) } catch { /* bad URL: surface via the oracle/render error paths */ }
         if (cancelled) return
         setVl(resolved)
         setVg(isVl ? (compile(inlined as never) as Record<string, unknown>) : inlined)
@@ -357,6 +371,7 @@ function SpecPlayground() {
               <div className="pane-head"><span className="badge aster">aster · react</span></div>
               <div className="chart-container">
                 {vg && (
+                  <AsterSuspense>
                   <Chart
                     spec={vg}
                     // the spec's own size: a forced size would override a spec that sizes itself through its
@@ -366,6 +381,7 @@ function SpecPlayground() {
                     tooltip
                     ariaLabel="Playground — aster"
                   />
+                  </AsterSuspense>
                 )}
               </div>
             </div>
@@ -382,19 +398,28 @@ function SpecPlayground() {
 // ---------------------------------------------------------------------------
 
 function LiveDataChanges() {
-  const [data, setData] = React.useState(() => Array.from({ length: 60 }, (_, i) => ({ x: i, y: 50 + Math.round(40 * Math.sin(i / 5)) })))
-  const seed = React.useRef(0)
+  // The rows and the index of the one that changed are one state, written together: `dataChanges` is a hint about the rows handed over
+  // with it, so it is made where the rows are (never read from a ref during a render).
+  const [state, setState] = React.useState(() => ({
+    data: Array.from({ length: 60 }, (_, i) => ({ x: i, y: 50 + Math.round(40 * Math.sin(i / 5)) })),
+    changed: null as number | null,
+    tick: 0,
+  }))
   React.useEffect(() => {
     const id = window.setInterval(() => {
-      seed.current++
-      const changed = (seed.current * 7) % data.length
-      setData((prev) => prev.map((r, i) => (i === changed ? { ...r, y: 10 + Math.round(80 * Math.random()) } : r)))
+      setState((prev) => {
+        const tick = prev.tick + 1
+        const changed = (tick * 7) % prev.data.length
+        return { data: prev.data.map((r, i) => (i === changed ? { ...r, y: 10 + Math.round(80 * Math.random()) } : r)), changed, tick }
+      })
     }, 700)
     return () => window.clearInterval(id)
-  }, [data.length])
+  }, [])
   return (
     <div className="chart-container">
-      <Chart spec={CompiledLineSpec} width={480} height={260} data={{ table: data }} dataChanges={{ table: [(seed.current * 7) % data.length] }} ariaLabel="Live incremental line chart" />
+      <AsterSuspense>
+        <Chart spec={CompiledLineSpec} width={480} height={260} data={{ table: state.data }} {...(state.changed != null ? { dataChanges: { table: [state.changed] } } : {})} ariaLabel="Live incremental line chart" />
+      </AsterSuspense>
     </div>
   )
 }
@@ -402,7 +427,7 @@ function LiveDataChanges() {
 function TooltipDemo() {
   return (
     <div className="chart-container">
-      <Chart spec={CompiledTooltipBarSpec} width={440} height={300} tooltip ariaLabel="Bars with tooltips" />
+      <AsterSuspense><Chart spec={CompiledTooltipBarSpec} width={440} height={300} tooltip ariaLabel="Bars with tooltips" /></AsterSuspense>
     </div>
   )
 }
@@ -415,7 +440,7 @@ function TooltipDemo() {
 function ResponsiveLine() {
   return (
     <div style={{ width: '100%', height: 400 }}>
-      <Chart spec={CompiledLineSpec} ariaLabel="Responsive line chart" />
+      <AsterSuspense><Chart spec={CompiledLineSpec} ariaLabel="Responsive line chart" /></AsterSuspense>
     </div>
   )
 }
@@ -423,31 +448,22 @@ function ResponsiveLine() {
 function BoundParam() {
   // The compiled spec carries `shift.bind`; <Chart> renders the range control
   // itself (same as Vega's bind UI), so no manual slider is needed here.
-  return <Chart spec={CompiledParamBoundSpec} ariaLabel="Shifted line chart" width={400} height={300} />
+  return <AsterSuspense><Chart spec={CompiledParamBoundSpec} ariaLabel="Shifted line chart" width={400} height={300} /></AsterSuspense>
 }
 
 function InteractiveBrush() {
-  const [brush, setBrush] = React.useState<SelectionInterval | null>(null)
-  const onSelect = React.useCallback((interval: SelectionInterval | null) => setBrush(interval), [])
-  const clear = React.useCallback(() => setBrush(null), [])
+  // The brush is the spec's own interval parameter, drawn and kept by the chart (its signals drive the spec's marks). The older `brush` /
+  // `onSelect` props are a second, unrelated way to persist a rectangle and do not talk to a spec's parameter (docs/INTERACTION.md).
   return (
-    <>
-      <div className="controls">
-        <button onClick={clear}>Clear brush</button>
-      </div>
-      {brush && (
-        <div className="selection-info">
-          x: {brush.x?.map((v: number) => v.toFixed(1)).join(', ')} / y: {brush.y?.map((v: number) => v.toFixed(1)).join(', ')}
-        </div>
-      )}
-      <Chart spec={CompiledInteractiveBrushSpec} ariaLabel="Brush scatter" width={400} height={300} onSelect={onSelect} brush={brush} />
-    </>
+    <AsterSuspense>
+      <Chart spec={CompiledInteractiveBrushSpec} ariaLabel="Brush scatter" width={400} height={300} />
+    </AsterSuspense>
   )
 }
 
 const plain = (spec: Record<string, unknown>, width: number, height: number, label: string, style?: React.CSSProperties) => (
   <div style={style}>
-    <Chart spec={spec} ariaLabel={label} width={width} height={height} />
+    <AsterSuspense><Chart spec={spec} ariaLabel={label} width={width} height={height} /></AsterSuspense>
   </div>
 )
 
@@ -557,11 +573,11 @@ export function App() {
           separately; aster paints first.
         </p>
         <div className="hero-stats">
-          <div><b>1,055/1,055</b> conformance specs vs the oracle</div>
-          <div><b>720/720</b> official Vega and Vega-Lite gallery examples</div>
-          <div><b>205 kB</b> gzip React chart (no vega runtime)</div>
-          <div><b>16.7 ms</b> streaming frames @ 100k canvas</div>
-          <div><b>~0 MB</b> retained per update</div>
+          <div><b>every</b> conformance spec compared with the oracle</div>
+          <div><b>every</b> official Vega and Vega-Lite gallery example compared too</div>
+          <div><b>no</b> vega runtime in the React chart</div>
+          <div><b>canvas</b> streaming frames, however many points</div>
+          <div><b>per-datum</b> updates that touch only the changed rows</div>
         </div>
       </header>
 
@@ -571,7 +587,7 @@ export function App() {
           <p className="desc">Aster renders Vega and Vega-Lite specs against the real Vega oracle, then optimizes the update path.</p>
         </div>
         <div className="features">
-          <div className="feature"><h3>Oracle-verified</h3><p>Geometry diffed against the actual Vega renderer on a 400+ spec conformance corpus.</p></div>
+          <div className="feature"><h3>Oracle-verified</h3><p>Geometry diffed against the actual Vega renderer on the conformance corpus (every spec of it, on every check).</p></div>
           <div className="feature"><h3>Own Vega-Lite compiler</h3><p>@aster-charts/vl compiles Vega-Lite to Vega from scratch — no npm vega-lite anywhere in the render path.</p></div>
           <div className="feature"><h3>Incremental DOM</h3><p>Patches only changed attributes and skips unchanged subtrees on updates.</p></div>
           <div className="feature"><h3>Reactive dataflow</h3><p>Per-datum updates re-derive only the changed rows, reusing unchanged marks, items, and scales.</p></div>

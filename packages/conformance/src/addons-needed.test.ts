@@ -1,7 +1,7 @@
 /**
  * `addonsNeeded(spec)` (the add-on auto-load's detector) is exact: it names the add-ons the ENGINE asks for, no more and no less.
  *
- * The ground truth is the engine itself. Every corpus spec (the 993 Vega and Vega-Lite files; Vega-Lite through the pinned
+ * The ground truth is the engine itself. Every corpus spec (each Vega and Vega-Lite file of corpus/, none left out: a spec that cannot load or render is a failure, not a skip; Vega-Lite through the pinned
  * vega-lite compiler, so the specs are what the oracle makes) is rendered with all three add-ons registered, then again as an
  * app that loads nothing up front would: with none registered, each "load the addon first" failure names the add-on to load, which
  * is then registered and the render repeated until it succeeds. The add-ons loaded that way are the ones the spec needs.
@@ -17,9 +17,12 @@ import '@aster-charts/core/geo'
 import '@aster-charts/core/transforms'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
 import {
-  addonsNeeded, isAddonLoaded, missingAddons, ADDON_FUNCTIONS, registeredFunctionNames, withdrawFunctions, LOAD_ADDON_FORMATS, TRANSFORMS_ADDON_TYPES, type AddonName,
+  addonsNeeded, isAddonLoaded, missingAddons, ADDON_FUNCTIONS, registeredFunctionNames, LOAD_ADDON_FORMATS, TRANSFORMS_ADDON_TYPES, type AddonName,
 } from '@aster-charts/core/addons'
-import { compileChart, dataFormatRegistry, geoRegistry, renderSpec, transformRegistry, type TransformFn, type VgSpec } from '@aster-charts/core'
+import { compileChart, renderSpec, type VgSpec } from '@aster-charts/core'
+// (the registries and the withdrawal seam are internal to the core: reached through its modules, not through a public entry)
+import { dataFormatRegistry, geoRegistry, transformRegistry, type TransformFn } from '../../core/dist/registry.js'
+import { withdrawExpressionFunctions as withdrawFunctions } from '../../core/dist/expression.js'
 
 const ADDONS: readonly AddonName[] = ['transforms', 'geo', 'load']
 const CORPUS = join(dirname(fileURLToPath(import.meta.url)), '..', 'corpus')
@@ -78,26 +81,34 @@ function discovered(spec: VgSpec): { needed: Set<AddonName>; svg: string } | { e
 
 describe('addonsNeeded is exactly what the engine asks for, over the whole corpus', async () => {
   const specs: Array<{ name: string; spec: VgSpec }> = []
+  let files = 0
+  const dropped: string[] = []
   setOnly(new Set(ADDONS))
   for (const f of readdirSync(CORPUS).sort()) {
     const kind = f.endsWith('.vl.json') ? 'vl' : f.endsWith('.vg.json') ? 'vg' : null
     if (!kind) continue
+    files++
     const doc = JSON.parse(readFileSync(join(CORPUS, f), 'utf8')) as VgSpec
     let spec = (doc.$schema ? doc : (doc.spec ?? doc)) as VgSpec
     if (kind === 'vl') spec = vl.compile(spec as never).spec as unknown as VgSpec
-    try { specs.push({ name: f, spec: await loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS) as VgSpec }) } catch { /* a spec whose data cannot load is not a rendering case */ }
+    try { specs.push({ name: f, spec: await loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS) as VgSpec }) } catch (e) { dropped.push(`${f}: data did not load: ${String(e).slice(0, 100)}`) }
   }
 
-  it('covers the corpus', () => { expect(specs.length).toBeGreaterThan(900) })
+  it('covers the corpus: every file loads', () => {
+    expect(dropped, 'specs left out of the comparison').toEqual([])
+    expect(files).toBeGreaterThan(1000)
+    expect(specs.length).toBe(files)
+  })
 
   it('names the add-ons the render needs: no more, no less; and renders with just those as with all', () => {
     const wrong: string[] = []
     const counts: Record<AddonName, number> = { transforms: 0, geo: 0, load: 0 }
     let compared = 0
+    const unrendered: string[] = []
     for (const { name, spec } of specs) {
       setOnly(new Set(ADDONS))
       let all: string
-      try { all = renderSpec(spec) } catch { continue } // a spec that does not render at all says nothing about add-ons
+      try { all = renderSpec(spec) } catch (e) { unrendered.push(`${name}: ${String(e).slice(0, 100)}`); continue } // (named, and none is allowed: see below)
       const found = discovered(spec)
       if ('error' in found) { wrong.push(`${name}: renders with every add-on but not by loading them one at a time: ${found.error.slice(0, 120)}`); continue }
       compared++
@@ -108,7 +119,8 @@ describe('addonsNeeded is exactly what the engine asks for, over the whole corpu
     }
     setOnly(new Set(ADDONS))
     expect(wrong.slice(0, 10).join('\n'), `${wrong.length} wrong`).toBe('')
-    expect(compared).toBeGreaterThan(900)
+    expect(unrendered, 'specs that do not render with every add-on, left out of the comparison').toEqual([])
+    expect(compared).toBe(specs.length)
     // the comparison is not vacuous: every add-on is demanded by some corpus spec, and most specs need none
     expect(counts.transforms).toBeGreaterThan(5)
     expect(counts.geo).toBeGreaterThan(5)

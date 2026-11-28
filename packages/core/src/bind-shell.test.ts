@@ -34,7 +34,7 @@ const SPEC = {
   scales: [{ name: 'x', type: 'linear', domain: [0, { signal: 'span' }], range: 'width' }],
   marks: [{
     type: 'group',
-    signals: [{ name: 'local', value: 0, on: [{ events: 'window:keydown', update: 'local + span' }] }],
+    signals: [{ name: 'local', value: 0, on: [{ events: 'window:resize', update: 'local + span' }] }],
     marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { value: 0 }, width: { value: 100 }, y: { value: 0 }, height: { value: 100 } } } }],
   }],
 } as unknown as VgSpec
@@ -67,7 +67,7 @@ describe('a binding again on the same element for the same chart', () => {
     // the new scene's scale (domain [0, 1]), its dataset (one row passes `datum.v <= 1`) and its signal value
     expect(seen.at).toEqual([0.5, 1, 1])
     // a group scope's handler too: its signal starts from this scene's value (0), plus this scene's `span`
-    window.dispatchEvent(new KeyboardEvent('keydown'))
+    window.dispatchEvent(new Event('resize'))
     expect(Object.entries(seen).filter(([k]) => k.endsWith(':local')).map(([, v]) => v)).toEqual([1])
     // a dataset edit goes to the dataset of this binding's scene
     const edited: unknown[][] = []

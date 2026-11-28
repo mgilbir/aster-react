@@ -55,7 +55,7 @@ ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 import { AlphaCanvas } from './raster.js'
-import { meterTick } from './limits.js'
+import { allot, allotGrowing, copiedRows, meterTick } from './limits.js'
 import { createHostCanvas, estimateTextWidth, measureText, usingCanvasTextMetrics } from './text-metrics.js'
 import { fieldOf } from './transform-agg.js'
 import type { Row, TransformContext } from './transform.js'
@@ -161,6 +161,9 @@ const boxSurface: Surface = {
   },
 }
 
+/** What one step of a word's spiral counts for under the `work` ceiling. */
+const SPIRAL_STEP_WORK = 32
+
 /** The sheet the words are drawn on and read back from, as wide and as high as vega's: where a word lands depends on the ink around it. */
 const SHEET = 2048
 
@@ -210,6 +213,7 @@ function cutSprites(words: Word[], start: number, surface: Surface): void {
     const rows = Math.max(hh, 0) * 2
     const at = (i: number, j: number): number => data[((y + j) * SHEET + x + i) * stride] ?? 0
     let top = 0
+    // bounded: a word's sprite, inside the sheet the pixels ceiling bounded
     scan: for (; top < rows; top++) for (let i = 0; i < w; i++) if (at(i, top)) break scan
     d.x1 = w >> 1
     d.x0 = -d.x1
@@ -217,7 +221,9 @@ function cutSprites(words: Word[], start: number, surface: Surface): void {
     d.y1 = rows - hh - 1
     d.w32 = w >> 5
     d.rows = new Int32Array(Math.max(rows - 1 - top, 0) * d.w32)
+    // bounded: a word's sprite rows, inside the sheet the pixels ceiling bounded
     for (let j = 0, n = d.rows.length / (d.w32 || 1); j < n; j++) {
+      // bounded: a word's sprite row, inside the sheet the pixels ceiling bounded
       for (let i = 0; i < w; i++) if (at(i, top + j)) d.rows[j * d.w32 + (i >> 5)]! |= 1 << (31 - (i & 31))
     }
     d.state = READY
@@ -265,8 +271,10 @@ function overlay(board: Int32Array, sw: number, d: Word, stamp: boolean): boolea
   const back = 32 - shift
   const height = w32 ? rows.length / w32 : 0
   let cell = (d.y + d.y0) * sw + (lx >> 5)
+  // bounded: a word's sprite rows, inside the sheet the pixels ceiling bounded; the spiral loop that calls this ticks per step
   for (let j = 0; j < height; j++, cell += sw) {
     let last = 0
+    // bounded: a word's sprite row, inside the sheet the pixels ceiling bounded
     for (let i = 0; i <= w32; i++) {
       const bits = (last << back) | (i < w32 ? (last = rows[j * w32 + i]!) >>> shift : 0)
       if (stamp) board[cell + i] = (board[cell + i] ?? 0) | bits
@@ -295,9 +303,16 @@ function layout(data: Rec[], o: LayoutOptions): Word[] {
   const [width, height] = size
   const canvas = createHostCanvas()
   const surface = canvas ? hostSurface(canvas) : boxSurface
+  // the board is a bit per pixel of the spec's `size`: bounded before it is allocated (and so `width >> 5` stays in range)
+  allot('pixels', Math.max(0, width) * Math.max(0, height), 'wordcloud board')
   const sw = width >> 5
   // (one cell past the end: a sprite at the far corner carries into it)
   const board = new Int32Array(Math.max(0, Math.ceil(sw * height)) + 1)
+  // the spiral of a word that finds no room runs out to the size's diagonal (and, for a size of extreme proportions, far past it):
+  // the steps of all of them are bounded as they grow, each counted as SPIRAL_STEP_WORK (a step's sine and cosine of a large angle
+  // cost about as much as that many steps of the other loops under the `work` ceiling: about 190 ns against 5)
+  const stepped = allotGrowing('work', 'wordcloud spiral')
+  let steps = 0
   const maxDelta = Math.hypot(width, height)
   const at: Point = { x: 0, y: 0 }
   const placed: Word[] = []
@@ -325,6 +340,7 @@ function layout(data: Rec[], o: LayoutOptions): Word[] {
     let found = false
     for (let t = 0; ; t += dt) {
       meterTick('wordcloud')
+      if ((++steps & 0xffff) === 0) stepped(steps * SPIRAL_STEP_WORK)
       step(t)
       const dx = ~~at.x
       const dy = ~~at.y
@@ -356,18 +372,12 @@ function layout(data: Rec[], o: LayoutOptions): Word[] {
 
 const Output = ['x', 'y', 'font', 'fontSize', 'fontStyle', 'fontWeight', 'angle']
 
-/** An `expr`-able parameter: a literal, `{field}` / a field name, or `{expr}` (a function of the tuple). */
-function param(p: unknown, ctx: TransformContext, asField = false): unknown {
-  if (typeof p === 'string' && asField) return fieldOf(p)
-  if (p !== null && typeof p === 'object' && !Array.isArray(p)) {
-    const o = p as { field?: unknown; expr?: unknown }
-    if (typeof o.field === 'string') return fieldOf(o.field)
-    if (typeof o.expr === 'string') {
-      const f = ctx.runtime.expr(o.expr)
-      return (d: Row) => f(d, ctx.signals)
-    }
-  }
-  return p
+/**
+ * An `expr`-able parameter: a literal, or the accessor a `{field}` or an `{expr}` was made (param-resolve.ts). `text` is a field
+ * parameter: a name is read off the tuple.
+ */
+function param(p: unknown, asField = false): unknown {
+  return typeof p === 'string' && asField ? fieldOf(p) : p
 }
 
 /**
@@ -382,8 +392,10 @@ function extentBy(array: Rec[], f: (d: Rec) => unknown): [unknown, unknown] {
   let min: unknown
   let max: unknown
   if (array && (n = array.length)) {
+    // bounded: one pass over the rows, finding the first value
     for (v = f(array[i]!); i < n && (v == null || v !== v); v = f(array[++i]!));
     min = max = v
+    // bounded: one pass over the rows (it continues where the first loop stopped)
     for (; i < n; ++i) {
       v = f(array[i]!)
       if (v != null) {
@@ -428,9 +440,9 @@ export function wordcloudRows(rows: Row[], t: Record<string, unknown>, ctx: Tran
   if (size && !(size[0] && size[1])) throw new Error('Wordcloud size dimensions must be non-zero.')
 
   const as = (t.as as string[] | undefined) ?? Output
-  const data = (ctx.inPlace ? rows : rows.map((r) => ({ ...r }))) as Rec[]
+  const data = (ctx.inPlace ? rows : copiedRows(rows, 'wordcloud', true)) as Rec[]
 
-  let fontSize: unknown = param(t.fontSize, ctx) || 14
+  let fontSize: unknown = param(t.fontSize) || 14
   let range: readonly number[] | null | undefined
   if (typeof fontSize === 'function') {
     // (vega-parser leaves a parameter the spec does not give undefined: the default [10, 50] of the definition is documentation, and
@@ -454,20 +466,21 @@ export function wordcloudRows(rows: Row[], t: Record<string, unknown>, ctx: Tran
 
   const functor = (p: unknown): ((d: Rec) => any) => (typeof p === 'function' ? (p as (d: Rec) => any) : () => p) // eslint-disable-line @typescript-eslint/no-explicit-any
   const spiralName = (t.spiral as string | undefined) || 'archimedean'
-  const spiral = spirals[spiralName]
+  // (an own entry only: `constructor` or `toString` is no spiral)
+  const spiral = Object.hasOwn(spirals, spiralName) ? spirals[spiralName as keyof typeof spirals] : undefined
   if (spiral === undefined) throw new Error(`Wordcloud spiral "${spiralName}" is not archimedean or rectangular.`)
   const layoutSize: [number, number] = [+(size?.[0] ?? 500), +(size?.[1] ?? 500)]
   const random = ctx.runtime.random ?? Math.random
 
   const words = layout(data, {
     size: layoutSize,
-    text: functor(param(t.text, ctx, true)),
-    font: functor(param(t.font, ctx) || 'sans-serif'),
-    fontStyle: functor(param(t.fontStyle, ctx) || 'normal'),
-    fontWeight: functor(param(t.fontWeight, ctx) || 'normal'),
+    text: functor(param(t.text, true)),
+    font: functor(param(t.font) || 'sans-serif'),
+    fontStyle: functor(param(t.fontStyle) || 'normal'),
+    fontWeight: functor(param(t.fontWeight) || 'normal'),
     fontSize: functor(fontSize),
-    rotate: functor(param(t.rotate, ctx) || 0),
-    padding: functor(param(t.padding, ctx) || 1),
+    rotate: functor(param(t.rotate) || 0),
+    padding: functor(param(t.padding) || 1),
     spiral,
     random,
   })

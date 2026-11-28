@@ -4,7 +4,7 @@
  * generated scenes); these pin each rule on a scene made for it.
  */
 import { describe, it, expect } from 'vitest'
-import { compileChart, evaluateChart } from './index.js'
+import { compileChart, createChartStream, evaluateChart } from './index.js'
 import { buildHitIndex } from './hit.js'
 import { Bounds, boundLeaf } from './bounds.js'
 import type { SceneGroup, SceneItem, VgSpec } from './types.js'
@@ -94,5 +94,101 @@ describe('a hit index for the canvas renderer', () => {
     }], { padding: 10, width: 300, height: 220, data: [{ name: 'd', values: rows }] })
     const { svg, canvas } = both(spec)
     for (const ix of [svg, canvas]) expect(markOf(ix.pick(214, 22))).toBe('none')
+  })
+})
+
+describe('a hit index of a scene that crossed a structured clone (C39)', () => {
+  // (a worker's scene reaches the main thread as plain objects: the boxes the guides measured are no longer `Bounds`)
+  const spec = {
+    width: 160, height: 100, padding: 5, autosize: 'pad',
+    data: [{ name: 't', values: [{ a: 'x', b: 3 }, { a: 'y', b: 7 }, { a: 'z', b: 5 }] }],
+    scales: [
+      { name: 'x', type: 'band', domain: { data: 't', field: 'a' }, range: 'width', padding: 0.2 },
+      { name: 'y', type: 'linear', domain: { data: 't', field: 'b' }, range: 'height' },
+      { name: 'c', type: 'ordinal', domain: { data: 't', field: 'a' }, range: 'category' },
+    ],
+    axes: [{ orient: 'bottom', scale: 'x' }, { orient: 'left', scale: 'y', title: 'b' }],
+    legends: [{ fill: 'c', title: 'a' }],
+    title: { text: 'T' },
+    marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'a' }, width: { scale: 'x', band: 1 }, y: { scale: 'y', field: 'b' }, y2: { scale: 'y', value: 0 }, fill: { scale: 'c', field: 'a' } } } }],
+  } as unknown as VgSpec
+  /** Every object of a scene by its place (the indices from the root), to name what a pick finds on either copy. */
+  const places = (scene: object): Map<object, string> => {
+    const out = new Map<object, string>()
+    const walk = (v: unknown, path: string): void => {
+      if (v === null || typeof v !== 'object' || out.has(v)) return
+      out.set(v, path)
+      const items = (v as { items?: unknown[] }).items
+      if (Array.isArray(items)) items.forEach((c, i) => walk(c, `${path}/${i}`))
+    }
+    walk(scene, '')
+    return out
+  }
+  for (const renderer of ['svg', 'canvas'] as const) {
+    it(`${renderer}: the clone is indexed, and every query finds what it finds on the scene itself`, () => {
+      const scene = evaluateChart(compileChart(spec), {})
+      const clone = JSON.parse(JSON.stringify(scene, (k, v) => (k === 'runtime' || k === 'compiled' || k.startsWith('__') ? undefined : v)))
+      const a = buildHitIndex(scene, undefined, { renderer })
+      const b = buildHitIndex(clone, undefined, { renderer })
+      const na = places(scene), nb = places(clone)
+      let found = 0
+      for (let x = 0; x < scene.width; x += 3) {
+        for (let y = 0; y < scene.height; y += 3) {
+          for (const q of ['query', 'pick', 'tooltip'] as const) {
+            const ha = a[q](x, y), hb = b[q](x, y)
+            expect(hb && nb.get(hb.item), `${q}(${x}, ${y})`).toBe(ha && na.get(ha.item))
+            if (ha) found++
+          }
+        }
+      }
+      expect(found).toBeGreaterThan(100)
+    })
+  }
+})
+
+describe('a hit index answers for the scene it was built for (C229)', () => {
+  it('after the engine appended to a line, the index of the scene before reports only that scene\'s items', () => {
+    const spec = {
+      width: 200, height: 100, padding: 0, autosize: 'none',
+      data: [{ name: 't', values: [{ x: 0, y: 10 }, { x: 50, y: 20 }, { x: 100, y: 30 }] }],
+      marks: [{ type: 'line', from: { data: 't' }, encode: { update: { x: { field: 'x' }, y: { field: 'y' }, stroke: { value: 'black' }, strokeWidth: { value: 4 } } } }],
+    } as unknown as VgSpec
+    const stream = createChartStream(spec)
+    stream.flush()
+    const s1 = stream.scene()!
+    const line1 = s1.items.find((g) => g.marktype === 'line')!
+    const held = [...(line1.items ?? [])]
+    for (const renderer of ['svg', 'canvas'] as const) {
+      const index = buildHitIndex(s1, undefined, { renderer })
+      // (a row appended where the line already runs: the engine grows the items array it published, see scene-registry.ts)
+      stream.push({ append: { t: [{ x: 75, y: 25 }, { x: 160, y: 31 }] } })
+      stream.flush()
+      for (const [x, y] of [[75, 25], [100, 30], [160, 31], [101, 30.2]] as const) {
+        for (const q of ['query', 'queryMark', 'tooltip'] as const) {
+          const h = index[q](x, y)
+          if (h) expect(held, `${renderer} ${q}(${x}, ${y})`).toContain(h.item)
+        }
+      }
+      // (a point only the later scene draws is not on the line of this one)
+      expect(index.pick(160, 31)).toBeNull()
+    }
+  })
+})
+
+describe('a line with a point past single precision', () => {
+  // (a browser's SVG path reads the text up to the number it cannot hold, so the line ends at the point before it; a canvas's path is
+  // floats: it leaves the point out and joins the two beside it. Where the SVG index tests the polygons the flattener made as the
+  // canvas draws them, it must read the text instead: this is what tells the two apart)
+  const { svg, canvas } = both(view([{
+    type: 'line', from: { data: 'p' },
+    encode: { update: { x: { field: 'x' }, y: { field: 'y' }, stroke: { value: '#333' }, strokeWidth: { value: 4 } } },
+  }], { data: [{ name: 'p', values: [{ x: 0, y: 50 }, { x: 100, y: 50 }, { x: 150, y: 1e39 }, { x: 300, y: 50 }] }] }))
+  it('the SVG index ends the line at the point before it', () => {
+    expect(markOf(svg.pick(50, 50))).toBe('line')
+    expect(markOf(svg.pick(200, 50))).toBe('none')
+  })
+  it('the canvas index joins the points beside it', () => {
+    expect(markOf(canvas.pick(50, 50))).toBe('line')
+    expect(markOf(canvas.pick(200, 50))).toBe('line')
   })
 })

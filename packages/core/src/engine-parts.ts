@@ -3,21 +3,23 @@
  *
  * Every public entry of `@aster-charts/core` (`renderSpec`, `compileChart` / `evaluateChart`, `createChartSession`, the signal loop,
  * the renderers) carries the parts its functions can use, as it always did: it imports their `part-*.ts` modules, which put them in
- * the slots below. `@aster-charts/core/lean` is the same engine with the slots left empty, for the React shells: they read which
+ * the slots below. `@aster-charts/core/internal` is the same engine with the slots left empty, for the React shells: they read which
  * parts a spec needs (`partsNeeded` in addons.ts), import exactly those (`loadParts`), and render once they are there, through the same
  * Suspense wait as the opt-in add-ons. A chart that needs none of them never fetches anything.
  *
  * A slot that is read while it is empty is a missed detection, never a reason to go on without the part: the reader throws, so a
  * chart is refused rather than drawn differently, and the regular-expression screen in particular can never be skipped (limits.ts).
  * The one exception is the pulse path of the incremental engine, which is an optimisation: without it a re-evaluation derives its
- * datasets in full, which makes the same scene, and asks for the part so that the next one is incremental (runtime.ts).
+ * datasets in full, which makes the same scene, and asks for the part so that the next one is incremental (runtime.ts). Not for a
+ * dataset that may draw from an injected random source: the two builds draw other numbers from the same source, so there the slot
+ * is read like any other (`specNeeds` names `pulse` for it, addons.ts).
  *
  * Only types are imported here: this module is in every bundle, the parts are not.
  */
 import type { buildLegend, entriesRefusal, legendType, placeLegendStack } from './guide-legend.js'
 import type { layoutFacet } from './trellis.js'
 import type { selectionIdTest, selectionResolve, selectionTest, selectionTuples } from './selections.js'
-import type { regexHazard } from './regex-screen.js'
+import type { regexModel } from './regex-screen.js'
 import type { drawnPathCommands, renderSvgPath, svgPathCommands } from './path-data.js'
 import type { sceneIntersect } from './scene-intersect.js'
 import type { applyChangeset, newChangeset, planModify } from './modify.js'
@@ -108,7 +110,7 @@ export interface EngineParts {
   /** vega-selections' functions (selections.ts): an expression that calls `vlSelectionTest` and the like. */
   selections: { selectionTest: typeof selectionTest; selectionIdTest: typeof selectionIdTest; selectionResolve: typeof selectionResolve; selectionTuples: typeof selectionTuples }
   /** The static screen of regular expressions (regex-screen.ts), run under limits before any pattern is compiled. */
-  regex: { regexHazard: typeof regexHazard }
+  regex: { regexModel: typeof regexModel }
   /** The SVG path reader and vega's replay of it (path-data.ts): custom symbol shapes and the bounds of path strings. */
   svgpath: { svgPathCommands: typeof svgPathCommands; drawnPathCommands: typeof drawnPathCommands; renderSvgPath: typeof renderSvgPath }
   /** The scene intersection behind the `intersect()` expression function (scene-intersect.ts). */
@@ -150,11 +152,34 @@ export function partLoaded(name: EnginePart): boolean {
   return slots[name] !== undefined
 }
 
+/**
+ * The public entry that carries each part (importing it fills the slot), `null` for a part no entry fills: the pulse part (the
+ * incremental engine asks for it in the background, `loadParts`), and the canvas renderer and the signal loop, which the React shells
+ * load for the capability that uses them (no evaluation reads either). Typed per part, so a new part must say where it is carried; the
+ * test (engine-parts-entries.test.ts) imports each entry in a fresh module registry and checks the claim both ways.
+ */
+export const CARRIED_BY: Readonly<Record<EnginePart, '@aster-charts/core' | '@aster-charts/core/signals' | null>> = {
+  aggregate: '@aster-charts/core', window: '@aster-charts/core', reshape: '@aster-charts/core', time: '@aster-charts/core',
+  curves: '@aster-charts/core', color: '@aster-charts/core', scales: '@aster-charts/core', legend: '@aster-charts/core',
+  layout: '@aster-charts/core', pulse: null, selections: '@aster-charts/core', regex: '@aster-charts/core', svgpath: '@aster-charts/core',
+  intersect: '@aster-charts/core/signals', modify: '@aster-charts/core/signals', timer: '@aster-charts/core/signals',
+  canvas: null, signals: null,
+}
+
+/** What to do about an empty slot: the entry that carries the part, or how else it gets loaded. */
+function howToLoad(name: EnginePart): string {
+  const entry = CARRIED_BY[name]
+  if (entry !== null) return `load it before evaluating (loadPartsFor in @aster-charts/core/addons), or import ${entry}, which carries it`
+  if (name === 'canvas') return 'it belongs to the canvas renderer, which <Chart renderer="canvas"> loads (the canvas capability); no entry of @aster-charts/core carries it'
+  if (name === 'signals') return 'it belongs to the signal loop, which <Chart> loads for a chart that binds events (the interaction capability); no entry of @aster-charts/core carries it'
+  return 'load it with loadParts in @aster-charts/core/addons; no entry of @aster-charts/core carries it'
+}
+
 /** A part, which must be loaded: reading an empty slot throws (see the file header). */
 export function part<K extends EnginePart>(name: K): EngineParts[K] {
   const impl = slots[name]
   if (impl === undefined) {
-    throw new Error(`[aster] the "${name}" part of the engine is not loaded: load it before evaluating (loadPartsFor in @aster-charts/core/addons), or import @aster-charts/core, which carries it`)
+    throw new Error(`[aster] the "${name}" part of the engine is not loaded: ${howToLoad(name)}`)
   }
   return impl
 }
@@ -179,7 +204,7 @@ export function requestPart(name: EnginePart): void {
   requester?.(name)
 }
 
-/** @internal Take parts out of their slots and get a function that puts them back (a test seam for the lean path). */
+/** Internal plumbing (`@aster-charts/core/internal`, not public API): take parts out of their slots and get a function that puts them back (a test seam for the lean path). */
 export function withdrawParts(names: readonly EnginePart[]): () => void {
   const saved = names.map((n) => [n, slots[n]] as const)
   for (const n of names) delete slots[n]

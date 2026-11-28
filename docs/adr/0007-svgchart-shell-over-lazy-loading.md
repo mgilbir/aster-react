@@ -18,9 +18,10 @@ are shells that render `<ChartCore>`: `<Chart>` injects the canvas and interacti
 `<SvgChart>` (from `@aster-charts/react/lite`) injects none and passes through the `interaction` value its
 caller imports from `@aster-charts/react/interaction`.
 
-Lazy loading inside `<Chart>` was rejected. Nothing loads asynchronously, so the first paint is
-synchronous and server-render-safe, and the cost of a capability is visible in the importing
-code.
+Lazy loading of the *capabilities* inside `<Chart>` was rejected: they are injected values, so the cost of a capability is
+visible in the importing code and `ChartCore` has no import to wait for. (This record once went on to say that nothing loads
+asynchronously, so the first paint is synchronous. That is not what a browser build does: see the amendment and
+[ADR 0011](0011-engine-parts-load-on-demand-in-browser-builds.md).)
 
 ## Consequences
 
@@ -49,3 +50,15 @@ code.
   [TESTING.md](../TESTING.md)): the DOM of `<Chart>`, `<SvgChart>` and `<SvgChart interaction>`
   equal over the corpus.
 - The shells and their cost: [ARCHITECTURE.md](../ARCHITECTURE.md#chartcore-and-the-two-shells).
+
+## Amendments
+
+*2026-11-23, to match the code (audit C363).*
+
+- "Nothing loads asynchronously" no longer holds for a browser build, and the first paint is synchronous only where nothing needs loading (a server, `@aster-charts/react/all`, a chart whose spec needs no part). The capabilities are still injected, never imported
+  by `ChartCore`, but the engine parts a chart may need (the canvas renderer behind `CanvasCapability.load`, the signal
+  loop behind `InteractionCapability.loadSignals`, the legend builder, time and colour parts...) load on demand through
+  the same Suspense wait as the opt-in add-ons (`useAddons`, [ARCHITECTURE.md](../ARCHITECTURE.md)). A host that needs a
+  synchronous first paint imports `@aster-charts/react/all` (every part bundled) or preloads (`preloadParts`). The
+  decision this ADR records -- the cost of a capability is visible in the importing code -- stands; the rejected
+  alternative was lazy-loading the capabilities themselves.

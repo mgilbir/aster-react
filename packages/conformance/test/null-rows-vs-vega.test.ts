@@ -15,7 +15,7 @@ import { describe, it, expect } from 'vitest'
 import * as vega from 'vega'
 import { renderSpec, renderSceneToSvg, createChartStream } from '@aster-charts/core'
 import { createChartSession } from '@aster-charts/core/dom'
-import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
+import { canonicalizeSvg, diffCanonical, type CanonicalResult } from '../src/normalize.js'
 
 type Spec = Record<string, unknown>
 const text = (from: string, x = 5): Spec => ({ type: 'text', from: { data: from }, encode: { update: { x: { value: x }, y: { value: 20 }, text: { signal: '"<" + datum.a + "|" + datum.data + ">"' } } } })
@@ -23,7 +23,7 @@ const lone: Spec = { type: 'rule', encode: { update: { x: { value: 50 }, y: { va
 const frame = (data: unknown[], marks: unknown[], extra: Spec = {}): Spec => ({ width: 100, height: 50, padding: 0, autosize: 'none', data, marks, ...extra })
 
 /** What was thrown and logged, by class (vega's message and Aster's differ by design), and Aster's messages. */
-interface Outcome { thrown?: string; svg?: string; errors: string[]; messages?: string[] }
+interface Outcome { thrown?: string; svg?: CanonicalResult; errors: string[]; messages?: string[] }
 const classOf = (e: unknown): string => (e instanceof Error ? e.constructor.name : String(e).split(':')[0]!)
 
 async function withVega(spec: Spec, after?: (view: any) => Promise<void> | void): Promise<Outcome> {
@@ -31,7 +31,7 @@ async function withVega(spec: Spec, after?: (view: any) => Promise<void> | void)
   const logger = { level() { return logger }, error: (...a: unknown[]) => { errors.push(classOf(a[0])); return logger }, warn: () => logger, info: () => logger, debug: () => logger }
   let view: any
   try {
-    view = new (vega as any).View(vega.parse(spec as never), { renderer: 'none', logger })
+    view = new (vega as any).View(vega.parse(structuredClone(spec) as never), { renderer: 'none', logger })
   } catch (e) {
     return { thrown: classOf(e), errors }
   }
@@ -109,7 +109,7 @@ describe('a null or undefined row where rows enter a dataset: the same TypeError
   for (const [name, rows] of Object.entries(HOST)) {
     const spec = frame([{ name: 't', values: [{ a: 9 }] }], [text('t')])
     it(`host rows (view.data / the data prop), ${name}: renderSpec and a session`, async () => {
-      const want = await withVega(spec, (view) => view.data('t', rows))
+      const want = await withVega(spec, (view) => view.data('t', structuredClone(rows)))
       // (vega's view.data throws before it changes anything; Aster's evaluation with those rows throws the same error)
       for (const run of [PATHS.renderSpec, PATHS.session]) {
         const got = withAster(run(spec, { data: { t: rows } }))
@@ -118,7 +118,7 @@ describe('a null or undefined row where rows enter a dataset: the same TypeError
       }
     })
     it(`a session given host rows and dataChanges over them, ${name}`, async () => {
-      const want = await withVega(spec, (view) => view.data('t', rows))
+      const want = await withVega(spec, (view) => view.data('t', structuredClone(rows)))
       const session = createChartSession()
       const start = rows.map((r) => (r == null ? { a: 0 } : r))
       session.evaluate(spec as never, { data: { t: start } })
@@ -126,7 +126,7 @@ describe('a null or undefined row where rows enter a dataset: the same TypeError
       expect(got.thrown).toBe(want.thrown)
     })
     it(`a stream append (view.insert), ${name}`, async () => {
-      const want = await withVega(spec, (view) => view.insert('t', rows))
+      const want = await withVega(spec, (view) => view.insert('t', structuredClone(rows)))
       const stream = createChartStream(spec as never)
       const got = withAster(() => { stream.push({ append: { t: rows } }); stream.flush(); return renderSceneToSvg(stream.scene()!) })
       expect(got.thrown).toBe(want.thrown)
@@ -210,7 +210,7 @@ describe("Aster's message: which row of which dataset, given how", () => {
 
   it('inline values, through renderSpec, a session and a stream (thrown)', () => {
     for (const [values, row, value] of [[[{ a: 1 }, null], 1, 'null'], [[undefined, { a: 2 }], 0, 'undefined']] as const) {
-      const spec = frame([{ name: 't', values: values as unknown[] }], [text('t')])
+      const spec = frame([{ name: 't', values: [...values] as unknown[] }], [text('t')])
       for (const run of Object.values(PATHS)) {
         const e = caught(() => run(spec)(undefined))
         expect(e).toBeInstanceOf(TypeError)

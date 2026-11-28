@@ -28,6 +28,9 @@
  * their own (a mark without `from` over data marks, facet cells, interactive axis labels, legend entries, a title), and the
  * dense scatter of the chart-bench study (10,000 overlapping circles in a 900 x 600 chart) at the point where Aster used to
  * report a circle whose edge is 0.19 px away from the pointer.
+ *
+ * Environment: PICK_DEBUG=1 prints every edge answer and the SVG target of every difference (diagnostics only: the verdict is
+ * the same with or without it).
  */
 import type { Browser } from 'playwright'
 
@@ -93,6 +96,17 @@ export function genPickScene(seed: number, W = 300, H = 220): PickScene {
     if (chance(0.15)) out.opacity = V(pick([0, 0.4]))
     return out
   }
+  // (paint order by zindex -- an item's, from its row or constant, and a mark's among its siblings -- drawn from a stream of its own,
+  // so the scenes this generator made before it read zindexes are the same scenes with zindexes added: C28, C118)
+  const Z = rng(seed ^ 0x2f6b9d)
+  const zOf = (): number => [0, 1, 2, -1, 3][Math.floor(Z() * 5)]!
+  const zindexed = (mark: Spec, update: Spec, rows: Spec[] | null): void => {
+    if (Z() < 0.35) {
+      if (rows === null) update.zindex = V(zOf())
+      else { for (const r of rows) r.z = zOf(); update.zindex = Z() < 0.7 ? F('z') : { signal: '-datum.z' } }
+    }
+    if (Z() < 0.25) mark.zindex = 1 + Math.floor(Z() * 2)
+  }
   const tooltipOf = (name: string): Spec => {
     const r = R()
     if (r < 0.65) return { tooltip: { signal: `'${name}:' + datum.id` } }
@@ -122,6 +136,7 @@ export function genPickScene(seed: number, W = 300, H = 220): PickScene {
       if (update.tooltip) update.tooltip = V(`${name}:solo`)
     }
     if (chance(0.12)) mark.interactive = false
+    zindexed(mark, update, fromLess ? null : rows)
     switch (type) {
       case 'symbol':
         update.size = fromLess ? V(num(30, 1600)) : { signal: '30 + datum.s * 1500' }
@@ -199,7 +214,9 @@ export function genPickScene(seed: number, W = 300, H = 220): PickScene {
       // (a group whose box is left out of its bounds: vega picks it only as far as what it holds reaches)
       if (chance(0.3)) update.noBound = V(true)
       const inner = [leaf(`${name}i0`, true), ...(chance(0.5) ? [leaf(`${name}i1`, true)] : [])]
-      marks.push({ type: 'group', name, from: { data: `d_${name}` }, encode: { update }, marks: inner })
+      const group: Spec = { type: 'group', name, from: { data: `d_${name}` }, encode: { update }, marks: inner }
+      zindexed(group, update, rows)
+      marks.push(group)
     } else {
       marks.push(leaf(name, false))
     }
@@ -244,6 +261,28 @@ const fixedScenes = (): PickScene[] => {
       },
       points: grid(280, 200, 5),
     },
+    // the view's own frame, the root group item (`mark-group role-frame root`): what vega's pick finds where nothing else is hit, when
+    // the frame is painted (a fill, a transparent one, or a stroke) -- and the cursor its `encode` gives it (C279). Over the data marks,
+    // on the border, in the padding and outside the view.
+    ...([
+      ['fill', { fill: V('#f0f0f0') }],
+      ['transparent', { fill: V('transparent') }],
+      ['stroke', { stroke: V('#333'), strokeWidth: V(6) }],
+      ['fill-stroke-thin', { fill: V('#eee'), stroke: V('#c00'), strokeWidth: V(1) }],
+      ['unpainted', {}],
+      ['stroke-transparent', { stroke: V('transparent'), strokeWidth: V(6) }],
+      ['rounded', { fill: V('#eee'), cornerRadius: V(40) }],
+      ['rounded-stroke', { stroke: V('#333'), strokeWidth: V(5), cornerRadius: V(30) }],
+    ] as Array<[string, Spec]>).map(([name, paint]): PickScene => ({
+      name: `fixed-root-frame-${name}`,
+      spec: {
+        ...base, signals: [{ ...PICKED_SIGNAL, on: [{ events: 'pointermove', update: "item().mark ? item().mark.marktype + '|' + (item().mark.name || item().mark.role) + '|' + (item().cursor || '-') : 'none'" }] }],
+        data: [{ name: 't', values: rows }],
+        encode: { update: { cursor: V('text'), ...paint } },
+        marks: [{ type: 'symbol', name: 'dots', from: { data: 't' }, encode: { update: { x: F('x'), y: F('y'), size: V(900), fill: V('steelblue') } } }],
+      },
+      points: grid(280, 200, 4, 1),
+    })),
     {
       // facet cells (group items whose datum is the facet tuple) with a fill and a tooltip, holding marks with their own
       name: 'fixed-facet-cells',

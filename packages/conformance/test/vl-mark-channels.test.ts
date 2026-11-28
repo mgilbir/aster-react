@@ -6,6 +6,11 @@
  * url on anything but an image: the output is the output without the channel); the ones it draws are drawn as vega-lite draws them.
  * The compiled scales, axes and legends, the scales as they run, the rows and the SVG must be the same (vl-ranged-compare.ts).
  *
+ * Nothing is dropped without being counted: the cases of which nothing could be compared (a side refused the spec, or vega could not run
+ * vega-lite's output) are tallied by which side stopped them and what Aster did, and the tally is pinned below. A case that moves from
+ * one kind to another, or a kind that appears, fails the last test of this file. (The `time` channel is among them: it needs a timer
+ * selection param, without which vega cannot run vega-lite's output; vl-anim.test.ts and vl-anim-forms.test.ts compare it with one.)
+ *
  * One kind of case is refused on purpose, and listed under "Throws" in packages/vl/README.md (readme-refusals.test.ts checks the
  * list): a condition that gives a field on a position the mark draws. The Vega-Lite schema gives a position no condition, and
  * vega-lite makes a scale, an axis and a stack group of the condition's field while it places the mark by the value. Those cases
@@ -16,7 +21,7 @@ import { describe, it, expect } from 'vitest'
 import * as vl from 'vega-lite'
 import { compile, VLCompileError } from '@aster-charts/vl'
 import { silent } from './vl-time-helpers.js'
-import { collect } from './vl-ranged-compare.js'
+import { collectAll, type Skipped } from './vl-ranged-compare.js'
 import { MARKS, base, markChannelCases } from './vl-mark-channels-space.js'
 
 type Obj = Record<string, unknown>
@@ -38,6 +43,16 @@ function keysOf(node: Obj): unknown[] {
   return ((node.marks as Obj[] | undefined) ?? []).flatMap((m) => [m.key, ...keysOf(m)])
 }
 
+/** What Aster did with a spec nothing was compared of. */
+const asterDid = (s: Skipped): string =>
+  s.aster === 'compiled' ? 'compiled'
+  : /the time channel needs exactly one timer selection param|the time channel needs a timer selection and its frame filter|the time channel is a field definition|`scale` is not supported on the time channel/.test(s.aster) ? 'refused: the time channel needs a timer param'
+  : /needs its pair: give both/.test(s.aster) ? 'refused: longitude and latitude need each other'
+  : /longitude \/ latitude positions are only implemented for the/.test(s.aster) ? 'refused: longitude / latitude on a mark it does not draw them on'
+  : /a condition that gives a field or a datum on a position/.test(s.aster) ? 'refused: a position condition'
+  : `other: ${s.aster}`
+const tally = new Map<string, number>()
+
 describe('a mark draws the channels vega-lite draws, and drops the ones it drops', () => {
   for (const mark of MARKS) {
     it(`${mark}: every channel as a field of each type, a value, a datum, a condition and a field without a scale`, async () => {
@@ -47,7 +62,8 @@ describe('a mark draws the channels vega-lite draws, and drops the ones it drops
       // (a position the mark does not draw is dropped, its condition with it: only a drawn one is refused)
       const refused = all.filter(([name, spec]) => positionFieldCondition(spec) && !dropped.has(name))
       const compared = all.filter((c) => !refused.includes(c))
-      const bad = await collect(compared)
+      const { bad, skipped } = await collectAll(compared)
+      for (const [, why] of skipped) tally.set(`${why.by} stopped it, aster ${asterDid(why)}`, (tally.get(`${why.by} stopped it, aster ${asterDid(why)}`) ?? 0) + 1)
       expect(bad.slice(0, 8), `${bad.length} of ${compared.length} differ`).toEqual([])
       // (the key Vega joins a mark's items by changes no picture: it is compared as written, mark by mark)
       for (const [name, spec] of compared.filter(([, spec]) => 'key' in (spec.encoding as Obj))) {
@@ -63,4 +79,21 @@ describe('a mark draws the channels vega-lite draws, and drops the ones it drops
       expect(dropped.size).toBeLessThan(all.length)
     }, 240_000)
   }
+})
+
+// Every case of the space of which nothing was compared, by who stopped it and what Aster did (a refusal of a spec only vega-lite refuses, or of
+// one vega cannot run, is allowed; a count that moves is a case that changed kind). `compiled` under "vega-lite stopped it" is a spec
+// vega-lite refuses and Aster draws: the space does not say what it should draw, so it is only counted.
+describe('the cases of which nothing is compared are the ones this table says', () => {
+  it('by who stopped them and what Aster did', () => {
+    expect(Object.fromEntries([...tally].sort(([a], [b]) => a.localeCompare(b)))).toEqual({
+      'vega stopped it, aster compiled': 10,
+      'vega stopped it, aster refused: longitude / latitude on a mark it does not draw them on': 172,
+      'vega stopped it, aster refused: longitude and latitude need each other': 142,
+      'vega stopped it, aster refused: the time channel needs a timer param': 169,
+      'vega-lite stopped it, aster compiled': 48,
+      'vega-lite stopped it, aster refused: longitude / latitude on a mark it does not draw them on': 8,
+      'vega-lite stopped it, aster refused: longitude and latitude need each other': 2,
+    })
+  })
 })

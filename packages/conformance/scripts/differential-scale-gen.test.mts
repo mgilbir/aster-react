@@ -1,6 +1,6 @@
 /**
- * GENERATED live differential of the whole scale library behind Aster's scale registry (`core/src/scale.ts`, built on
- * `scale-d3.ts`, `interp.ts`, `arr.ts`) against the pinned `vega-scale` 8.1.2 (and the d3-scale it is built on), in one
+ * GENERATED live differential of the whole scale library behind Aster's scale registry (`core/src/scale.ts` and the constructors it
+ * registers: scale-continuous, -warped, -calendar, -discrete and -classes, over `interp.ts` and `arr.ts`) against the pinned `vega-scale` 8.1.2 (and the d3-scale it is built on), in one
  * process and one engine. Nothing is recorded: see `differential-util.mts`.
  *
  * For every scale type of the registry (identity, linear, log, pow, sqrt, symlog, time, utc, sequential and diverging
@@ -19,7 +19,7 @@ import { appendFileSync } from 'node:fs'
 import * as d3time from 'd3-time'
 import * as vegaScale from 'vega-scale'
 import { describe, expect, it, vi } from 'vitest'
-import { implicit as asterImplicit } from '../../core/src/scale-d3.ts'
+import { implicit as asterImplicit } from '../../core/src/scale-d3.testlib.ts'
 import * as asterScale from '../../core/src/scale.ts'
 import * as asterTime from '../../core/src/time.ts'
 import { enc, withTz } from './differential-util.mts'

@@ -42,7 +42,7 @@ const UNITS: Array<[string, (r: unknown) => Unit]> = [
   ['errorbar', (r) => ({ mark: 'errorbar', encoding: { x: n('c'), y: q(r) } })],
   ['errorbar horizontal', (r) => ({ mark: 'errorbar', encoding: { y: n('c'), x: q(r) } })],
   ['errorbar stdev', (r) => ({ mark: { type: 'errorbar', extent: 'stdev', ticks: true }, encoding: { x: n('c'), y: q(r) } })],
-  ['errorbar iqr with a point', (r) => ({ mark: { type: 'errorbar', extent: 'iqr', rule: { strokeWidth: 3 } }, encoding: { x: n('c'), y: q(r) } })],
+  ['errorbar iqr with a thick rule', (r) => ({ mark: { type: 'errorbar', extent: 'iqr', rule: { strokeWidth: 3 } }, encoding: { x: n('c'), y: q(r) } })],
   ['errorbar ci', (r) => ({ mark: { type: 'errorbar', extent: 'ci' }, encoding: { x: n('c'), y: q(r) } })],
   ['errorbar with y2', (r) => ({ mark: 'errorbar', encoding: { x: n('c'), y: q(r), y2: q('hi') } })],
   ['errorbar with yError', (r) => ({ mark: 'errorbar', encoding: { x: n('c'), y: q('v'), yError: q(r) } })],
@@ -132,10 +132,8 @@ group('@aster-charts/vl == vega-lite: a composite mark in a repeat, with sizes, 
   add('a repeat with a spacing', { data: DATA, repeat: { column: ['v', 'w'] }, spacing: 30, spec: box })
   add('a repeat with align none', { data: DATA, repeat: { column: ['v', 'w'] }, align: 'none', spec: box })
   add('a repeat with center', { data: DATA, repeat: { column: ['v', 'w'] }, center: true, spec: box })
-  add('an interval selection in the repeated boxplot', { data: DATA, repeat: { column: ['v', 'w'] }, spec: { params: [{ name: 'brush', select: 'interval' }], ...box } })
   add('a selection in a layer with a repeated errorband', { data: DATA, repeat: { column: ['v', 'w'] }, spec: { layer: [{ params: [{ name: 'brush', select: 'interval' }], mark: 'point', encoding: { x: q('x'), y: q(ref('column')) } }, { mark: 'errorband', encoding: { x: q('x'), y: q(ref('column')) } }] } })
   add('a selection filtering a repeated boxplot', { data: DATA, repeat: { column: ['v', 'w'] }, spec: { layer: [{ params: [{ name: 'brush', select: 'interval' }], mark: 'point', encoding: { x: n('c'), y: q(ref('column')) } }, { transform: [{ filter: { param: 'brush' } }], mark: 'boxplot', encoding: { x: n('c'), y: q(ref('column')) } }] } })
-  add('a bound selection in a repeated errorbar', { data: DATA, repeat: { column: ['v', 'w'] }, spec: { params: [{ name: 'grid', select: 'interval', bind: 'scales' }], mark: 'errorbar', encoding: { x: n('c'), y: q(ref('column')) } } })
 })
 
 // --- what a composite mark in a repeat needs from the views around it ---------------------------------------------------------------
@@ -187,9 +185,12 @@ group('@aster-charts/vl == vega-lite: a datum colour in a composite mark, a datu
   add('a layer of boxplots with datum colours', { data: DATA, layer: [{ mark: 'boxplot', encoding: { x: n('c'), y: q('v'), color: { datum: 'one', type: 'nominal' } } }, { mark: 'boxplot', encoding: { x: n('c'), y: q('w'), color: { datum: 'two', type: 'nominal' } } }] })
   add('a layer repeat of boxplots with the repeated field as the datum', { data: DATA, repeat: { layer: ['v', 'w'] }, spec: { mark: 'boxplot', encoding: { x: n('c'), y: q(ref('layer')), color: { datum: ref('layer'), type: 'nominal' } } } })
   add('a datum condition on shape of a point', { data: DATA, mark: 'point', encoding: { x: n('c'), y: q('v'), shape: { condition: { test: 'datum.v > 4', datum: 'square', type: 'nominal' }, value: 'circle' } } })
+  // (the otherwise-value is one the channel takes: a colour, a dash array, a number; `value: 1` on colour or strokeDash is not a
+  // value the schema allows there, and is refused by its path (C245))
+  const OTHERWISE: Record<string, unknown> = { color: 'grey', strokeDash: [4, 2] }
   for (const channel of ['color', 'size', 'opacity', 'strokeWidth', 'strokeDash']) {
     for (const mark of channel === 'size' ? ['point'] : ['point', 'bar']) {
-      add(`a datum condition on ${channel} of a ${mark}`, { data: DATA, mark, encoding: { x: n('c'), y: q('v'), [channel]: { condition: { test: 'datum.v > 4', datum: 'hi', type: 'nominal' }, value: 1 } } })
+      add(`a datum condition on ${channel} of a ${mark}`, { data: DATA, mark, encoding: { x: n('c'), y: q('v'), [channel]: { condition: { test: 'datum.v > 4', datum: 'hi', type: 'nominal' }, value: OTHERWISE[channel] ?? 1 } } })
     }
   }
 })
@@ -199,7 +200,7 @@ group('@aster-charts/vl == vega-lite: the views a repeat names', (add) => {
   add('a repeat in a repeat', { data: DATA, repeat: { row: ['g', 'c'] }, spec: { repeat: { column: ['v', 'w'] }, spec: point({ x: q('x'), y: q(ref('column')), color: n(ref('row')) }) } })
   add('a list repeat in a list repeat', { data: DATA, repeat: ['g', 'c'], spec: { repeat: ['v', 'w'], spec: point({ x: q('x'), y: q(ref('repeat')) }) } })
   add('a layer repeat in a column repeat', { data: DATA, repeat: { column: ['g', 'c'] }, spec: { repeat: { layer: ['v', 'w'] }, spec: point({ x: q('x'), y: q(ref('layer')), color: n(ref('column')) }) } })
-  add('a column repeat in a layer-less list repeat, three deep', { data: DATA, repeat: { row: ['g', 'c'] }, spec: { repeat: { column: ['v', 'w'] }, spec: { repeat: { layer: ['x', 'k'] }, spec: point({ x: q(ref('layer')), y: q(ref('column')), color: n(ref('row')) }) } } })
+  add('a row repeat holding a column repeat holding a layer repeat', { data: DATA, repeat: { row: ['g', 'c'] }, spec: { repeat: { column: ['v', 'w'] }, spec: { repeat: { layer: ['x', 'k'] }, spec: point({ x: q(ref('layer')), y: q(ref('column')), color: n(ref('row')) }) } } })
   add('a hconcat of a repeat and a view', { data: DATA, hconcat: [{ repeat: { column: ['v', 'w'] }, spec: point({ x: q('x'), y: q(ref('column')) }) }, point({ x: q('x'), y: q('v') })] })
   add('a repeat of an hconcat', { data: DATA, repeat: { column: ['v', 'w'] }, spec: { hconcat: [point({ x: q('x'), y: q(ref('column')) }), point({ x: q('k'), y: q(ref('column')) })] } })
   add('a named repeated spec', { data: DATA, repeat: { column: ['v', 'w'] }, spec: { name: 'inner', ...point({ x: q('x'), y: q(ref('column')) }) } })

@@ -5,30 +5,41 @@
  */
 import { itemImage, type ItemImage } from './image-box.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
+import { outputUrl, sceneUrlPolicy, type ImageUrlPolicy } from './url-policy.js'
 
 /** How many image urls are loaded at once (a scene with thousands of urls does not make thousands of requests at once). */
 export const IMAGE_CONCURRENCY = 6
 
-/** An image item the canvas renderer would leave blank: it has a `url` and no loaded bitmap of it. */
-function needsImage(it: SceneItem): it is SceneItem & { url: string } {
+/**
+ * The url to load for an image item the canvas renderer would leave blank (it has a `url` and no loaded bitmap of it), or null.
+ * This is where a canvas host's requests come from, so it is where they are vetted: the url is what `outputUrl` permits under
+ * the policy the scene was evaluated under (else the defaults), as the SVG renderers write it.
+ */
+function neededUrl(it: SceneItem, policy: ImageUrlPolicy | undefined): string | null {
   const url = (it as { url?: unknown }).url
-  if (typeof url !== 'string' || url === '') return false
+  if (typeof url !== 'string' || url === '') return null
   const img = itemImage(it)
-  return img == null || img.complete === false
+  return img == null || img.complete === false ? outputUrl('image', url, policy) : null
 }
 
-/** The urls of the image items the canvas renderer would leave blank (a `url` and no loaded bitmap of it), in scene order, each once. */
+/**
+ * The urls of the image items the canvas renderer would leave blank (a `url` and no loaded bitmap of it), in scene order, each
+ * once: only urls the scene's URL policy permits (see `neededUrl`).
+ */
 export function sceneImageUrls(scene: SceneRoot): string[] {
-  return [...imageUrls(scene.items, new Set())]
+  return [...imageUrls(scene.items, new Set(), sceneUrlPolicy(scene))]
 }
 
 /** {@link sceneImageUrls} into `out`, over a list of mark nodes. */
-function imageUrls(nodes: readonly SceneGroup[] | undefined, out: Set<string>): Set<string> {
+function imageUrls(nodes: readonly SceneGroup[] | undefined, out: Set<string>, policy: ImageUrlPolicy | undefined): Set<string> {
   for (const node of nodes ?? []) {
     if (node.marktype === 'image') {
-      for (const it of node.items ?? []) if (needsImage(it)) out.add(it.url)
+      for (const it of node.items ?? []) {
+        const url = neededUrl(it, policy)
+        if (url !== null) out.add(url)
+      }
     } else {
-      for (const it of node.items ?? []) if (Array.isArray((it as SceneGroup).items)) imageUrls([it as SceneGroup], out)
+      for (const it of node.items ?? []) if (Array.isArray((it as SceneGroup).items)) imageUrls([it as SceneGroup], out, policy)
     }
   }
   return out
@@ -99,6 +110,7 @@ export async function loadImages(urls: Iterable<string>, options: ImageLoadOptio
  */
 export function withSceneImages(scene: SceneRoot, bitmaps: ReadonlyMap<string, ItemImage>): SceneRoot {
   if (bitmaps.size === 0) return scene
+  const policy = sceneUrlPolicy(scene)
   const mapNodes = (nodes: SceneGroup[]): SceneGroup[] => {
     let changed = false
     const out = nodes.map((node) => {
@@ -115,7 +127,8 @@ export function withSceneImages(scene: SceneRoot, bitmaps: ReadonlyMap<string, I
     const out = items.map((it) => {
       let next: SceneItem = it
       if (node.marktype === 'image') {
-        const img = needsImage(it) ? bitmaps.get(it.url) : undefined
+        const url = neededUrl(it, policy)
+        const img = url !== null ? bitmaps.get(url) : undefined
         if (img) next = copyWith(it, { image: img } as Partial<SceneItem>)
       } else if (Array.isArray((it as SceneGroup).items)) {
         next = mapNode(it as SceneGroup)

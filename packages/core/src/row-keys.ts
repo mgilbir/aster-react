@@ -5,8 +5,8 @@
  * (engine-parts.ts), so what all of them share lives here, outside those parts.
  */
 import { orderOf, setOrder } from './tuple-order.js'
-import { accessor, accessorFields, array, ascending, error, field, sortData, type Accessor } from './util.js'
-import { AsterLimitError, activeMeter, meterRows } from './limits.js'
+import { accessor, accessorFields, array, ascending, error, field, TextTable, type Accessor } from './util.js'
+import { AsterLimitError, allotUpTo, meterTick, meteredCompare, sortMetered } from './limits.js'
 import { ascending as numericAscending, quantileSorted } from './arr.js'
 
 export type Row = Record<string, unknown>
@@ -28,15 +28,17 @@ export function lcg(seed: number): () => number {
 // field access
 // ---------------------------------------------------------------------------
 
-const accessors = new Map<string, Accessor>()
-const ACCESSOR_CACHE_LIMIT = 4096
+const accessors = new TextTable<Accessor>('field accessors', 4096, 1_000_000)
 
-/** The accessor of a field spec (`a.b`, `a[0]`, `a\.b`), parsed once per distinct string. */
+/**
+ * The accessor of a field spec (`a.b`, `a[0]`, `a\.b`), parsed once per distinct string. A parameter written `{field, as}` or
+ * `{expr}` reaches a transform already made an accessor (param-resolve.ts): it is that accessor.
+ */
 export function fieldOf(spec: unknown): Accessor {
+  if (typeof spec === 'function') return spec as Accessor
   if (typeof spec !== 'string') return field(spec)
   let found = accessors.get(spec)
   if (found === undefined) {
-    if (accessors.size >= ACCESSOR_CACHE_LIMIT) accessors.clear()
     found = field(spec)
     accessors.set(spec, found)
   }
@@ -97,7 +99,11 @@ export function sortBySpec<T>(items: readonly T[], spec: unknown, leaveOrder = f
   const m = keys.get.length
   const columns = keys.get.map((get) => {
     const column = new Array<unknown>(n)
-    for (let i = 0; i < n; i++) column[i] = get(items[i])
+    // bounded: the spec's sort keys, a column each; the rows tick
+    for (let i = 0; i < n; i++) {
+      column[i] = get(items[i])
+      if ((i & 1023) === 1023) meterTick('sort', 1024)
+    }
     return column
   })
   const order = new Array<number>(n)
@@ -106,15 +112,16 @@ export function sortBySpec<T>(items: readonly T[], spec: unknown, leaveOrder = f
   if (m === 1) {
     const column = columns[0]!
     const sign = keys.sign[0]!
-    sortData(order, (i, j) => compareValues(column[i], column[j]) * sign || (places ? places[i]! - places[j]! : 0) || i - j)
+    sortMetered(order, (i, j) => compareValues(column[i], column[j]) * sign || (places ? places[i]! - places[j]! : 0) || i - j, 'sort')
   } else {
-    sortData(order, (i, j) => {
+    sortMetered(order, (i, j) => {
+      // bounded: the spec's sort keys
       for (let k = 0; k < m; k++) {
         const c = compareValues(columns[k]![i], columns[k]![j])
         if (c !== 0) return c * keys.sign[k]! || (places ? places[i]! - places[j]! : 0) || i - j
       }
       return (places ? places[i]! - places[j]! : 0) || i - j
-    })
+    }, 'sort')
   }
   const sorted = order.map((i) => items[i]!)
   onOrder?.(order)
@@ -132,6 +139,7 @@ export function compareOf(spec: unknown): Accessor<number> | null {
   if (keys === null) return null
   const { get, sign } = keys
   const read = new Set<string>()
+  // bounded: the spec's sort keys and the fields each reads
   for (const g of get) for (const name of accessorFields(g) ?? []) read.add(name)
   let compare: Compare
   if (get.length === 1) {
@@ -141,6 +149,7 @@ export function compareOf(spec: unknown): Accessor<number> | null {
   } else {
     const n = get.length
     compare = (a, b) => {
+      // bounded: the spec's sort keys
       for (let k = 0; k < n; k++) {
         const c = compareValues(get[k]!(a), get[k]!(b))
         if (c !== 0) return c * sign[k]!
@@ -157,7 +166,7 @@ export function stableSortBy<T>(items: readonly T[], compare: Compare | null, ma
   const n = items.length
   const order = new Array<number>(n)
   for (let i = 0; i < n; i++) order[i] = i
-  sortData(order, (i, j) => compare(items[i], items[j]) || (made ? made[i]! - made[j]! : 0) || i - j)
+  sortMetered(order, (i, j) => compare(items[i], items[j]) || (made ? made[i]! - made[j]! : 0) || i - j, 'sort')
   const sorted = new Array<T>(n)
   for (let i = 0; i < n; i++) sorted[i] = items[order[i]!]!
   return sorted
@@ -219,26 +228,37 @@ export function required(type: string, p: Record<string, unknown>, ...names: str
   }
 }
 
-/** `start, start + step, ...` below `stop` (above it for a negative step). The length is checked against the limits before it is allocated. */
+/**
+ * `start, start + step, ...` below `stop` (above it for a negative step), for a transform (`sequence`, `quantile` probabilities,
+ * graticule lines). The length is bounded before it is allocated ({@link allotUpTo}: the transform runner charges the rows).
+ */
 export function numberRange(start: number, stop: number, step: number): number[] {
   start = +start
   stop = +stop
   step = +step
   const length = Math.max(0, Math.ceil((stop - start) / step))
   if (length > 0x7fffffff) throw new AsterLimitError(`range length ${length} > 2147483647`)
-  const meter = activeMeter()
-  meterRows(Number.isFinite(length) ? length : Infinity, 'range')
-  const out: number[] = new Array(length | 0)
+  const out: number[] = new Array(allotUpTo('rows', length, 'range') | 0)
   for (let i = 0; i < out.length; i++) {
     out[i] = start + i * step
-    if (meter && (i & 0xffff) === 0xffff) meter.clock.check('range')
+    if ((i & 0xffff) === 0xffff) meterTick('range', 0x10000)
   }
   return out
 }
 
-/** The number of rows `flatten` makes of one row: the length of the longest of its arrays. */
-export function flattenLength(arrays: unknown[]): number {
-  return arrays.reduce<number>((longest, a) => Math.max(longest, (a as { length: number }).length), 0)
+/**
+ * The number of rows `flatten` makes of one row: the length of the longest of its arrays. A field that holds nothing (`null` or
+ * `undefined`) has no length: vega's flatten fails on it with the engine's TypeError (`Cannot read properties of undefined
+ * (reading 'length')`), and so does this, with a message that says which field of which row (`names`, when the caller has them).
+ */
+export function flattenLength(arrays: unknown[], names?: readonly string[]): number {
+  let longest = 0
+  for (let i = 0; i < arrays.length; i++) {
+    const a = arrays[i]
+    if (a == null) throw new TypeError(`[aster] flatten: a row holds ${a === null ? 'null' : 'undefined'} in the field ${names?.[i] === undefined ? `#${i + 1}` : JSON.stringify(names[i])}, not an array to flatten (vega's flatten fails on it with a TypeError too)`)
+    longest = Math.max(longest, (a as { length: number }).length)
+  }
+  return longest
 }
 
 type Get = (d: unknown) => unknown
@@ -247,6 +267,7 @@ type Get = (d: unknown) => unknown
 export function numbersOf(values: ArrayLike<unknown>, get?: Get): number[] {
   const out: number[] = []
   for (let i = 0; i < values.length; i++) {
+    if ((i & 1023) === 1023) meterTick('quantile', 1024)
     const raw = get ? get(values[i]) : values[i]
     if (raw == null || raw === '') continue
     const x = +(raw as number)
@@ -257,7 +278,7 @@ export function numbersOf(values: ArrayLike<unknown>, get?: Get): number[] {
 
 /** Quantiles `probs` of the numbers in `values` (read through `get`); `undefined` where there is no number. */
 export function quantiles(values: ArrayLike<unknown>, probs: readonly number[], get?: Get): Array<number | undefined> {
-  const sorted = Float64Array.from(numbersOf(values, get)).sort(numericAscending)
+  const sorted = Float64Array.from(numbersOf(values, get)).sort(meteredCompare(numericAscending, 'quantile'))
   return probs.map((p) => quantileSorted(sorted, p))
 }
 

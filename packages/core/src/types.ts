@@ -67,6 +67,18 @@ export interface RuntimeInput {
   /** Static signal values for signals that are referenced but not event-driven. */
   signals?: Record<string, unknown>
   /**
+   * The scene of the view this evaluation continues, as vega's running view continues from what it showed: an axis keeps the
+   * ticks it still shows in the order it showed them, and the ticks it did not show come after them, in order (vega joins an
+   * axis's tick items by value); an ordinal scale given no domain starts from the categories it ended with; an `autosize: pad`
+   * view keeps its padding until `width`, `height` or `padding` change (or `autosize.resize`). Where the rows a mark is drawn from
+   * came or went (other than rows appended after the others), vega's item order is its join's, which the rows do not tell: the
+   * evaluation, and any that continues its scene, is then the first render of its input. Without it the evaluation is the first
+   * render of the view: the ticks in order. The scene is read
+   * only for that order, so an evaluation given the same scene is the same scene, fresh or incremental. A session made with
+   * `createChartSession({ runningView: true })` (what `<Chart>` does) passes its last scene for every evaluation of the same chart.
+   */
+  retainFrom?: SceneRoot
+  /**
    * The size of the element the chart fills, in pixels: what `containerSize()`
    * returns in expressions (vega-lite's `width: "container"` reads it). Without
    * it `containerSize()` is `[undefined, undefined]`, as in headless vega, and
@@ -80,9 +92,10 @@ export interface RuntimeInput {
    * vega-lite's `"container"`) keeps doing so and only sees the container through `containerSize()`, and a spec whose
    * autosize is `none` keeps its own size (in Vega its whole size is its `width`, `height` and `padding`). As in Vega, where
    * `view.width(w)` is a signal write, the later write wins: a `width` / `height` in `signals` beats it, and an
-   * explicit `width` / `height` beats both. Without `containerSize` it is also what `containerSize()` returns.
+   * explicit `width` / `height` beats both. Without `containerSize` it is also what `containerSize()` returns. Each dimension
+   * is its own: a host that lets the chart fill only the width of its element gives only `width`.
    */
-  measuredSize?: { width: number; height: number }
+  measuredSize?: { width?: number; height?: number }
   /**
    * Partial re-evaluation: the names of datasets whose VALUES changed since
    * the previous evaluate (the datasets' transform pipeline re-runs, and only
@@ -110,27 +123,21 @@ export interface RuntimeInput {
    * of falling back to a full re-derive. `dataChanges` remains the compact
    * same-length form; when both are present `dataPulse` wins for that dataset.
    */
-  dataPulse?: Record<string, {
-    changed?: number[]
-    /** new index -> previous index (-1 for inserted rows). */
-    from?: number[]
-    /** previous index -> new index (-1 for removed rows). */
-    to?: number[]
-    /** Appended ranges in new coordinates. */
-    added?: Array<[number, number]>
-    /** Removed ranges in previous coordinates. */
-    removed?: Array<[number, number]>
-    /**
-     * Compact append-only pulse: the retained prefix is unchanged in index, so
-     * `from` can be synthesised on demand. `baseLength` is the previous length.
-     */
-    appendOnly?: boolean
-    baseLength?: number
-  }>
+  dataPulse?: Record<string, import('./pulse.js').PulseChangeInput | import('./pulse.js').RowDiff>
   /**
-   * Infer a per-datum changeset by diffing replaced source arrays against the
-   * previous session evaluation. Defaults to true when `dataChanges` is absent;
-   * set false to force a full re-encode.
+   * `evaluateChart` only: the scene this caller was given by its previous `evaluateChart` of the same compiled chart, which its
+   * `dataChanges` / `dataPulse` are relative to. With it a hint for a new array is checked in constant time, by identity: it is
+   * taken when the chart's last evaluation was this caller's (the rows the hint is relative to are the rows the chart kept state
+   * for), and otherwise -- another caller evaluated the same compiled chart since -- the hinted datasets are derived in full.
+   * Without it, a hint for a new array is taken only after one pass over the rows checks that those it calls unchanged are the
+   * rows the chart's last evaluation was given (the same objects, or equal field by field), which costs O(rows). A session keeps
+   * its own previous rows and does not read it.
+   */
+  previousScene?: SceneRoot
+  /**
+   * Sessions only (`createChartSession`, and the React shells): infer a per-datum changeset by diffing replaced source arrays
+   * against the previous session evaluation. Defaults to true when `dataChanges` is absent; set false to force a full re-encode.
+   * `evaluateChart` keeps no previous rows to diff against and does not read it.
    */
   autoChanges?: boolean
   /**
@@ -164,15 +171,24 @@ export interface CompiledChart {
    * when it is compiled; absent when nowhere. `limits.regex: 'refuse'` refuses the chart for them before anything runs.
    */
   regexSites?: readonly string[]
+  /**
+   * The data sets vega indexes by `unit` (a selection function names one with a literal last argument `'intersect'`): an
+   * `intersect` test on any other requires every tuple to match. Absent when none.
+   */
+  unitIndexed?: readonly string[]
   /** `config.range` — named range lookup for scales. */
   configRange?: Record<string, unknown>
   /** vega autosize `contains` (viewSizeLayout's contains: 'padding' makes the
    * spec'd width/height include the padding). */
   autosizeContains?: string
+  /** vega autosize `resize: true`: the layout sizes the view on every run (a view that continues another resizes; see `RuntimeInput.retainFrom`). */
+  autosizeResize?: boolean
   width: SizeSpec
   height: SizeSpec
   padding: { top: number; right: number; bottom: number; left: number }
   background: string | null
+  /** The view's description (vega-parser: the spec's `description`, else `config.description`), for the scene (`SceneRoot.description`). */
+  description?: string
   /** Stroke of the plot frame border (e.g. '#ddd' from style 'cell'). */
   frameStroke?: string
   frameFill?: string
@@ -212,31 +228,42 @@ export interface CompiledChart {
    * view's event listeners that are not named.
    */
   eventConfig?: { defaults?: { prevent?: unknown; allow?: unknown }; view?: unknown }
+  /**
+   * `config.locale`: the chart's own number and time locale (vega-view `locale(spec.locale.number, spec.locale.time)`), which its
+   * axes, legends, captions, expression `format` / `timeFormat` / `timeParse` and data parsing read; a half it leaves out is the
+   * default one.
+   */
+  locale?: import('./locale.js').LocaleDefinition
   /** Top-level chart title (string or object form, defaults merged from config.title). */
   title?: CompiledTitle
   /** Cartographic projections referenced by geo marks / the geoshape transform. */
   projections?: CompiledProjection[]
-  /** Signal values supplied by the host (not serialized). */
   /** Root-level trellis layout options (vega spec `layout`), when present. */
   layout?: Record<string, unknown>
-  /**
-   * The view dimensions the spec leaves to its content: no size and no `width` / `height` signal. In Vega that dimension is
-   * 0 and the autosize pass grows it to what is drawn (a composition's laid-out groups, text hanging below an axis), so a
-   * host's container does not size it.
-   */
   /**
    * An expression of the spec asks `isTuple` of what may be an engine tuple: its evaluations register the tuples they make (util
    * `withTuples`). `'facet'`: it only asks of Vega-Lite's `facet` signal, so an evaluation registers them only when the value it is
    * given for that signal is not a known tuple.
    */
   callsIsTuple?: true | 'facet'
+  /**
+   * The view dimensions the spec leaves to its content: no size and no `width` / `height` signal. In Vega that dimension is
+   * 0 and the autosize pass grows it to what is drawn (a composition's laid-out groups, text hanging below an axis), so a
+   * host's container does not size it.
+   */
   contentSized?: ReadonlyArray<'width' | 'height'>
+  /**
+   * An expression of the spec compares two values that may be objects with an equality operator (`datum === src`): its evaluations
+   * record which tuple each copy of a row stands for (util `withTupleOrigins`), so the comparison is vega's tuple identity.
+   */
+  comparesTuples?: true
 }
 
 export interface CompiledTitle {
   /** The text, or a signal expression (a group title reads its facet datum as `parent`). */
   text: string | string[] | { signal: string }
-  subtitle?: string
+  /** The subtitle as the title's text is: lines, or a signal expression (the renderer reads the title's own spec). */
+  subtitle?: string | string[] | { signal: string }
   orient: 'top' | 'bottom' | 'left' | 'right' | 'none'
   anchor: 'start' | 'middle' | 'end'
   offset: number
@@ -332,6 +359,11 @@ export interface CompiledData {
   source?: string | string[]
   format?: Record<string, unknown>
   transform: CompiledTransform[]
+  /**
+   * The data set's triggers (`on`: `{trigger, insert, remove, toggle, modify, values}`): each is vega's operator
+   * `if(<trigger>, modify("<name>", <insert>, <remove>, <toggle>, <modify>, <values>), 0)`, run by the signal event loop.
+   */
+  on?: Array<Record<string, unknown>>
 }
 
 export type CompiledTransform =
@@ -376,9 +408,17 @@ export type ScaleRange =
   | { signal: string }
   | unknown[]
 
+/** A scale type vega registers (vega-scale `isValidScaleType`); `compileChart` refuses any other, as vega-parser does. */
+export type ScaleType =
+  | 'identity' | 'linear' | 'log' | 'pow' | 'sqrt' | 'symlog' | 'time' | 'utc'
+  | 'sequential' | 'sequential-linear' | 'sequential-log' | 'sequential-pow' | 'sequential-sqrt' | 'sequential-symlog'
+  | 'diverging-linear' | 'diverging-log' | 'diverging-pow' | 'diverging-sqrt' | 'diverging-symlog'
+  | 'quantile' | 'quantize' | 'threshold' | 'ordinal' | 'band' | 'point' | 'bin-ordinal'
+
 export interface CompiledScale {
   name: string
-  type: 'linear' | 'log' | 'pow' | 'sqrt' | 'symlog' | 'time' | 'utc' | 'band' | 'point' | 'ordinal' | 'quantize' | 'quantile' | 'threshold' | 'sequential' | 'bin-ordinal' | 'identity'
+  /** Absent: vega's default, linear. */
+  type: ScaleType
   domain: ScaleDomain
   range: ScaleRange
   zero?: boolean
@@ -601,6 +641,13 @@ export interface CompiledMark {
   key?: string
   sort?: SortSpec
   encode?: Record<string, Record<string, EncodeValue | EncodeValue[]>>
+  /** The channels the spec's own `update` set writes, for a mark with encode sets a signal handler can name (`hover`, ...) or triggers. */
+  updateChannels?: readonly string[]
+  /**
+   * The triggers of a named mark (`on: [{trigger, modify, values}]`, vega-parser parseTrigger): each is the operator
+   * `if(<trigger>, modify("<name>", null, null, null, <modify>, <values>), 0)`, run by the signal event loop on the mark's items.
+   */
+  on?: Array<Record<string, unknown>>
   transform?: CompiledTransform[]
   /** Group mark title (for axis/row titles). */
   title?: unknown
@@ -629,7 +676,7 @@ export interface CompiledMark {
 
 export type EncodeValue =
   | { value: unknown }
-  | { field: string; format?: unknown; formatType?: string; type?: string }
+  | { field: string; type?: string }
   | { scale: string; field: string | EncodeValue; band?: boolean | number; offset?: number; round?: boolean; range?: boolean }
   | { signal: string }
   | EncodeConditional
@@ -679,10 +726,21 @@ export interface SceneRoot {
   frameY?: number
   /** The root group item's own aria channels (the view `encode`'s, or `config.group`'s): `description`, `aria`, `ariaRole`, `ariaRoleDescription`. */
   frameAria?: Pick<SceneItem, 'description' | 'aria' | 'ariaRole' | 'ariaRoleDescription'>
-  /** @internal The expression runtime for this evaluation (event-loop wiring). */
-  runtime?: unknown
-  /** @internal The compiled chart for this evaluation. */
-  compiled?: unknown
+  /** The root group item's `cursor` (the view `encode`'s): what the pointer shows over the view where no item takes it (vega's root item is what `pick` finds there). */
+  frameCursor?: string
+  /**
+   * The event loop's handles on this evaluation: the expression runtime, the compiled chart, the values the chart's signals held
+   * (`signalParams`) and the `limits` it was evaluated under. `bindSceneSignals` reads them (a host that calls `bindSignalEvents` itself
+   * takes its arguments from here). They are own properties of a scene evaluated in this process, not part of its structure:
+   * a scene that crossed a worker or a JSON round trip has none of them (`bindSceneSignals` then reports that and binds nothing).
+   */
+  runtime?: import('./expression.js').ExpressionRuntime
+  /** See {@link SceneRoot.runtime}. */
+  compiled?: CompiledChart
+  /** See {@link SceneRoot.runtime}. */
+  signalParams?: Record<string, unknown>
+  /** See {@link SceneRoot.runtime}: the `limits` the scene was evaluated under, so the event loop runs a handler under the same ones. */
+  __limits?: import('./limits.js').SpecLimits
   background?: string | null
   frameStroke?: string
   frameFill?: string
@@ -706,10 +764,15 @@ export interface SceneRoot {
   /** Gradient definitions for use by fill="url(#...)" references. */
   defs?: SceneDef[]
   name?: string
-  ariaRole?: string
-  ariaLabel?: string
+  /**
+   * The view's description -- the spec's top-level `description`, else `config.description` ("Vega visualization" by default) --:
+   * what vega's view writes as its container's `aria-label` (`view.description`), and the accessible tree's label (`buildA11yTree`).
+   */
+  description?: string
   /** @internal Resolved scales in this scope (scene-differential metadata). */
   __scales?: ScaleSnapshot[]
+  /** @internal The chart's own locale (`config.locale`), which the guide captions format with: plain data, as the scene may be cloned. */
+  __locale?: import('./locale.js').LocaleDefinition
   /**
    * @internal Live scales for this evaluation, so hosts can derive `ChartInfo`
    * (interaction, hit tests) from an already-evaluated scene without compiling
@@ -720,7 +783,7 @@ export interface SceneRoot {
    * @internal The rows each spec dataset ended with in this evaluation, and the names of the ones that never ran (see
    * `datasetsOfScene`). Non-enumerable, so it is not part of the scene's structure; not serializable.
    */
-  __datasets?: { rows: ReadonlyMap<string, readonly unknown[]>; failed: ReadonlySet<string> | undefined }
+  __datasets?: { rows: ReadonlyMap<string, import('./content-stamp.js').History>; failed: ReadonlySet<string> | undefined }
 }
 
 export interface SceneGroup extends SceneItem {
@@ -734,11 +797,18 @@ export interface SceneGroup extends SceneItem {
   hasLinks?: boolean
   /** The MARK's `clip` (not the item's): this group item sits in a container clipped to the enclosing group's frame. */
   markClip?: boolean
+  /** The shape the MARK's `clip` is when it is one (`{sphere}`, `{path}`, a `{signal}` shape): the container is clipped to it instead. */
+  markClipPathD?: string
   /** A grid header or footer the layout had no column (row) for: it stays where it was and adds nothing to the bounds of the group. */
   unbounded?: boolean
+  /** An authored mark of role `title`: the layout reads it as the title and adds it to no bounds of its own (`unbounded`), but the bounds of the group item that holds it count it. */
+  titleRole?: boolean
   /** Pre-computed rounded-rect path `d` for clip-path defs (when cornerRadius > 0). */
   clipPathD?: string
-  /** @internal The mark's source dataset. Written when the group is built; nothing reads it (groups are matched by compiled-mark identity). */
+  /**
+   * @internal The mark's source dataset. Written when the group is built. The hit index reads it (`HitTarget.fromData`: a mark with a
+   * source dataset is data-driven); groups are matched across evaluations by compiled-mark identity, not by it.
+   */
   __source?: string
   /**
    * @internal The fields whose values identify items across evaluations (no renderer reads them; `@aster-charts/core/transition`
@@ -778,6 +848,11 @@ export interface SceneGroup extends SceneItem {
   noBound?: boolean
   /** Group items of one mark carry the mark's index in its parent, so consecutive items of a mark share one container. */
   markIndex?: number
+  /**
+   * A group item's mark's own `zindex` (vega's `mark.zindex`), which orders its mark among the marks of its scope; the item's own
+   * `zindex` (its encode's) orders it among the items of its mark (paint-order.ts).
+   */
+  markZindex?: number
   /** A group mark with no items: this node only stands for its (empty) container in the scene; it is no group item. */
   emptyMark?: boolean
   /** The mark's `interactive: false` (its SVG container then has `pointer-events="none"`). */
@@ -822,9 +897,6 @@ export interface SceneItem {
   /** @internal Differential-update generation: set when an item is (re)encoded; a DOM
    * patch skips subtrees whose item was not touched this eval. */
   __gen?: number
-  /** @internal Cached DOM descriptor for a reused (unchanged) item, so the DOM
-   * desc is not rebuilt from scratch every patch. */
-  __domDesc?: unknown
   // geometry
   x?: number
   y?: number
@@ -862,6 +934,11 @@ export interface SceneItem {
   // image
   url?: string
   aspect?: boolean
+  /**
+   * An image mark's bitmap (a loaded `Image`, or a canvas: a `heatmap` transform's, or the host's), what the renderers draw
+   * (`@aster-charts/core/canvas` loads them: `withSceneImages`). With none, an image with a `url` is drawn from it.
+   */
+  image?: import('./image-box.js').ItemImage | null
   // presentation
   fill?: string | { gradient: string }
   fillOpacity?: number
@@ -884,6 +961,8 @@ export interface SceneItem {
   cursor?: string
   /** Hyperlink: the item's element is drawn inside `<a xlink:href>` (after `sanitizeHref`). */
   href?: string
+  /** The tooltip channel's value (a string, or an object of fields for vega-tooltip's table): what `HitIndex.tooltip()` hands a host. Never painted. */
+  tooltip?: unknown
   /** Internal: marks a legend title item so the builder can paint it last. */
   _legendTitle?: boolean
   /**
@@ -899,7 +978,6 @@ export interface SceneItem {
   __tick?: unknown
   // accessibility
   ariaRole?: string
-  ariaLabel?: string
   ariaRoleDescription?: string
   aria?: boolean
   description?: string

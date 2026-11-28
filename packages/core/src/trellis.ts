@@ -12,7 +12,7 @@
  */
 import type { SceneGroup } from './types.js'
 import { Bounds, layoutBounds } from './bounds.js'
-import { boundedCount, ceiling } from './limits.js'
+import { allot, meterTick } from './limits.js'
 
 type Opt = Record<string, unknown>
 
@@ -72,9 +72,12 @@ function shiftAlong(axis: Axis, boxes: Bounds[], at: number[], padding: number, 
   const last = (t: number): number => (columns ? n : Math.min(n, (t + 1) * ncols))
 
   if (align === 'each') {
+    // bounded: one pass per track, at most the facet columns allotted (or the rows of the cells); the cells loops inside partition the cells
     for (let t = 1; t < tracks; ++t) {
       let widest = 0
+      // bounded: the cells of one track: the tracks partition the cells
       for (let i = first(t); i < last(t); i += step) if (widest < lead[i]!) widest = lead[i]!
+      // bounded: the cells of one track: the tracks partition the cells
       for (let i = first(t); i < last(t); i += step) lead[i] = widest + extent[t - 1]!
     }
   } else if (align === 'all') {
@@ -82,6 +85,7 @@ function shiftAlong(axis: Axis, boxes: Bounds[], at: number[], padding: number, 
     for (let i = 0; i < n; ++i) if (trackOf(i) > 0 && widest < lead[i]!) widest = lead[i]!
     for (let i = 0; i < n; ++i) if (trackOf(i) > 0) lead[i] = widest + total
   } else {
+    // bounded: one pass per track over its cells: the tracks partition the cells
     for (let t = 1; t < tracks; ++t) for (let i = first(t); i < last(t); i += step) lead[i]! += extent[t - 1]!
   }
 
@@ -94,8 +98,10 @@ function shiftAlong(axis: Axis, boxes: Bounds[], at: number[], padding: number, 
       shift[i]! += pos - at[i]!
     }
   } else {
+    // bounded: one pass per column, at most the facet columns allotted; the loop inside walks that column's cells
     for (let c = 0; c < ncols; ++c) {
       let pos = 0
+      // bounded: the cells of one column: the columns partition the cells
       for (let i = c; i < n; i += ncols) {
         pos += lead[i]!
         shift[i]! += pos - at[i]!
@@ -121,7 +127,7 @@ export function placeGrid(boxes: Bounds[], at: ReadonlyArray<{ x: number; y: num
   const n = boxes.length
   const ncols = (opt.columns as number) || n
   // `columns` comes from the spec: bound the per-column arrays before allocating them
-  if (ncols > 0) { ceiling('items', ncols, 'facet columns'); boundedCount(ncols, 'facet columns') }
+  if (ncols > 0) allot('items', ncols, 'facet columns')
   const nrows = ncols <= 0 ? 1 : Math.ceil(n / ncols)
   const dx = shiftAlong({ columns: true, ncols, nrows }, boxes, at.map((a) => a.x || 0), option(opt.padding, 'column'), option(opt.align, 'column'), option(opt.center, 'column'))
   const dy = shiftAlong({ columns: false, ncols, nrows }, boxes, at.map((a) => a.y || 0), option(opt.padding, 'row'), option(opt.align, 'row'), option(opt.center, 'row'))
@@ -234,6 +240,7 @@ function placeStrips(strips: SceneGroup[], cells: SceneGroup[], ncols: number, n
   const back = overColumns ? ncols : 1
 
   let margin = 0
+  // bounded: one pass over the cells of a column or row
   for (let i = start; i < n; i += stride) if (cells[i]) margin = outward(margin, sideOf(cells[i]!, edge, flush))
   if (!strips.length) return margin
 
@@ -248,7 +255,7 @@ function placeStrips(strips: SceneGroup[], cells: SceneGroup[], ncols: number, n
     const strip = placed[j]!
     let k = i
     let cell: SceneGroup | undefined
-    for (; k >= 0 && (cell = cells[k]) == null; k -= back);
+    for (; k >= 0 && (cell = cells[k]) == null; k -= back) meterTick('facet layout')
     // A strip with no cell at or before its place (more column headers or footers than the grid has cells, in a grid with more columns
     // than cells): vega's layout reads the position of the cell it did not find and throws. The strips before it stay where they were
     // put, and the layout stops there (see `layoutFacet`).
@@ -295,7 +302,7 @@ export function layoutFacet(view: SceneGroup, opt: Opt, memory?: { prev: readonl
   try {
     const flush = opt.bounds === 'flush'
     const ncols = (opt.columns as number) || cells.length
-    if (ncols > 0) { ceiling('items', ncols, 'facet columns'); boundedCount(ncols, 'facet columns') }
+    if (ncols > 0) allot('items', ncols, 'facet columns')
     const nrows = ncols <= 0 ? 1 : Math.ceil(cells.length / ncols)
 
     const grid = layoutCells(cells, opt)

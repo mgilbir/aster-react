@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { ChartHandle } from './Chart'
 import type { SelectionInterval, ViewDomain } from './interaction'
 import { forEachVariant } from './testing/variants'
+import { stubPointerCapture, type PointerCaptureStub } from './testing/pointer-capture'
 
 // The matrix runs every test below on <Chart>, <SvgChart> and <SvgChart interaction={interaction}>;
 // `Chart` is the variant's component (see testing/variants.tsx).
@@ -52,11 +53,11 @@ forEachVariant(['svg'], (Chart, variant) => {
     act(() => { el.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, pointerId: id, bubbles: true })) })
   }
 
+  let pointerCapture: PointerCaptureStub
   beforeEach(() => {
-    ;(Element.prototype as unknown as Record<string, unknown>).setPointerCapture = vi.fn()
-    ;(Element.prototype as unknown as Record<string, unknown>).releasePointerCapture = vi.fn()
+    pointerCapture = stubPointerCapture()
   })
-  afterEach(() => { document.body.innerHTML = '' })
+  afterEach(() => { pointerCapture.restore(); document.body.innerHTML = '' })
 
   describe.each([
     ['xscale/yscale', { x: 'xscale', y: 'yscale' }],
@@ -115,6 +116,73 @@ forEachVariant(['svg'], (Chart, variant) => {
       const rect = overlay.firstElementChild as HTMLElement
       expect(rect).not.toBeNull()
       expect(parseFloat(rect.style.width)).toBeCloseTo(80, 0) // 4 of 10 over a 200px plot
+    })
+  })
+
+  // The scale TYPE decides what a pixel is worth in the data (a Date, a power of ten): every positional scale type a chart can have
+  // pans, zooms and brushes, and the view and the interval it reports are numbers over the scale's own domain (a time scale's in
+  // milliseconds). `describe.each` over the names alone only ever ran linear scales (C665).
+  const T0 = Date.UTC(2024, 0, 1)
+  const DAY = 86_400_000
+  const TYPES: Array<[string, 'linear' | 'time' | 'utc' | 'log' | 'sqrt' | 'pow' | 'symlog', [number, number]]> = [
+    ['linear', 'linear', [0, 10]], ['time', 'time', [T0, T0 + 10 * DAY]], ['utc', 'utc', [T0, T0 + 10 * DAY]],
+    ['log', 'log', [1, 1000]], ['sqrt', 'sqrt', [0, 100]], ['pow', 'pow', [0, 100]], ['symlog', 'symlog', [0, 1000]],
+  ]
+  const typedSpec = (type: string, domain: [number, number]): never => ({
+    $schema: 'https://vega.github.io/schema/vega/v6.json',
+    width: 200, height: 100, padding: 5, autosize: 'none',
+    data: [{ name: 't', values: [{ px: domain[0], py: 0 }, { px: (domain[0] + domain[1]) / 2, py: 5 }, { px: domain[1], py: 10 }] }],
+    scales: [
+      { name: 'x', type, domain, range: 'width', nice: false, ...(type === 'pow' ? { exponent: 2 } : {}) },
+      { name: 'y', type, domain, range: 'height', nice: false, ...(type === 'pow' ? { exponent: 2 } : {}) },
+    ],
+    axes: [{ scale: 'x', orient: 'bottom' }, { scale: 'y', orient: 'left' }],
+    marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'px' }, y: { scale: 'y', value: domain[0] }, size: { value: 40 } } } }],
+  }) as never
+
+  describe.each(TYPES)('pan/zoom/brush on %s scales', (_label, type, domain) => {
+    const span = domain[1] - domain[0]
+    const widthOf = (axis: unknown[] | undefined): number => Number(axis![1]) - Number(axis![0])
+
+    it('the wheel zooms: the reported view is a narrower, finite range of the domain', () => {
+      const onViewChange = vi.fn<(v: ViewDomain | null) => void>()
+      const { host } = mount(<Chart spec={typedSpec(type, domain)} panZoom onViewChange={onViewChange} width={200} height={100} />)
+      wheel(host)
+      expect(host.getAttribute('data-aster-view')).toBe('zoomed')
+      const view = onViewChange.mock.calls.at(-1)![0]!
+      for (const axis of [view.x, view.y]) {
+        expect(axis!.every((v) => Number.isFinite(Number(v)))).toBe(true)
+        expect(widthOf(axis)).toBeGreaterThan(0)
+        expect(widthOf(axis)).toBeLessThan(span)
+        expect(Number(axis![0])).toBeGreaterThanOrEqual(domain[0] - 1e-6 * span)
+        expect(Number(axis![1])).toBeLessThanOrEqual(domain[1] + 1e-6 * span)
+      }
+    })
+
+    it('the keyboard zooms with + and pans with ArrowRight', () => {
+      const onViewChange = vi.fn<(v: ViewDomain | null) => void>()
+      const { host } = mount(<Chart spec={typedSpec(type, domain)} panZoom onViewChange={onViewChange} width={200} height={100} />)
+      key(host, '+')
+      const zoomed = onViewChange.mock.calls.at(-1)![0]!
+      expect(widthOf(zoomed.x)).toBeLessThan(span)
+      key(host, 'ArrowRight')
+      const panned = onViewChange.mock.calls.at(-1)![0]!
+      expect(Number(panned.x![0])).toBeGreaterThan(Number(zoomed.x![0]))
+    })
+
+    it('a brush drag reports a finite interval inside the domain', () => {
+      const onSelect = vi.fn<(i: SelectionInterval | null) => void>()
+      const { container } = mount(<Chart spec={typedSpec(type, domain)} onSelect={onSelect} width={200} height={100} />)
+      ptr(overlayOf(container), 'pointerdown', 30, 20)
+      ptr(overlayOf(container), 'pointermove', 130, 80)
+      ptr(overlayOf(container), 'pointerup', 130, 80)
+      const interval = onSelect.mock.calls.at(-1)![0]!
+      for (const axis of [interval.x, interval.y]) {
+        expect(axis!.every((v) => Number.isFinite(Number(v)))).toBe(true)
+        expect(widthOf(axis)).toBeGreaterThan(0)
+        expect(Number(axis![0])).toBeGreaterThanOrEqual(domain[0] - 1e-6 * span)
+        expect(Number(axis![1])).toBeLessThanOrEqual(domain[1] + 1e-6 * span)
+      }
     })
   })
 

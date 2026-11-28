@@ -10,14 +10,14 @@
  * (`./util.js`), the colour spaces (`./color.js`, the engine's colour part), the calendar (`./time.js`, the engine's time part: engine-parts.ts)
  * and the format layer (`./locale.js`).
  */
-import { currentLocale } from './locale.js'
-import { boundedCount, ceiling, meterBytes, meterTick, checkRegexInput, checkRegexObject, regExpOf } from './limits.js'
+import { currentLocale, type Locale } from './locale.js'
+import { activeMeter, allot, HARD_CAPS, metering, meterTick, checkRegexObject, checkRegexRun, regExpOf } from './limits.js'
 import { bandSpace, scaleGradient, type Scale } from './scale.js'
 import { part } from './engine-parts.js'
 import { parseExpressionCached } from './expr-parser.js'
 import { PRIMITIVE_TUPLE, tupleDatum } from './util.js'
 import { ADDON_FUNCTIONS } from './addon-functions.js'
-import { compileExpression, DefaultFunctions, ExpressionConstants, EventFunctions, FIRST_ARGUMENT_ONLY, markBuiltinTable } from './expr-interpreter.js'
+import { compileExpression, DefaultFunctions, ExpressionConstants, EventFunctions, FIRST_ARGUMENT_ONLY, markBuiltinTable, markInspectors, SIGNAL_CONTEXT } from './expr-interpreter.js'
 
 /**
  * `sequence(...)`: the arithmetic sequence [start, stop) by step, as vega's (d3-array's `range`) reads its arguments: by how many
@@ -30,13 +30,14 @@ function numericSequence(args: readonly unknown[]): number[] {
   let stop = +(args[1] as number)
   let step = 1
   if (n < 2) { stop = start; start = 0 } else if (n > 2) step = +(args[2] as number)
-  const count = Math.max(0, Math.ceil((stop - start) / step))
-  // Deviation from d3/vega (safety): under limits the length is bounded BEFORE
-  // the allocation (sequence(0, 5e7) would otherwise build a 400 MB array in
-  // one uninterruptible call), and the clock is sampled while filling.
-  ceiling('rows', count, 'sequence')
-  boundedCount(count, 'sequence', 'rows')
-  const len = count | 0
+  // (d3-array's `range` sizes its array by the count `| 0`, as vega does: a count of 2^32 + 5 is 5 elements, one from 2^31 to
+  // 2^32 is negative, `Invalid array length`)
+  const len = Math.max(0, Math.ceil((stop - start) / step)) | 0
+  if (len < 0) throw new RangeError('Invalid array length')
+  // Deviation from d3/vega (safety): the length actually allocated is bounded BEFORE the allocation, by the built-in ceiling and
+  // under limits by the row caps (sequence(0, 5e7) would otherwise build a 400 MB array in one uninterruptible call), and the
+  // clock is sampled while filling.
+  allot('rows', len, 'sequence')
   const out = new Array(len)
   for (let i = 0; i < len; i++) {
     out[i] = start + i * step
@@ -69,10 +70,17 @@ export interface ExpressionRuntime {
    */
   modify?: (name: string, insert: unknown, remove: unknown, toggle: unknown, modify: unknown, values: unknown) => number
   /**
-   * The rows dataset `name` publishes for the input rows `raw`: its transform pipeline run over them. The
-   * event loop shows a dataset it modified through this, before the next evaluation computes it for real.
+   * The `encode(item, set, retval)` expression function (vega-functions): re-encode the scenegraph item with the named encode set
+   * of its mark, and answer `retval`, else the item. Only the signal event loop supplies it (encode-handlers.ts).
    */
-  transformed?: (name: string, raw: readonly unknown[]) => unknown[]
+  encode?: (item: unknown, set: string) => void
+  /**
+   * The rows dataset `name` publishes for the input rows `raw`: its transform pipeline run over them. The
+   * event loop shows a dataset it modified through this, before the next evaluation computes it for real. `runtime`: the
+   * runtime the pipeline's expressions run in, when it is not the evaluation's own (the loop runs a dataset's filters against the
+   * selection store as it has just edited it).
+   */
+  transformed?: (name: string, raw: readonly unknown[], runtime?: ExpressionRuntime) => unknown[]
   /**
    * `inScope(item)`: whether the item lies within the group whose scope the expression runs in (vega-functions
    * inscope.js reads `this.context.group`). Absent, the expression runs in the root scope, whose group is the root of
@@ -104,20 +112,37 @@ export interface ExpressionRuntime {
    * empty until its marks are built.
    */
   intersect?: (box: unknown, opt?: unknown, group?: unknown) => unknown[]
+  /**
+   * The locale `format`, `timeFormat`, `timeParse` ... read (vega's view locale): the chart's own when its config has a `locale`.
+   * Absent, the default locale.
+   */
+  locale?: () => Locale
+  /**
+   * Whether vega would have indexed the data set by `unit` (see `CompiledChart.unitIndexed`): only then does an `intersect`
+   * selection test combine per unit; absent, every data set is (the Vega-Lite case: its specs always name the op literally).
+   */
+  unitIndexed?: (name: string) => boolean
 }
 
-export type CompiledExpr = (datum: unknown, params?: Record<string, unknown>, event?: unknown) => unknown
-
-// The default locale -- upstream's expression `format` goes through
-// vega-format's default locale (grouping included). It is read per call (not
-// snapshotted at import) so a later `defaultLocale(...)` is honoured.
-const L = {
-  format: (spec: string) => currentLocale().format(spec),
-  timeFormat: (spec: unknown) => currentLocale().timeFormat(spec),
-  utcFormat: (spec: unknown) => currentLocale().utcFormat(spec),
-  timeParse: (spec: string) => currentLocale().timeParse(spec),
-  utcParse: (spec: string) => currentLocale().utcParse(spec),
+/**
+ * The value of an expression as a signal's: the signals alone are in scope, as in vega's parameter and operator expressions (a
+ * signal's `init` / `update`, a `{signal}` of a scale, an axis, a transform parameter, a view size). `datum`, `event` and `item`
+ * are not defined there: reading one throws `ReferenceError: datum is not defined` when it is evaluated, as vega's generated code
+ * does. (A row's expression, an encode and an event handler call the expression with their row, item or event.)
+ */
+export function evalSignal(fn: CompiledExpr, params: Record<string, unknown> | undefined): unknown {
+  return fn(SIGNAL_CONTEXT, params)
 }
+
+/** An expression bound to a runtime. `item` is the scenegraph item an encode is evaluated for (vega binds it there). */
+export type CompiledExpr = (datum: unknown, params?: Record<string, unknown>, event?: unknown, item?: unknown) => unknown
+
+/**
+ * The locale an expression formats and parses through (vega-functions reads `this.context.dataflow.locale()`): the chart's
+ * (`config.locale`, see `chartLocale`) when its runtime says so, else the default one -- read per call (not snapshotted at import),
+ * so a later `defaultLocale(...)` is honoured.
+ */
+const localeOf = (runtime: ExpressionRuntime): Locale => runtime.locale?.() ?? currentLocale()
 
 function isValid(value: unknown): boolean {
   return value != null && value === value
@@ -128,29 +153,20 @@ function isValid(value: unknown): boolean {
 // locale. That the Date is kept is observable: a day past the end of a month (`dayFormat(30)` is January 32nd) carries the next
 // month name over to the following month, and a midnight the time zone skips moves the date back an hour into the day before.
 const nameDate = new Date(2000, 0, 1)
-function nameFormat(month: unknown, day: unknown, spec: string): string {
+function nameFormat(L: Locale, month: unknown, day: unknown, spec: string): string {
   if (!Number.isInteger(month) || !Number.isInteger(day)) return ''
   nameDate.setFullYear(2000)
   nameDate.setMonth(month as number)
   nameDate.setDate(day as number)
   return L.timeFormat(spec)(nameDate)
 }
-const monthFormatValue = (month: unknown): string => nameFormat(month, 1, '%B')
-const dayFormatValue = (day: unknown): string => nameFormat(0, 2 + (day as number), '%A')
 
 // --- numeric/time formatting (vega semantics: null -> "null") ---------------
 
-function fmtNumber(value: unknown, spec?: string): string {
-  // vega-functions wraps the locale's formatter but only maps *null* to "null"; undefined
-  // reaches the formatter and formats as NaN. The specifier is passed as given.
-  return value === null ? 'null' : L.format(spec as string)(value as number)
-}
-function fmtTime(value: unknown, spec?: string): string {
-  return value === null ? 'null' : L.timeFormat(spec)(value as Date)
-}
-function fmtUtc(value: unknown, spec?: string): string {
-  return value === null ? 'null' : L.utcFormat(spec)(value as Date)
-}
+// vega-functions wraps the locale's formatter but only maps *null* to "null"; undefined reaches the formatter and formats as NaN. The
+// specifier is passed as given.
+const formatting = (method: 'format' | 'timeFormat' | 'utcFormat' | 'timeParse' | 'utcParse', runtime: ExpressionRuntime) =>
+  (value: unknown, spec?: unknown): unknown => (value === null ? 'null' : (localeOf(runtime)[method] as (s: unknown) => (v: unknown) => unknown)(spec)(value))
 
 // --- date-time accessors -----------------------------------------------------
 
@@ -189,6 +205,9 @@ function asSequence(value: unknown): { indexOf(...a: unknown[]): number; lastInd
   return (Array.isArray(value) || ArrayBuffer.isView(value) || typeof value === 'string' ? value : null) as never
 }
 function truncate(value: unknown, count: unknown, align?: unknown, ellipsis?: unknown): string {
+  return built(truncateText(value, count, align, ellipsis), 'truncate')
+}
+function truncateText(value: unknown, count: unknown, align?: unknown, ellipsis?: unknown): string {
   const mark = (ellipsis != null ? ellipsis : '\u2026') as string
   const str = (value as string) + ''
   const n = str.length
@@ -209,11 +228,125 @@ function pad(value: unknown, count: unknown, padchar?: unknown, align?: unknown)
   const n = (count as number) - str.length
   if (!(n > 0)) return str
   // Deviation (safety): the padded string is bounded by the limits BEFORE it is built.
-  meterBytes(Math.floor(n) * fill.length + str.length, 'pad')
+  allot('bytes', Math.floor(n) * fill.length + str.length, 'pad')
   if (align === 'left') return copies(fill, n) + str
   if (align === 'center') return copies(fill, ~~(n / 2)) + str + copies(fill, Math.ceil(n / 2))
   return str + copies(fill, n)
 }
+// --- strings built under limits ---------------------------------------------------------------------
+//
+// Under limits a string a built-in builds counts against `maxStringLength` (one string) and `maxGeneratedBytes` (all of them),
+// as `pad` and number formats do; one that can amplify its input (`join`, `replace`) is bounded BEFORE it is built, an array
+// `split` makes is bounded by the row caps before it is allocated. Without limits they are vega's, unmetered.
+
+/** The longest string one call may build: `maxStringLength`, else the built-in ceiling. */
+const stringCap = (): number => activeMeter()?.limits.maxStringLength ?? HARD_CAPS.bytes
+/** A string a built-in has made: metered under limits; returned as it is. */
+function built<T>(v: T, what: string): T {
+  if (metering && typeof v === 'string') allot('bytes', v.length, what)
+  return v
+}
+/** `join`: the length is the elements' text and the separators', summed before anything is built. */
+function joinBounded(seq: unknown, rest: unknown[]): string {
+  const arr = asArray(seq)
+  if (!metering || arr === null) return arr.join(...rest)
+  const sep = rest[0] === undefined ? ',' : String(rest[0])
+  const n = (arr as unknown as ArrayLike<unknown>).length
+  const parts: string[] = new Array(n)
+  let total = n > 1 ? sep.length * (n - 1) : 0
+  const cap = stringCap()
+  for (let i = 0; i < n; i++) {
+    const el = (arr as unknown as ArrayLike<unknown>)[i]
+    const t = el == null ? '' : String(el)
+    total += t.length
+    if (total > cap) allot('bytes', total, 'join')
+    parts[i] = t
+  }
+  allot('bytes', total, 'join')
+  return parts.join(sep)
+}
+/**
+ * The replacement text of one match, as `String.prototype.replace` makes it from a replacement pattern (ECMA-262 GetSubstitution:
+ * `$$`, `$&`, `` $` ``, `$'`, `$n`, `$nn`, `$<name>`).
+ */
+export function substitution(repl: string, matched: string, position: number, str: string, captures: readonly unknown[], groups: Record<string, unknown> | undefined): string {
+  if (!repl.includes('$')) return repl
+  const m = captures.length
+  let out = ''
+  for (let i = 0; i < repl.length; i++) {
+    const c = repl[i]
+    if (c !== '$' || i + 1 >= repl.length) { out += c; continue }
+    const d = repl[i + 1]!
+    if (d === '$') { out += '$'; i++ }
+    else if (d === '&') { out += matched; i++ }
+    else if (d === '`') { out += str.slice(0, position); i++ }
+    else if (d === "'") { out += str.slice(Math.min(position + matched.length, str.length)); i++ }
+    else if (d >= '0' && d <= '9') {
+      const d2 = repl[i + 2]
+      const two = d2 !== undefined && d2 >= '0' && d2 <= '9' ? Number(d + d2) : NaN
+      if (two >= 1 && two <= m) { const v = captures[two - 1]; out += v === undefined ? '' : String(v); i += 2 }
+      else {
+        const one = Number(d)
+        if (one >= 1 && one <= m) { const v = captures[one - 1]; out += v === undefined ? '' : String(v); i++ }
+        else out += '$'
+      }
+    } else if (d === '<') {
+      const end = groups === undefined ? -1 : repl.indexOf('>', i + 2)
+      if (end < 0) { out += '$'; continue }
+      const v = groups![repl.slice(i + 2, end)]
+      out += v === undefined ? '' : String(v)
+      i = end
+    } else out += '$'
+  }
+  return out
+}
+/** `replace` under limits: each replacement made by GetSubstitution, the result's length kept within the cap as it grows. */
+function replaceBounded(str: string, pattern: string | RegExp, repl: unknown): string {
+  const text = String(repl)
+  const cap = stringCap()
+  // (a replacement with no `$` is itself, at most once per match, and a match per position at most: when even that bound fits the
+  // cap, the native replace makes the same text)
+  if (!text.includes('$')) {
+    const once = typeof pattern === 'string' || !(pattern.global)
+    const most = str.length + (once ? 1 : str.length + 1) * text.length
+    if (most <= cap) {
+      const out = str.replace(pattern as RegExp, text)
+      allot('bytes', out.length, 'replace')
+      return out
+    }
+  }
+  let total = str.length
+  const out = str.replace(pattern as RegExp, (...args: unknown[]) => {
+    const named = typeof args[args.length - 1] === 'object' && args[args.length - 1] !== null
+    const groups = named ? args[args.length - 1] as Record<string, unknown> : undefined
+    const tail = named ? 3 : 2
+    const matched = args[0] as string
+    const position = args[args.length - tail] as number
+    const piece = substitution(text, matched, position, str, args.slice(1, args.length - tail), groups)
+    total += piece.length - matched.length
+    if (total > cap) allot('bytes', total, 'replace')
+    return piece
+  })
+  allot('bytes', out.length, 'replace')
+  return out
+}
+/** `split` under limits: the pieces a string separator makes are counted, and bounded as rows, before the array is made. */
+function splitBounded(str: string, rest: unknown[]): string[] {
+  const sep = rest[0]
+  if (metering && sep !== undefined && sep !== null && !isRegExp(sep)) {
+    const s = String(sep)
+    let pieces = 1
+    if (s === '') pieces = str.length
+    else for (let at = str.indexOf(s); at >= 0; at = str.indexOf(s, at + s.length)) pieces++
+    const limit = rest[1] === undefined ? Infinity : (rest[1] as number) >>> 0
+    allot('rows', Math.min(pieces, limit), 'split')
+  }
+  const out = (str.split as (...a: unknown[]) => string[])(...rest)
+  // (a regular expression's input is capped under limits already; the pieces it made are counted as rows)
+  if (metering && isRegExp(sep)) allot('rows', out.length, 'split')
+  return out
+}
+
 function mergeObj(...objs: unknown[]): unknown {
   // Like vega's merge (extend into {}), but an own `__proto__` key (JSON data)
   // must not leave the result with a foreign prototype: restore it.
@@ -225,7 +358,7 @@ function testRe(pattern: unknown, text: unknown): boolean {
   // limits. This does NOT stop catastrophic backtracking (docs/LIMITS.md).
   const re = regExpOf(pattern)
   const input = String(text)
-  checkRegexInput(input)
+  checkRegexRun(re, input)
   return re.test(input)
 }
 
@@ -252,7 +385,7 @@ const PARAM_SAFE_BUILTINS: ReadonlySet<string> = new Set([
   'toBoolean', 'toNumber', 'toDate', 'toString', 'if', 'test', 'hypot', 'containerSize', 'windowSize', 'clamp',
   'extent', 'clampRange', 'inrange', 'join', 'lerp', 'length', 'indexof', 'lastindexof', 'peek', 'reverse', 'sequence', 'slice', 'sort',
   'merge', 'vlSelectionTuples', 'isTuple', 'panLinear', 'panLog', 'panPow', 'panSymlog', 'zoomLinear', 'zoomLog', 'zoomPow', 'zoomSymlog',
-  'pinchDistance', 'pinchAngle', 'span', 'pluck', 'pad', 'parseFloat', 'parseInt', 'replace', 'split', 'substring', 'truncate',
+  'pinchDistance', 'pinchAngle', 'span', 'pluck', 'pad', 'parseFloat', 'parseInt', 'replace', 'split', 'substring', 'truncate', 'upper', 'lower', 'trim',
   'encodeURIComponent', 'regexp', 'now', 'random', 'datetime', 'timeOffset', 'utcOffset', 'timeSequence', 'utcSequence',
   'quarter', 'week', 'dayofyear', 'utcquarter', 'utcweek', 'utcdayofyear',
   'format', 'timeFormat', 'utcFormat', 'timeParse', 'utcParse', 'timeUnitSpecifier', 'monthFormat', 'monthAbbrevFormat', 'dayFormat',
@@ -324,12 +457,11 @@ export function expressionFunctionNames(): string[] {
 }
 
 /**
- * The functions vega's parser recognises that Aster does not implement (logging, the lasso tools, `screen`, mark re-encoding,
- * `flush`). A spec that calls one is not refused when it is compiled -- vega accepts it -- but when the call is
- * evaluated, as before. `expression-register.test.ts` pins this list against the vega the conformance suite runs.
+ * The functions vega's parser recognises that Aster does not implement (logging, the lasso tools, `screen`, `flush`). A spec
+ * that calls one is not refused when it is compiled -- vega accepts it -- but when the call is evaluated, as before. `expression-register.test.ts` pins this list against the vega the conformance suite runs.
  */
 export const UNWRITTEN_FUNCTIONS: readonly string[] = Object.freeze([
-  'debug', 'info', 'warn', 'encode', 'flush', 'intersectLasso', 'lassoAppend', 'lassoPath', 'screen',
+  'debug', 'info', 'warn', 'flush', 'intersectLasso', 'lassoAppend', 'lassoPath', 'screen',
 ])
 /** The internal scale calls vega's own encode entries are written with (`_scale("x", v)`); the only names with an underscore it knows. */
 const SCALE_CALLS: ReadonlySet<string> = new Set(['_scale', '_bandwidth', '_range'])
@@ -424,10 +556,39 @@ function projectionScale(p: ProjectionLike): unknown {
   return scale
 }
 
+/**
+ * What `copy('projection')` gives: vega's is a copy of the projection, which `scale`, `invert` and the geo functions take in place of
+ * a name. Here it is an opaque, frozen handle on the projection as it was (a projection is never changed once built: new parameters
+ * build a new one), which those functions alone resolve; it is no function, so the sandbox's rule that a built-in is never handed a
+ * function holds, and nothing a spec writes can pose as one.
+ */
+const PROJECTION_COPIES = new WeakMap<object, ProjectionLike>()
+
+/** The projection a name or a `copy()` of one stands for (vega's `getScale` over projections), or undefined. */
+export function projectionOf(runtime: { projection?: (name: string) => unknown }, ref: unknown): unknown {
+  if (typeof ref === 'string') return runtime.projection?.(ref)
+  return typeof ref === 'object' && ref !== null ? PROJECTION_COPIES.get(ref) : undefined
+}
+
+/** The built-in inspectors of a table, by name: they may be handed a function (see expr-interpreter.ts `INSPECTORS`). */
+const INSPECTOR_NAMES = ['isValid', 'isDefined', 'isArray', 'isBoolean', 'isDate', 'isNumber', 'isObject', 'isRegExp', 'isString', 'isTuple'] as const
+
 function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unknown> {
-  // (vega keeps a view's projections among its scales: `scale('projection', [lon, lat])` is the projected point)
+  const table = builtinTable(runtime)
+  markInspectors(INSPECTOR_NAMES.map((n) => table[n] as (...a: never[]) => unknown))
+  return table
+}
+
+function builtinTable(runtime: ExpressionRuntime): Record<string, unknown> {
+  // (vega keeps a view's projections among its scales: `scale('projection', [lon, lat])` is the projected point; a copy of one stands
+  // for it too)
   const scaleObject = (name: unknown): Record<string, unknown> | undefined => {
-    const s = runtime.scale(String(name)) ?? runtime.projection?.(String(name))
+    // (vega's getScale: a name is looked up; anything else that is no copy of a projection names nothing)
+    if (typeof name !== 'string') {
+      const copied = typeof name === 'object' && name !== null ? PROJECTION_COPIES.get(name) : undefined
+      return copied ? (projectionScale(copied) as Record<string, unknown>) : undefined
+    }
+    const s = runtime.scale(name) ?? runtime.projection?.(name)
     return (isProjection(s) ? projectionScale(s) : s) as unknown as Record<string, unknown> | undefined
   }
   return {
@@ -465,7 +626,7 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     extent: (arr: unknown) => extent(arr as ArrayLike<unknown>), // unary: no accessor callable
     clampRange: (r: unknown, lo: unknown, hi: unknown) => clampRange(r as number[], lo as number, hi as number),
     inrange: (value: unknown, range: unknown, left?: unknown, right?: unknown) => inrange(value, range as unknown[], left as boolean | undefined, right as boolean | undefined),
-    join: (seq: unknown, ...rest: unknown[]) => asArray(seq).join(...rest),
+    join: (seq: unknown, ...rest: unknown[]) => joinBounded(seq, rest),
     lerp: (arr: unknown, t: unknown) => lerpOf(arr as number[], t),
     length: (value: unknown) => (value as { length: unknown }).length,
     indexof: (seq: unknown, ...rest: unknown[]) => asSequence(seq).indexOf(...rest),
@@ -473,16 +634,22 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     peek: (arr: unknown) => (arr as unknown[])[(arr as unknown[]).length - 1],
     reverse: (seq: unknown) => asArray(seq).slice().reverse(),
     sequence: (...args: unknown[]) => numericSequence(args),
-    slice: (seq: unknown, ...rest: unknown[]) => asSequence(seq).slice(...rest),
+    slice: (seq: unknown, ...rest: unknown[]) => built(asSequence(seq).slice(...rest), 'slice'),
     sort: (seq: unknown) => sortSlice(asArray(seq), (a, b) => ascending(a as never, b as never)),
     merge: mergeObj,
     // dataset edits happen inside the signal event loop, which supplies runtime.modify; elsewhere there is nothing to edit
     modify: (name: unknown, insert?: unknown, remove?: unknown, toggle?: unknown, modifyTuple?: unknown, values?: unknown) =>
       runtime.modify ? runtime.modify(String(name), insert, remove, toggle, modifyTuple, values) : 0,
+    // a mark's item re-encoded with one of its sets: only while the event loop handles an event (a handler's `encode: <set>`)
+    encode: (item: unknown, set: unknown, retval?: unknown) => {
+      if (!runtime.encode) throw new Error('encode() re-encodes an item only while an event is being handled')
+      if (item) runtime.encode(item, String(set))
+      return retval !== undefined ? retval : item
+    },
     // vega-selections
     // (vega-selections' functions are a part the React shells load on demand: engine-parts.ts)
-    vlSelectionTest: (name: unknown, datum: unknown, op?: unknown) => part('selections').selectionTest(runtime.data(String(name)) as never, datum, op),
-    vlSelectionIdTest: (name: unknown, datum: unknown, op?: unknown) => part('selections').selectionIdTest(runtime.data(String(name)) as never, datum, op),
+    vlSelectionTest: (name: unknown, datum: unknown, op?: unknown) => part('selections').selectionTest(runtime.data(String(name)) as never, datum, op, runtime.unitIndexed?.(String(name)) ?? true),
+    vlSelectionIdTest: (name: unknown, datum: unknown, op?: unknown) => part('selections').selectionIdTest(runtime.data(String(name)) as never, datum, op, runtime.unitIndexed?.(String(name)) ?? true),
     vlSelectionResolve: (name: unknown, op?: unknown, isMulti?: unknown, vl5?: unknown) => part('selections').selectionResolve(runtime.data(String(name)) as never, op, isMulti, vl5),
     vlSelectionTuples: (items: unknown, base: unknown) => part('selections').selectionTuples(items, base),
     isTuple: (t: unknown) => isTuple(t),
@@ -521,16 +688,19 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
       // (vega-functions replace: the pattern must be a string or a regular expression; the replacement is passed as given)
       if (!isString(pattern) && !isRegExp(pattern)) throw new Error('Please pass a string or RegExp argument to replace.')
       const str = String(value)
-      if (isRegExp(pattern)) { checkRegexObject(pattern as RegExp); checkRegexInput(str) }
-      return str.replace(pattern as string | RegExp, repl as string)
+      if (isRegExp(pattern)) { checkRegexObject(pattern as RegExp); checkRegexRun(pattern as RegExp, str) }
+      return metering ? replaceBounded(str, pattern as string | RegExp, repl) : str.replace(pattern as string | RegExp, repl as string)
     },
     // `split` and `substring` are the string methods called on `String(value)` with the remaining arguments as given
     split: (value: unknown, ...rest: unknown[]) => {
       const str = String(value)
-      if (isRegExp(rest[0])) { checkRegexObject(rest[0] as RegExp); checkRegexInput(str) }
-      return (str.split as (...a: unknown[]) => string[])(...rest)
+      if (isRegExp(rest[0])) { checkRegexObject(rest[0] as RegExp); checkRegexRun(rest[0] as RegExp, str) }
+      return splitBounded(str, rest)
     },
-    substring: (value: unknown, ...rest: unknown[]) => (String(value).substring as (...a: unknown[]) => string)(...rest),
+    substring: (value: unknown, ...rest: unknown[]) => built((String(value).substring as (...a: unknown[]) => string)(...rest), 'substring'),
+    upper: (value: unknown) => built(String(value).toUpperCase(), 'upper'),
+    lower: (value: unknown) => built(String(value).toLowerCase(), 'lower'),
+    trim: (value: unknown) => built(String(value).trim(), 'trim'),
     truncate,
     encodeURIComponent: (value: unknown) => encodeURIComponent(String(value)),
     regexp: (...args: unknown[]) => regExpOf(...args),
@@ -550,16 +720,16 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     quarter: quarterFn, week: weekFn, dayofyear: dayofyearFn,
     utcquarter: utcQuarterFn, utcweek: utcWeekFn, utcdayofyear: utcDayofyearFn,
     // formatting
-    format: (value: unknown, spec?: string) => fmtNumber(value, spec),
-    timeFormat: (value: unknown, spec?: string) => fmtTime(value, spec),
-    utcFormat: (value: unknown, spec?: string) => fmtUtc(value, spec),
-    timeParse: (value: unknown, spec: string) => (value === null ? 'null' : L.timeParse(spec)(value as string)),
-    utcParse: (value: unknown, spec: string) => (value === null ? 'null' : L.utcParse(spec)(value as string)),
+    format: formatting('format', runtime),
+    timeFormat: formatting('timeFormat', runtime),
+    utcFormat: formatting('utcFormat', runtime),
+    timeParse: formatting('timeParse', runtime),
+    utcParse: formatting('utcParse', runtime),
     timeUnitSpecifier: (units: unknown, specs?: unknown) => part('time').timeUnitSpecifier(units as never, specs as never),
-    monthFormat: monthFormatValue,
-    monthAbbrevFormat: (month: unknown) => nameFormat(month, 1, '%b'),
-    dayFormat: dayFormatValue,
-    dayAbbrevFormat: (day: unknown) => nameFormat(0, 2 + (day as number), '%a'),
+    monthFormat: (month: unknown) => nameFormat(localeOf(runtime), month, 1, '%B'),
+    monthAbbrevFormat: (month: unknown) => nameFormat(localeOf(runtime), month, 1, '%b'),
+    dayFormat: (day: unknown) => nameFormat(localeOf(runtime), 0, 2 + (day as number), '%A'),
+    dayAbbrevFormat: (day: unknown) => nameFormat(localeOf(runtime), 0, 2 + (day as number), '%a'),
     // colors
     // (the colour spaces are the engine's colour part: engine-parts.ts)
     rgb: (...args: number[] | [string]) => (part('color').rgb as unknown as (...a: unknown[]) => unknown)(...args),
@@ -607,7 +777,13 @@ function createBuiltinFunctions(runtime: ExpressionRuntime): Record<string, unkn
     },
     bandspace: (count: number, paddingInner?: number, paddingOuter?: number) =>
       bandSpace(count || 0, paddingInner || 0, paddingOuter || 0),
-    copy: (name: string) => {
+    copy: (name: unknown) => {
+      const projection = projectionOf(runtime, name)
+      if ((typeof name !== 'string' || runtime.scale(name) === undefined) && isProjection(projection)) {
+        const copied = Object.freeze(Object.create(null) as object)
+        PROJECTION_COPIES.set(copied, projection)
+        return copied
+      }
       const s = scaleObject(name)
       return s && s.copy ? (s.copy as () => unknown)() : undefined
     },
@@ -695,22 +871,26 @@ export function compileExpr(expr: string, runtime: ExpressionRuntime): CompiledE
   // vega refuses an unknown function when it parses and generates code ("Unrecognized function: x"), not when it is called
   const functions = functionContextOf(runtime)
   assertKnownFunctions(ast, functions, expr)
-  const compiledEpoch = registryEpoch
-  const evaluate = compileExpression(functions, ast)
-  const compiled = (datum: unknown, params: unknown, event?: unknown): unknown => {
-    // the registry changed since this closure was made (a function disposed, replaced): compile again under the
-    // current one -- an unknown name is then refused as at first compile, a replaced one calls the new function
-    if (registryEpoch !== compiledEpoch) {
-      return compileExpr(expr, runtime)(datum, params as never, event)
+  // What the expression evaluates with: compiled under the registry of `epoch`. When the registry has changed since (a function
+  // disposed, replaced, an add-on loaded) it is compiled again under the current one, once: an unknown name is then refused as at
+  // first compile (each call, as long as it stays unknown), a replaced one calls the new function.
+  let bound = { epoch: registryEpoch, evaluate: compileExpression(functions, ast) }
+  const current = (): typeof bound => {
+    if (bound.epoch !== registryEpoch) {
+      const fns = functionContextOf(runtime)
+      assertKnownFunctions(ast, fns, expr)
+      bound = { epoch: registryEpoch, evaluate: compileExpression(fns, ast) }
     }
-    // (the signals are read by their own names off the parameters: an event's datum is its item's)
-    return evaluate(datum, params as Record<string, unknown> | undefined, event)
+    return bound
   }
+  // (the signals are read by their own names off the parameters: an event's datum is its item's)
+  const compiled = (datum: unknown, params: unknown, event?: unknown, item?: unknown): unknown =>
+    current().evaluate(datum, params as Record<string, unknown> | undefined, event, item)
   ROW_PASSES.set(compiled, (params) => {
-    if (registryEpoch !== compiledEpoch) return (datum) => compiled(datum, params)
-    const row = evaluate.rows(params)
+    const pass = current()
+    const row = pass.evaluate.rows(params)
     // (a registry change in the middle of the pass: every later row is evaluated as `compiled` evaluates it)
-    return (datum) => (registryEpoch === compiledEpoch ? row(datum) : compiled(datum, params))
+    return (datum) => (registryEpoch === pass.epoch ? row(datum) : compiled(datum, params))
   })
   return compiled as CompiledExpr
 }

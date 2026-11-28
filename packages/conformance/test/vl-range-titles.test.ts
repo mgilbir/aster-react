@@ -13,6 +13,7 @@ import * as vega from 'vega'
 import * as vl from 'vega-lite'
 import { compile } from '@aster-charts/vl'
 import { TIME_DATA, silent } from './vl-time-helpers.js'
+import { scenegraphRoot } from '../src/scenegraph-root.js'
 
 type Obj = Record<string, unknown>
 
@@ -36,8 +37,8 @@ const DEFS: Array<[string, Obj]> = [
   ['t utcmonth', { field: 't', type: 'temporal', timeUnit: 'utcmonth' }],
   ['t year', { field: 't', type: 'temporal', timeUnit: 'year' }],
   ['t', { field: 't', type: 'temporal' }],
-  ['v, bin true and its default', { field: 'v', bin: { maxbins: 10 }, type: 'quantitative' }],
-  ['v binned', { field: 'v', bin: true, type: 'quantitative' }],
+  ['v, bin maxbins 10 (the default)', { field: 'v', bin: { maxbins: 10 }, type: 'quantitative' }],
+  ['v, bin true', { field: 'v', bin: true, type: 'quantitative' }],
   ['v, bin maxbins', { field: 'v', bin: { maxbins: 4 }, type: 'quantitative' }],
 ]
 /** A second channel takes a field of the same kind as the first: a number with a number, a time with a time. */
@@ -67,7 +68,7 @@ async function drawn(vg: unknown): Promise<string[]> {
     }
     for (const sub of node.marks ?? []) walk(sub, sub.role ?? role)
   }
-  walk(view.scenegraph().root, 'root')
+  walk(scenegraphRoot(view), 'root')
   return out
 }
 

@@ -33,12 +33,46 @@ export function hash53(str: string, seed = 0): string {
   return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36)
 }
 
+/**
+ * `hash53` of a string given in pieces, without joining them first: `add` the pieces in order, `digest` once. The digest is
+ * `hash53(pieces.join(''))` (the hash reads the characters one after the other), so a text built only to be hashed is never built.
+ */
+export class Hash53Stream {
+  private h1 = 0xdeadbeef
+  private h2 = 0x41c6ce57
+  add(str: string): this {
+    let h1 = this.h1
+    let h2 = this.h2
+    for (let i = 0; i < str.length; i++) {
+      const ch = str.charCodeAt(i)
+      h1 = Math.imul(h1 ^ ch, 2654435761)
+      h2 = Math.imul(h2 ^ ch, 1597334677)
+    }
+    this.h1 = h1
+    this.h2 = h2
+    return this
+  }
+  digest(): string {
+    let h1 = this.h1
+    let h2 = this.h2
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909)
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909)
+    return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36)
+  }
+}
+
 export class ClipCollector {
   /** id -> definition, in first-use order. */
   readonly defs = new Map<string, ClipDef>()
   private readonly keys = new Map<string, string>()
   /** How many ids were asked for, registered or not (what is drawn between two readings asked for a clip when it moved). */
   asked = 0
+
+  /**
+   * `taken`: the ids the document's other definitions hold (`sceneDefIds`): a gradient paint may name its own id, any id, so a
+   * clip id that is one of them is passed over like a hash collision, and one id never names two elements.
+   */
+  constructor(private readonly taken: ReadonlySet<string> = NO_IDS) {}
 
   /** The id of `def`, registering it on first use. */
   id(def: ClipDef): string {
@@ -47,19 +81,33 @@ export class ClipCollector {
     let id = `clip${hash53(key)}`
     for (let n = 1; ; n++) {
       const owner = this.keys.get(id)
-      if (owner === undefined) {
+      if (owner === undefined && !this.taken.has(id)) {
         this.keys.set(id, key)
         this.defs.set(id, def)
         return id
       }
       if (owner === key) return id
       id = `clip${hash53(key)}_${n}`
+      // (the next candidate is checked the same way)
     }
   }
 
   get size(): number {
     return this.defs.size
   }
+}
+
+const NO_IDS: ReadonlySet<string> = new Set()
+
+/** The ids a scene's gradient definitions write (a radial one's pattern wrapper too): what a clip id may not be. */
+export function sceneDefIds(defs: readonly SceneDef[] | undefined): ReadonlySet<string> {
+  if (!defs?.length) return NO_IDS
+  const ids = new Set<string>()
+  for (const def of defs) {
+    ids.add(def.id)
+    if (def.kind === 'radial') ids.add('p_' + def.id)
+  }
+  return ids
 }
 
 

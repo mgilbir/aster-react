@@ -6,7 +6,7 @@ project work. The package is private (`"private": true`) and is not published to
 ## What it shows
 
 Every comparison card feeds the same spec to both engines: the official `vega-embed` on the left (loaded lazily, so the Aster
-column paints first), `<Chart>` from `@aster-charts/react` on the right. Vega-Lite specs are compiled by `@aster-charts/vl` for both columns.
+column paints first), `<Chart>` from `@aster-charts/react` on the right. A Vega-Lite spec is compiled by `@aster-charts/vl` for the Aster column (`<Chart>` with `@aster-charts/react/vl`) and by the official `vega-lite` inside `vega-embed` for the oracle column: the two compilers are what the cards compare.
 
 The page (`src/App.tsx`) has these sections:
 
@@ -14,12 +14,16 @@ The page (`src/App.tsx`) has these sections:
 - **Streaming** -- the same append stream into an SVG and a canvas `ChartStream`.
 - **Spec playground** -- paste any Vega or Vega-Lite spec and see both engines render it.
 - **New in this build**, **Selections, maps and animation**, **Gallery** -- the same spec in both engines. The first two take their
-  specs from `src/showcase/` (nine of its fourteen files are byte-identical to files of `packages/conformance/corpus`), the
-  gallery from `src/specs.ts`.
+  specs from `packages/conformance/corpus` (imported from there, all fourteen: each is a corpus spec, compared with real vega / vega-lite by
+  the gates), the gallery from `src/specs.ts`.
 
-The numbers in the page header (conformance counts, bundle size, frame time) are literal text in `src/App.tsx`. They are not
-computed from a run and are not checked by any gate, so treat the repository docs ([README](../../README.md),
-[docs/TESTING.md](../../docs/TESTING.md), [docs/PERFORMANCE.md](../../docs/PERFORMANCE.md)) as the source for current figures.
+The page header states no measured figure (a number written into a page goes stale: it had 1,055 conformance specs, 205 kB and a corpus of "400+" when the corpus had 1,063 and `<Chart>` was 190 kB); `scripts/docs-claims.test.mjs` fails if one comes back. The repository docs ([README](../../README.md),
+[docs/TESTING.md](../../docs/TESTING.md), [docs/PERFORMANCE.md](../../docs/PERFORMANCE.md)) are the source for current figures.
+
+The cards are written as an app should write them: every `<Chart>` sits under a `<Suspense>` boundary (`AsterSuspense` in `src/App.tsx`),
+because a chart that needs a part of the engine suspends once in a browser build ([ADR 0011](../../docs/adr/0011-engine-parts-load-on-demand-in-browser-builds.md)); `dataChanges` is made where the rows are
+(`LiveDataChanges`); a size prop is passed only where the spec has a number (a concat or facet view is sized by its content); and the brush of
+the brush card is the spec's own interval parameter, not the older `brush` / `onSelect` props.
 
 ## Run it
 
@@ -39,9 +43,9 @@ Other scripts of the package:
 | Command | What it does |
 |---|---|
 | `pnpm --filter @aster-charts/demo typecheck` | `tsc -p tsconfig.json --noEmit` |
-| `pnpm --filter @aster-charts/demo build` | rebuilds `@aster-charts/react` (`tsc`), then `vite build` into `apps/demo/dist` (ignored by git) |
+| `pnpm --filter @aster-charts/demo build` | `vite build` into `apps/demo/dist` (ignored by git) |
 
-`build` rebuilds only `@aster-charts/react`; `@aster-charts/core` and `@aster-charts/vl` must already be built (`pnpm build` at the root does all three).
+`build` builds none of the packages it imports (a second `tsc` of `@aster-charts/react` would race the other workspaces that read its `dist`); `@aster-charts/core`, `@aster-charts/vl` and `@aster-charts/react` must already be built, which `pnpm build` at the root does in dependency order.
 
 ## Build and deployment
 

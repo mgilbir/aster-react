@@ -8,6 +8,7 @@
  */
 import { appendFileSync } from 'node:fs'
 import { enc } from './differential-util.mts'
+import { turn } from '../../../scripts/lib/turn.mjs'
 
 export type Rng = ReturnType<typeof makeRng>
 
@@ -66,32 +67,91 @@ export interface Case {
   label: string
   oracle: () => unknown
   aster: () => unknown
+  /**
+   * Whether the oracle's value (as `enc` shows it) is one worth comparing: the floors of a test count these. Without it, a value
+   * is informative when {@link holdsData} finds a finite number, a non-empty string or a date in it (an `undefined`, a NaN, an empty
+   * list or a bare `null` is not).
+   */
+  informative?: (value: unknown) => boolean
+}
+
+/** Whether an `enc` image holds a finite number, a non-empty string, a boolean or a date somewhere. */
+export function holdsData(v: unknown): boolean {
+  if (typeof v === 'number') return Number.isFinite(v)
+  if (typeof v === 'string') return v !== ''
+  if (typeof v === 'boolean') return true
+  if (Array.isArray(v)) return v.some(holdsData)
+  if (v !== null && typeof v === 'object') {
+    const tag = (v as { $?: unknown }).$
+    if (tag !== undefined) return tag === 'date' || tag === 're'
+    return Object.values(v).some(holdsData)
+  }
+  return false
 }
 
 /**
  * Run `count` generated cases; collect the first mismatches (with their label) and throw one error listing them.
- * Returns how many cases the oracle refused (threw) and how many produced a non-null value, so a generator whose
- * cases mostly refuse or parse to null can be told apart from one that exercises the code.
+ * Returns how many cases the oracle refused (threw) and how many produced a value worth comparing (`Case.informative`), so a
+ * generator whose cases mostly refuse or produce nothing can be told apart from one that exercises the code.
  */
 export function compareCases(name: string, count: number, gen: (i: number) => Case): { cases: number; refused: number; informative: number } {
+  const t = tally(name, count)
+  for (let i = 0; i < count; i++) t.add(i, gen(i))
+  return t.done()
+}
+
+/**
+ * `compareCases` for a suite whose cases take long enough to hold a vitest worker's event loop for a minute on a loaded machine: the
+ * loop turns once every few cases (turn.mjs), so the worker reads the host's replies in between. Same result, same errors.
+ */
+export async function compareCasesAsync(name: string, count: number, gen: (i: number) => Case): Promise<{ cases: number; refused: number; informative: number }> {
+  const t = tally(name, count)
+  for (let i = 0; i < count; i++) {
+    if (i % 8 === 0) await turn()
+    t.add(i, gen(i))
+  }
+  return t.done()
+}
+
+function tally(name: string, count: number): { add: (i: number, c: Case) => void; done: () => { cases: number; refused: number; informative: number } } {
   const bad: string[] = []
   let refused = 0
   let informative = 0
   let failures = 0
-  for (let i = 0; i < count; i++) {
-    const c = gen(i)
-    if (process.env.ASTER_DIFF_TRACE) appendFileSync(process.env.ASTER_DIFF_TRACE, `${name} #${i} ${c.label}\n`)
-    const want = outcome(c.oracle)
-    const got = outcome(c.aster)
-    if ((want as { threw?: string }).threw) refused++
-    else if ((want as { value?: unknown }).value !== null) informative++
-    if (JSON.stringify(want) !== JSON.stringify(got)) {
-      failures++
-      if (bad.length < 5) {
-        bad.push(`  #${i} ${c.label}\n     oracle ${JSON.stringify(want)?.slice(0, 220)}\n     aster  ${JSON.stringify(got)?.slice(0, 220)}`)
+  return {
+    add(i, c) {
+      if (process.env.ASTER_DIFF_TRACE) appendFileSync(process.env.ASTER_DIFF_TRACE, `${name} #${i} ${c.label}\n`)
+      const want = outcome(c.oracle)
+      const got = outcome(c.aster)
+      if ((want as { threw?: string }).threw) refused++
+      else if ((c.informative ?? holdsData)((want as { value?: unknown }).value)) informative++
+      if (JSON.stringify(want) !== JSON.stringify(got)) {
+        failures++
+        if (bad.length < 5) {
+          bad.push(`  #${i} ${c.label}\n     oracle ${JSON.stringify(want)?.slice(0, 220)}\n     aster  ${JSON.stringify(got)?.slice(0, 220)}`)
+        }
       }
-    }
+    },
+    done() {
+      if (failures) throw new Error(`${name}: ${failures}/${count} cases differ from the oracle\n${bad.join('\n')}`)
+      return { cases: count, refused, informative }
+    },
   }
-  if (failures) throw new Error(`${name}: ${failures}/${count} cases differ from the oracle\n${bad.join('\n')}`)
-  return { cases: count, refused, informative }
+}
+
+/**
+ * `compareCases` that also holds what it counted to a floor, named by the first word of the suite's name: at least `informative` of
+ * the cases gave the oracle a value worth comparing, and no more than `refused` of them were refused by it (a suite whose cases are
+ * mostly refused, or empty, compares little whatever its size). A name with no entry is an error: every call states its floor.
+ */
+export function compareWithFloors(floors: Record<string, { informative: number; refused?: number }>): typeof compareCases {
+  return (name, count, gen) => {
+    const stats = compareCases(name, count, gen)
+    const key = Object.keys(floors).filter((k) => name === k || name.startsWith(`${k} `)).sort((a, b) => b.length - a.length)[0]
+    if (key === undefined) throw new Error(`${name}: no floor is stated for this suite`)
+    const floor = floors[key]!
+    if (!(stats.informative >= stats.cases * floor.informative)) throw new Error(`${name}: ${stats.informative} of ${stats.cases} cases informative, floor ${floor.informative}`)
+    if (!(stats.refused <= stats.cases * (floor.refused ?? 0.1))) throw new Error(`${name}: ${stats.refused} of ${stats.cases} cases refused by the oracle, ceiling ${floor.refused ?? 0.1}`)
+    return stats
+  }
 }

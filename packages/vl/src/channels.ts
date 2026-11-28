@@ -8,7 +8,20 @@ const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typ
 const isFieldDef = (def: unknown): def is Record<string, unknown> => isObject(def) && ('field' in def || def.aggregate === 'count')
 
 /** channel.ts getSupportedMark: the marks that draw a channel (`always`), or draw it only for pre-binned data (`binned`). */
-function supportedMarks(channel: string): Record<string, 'always' | 'binned'> | undefined {
+function supportedMarks(channel: string): Readonly<Record<string, 'always' | 'binned'>> | undefined {
+  // (a table is made once per channel: a compile asks for every channel of every unit, and making it was a measurable part of one)
+  let table = SUPPORTED.get(channel)
+  if (table === undefined) {
+    table = makeSupportedMarks(channel)
+    if (table !== undefined) SUPPORTED.set(channel, Object.freeze(table))
+  }
+  return table
+}
+
+/** supportedMarks' tables, by channel (only the channels that have one: a bounded set). */
+const SUPPORTED = new Map<string, Readonly<Record<string, 'always' | 'binned'>>>()
+
+function makeSupportedMarks(channel: string): Record<string, 'always' | 'binned'> | undefined {
   const always = (marks: string[]): Record<string, 'always'> => Object.fromEntries(marks.map((m) => [m, 'always' as const]))
   switch (channel) {
     case 'color': case 'fill': case 'stroke': case 'description': case 'detail': case 'key': case 'tooltip': case 'href': case 'order':
@@ -56,6 +69,6 @@ const SPAN_ENDS: ReadonlyArray<readonly [end: string, start: string]> = [['x2', 
 export function spansAChannel(encoding: Record<string, unknown>): boolean {
   return SPAN_ENDS.some(([end, start]) => {
     const def = encoding[start]
-    return !!encoding[end] && isObject(def) && ((def.field !== undefined && def.bin !== 'binned' && !(isObject(def.bin) && def.bin.binned === true)) || def.datum !== undefined)
+    return !!encoding[end] && isObject(def) && ((isFieldDef(def) && def.bin !== 'binned' && !(isObject(def.bin) && def.bin.binned === true)) || def.datum !== undefined)
   })
 }

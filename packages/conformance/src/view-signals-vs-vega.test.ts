@@ -21,7 +21,7 @@ import { canonicalizeSvg, diffCanonical } from './normalize.js'
 
 type Obj = Record<string, unknown>
 type View = { runAsync(): Promise<unknown>; toSVG(): Promise<string>; signal(n: string, v: unknown): View; finalize(): void }
-const newView = (spec: Obj): View => new (vega as unknown as { View: new (rt: unknown, o: unknown) => View }).View(vega.parse(spec as never), { renderer: 'none' })
+const newView = (spec: Obj): View => new (vega as unknown as { View: new (rt: unknown, o: unknown) => View }).View(vega.parse(structuredClone(spec) as never), { renderer: 'none' })
 
 async function oracleSvg(spec: Obj): Promise<string> {
   const view = newView(spec)
@@ -118,6 +118,13 @@ const CASES: Record<string, Obj> = {
   'width from config, the spec wins': base({ config: { width: 77 } }),
   'width 0 in the spec beats config': base({ width: 0, config: { width: 77 } }),
   'width {signal} from config': unsized({ config: { width: { signal: '50 + 5' } } }),
+  // the audit's wrong-typed sizes and paddings (C504) and signal forms (C36)
+  'width null': base({ width: null }),
+  'width a numeric string': base({ width: '200' }),
+  'padding object with strings, one no number': base({ padding: { left: '7', top: 'x' } }),
+  'padding an array': base({ padding: [5, 6] }),
+  'autosize {type: {signal}}': base({ autosize: { type: { signal: "'none'" } }, ...WIDE }),
+  'autosize {signal} reading a declared signal': base({ autosize: { signal: 'az' }, signals: [{ name: 'az', value: 'none' }], ...WIDE }),
 }
 
 describe('the view properties render as vega renders them', () => {
@@ -126,6 +133,12 @@ describe('the view properties render as vega renders them', () => {
       expect(diff(await oracleSvg(spec), renderSpec(spec as never))).toEqual([])
     })
   }
+})
+
+it('a size that is a string which is no number: vega writes a NaN document, Aster sizes the view by its content (a documented deviation)', async () => {
+  const spec = base({ height: 'x' })
+  expect(await oracleSvg(spec)).toContain('height="NaN"')
+  expect(renderSpec(spec as never)).toMatch(/<svg[^>]* height="\d+"/)
 })
 
 describe('a view signal the host writes re-lays the view out as vega does', () => {

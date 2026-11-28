@@ -18,8 +18,9 @@ const FIXTURES = {
   'ci-crash': [c('x-aggregate-ci0', chart({ transform: [{ type: 'aggregate', ops: ['bogus'], fields: ['a'] }] }))],
   // same crash on a non-ci name (control for the masking test)
   'plain-crash': [c('x-plain', chart({ transform: [{ type: 'aggregate', ops: ['bogus'], fields: ['a'] }] }))],
-  // the oracle crashes on an unknown mark, Aster renders it: a node-error
-  'node-error': [c('plain-a', chart()), c('oracle-only-crash', { width: 10, height: 10, marks: [{ type: 'nosuchmark' }] })],
+  // the oracle crashes on a data set named like a member of Object.prototype, Aster renders it (a documented deviation): a node-error
+  // (an unknown mark type no longer serves: Aster refuses it as vega does, C238)
+  'node-error': [c('plain-a', chart()), c('oracle-only-crash', { width: 10, height: 10, data: [{ name: 'toString', values: [{ a: 1 }] }] })],
   // oracle is genuinely random, so two engines legitimately differ on a ci case
   'ci-random': [c('x-aggregate-ci1', {
     width: 80, height: 40, padding: 2, autosize: 'none', background: 'white',
@@ -68,6 +69,39 @@ const angled = (angle) => ({
 })
 FIXTURES['oracle-unjudgeable'] = [c('plain-a', chart()), c('sideways', angled('sideways'))]
 FIXTURES['ours-unjudgeable'] = [{ ...c('sideways', angled(0)), ourSpec: angled('sideways') }]
+
+// C61: the engine's side has its transform removed, and both specs share ONE rows table (as a generator's module-level table
+// does). The oracle's `stack` writes y0/y1 onto those rows; a runner that hands Aster rows the oracle has run on hands it the
+// oracle's answers, and an Aster with no stack "agrees". Each engine must get its own copy, taken before either runs: this
+// case must differ.
+const stackRows = [{ k: 'a', v: 1 }, { k: 'a', v: 2 }, { k: 'b', v: 3 }]
+const stacked = (transform) => ({
+  width: 60, height: 40, padding: 2, autosize: 'none', background: 'white',
+  data: [{ name: 't', values: stackRows, transform }],
+  scales: [{ name: 'y', type: 'linear', domain: [0, 6], range: 'height' }],
+  marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { value: 5 }, width: { value: 10 }, y: { scale: 'y', field: 'y1' }, y2: { scale: 'y', field: 'y0' }, fill: { value: 'steelblue' } } } }],
+})
+// A scheme word the pinned vega does not know (vega-lite's own schema lists `goldred-4`): vega logs `Unrecognized scheme name` and its
+// renderer then crashes on the scale it could not make. Aster logs the same and draws: both engines refuse the spec for the same
+// reason, which is no node-error. With the engine's chart given another scheme word (so it logs another message), or none, the oracle's
+// crash is its own and stays a node-error.
+const compiled = {"background":"white","padding":5,"width":300,"height":300,"style":"cell","data":[{"name":"source_0","values":[{"a":1,"b":2,"c":3},{"a":2,"b":3,"c":5}]},{"name":"data_0","source":"source_0","transform":[{"type":"filter","expr":"isValid(datum[\"a\"]) && isFinite(+datum[\"a\"]) && isValid(datum[\"b\"]) && isFinite(+datum[\"b\"]) && isValid(datum[\"c\"]) && isFinite(+datum[\"c\"])"}]}],"marks":[{"name":"marks","type":"symbol","style":["point"],"from":{"data":"data_0"},"encode":{"update":{"opacity":{"value":0.7},"fill":{"value":"transparent"},"stroke":{"scale":"color","field":"c"},"ariaRoleDescription":{"value":"point"},"description":{"signal":"\"a: \" + (format(datum[\"a\"], \"\")) + \"; b: \" + (format(datum[\"b\"], \"\")) + \"; c: \" + (format(datum[\"c\"], \"\"))"},"x":{"scale":"x","field":"a"},"y":{"scale":"y","field":"b"}}}}],"scales":[{"name":"x","type":"linear","domain":{"data":"data_0","field":"a"},"range":[0,{"signal":"width"}],"nice":true,"zero":true},{"name":"y","type":"linear","domain":{"data":"data_0","field":"b"},"range":[{"signal":"height"},0],"nice":true,"zero":true},{"name":"color","type":"linear","domain":{"data":"data_0","field":"c"},"range":{"scheme":"goldred-4"},"interpolate":"hcl","zero":false}],"axes":[{"scale":"x","orient":"bottom","gridScale":"y","grid":true,"tickCount":{"signal":"ceil(width/40)"},"domain":false,"labels":false,"aria":false,"maxExtent":0,"minExtent":0,"ticks":false,"zindex":0},{"scale":"y","orient":"left","gridScale":"x","grid":true,"tickCount":{"signal":"ceil(height/40)"},"domain":false,"labels":false,"aria":false,"maxExtent":0,"minExtent":0,"ticks":false,"zindex":0},{"scale":"x","orient":"bottom","grid":false,"title":"a","labelFlush":true,"labelOverlap":true,"tickCount":{"signal":"ceil(width/40)"},"zindex":0},{"scale":"y","orient":"left","grid":false,"title":"b","labelOverlap":true,"tickCount":{"signal":"ceil(height/40)"},"zindex":0}],"legends":[{"stroke":"color","gradientLength":{"signal":"clamp(height, 64, 200)"},"title":"c","encode":{"gradient":{"update":{"opacity":{"value":0.7}}}}}]}
+// (what vega-lite 6.4.3 compiles `color: quantitative, scale.scheme` to, as written; `scheme` is what the colour scale's range names)
+const schemed = (scheme) => ({ ...compiled, scales: compiled.scales.map((s) => (s.name === 'color' ? { ...s, range: scheme === null ? ['red', 'blue'] : { scheme } } : s)) })
+FIXTURES['refused-alike'] = [c('plain-a', chart()), c('goldred-4', schemed('goldred-4'))]
+FIXTURES['refused-differently'] = [c('plain-a', chart()), { ...c('goldred-4', schemed('goldred-4')), ourSpec: schemed('goldred-5') }]
+FIXTURES['crash-unexplained'] = [c('plain-a', chart()), { ...c('goldred-4', schemed('goldred-4')), ourSpec: schemed(null) }]
+
+FIXTURES['transform-removed'] = [{ ...c('stacked', stacked([{ type: 'stack', groupby: ['k'], field: 'v' }])), ourSpec: stacked([]) }]
+// the same table read by two cases: the second case's oracle has no stack, its engine has one. Neither may read what the first
+// case's oracle wrote onto the table (with y0/y1 left on the rows, the second oracle would draw the stack it does not run)
+FIXTURES['shared-table'] = [
+  c('a-stacked', stacked([{ type: 'stack', groupby: ['k'], field: 'v' }])),
+  { ...c('b-unstacked', stacked([])), ourSpec: stacked([{ type: 'stack', groupby: ['k'], field: 'v' }]) },
+]
+// the same through the Vega-Lite path: both compilers read one input spec
+const vlStacked = { data: { values: stackRows }, mark: 'bar', encoding: { x: { field: 'k', type: 'nominal' }, y: { field: 'v', type: 'quantitative', aggregate: 'sum' } }, width: 40, height: 40 }
+FIXTURES['vl-transform-removed'] = [{ ...c('vl-stacked', vlStacked), lite: true, ourSpec: { ...vlStacked, encoding: { ...vlStacked.encoding, y: { field: 'v', type: 'quantitative' } } } }]
 
 export function generate() {
   const name = process.env.FIXTURE ?? 'good'

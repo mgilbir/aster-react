@@ -75,19 +75,45 @@ describe('the regular-expression screen is never skipped', () => {
   const spec = (expr: string): VgSpec => ({ width: 10, height: 10, signals: [{ name: 's', update: expr }] } as VgSpec)
   const signal = (expr: string, limits?: object): unknown => evaluateChart(compileChart(spec(expr)), limits ? { limits } : {})
 
-  it('under limits, without the screen, a pattern is refused before it is compiled or run', () => {
+  it('under limits, without the screen, a pattern is refused before it is run (and one the expression computes before it is built)', () => {
     lean()
-    // (what runs a pattern: a test or exec of a regular expression whose source is the spec's)
+    // What compiles a pattern: the RegExp constructor (a literal in an expression is built through it); what runs one: `exec`, which
+    // `test`, `replace` and `split` all go through (spying `test` alone sees none of the last two). Both are recorded for the
+    // sources of the spec's patterns.
+    const sources = new Set(['^(a+)+$', 'a+', ','])
+    const made: string[] = []
     const ran: string[] = []
-    const test = vi.spyOn(RegExp.prototype, 'test').mockImplementation(function (this: RegExp, s: string) { ran.push(this.source); return RegExp.prototype.exec.call(this, s) !== null })
+    const RealRegExp = RegExp
+    const exec = RegExp.prototype.exec
+    const spy = vi.spyOn(RegExp.prototype, 'exec').mockImplementation(function (this: RegExp, s: string) { ran.push(this.source); return exec.call(this, s) })
+    vi.stubGlobal('RegExp', new Proxy(RealRegExp, {
+      construct(target, args, newTarget) {
+        const first = args[0] as unknown
+        made.push(first instanceof RealRegExp ? first.source : String(first))
+        return Reflect.construct(target, args, newTarget)
+      },
+    }))
     try {
-      for (const [expr, source] of [["test('^(a+)+$', 'aaaa')", '^(a+)+$'], ['test(/^(a+)+$/, "aaaa")', '^(a+)+$'], ["replace('aaaa', /a+/, 'b')", 'a+'], ["split('a,b', regexp(','))", ',']] as const) {
+      // (a literal is built when the expression is compiled, from the spec's own text: building never runs it, and the screen refuses
+    // it before its first run. A pattern the expression computes -- a string, `regexp()` -- is built only after the screen, so it
+    // is never built: that is what `compiled` asserts)
+    for (const [expr, literal] of [["test('^(a+)+$', 'aaaa')", false], ['test(/^(a+)+$/, "aaaa")', true], ["replace('aaaa', /a+/, 'b')", true], ["split('a,b', regexp(','))", false]] as const) {
+        made.length = 0
         ran.length = 0
         expect(() => withLimits({ maxTimeMs: 10_000 }, () => evaluateChart(compileChart(spec(expr)), { limits: { maxTimeMs: 10_000 } })), expr).toThrow(MISSING)
-        expect(ran.filter((s) => s === source), expr).toEqual([])
+        if (!literal) expect(made.filter((s) => sources.has(s)), `${expr}: compiled`).toEqual([])
+        expect(ran.filter((s) => sources.has(s)), `${expr}: run`).toEqual([])
       }
+      // the recorders see what they record: an unlimited evaluation of the same expressions compiles and runs them
+      made.length = 0
+      ran.length = 0
+      evaluateChart(compileChart(spec("replace('zzzz', /z+/, 'b')")))
+      evaluateChart(compileChart(spec("split('a;b', regexp(';'))")))
+      expect(made).toEqual(expect.arrayContaining(['z+', ';']))
+      expect(ran).toEqual(expect.arrayContaining(['z+', ';']))
     } finally {
-      test.mockRestore()
+      vi.unstubAllGlobals()
+      spy.mockRestore()
     }
   })
   it('with the screen loaded it refuses a dangerous pattern as the full engine does, and lets a safe one run', async () => {
@@ -96,6 +122,11 @@ describe('the regular-expression screen is never skipped', () => {
     await loadParts(['regex'])
     expect(() => signal("test('^(a+)+$', 'aaaa')", { maxTimeMs: 10_000 })).toThrow(AsterLimitError)
     expect(() => signal("test('^(a+)+$', 'aaaa')", { maxTimeMs: 10_000 })).toThrow(/regexSafety/)
+    // ... and lets a safe one run: the same call with a pattern that cannot blow up answers, under the same limits
+    expect(signal("test('^a+$', 'aaaa')", { maxTimeMs: 10_000 })).toBeDefined()
+    expect(() => signal("test('^a+$', 'aaaa')", { maxTimeMs: 10_000 })).not.toThrow()
+    expect(() => signal("replace('aaaa', /a+/, 'b')", { maxTimeMs: 10_000 })).not.toThrow()
+    expect(() => signal("split('a,b', regexp(','))", { maxTimeMs: 10_000 })).not.toThrow()
   })
   it('without limits no pattern is screened, so none needs the screen', () => {
     lean()
@@ -124,8 +155,8 @@ describe('the signal loop reads its parts where the detector looks for them', ()
     document.body.innerHTML = ''
     setTimerClock(null)
   })
-  function mount(signals: unknown[]): { spec: VgSpec; svg: SVGSVGElement; scene: ReturnType<typeof evaluateChart> } {
-    const spec = { width: 100, height: 60, signals, data: [{ name: 'store' }, { name: 't', values: [{ x: 1 }] }], marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { value: 1 }, y: { value: 1 }, width: { value: 50 }, height: { value: 50 } } } }] } as unknown as VgSpec
+  function mount(signals: unknown[], storeOn?: unknown[]): { spec: VgSpec; svg: SVGSVGElement; scene: ReturnType<typeof evaluateChart> } {
+    const spec = { width: 100, height: 60, signals, data: [{ name: 'store', ...(storeOn ? { on: storeOn } : {}) }, { name: 't', values: [{ x: 1 }] }], marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { value: 1 }, y: { value: 1 }, width: { value: 50 }, height: { value: 50 } } } }] } as unknown as VgSpec
     const host = document.createElement('div')
     document.body.appendChild(host)
     const scene = evaluateChart(compileChart(spec))
@@ -133,8 +164,8 @@ describe('the signal loop reads its parts where the detector looks for them', ()
     return { spec, svg: host.querySelector('svg') as SVGSVGElement, scene }
   }
   /** What the loop logs while it binds and handles one click, with `loaded` the only event-loop parts in their slots. */
-  function clickWith(signals: unknown[], loaded: EnginePart[]): string[] {
-    const { svg, scene } = mount(signals)
+  function clickWith(signals: unknown[], loaded: EnginePart[], storeOn?: unknown[]): string[] {
+    const { svg, scene } = mount(signals, storeOn)
     const errors: string[] = []
     restore = withdrawParts(['intersect', 'modify', 'timer'].filter((p) => !loaded.includes(p as EnginePart)) as EnginePart[])
     const b = bindSceneSignals(svg, scene, {}, { logger: { error: (...a) => errors.push(a.map(String).join(' ')), warn: () => {} }, onData: () => {} })
@@ -142,17 +173,19 @@ describe('the signal loop reads its parts where the detector looks for them', ()
     svg.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     return errors
   }
-  const cases: Array<[EnginePart, unknown[]]> = [
+  const cases: Array<[EnginePart, unknown[], unknown[]?]> = [
     ['modify', [{ name: 'go', value: 0, on: [{ events: 'click', update: 'modify("store", {"a": 1})' }] }]],
     ['modify', [{ name: 'go', value: 0, on: [{ events: 'click', update: 'setdata("store", [{"a": 1}])' }] }]],
     ['intersect', [{ name: 'go', value: 0, on: [{ events: 'click', update: 'length(intersect([0, 0, 100, 60]))' }] }]],
+    // a dataset's own trigger edits it as modify() does
+    ['modify', [{ name: 'go', value: 0, on: [{ events: 'click', update: 'go + 1' }] }], [{ trigger: 'go', insert: '{a: go}' }]],
   ]
-  it.each(cases)('%s: read by the handler, named by the detector, and enough on its own', (p, signals) => {
-    expect(parts({ signals })).toContain(p)
-    expect(clickWith(signals, []).join('\n')).toMatch(new RegExp(`the "${p}" part of the engine is not loaded`))
+  it.each(cases)('%s: read by the handler, named by the detector, and enough on its own', (p, signals, storeOn) => {
+    expect(parts({ signals, data: [{ name: 'store', ...(storeOn ? { on: storeOn } : {}) }] })).toContain(p)
+    expect(clickWith(signals, [], storeOn).join('\n')).toMatch(new RegExp(`the "${p}" part of the engine is not loaded`))
     restore?.()
     restore = null
-    expect(clickWith(signals, [p])).toEqual([])
+    expect(clickWith(signals, [p], storeOn)).toEqual([])
   })
   it('timer: a timer stream reads the scheduler when the loop binds it; the detector names it in every form a stream takes', () => {
     setTimerClock(new FakeClock())
@@ -234,8 +267,22 @@ describe('the pulse path: a re-evaluation without it derives in full, the same s
       return [[{ k: 1 }], [{ k: 1 }, { k: 2 }], [{ k: 1 }, { k: 2 }, { k: 3 }]].map((rows) => renderSceneToSvg(session.evaluate(drawing, { data: { t: rows }, random })))
     }
     const withPulse = draws()
+    expect(withPulse).toHaveLength(3)
+    expect(new Set(withPulse).size, 'the three scenes differ (the rows differ)').toBe(3)
+    // the part withdrawn, the engine does not carry on with the other build (it would draw other numbers for the same source):
+    // the evaluation that would have taken the pulse is refused, naming the part, as for any part (C572)
     restore = withdrawParts(['pulse'])
-    expect(draws()).not.toEqual(withPulse)
+    expect(() => draws()).toThrow(/"pulse" part of the engine is not loaded/)
+    // a dataset that cannot draw is an optimisation only: derived in full, the same scenes
+    const quiet = { width: 10, height: 10, data: [{ name: 't', transform: [{ type: 'formula', expr: 'datum.k * 2', as: 'r' }] }], marks: [{ type: 'text', from: { data: 't' }, encode: { update: { text: { field: 'r' } } } }] } as unknown as VgSpec
+    const run = (): string[] => {
+      const session = createChartSession()
+      return [[{ k: 1 }], [{ k: 1 }, { k: 2 }], [{ k: 1 }, { k: 2 }, { k: 3 }]].map((rows) => renderSceneToSvg(session.evaluate(quiet, { data: { t: rows }, random: () => 0.5 })))
+    }
+    const without = run()
+    restore()
+    expect(run()).toEqual(without)
+    restore = withdrawParts(['pulse'])
   })
 })
 

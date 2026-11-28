@@ -13,10 +13,13 @@
  * - a field list entry may be a literal list or a signal; its values count as one dataset of their own.
  */
 import { SpecParseError } from './parse-error.js'
+import { parseExpressionCached } from './expr-parser.js'
+import { ExpressionConstants } from './expr-interpreter.js'
 import { isDiscrete, isQuantile } from './scale.js'
 import { aggregateGroup } from './transform.js'
 import { part } from './engine-parts.js'
-import { ascending, error as raise, isArray, isObject, isString, pushAll, sortData } from './util.js'
+import { ascending, error as raise, isArray, isObject, isString, pushAll } from './util.js'
+import { sortMetered } from './limits.js'
 
 export interface ScaleContext {
   width: number
@@ -47,18 +50,31 @@ export interface ScaleContext {
    * bins leaves the zero out of its default domain: the first pass includes it, the second does not.
    */
   pass?: { prev: { key: string; bins: boolean } | undefined; record: (key: string, bins: boolean) => void }
+  /** Where a scale's warnings go (an option the scale has no method for, a log domain through zero, ...); none when absent. */
+  warn?: (message: string, ...detail: unknown[]) => void
 }
 
-/** A name a signal reference may be: a bare identifier. */
+/** Text that may be a bare name (cheap to test before the text is parsed). */
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/
-/** Names an expression knows without a signal. */
-const EXPRESSION_CONSTANTS = new Set(['NaN', 'E', 'LN2', 'LN10', 'LOG2E', 'LOG10E', 'PI', 'SQRT1_2', 'SQRT2', 'MIN_VALUE', 'MAX_VALUE'])
+
+/**
+ * Whether a reference is a bare name the expression language does not know by itself: as the parser reads it, an identifier that is
+ * none of the language's constants. `true`, `false` and `null` read as literals, `PI` as a constant.
+ */
+function isFreeName(reference: string): boolean {
+  if (!IDENTIFIER.test(reference)) return false
+  const tree = parseExpressionCached(reference)
+  // (`datum`, `event` and `item` are names vega's code generator lets through: an expression that is evaluated, and fails there as
+  // a signal's does, `datum is not defined`; any other name must be a signal)
+  return tree.type === 'Identifier' && !Object.hasOwn(ExpressionConstants, tree.name) && !EXPRESSION_VARIABLES.has(tree.name)
+}
+const EXPRESSION_VARIABLES: ReadonlySet<string> = new Set(['datum', 'event', 'item'])
 
 /** The value a `signal` reference stands for: a named signal's value, or the value of an expression. */
 export function signalValue(reference: string, ctx: ScaleContext): unknown {
   if (Object.hasOwn(ctx.signals, reference)) return ctx.signals[reference]
-  // a bare name that is no signal is a slip in the spec; anything else is an expression
-  if (IDENTIFIER.test(reference) && !EXPRESSION_CONSTANTS.has(reference)) raise(`Unrecognized signal name: ${reference}`)
+  // a bare name that is no signal is a slip in the spec; anything else (a literal, a constant, an expression) is evaluated
+  if (isFreeName(reference)) raise(`Unrecognized signal name: ${reference}`)
   if (!ctx.evaluate) raise(`Unrecognized signal expression: ${reference}`)
   return ctx.evaluate!(reference)
 }
@@ -197,7 +213,7 @@ function orderedKeys(categories: Keyed[], ordering: Ordering | undefined): unkno
   const column = columnName(ordering.op, ordering.field)
   const direction = (ordering.order || 'ascending') === 'descending' ? -1 : 1
   const ranked = categories.map((category, position) => ({ category, position }))
-  sortData(ranked, (a, b) => ascending(a.category[column], b.category[column]) * direction || a.position - b.position)
+  sortMetered(ranked, (a, b) => ascending(a.category[column], b.category[column]) * direction || a.position - b.position, 'scale domain')
   return ranked.map((r) => r.category.key)
 }
 

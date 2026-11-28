@@ -45,7 +45,7 @@ describe('arr.ts quantile vs d3-array 3.2.4 (generated)', () => {
       for (const p of PS) {
         expect(exact(() => quantile(col as number[], p)), `p=${p}`).toEqual(exact(() => d3.quantile(col as number[], p)))
         expect(exact(() => quantile(col.map((v) => ({ v })) as unknown as number[], p, (d) => (d as { v: unknown }).v)), `p=${p} accessor`).toEqual(
-          exact(() => d3.quantile(col.map((v) => ({ v })), p, (d) => (d as { v: unknown }).v)),
+          exact(() => d3.quantile(col.map((v) => ({ v })), p, (d: { v: unknown }) => d.v)),
         )
       }
       const sorted = col.filter((v) => v != null && +(v as number) === +(v as number)).map(Number).sort((a, b) => a - b)

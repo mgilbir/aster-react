@@ -1,6 +1,10 @@
 /**
- * Every place a Vega spec holds an expression, and the expressions to put there, for the live differentials against
- * `vega.parse` (differential-parse-errors.test.mts, and jsdom-parse-errors-handlers.test.mts for the handlers of signals).
+ * A hand-written table of places a Vega spec holds an expression, and the expressions to put there, for the live differentials
+ * against `vega.parse` (differential-parse-errors.test.mts, and jsdom-parse-errors-handlers.test.mts for the handlers of signals).
+ * It is NOT every place: a hand list is only what someone thought of (the audit found 63 more, 15 of them read differently by
+ * Aster, C81; they are below). The complete set is the one derived from the pinned Vega JSON schema, which fails on a position
+ * it cannot generate (the schema-site generator and its differential, audit finding C126). This table keeps the
+ * sites that need a hand: orders of evaluation, scopes, handlers, positions the schema does not declare.
  *
  * A site is a function from the text of an expression to a whole spec. A pool is a list of texts: broken ones (vega refuses
  * with `Expression parse error: <text>`), unknown functions and signals, expressions vega's code generator refuses for other
@@ -65,6 +69,8 @@ export const base = (o: Spec = {}): Spec => ({
   ...o,
 })
 const inGroup = (o: Spec): Spec => base({ marks: [{ type: 'group', ...o }] })
+const facet = (f: Spec): Spec => base({ marks: [{ type: 'group', from: { facet: { name: 'f', data: 'd', ...f } }, marks: [] }] })
+const scale = (o: Spec): Spec => base({ scales: [{ name: 'x', type: 'linear', domain: [0, 1], range: [0, 1], ...o }] })
 
 const raw = (on: Spec): Spec => base({ signals: [{ name: 's', value: 1 }, { name: 't', value: 0, on: [on] }] })
 const handler = (events: unknown, update: unknown = '1', more: Spec = {}): Spec => raw({ events, update, ...more })
@@ -183,6 +189,72 @@ export const SITES: Record<string, (e: string) => Spec> = {
   paramExprSignal: (e) => base({ data: [{ name: 'd', values: [{ a: 1 }], transform: [{ type: 'filter', expr: { signal: e } }] }] }),
   paramFieldSignal: (e) => base({ data: [{ name: 'd', values: [{ a: 1 }], transform: [{ type: 'extent', field: { signal: e } }] }] }),
   orderExprBeforeLambda: (e) => base({ marks: [rect({ x: { signal: e } }, { clip: { signal: 'nosuch3' } })] }),
+  // The sites the audit found outside this table (C81): the view's own layout and encode, a facet's parameters (as `{expr}` and
+  // `{signal}`), aggregate fields and cross, a mark trigger's values, a clip path and sphere, aria and description, the scale
+  // properties (bins.step, interpolate, a signal type...), the projection, data format, view, bind and guide-encode ones.
+  rootLayout: (e: string) => ({ ...base(), layout: { columns: { signal: e } } }),
+  rootLayoutPadding: (e: string) => ({ ...base(), layout: { padding: { signal: e } } }),
+  rootEncode: (e: string) => ({ ...base(), encode: { update: { fill: { signal: e } } } }),
+  rootEncodeEnter: (e: string) => ({ ...base(), encode: { enter: { stroke: { signal: e } } } }),
+  facetGroupbyExpr: (e: string) => facet({ groupby: { expr: e } }),
+  facetGroupbyExprList: (e: string) => facet({ groupby: ['a', { expr: e }] }),
+  facetGroupbySignal: (e: string) => facet({ groupby: { signal: e } }),
+  facetFieldExpr: (e: string) => facet({ field: { expr: e } }),
+  facetAggregateFields: (e: string) => facet({ groupby: 'a', aggregate: { fields: [{ expr: e }], ops: ['sum'], as: ['t'] } }),
+  facetAggregateCross: (e: string) => facet({ groupby: 'a', aggregate: { cross: { signal: e } } }),
+  markTriggerValues: (e: string) => base({ marks: [rect({}, { name: 'm', on: [{ trigger: 's', modify: 'datum', values: e }] })] }),
+  markClipPath: (e: string) => base({ marks: [{ type: 'group', clip: { path: { signal: e } } }] }),
+  markClipSphere: (e: string) => base({ projections: [{ name: 'p', type: 'mercator' }], marks: [{ type: 'group', clip: { sphere: { signal: e } } }] }),
+  markAria: (e: string) => base({ marks: [rect({}, { aria: { signal: e } })] }),
+  markDescription: (e: string) => base({ marks: [rect({}, { description: { signal: e } })] }),
+  encFieldDatumSignal: (e: string) => base({ marks: [rect({ x: { field: { datum: { signal: e } } } })] }),
+  encOffsetScale: (e: string) => base({ marks: [rect({ x: { value: 1, offset: { scale: 'x', signal: e } } })] }),
+  encHover: (e: string) => base({ marks: [rect({}, {})].map((m) => ({ ...m, encode: { ...(m.encode as object), hover: { fill: { signal: e } } } })) }),
+  encExit: (e: string) => base({ marks: [rect({}, {})].map((m) => ({ ...m, encode: { ...(m.encode as object), exit: { fill: { signal: e } } } })) }),
+  encCustomSet: (e: string) => base({ marks: [rect({}, {})].map((m) => ({ ...m, encode: { ...(m.encode as object), select: { fill: { signal: e } } } })) }),
+  scaleNice: (e: string) => scale({ nice: { signal: e } }),
+  scaleReverse: (e: string) => scale({ reverse: { signal: e } }),
+  scaleClamp: (e: string) => scale({ clamp: { signal: e } }),
+  scaleDomainMin: (e: string) => scale({ domainMin: { signal: e } }),
+  scaleDomainMid: (e: string) => scale({ domainMid: { signal: e } }),
+  scaleDomainRaw: (e: string) => scale({ domainRaw: { signal: e } }),
+  scaleBins: (e: string) => scale({ bins: { signal: e } }),
+  scaleBinsStep: (e: string) => scale({ bins: { step: { signal: e } } }),
+  scaleInterpolate: (e: string) => scale({ interpolate: { signal: e } }),
+  scalePadding: (e: string) => scale({ padding: { signal: e } }),
+  scaleRangeStep: (e: string) => base({ scales: [{ name: 'x', type: 'band', domain: ['a'], range: { step: { signal: e } } }] }),
+  scaleRangeItem: (e: string) => scale({ range: [0, { signal: e }] }),
+  scaleRangeScheme: (e: string) => scale({ range: { scheme: { signal: e } } }),
+  scaleDomainDataField: (e: string) => base({ scales: [{ name: 'x', type: 'linear', domain: { data: 'd', field: { signal: e } }, range: [0, 1] }] }),
+  scaleDomainSortField: (e: string) => base({ scales: [{ name: 'x', type: 'band', domain: { data: 'd', field: 'a', sort: { field: { signal: e }, op: 'sum' } }, range: [0, 1] }] }),
+  scaleExponent: (e: string) => base({ scales: [{ name: 'x', type: 'pow', exponent: { signal: e }, domain: [0, 1], range: [0, 1] }] }),
+  scaleType: (e: string) => base({ scales: [{ name: 'x', type: { signal: e }, domain: [0, 1], range: [0, 1] }] }),
+  projectionCenterItem: (e: string) => base({ projections: [{ name: 'p', type: 'mercator', center: [{ signal: e }, 0] }] }),
+  projectionFit: (e: string) => base({ projections: [{ name: 'p', type: 'mercator', fit: { signal: e }, size: [1, 1] }] }),
+  projectionType: (e: string) => base({ projections: [{ name: 'p', type: { signal: e } }] }),
+  projectionSize: (e: string) => base({ projections: [{ name: 'p', type: 'mercator', size: { signal: e } }] }),
+  dataFormatParse: (e: string) => base({ data: [{ name: 'd', values: [], format: { type: 'json', parse: { signal: e } } }] }),
+  dataFormatProperty: (e: string) => base({ data: [{ name: 'd', values: [], format: { type: 'json', property: { signal: e } } }] }),
+  viewHeight: (e: string) => ({ ...base(), height: { signal: e } }),
+  viewPaddingSide: (e: string) => ({ ...base(), padding: { left: { signal: e } } }),
+  viewAutosizeType: (e: string) => ({ ...base(), autosize: { type: { signal: e } } }),
+  viewDescription: (e: string) => ({ ...base(), description: { signal: e } }),
+  bindOptions: (e: string) => base({ signals: [{ name: 't', value: 0, bind: { input: 'select', options: { signal: e } } }] }),
+  bindMax: (e: string) => base({ signals: [{ name: 't', value: 0, bind: { input: 'range', max: { signal: e } } }] }),
+  bindName: (e: string) => base({ signals: [{ name: 't', value: 0, bind: { input: 'range', name: { signal: e } } }] }),
+  legendEncodeLegend: (e: string) => base({ scales: [{ name: 'c', type: 'ordinal', domain: [0, 1], range: ['red', 'blue'] }], legends: [{ fill: 'c', encode: { legend: { update: { stroke: { signal: e } } } } }] }),
+  legendEncodeTitle: (e: string) => base({ scales: [{ name: 'c', type: 'ordinal', domain: [0, 1], range: ['red', 'blue'] }], legends: [{ fill: 'c', title: 'T', encode: { title: { update: { fill: { signal: e } } } } }] }),
+  axisEncodeTicks: (e: string) => base({ axes: [{ scale: 'x', orient: 'bottom', encode: { ticks: { update: { stroke: { signal: e } } } } }] }),
+  axisEncodeAxis: (e: string) => base({ axes: [{ scale: 'x', orient: 'bottom', encode: { axis: { update: { fill: { signal: e } } } } }] }),
+  titleEncodeGroup: (e: string) => base({ title: { text: 'x', encode: { group: { update: { fill: { signal: e } } } } } }),
+  titleEncodeSubtitle: (e: string) => base({ title: { text: 'x', subtitle: 'y', encode: { subtitle: { update: { fill: { signal: e } } } } } }),
+  windowParams: (e: string) => base({ data: [{ name: 'd', values: [{ a: 1 }], transform: [{ type: 'window', ops: ['ntile'], params: [{ signal: e }], as: ['n'] }] }] }),
+  imputeValue: (e: string) => base({ data: [{ name: 'd', values: [{ a: 1 }], transform: [{ type: 'impute', field: 'a', key: 'a', value: { signal: e } }] }] }),
+  sequenceStop: (e: string) => base({ data: [{ name: 'q', transform: [{ type: 'sequence', start: 0, stop: { signal: e } }] }] }),
+  stackField: (e: string) => base({ data: [{ name: 'd', values: [{ a: 1 }], transform: [{ type: 'stack', field: { expr: e } }] }] }),
+  joinaggregateFields: (e: string) => base({ data: [{ name: 'd', values: [{ a: 1 }], transform: [{ type: 'joinaggregate', fields: [{ expr: e }], ops: ['sum'], as: ['t'] }] }] }),
+  dataOnInsertSignalTrigger: (e: string) => base({ data: [{ name: 'd', values: [{ a: 1 }], on: [{ trigger: 's', insert: { signal: e } }] }] }),
+  signalOnForce: (e: string) => base({ signals: [{ name: 't', value: 0, on: [{ events: 'mousedown', update: '1', force: { signal: e } }] }] }),
 }
 
 const AXIS_PROPERTIES = [
@@ -365,17 +437,16 @@ export const HANDLER_SITES: Record<string, (e: string) => Spec> = {
   onViewSignal: (e) => base({ signals: [{ name: 'width', on: [{ events: 'mousedown', update: e }] }] }),
 }
 
-/** Where the text is the name of a mark's encode set: the handler is accepted, and the engine does not bind it. */
+/** Where the text is the name of a mark's encode set: the handler re-encodes the event's item with it (encode-handlers.ts). */
 export const UNBOUND_HANDLER_SITES: Record<string, (e: string) => Spec> = {
   onEncode: (e) => raw({ events: 'mousedown', encode: e }),
 }
 
 /**
  * What a handler vega accepts may still report when it is bound, by site: a selector's source that is no CSS selector (the pool's
- * texts are valid expressions, not always valid selectors), and the encode set of a handler, which the engine does not run.
+ * texts are valid expressions, not always valid selectors).
  */
 export const BIND_TIME_REPORTS: Record<string, RegExp> = {
-  onEncode: /`encode` updates/,
   onEventSelector: /Invalid selector/,
   onEventSelectorMerged: /Invalid selector/,
   onEventSelectorBetween: /Invalid selector/,
@@ -416,6 +487,17 @@ export function vegaOutcome(spec: Spec): string {
   try { vega.parse({ signals: [{ name: 'flush', update: '1' }] } as never) } catch { /* the leftover names of an earlier refusal */ }
   try {
     vega.parse(structuredClone(spec) as never)
+    return 'ok'
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e)
+  }
+}
+
+/** Vega's outcome with a view built of the parsed spec: what its parser accepts but its code generator then fails on. */
+export function vegaViewOutcome(spec: Spec): string {
+  try { vega.parse({ signals: [{ name: 'flush', update: '1' }] } as never) } catch { /* the leftover names of an earlier refusal */ }
+  try {
+    new vega.View(vega.parse(structuredClone(spec) as never), { renderer: 'none' }).finalize()
     return 'ok'
   } catch (e) {
     return e instanceof Error ? e.message : String(e)

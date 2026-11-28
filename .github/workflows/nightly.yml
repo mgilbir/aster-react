@@ -93,7 +93,7 @@ jobs:
       - id: bench-browser
         name: Browser mount/update/no-op benchmark
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.playwright.outcome == 'success' }}
-        run: pnpm bench:browser -- --points=1000 --memory=false
+        run: pnpm bench:browser -- --points=1000 --memory=true
 
       - id: bench-dense
         name: Dense-SVG streaming benchmark
@@ -103,17 +103,17 @@ jobs:
       - id: sweep-vl
         name: Vega-Lite schema sweep
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        run: pnpm sweep-vl -- --floor 27513 --min-ok 27452 --max-node-error 17 --vega-check
+        run: pnpm sweep-vl -- --floor 33043 --min-ok 32630 --max-node-error 1 --vega-check
 
       - id: sweep-vega
         name: Vega schema sweep
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        run: pnpm sweep-vega -- --floor 7549 --min-ok 7538 --max-node-error 3
+        run: pnpm sweep-vega -- --floor 7760 --min-ok 7738 --max-node-error 3
 
       - id: sweep-values
         name: Value sweep
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        run: pnpm sweep-values -- --floor 500 --min-ok 500 --max-node-error 0
+        run: pnpm sweep-values -- --floor 525 --min-ok 525 --max-node-error 0
 
       - id: fuzz
         name: Differential fuzzing (deterministic seeds)

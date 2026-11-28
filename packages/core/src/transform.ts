@@ -10,17 +10,19 @@ import type { CompiledTransform, SortSpec } from './types.js'
 import type { IdCounter } from './identifier-ids.js'
 import { exprRows, type ExpressionRuntime } from './expression.js'
 import { type ContourFeature, SHAPE_BOUNDS, geoRegistry, requireGeo, requireTransform } from './registry.js'
-import { isArray, sortData } from './util.js'
+import { isArray, copyTuple } from './util.js'
 import { densityGrid, placeContours } from './raster-grid.js'
-import { accessorOf, densitySettings } from './raster-params.js'
+import { densitySettings } from './raster-params.js'
 import { PARAM_RULES, checkParams } from './param-rules.js'
 import { tickStep } from './arr.js'
 import { carryOrder, orderOf, placesAt } from './tuple-order.js'
-import { activeMeter, boundedCount, ceiling } from './limits.js'
+import { activeMeter, allot, copiedRows, meterTick, sortMetered } from './limits.js'
 import { walkPostOrder, walkPreOrder } from './tree-walk.js'
 import { compareOf, fieldOf, numberRange, required, sortBySpec } from './row-keys.js'
 import type { AggregateParams } from './transform-agg.js'
 import { part } from './engine-parts.js'
+import { resolveTransformParams } from './param-resolve.js'
+import { signalValueOf } from './transform-params.js'
 
 
 /** One group's aggregate tuple (the incremental aggregate re-derives only dirty groups). */
@@ -48,6 +50,16 @@ export interface TransformContext {
    * does not copy them first.
    */
   inPlace?: boolean
+  /**
+   * A `force` layout over nodes that carry the positions and velocities of a layout already run (a view that continues one) that vega
+   * does not run again: the layout is set up over them (its links are bound to its nodes) and no tick is made.
+   */
+  settled?: boolean
+  /**
+   * A `force` layout over the nodes of a layout already run, which it runs again: the simulation keeps its nodes (vega sets a node
+   * to its `fx` / `fy` when it is given its nodes, not when it runs again), so the first tick sees them where they were.
+   */
+  continued?: boolean
   /**
    * A named mark's container (`marktype` and its `items`; for a group mark, the group items): the marks the `label`
    * transform avoids. Absent where there are no marks (a dataset's transform).
@@ -126,6 +138,7 @@ const KEEPS_ROW_OBJECTS = new Set(['filter', 'collect', 'sample', 'extent', 'imp
 export function applyTransformsToSharedRows(rows: Row[], transforms: CompiledTransform[], ctx: TransformContext, sourceName?: string): Row[] {
   let reading = 0
   let shared = true
+  // bounded: the spec's transforms, once each
   while (reading < transforms.length) {
     const use = rowUseOf(transforms[reading]!)
     if (use === 'writes') break
@@ -133,7 +146,7 @@ export function applyTransformsToSharedRows(rows: Row[], transforms: CompiledTra
     reading++
   }
   let out = reading > 0 ? applyTransforms(rows, transforms.slice(0, reading), ctx, sourceName) : rows
-  if (shared) out = out.map((r) => ({ ...r }))
+  if (shared) out = copiedRows(out, 'dataset rows', true)
   // (the rows are now the pipeline's own: copies of the shared ones, or made by an aggregate)
   return reading < transforms.length ? applyTransforms(out, transforms.slice(reading), ctx, sourceName, true) : out
 }
@@ -157,81 +170,76 @@ export function applyTransforms(
     // (a collect that sorts, with a sort after it, leaves the order the rows were made in beside its result)
     const input = out
     out = applyTransform(out, t, run, sourceName, ownedIn, placesAt(transforms, k))
+    // (a transform's `signal`: what vega binds it to, see `signalValueOf`)
+    const published = (t as { signal?: unknown }).signal
+    if (typeof published === 'string' && published) publishSignal(t, published, input, out, run)
     carryOrder(t.type, input, out)
     if (meter) {
       // Whatever a transform produced is a dataset like any other: it may not
-      // exceed maxRows, and rows beyond the input count as generated.
+      // exceed maxRows, and the rows it made beyond the rows IT was given count as generated (once: a later step that keeps
+      // them makes none)
       meter.checkRows(out.length, `transform ${t.type}`)
-      meter.generated(out.length - rows.length, `transform ${t.type}`)
+      meter.generated(out.length - input.length, `transform ${t.type}`)
     }
   }
   return out
 }
 
-/** Whether a (nested) param value holds a `{signal: ...}` reference. */
-function containsSignal(v: unknown, depth = 0): boolean {
-  if (v === null || typeof v !== 'object' || depth > 6) return false
-  if (isArray(v)) return (v as unknown[]).some((x) => containsSignal(x, depth + 1))
-  const o = v as Record<string, unknown>
-  if (typeof o.signal === 'string' && Object.keys(o).length === 1) return true
-  return Object.keys(o).some((k) => containsSignal(o[k], depth + 1))
+/** Bind a transform's `signal` to the value vega binds it to (the transforms that publish their own did so already). */
+function publishSignal(t: CompiledTransform, name: string, input: Row[], out: Row[], ctx: TransformContext): void {
+  switch (signalValueOf(t.type)) {
+    case 'output': ctx.signals[name] = out; break
+    case 'added': ctx.signals[name] = out.slice(input.length); break
+    case 'values': {
+      const field = (t as { field?: unknown }).field ? fieldOf((resolveTransformParams(t, ctx) as { field?: unknown }).field) : null
+      ctx.signals[name] = input.map((r) => (field ? field(r) : 1))
+      break
+    }
+    case 'counter': ctx.signals[name] = ctx.ids?.value; break
+    case 'none': ctx.signals[name] = null; break
+    case 'own': break
+    default: {
+      // (vega's internal state of the operator: an opaque object that stands for it, the same one every evaluation)
+      let token = OPAQUE.get(t)
+      if (token === undefined) OPAQUE.set(t, (token = Object.freeze({})))
+      ctx.signals[name] = token
+    }
+  }
 }
+const OPAQUE = new WeakMap<object, object>()
 
 /** A parameter value that is a lone `{signal: <expression>}`. */
 function isSignalRef(v: unknown): boolean {
   return v !== null && typeof v === 'object' && !isArray(v) && typeof (v as { signal?: unknown }).signal === 'string' && Object.keys(v as object).length === 1
 }
 
-const signalParams = new WeakMap<object, boolean>()
-
-/**
- * Vega lets any transform parameter be a `{signal: <expression>}`; evaluate
- * those against the current signals before the transform runs. Transforms with
- * no signal param (the common case, and every row-local re-application) are
- * returned untouched.
- */
-function resolveSignalParams(t: CompiledTransform, ctx: TransformContext): CompiledTransform {
-  let has = signalParams.get(t)
-  if (has === undefined) {
-    has = containsSignal(t)
-    signalParams.set(t, has)
-  }
-  if (!has) return t
-  const resolve = (v: unknown, depth: number): unknown => {
-    if (v === null || typeof v !== 'object' || depth > 6) return v
-    if (isArray(v)) return (v as unknown[]).map((x) => resolve(x, depth + 1))
-    const o = v as Record<string, unknown>
-    if (typeof o.signal === 'string' && Object.keys(o).length === 1) {
-      // (vega-parser Scope.signalRef: the name of a declared signal is that signal, not an expression -- `static`,
-      // a reserved word to the expression parser, is a fine signal name)
-      return Object.hasOwn(ctx.signals, o.signal) ? ctx.signals[o.signal] : ctx.runtime.expr(o.signal)({}, ctx.signals)
-    }
-    const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>
-    for (const k of Object.keys(o)) out[k] = resolve(o[k], depth + 1)
-    return out
-  }
-  return resolve(t, 0) as CompiledTransform
-}
-
 function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContext, sourceName: string | undefined, owned: boolean, leaveOrder: boolean): Row[] {
   const rules = PARAM_RULES.get(t0.type as string)
   if (rules) checkParams(t0 as Record<string, unknown>, rules)
-  const t = resolveSignalParams(t0, ctx)
+  // (every parameter as vega reads it: `{signal}`s, fields written `{expr}` / `{field, as}`, comparators -- see param-resolve.ts)
+  const t = resolveTransformParams(t0, ctx)
   switch (t.type) {
     case 'formula': {
       required('formula', t, 'expr', 'as')
-      const expr = exprRowPass(t.expr as string, ctx)
+      const expr = exprRowPass(t.expr as string, ctx, 'formula')
       const as = t.as as string
-      if (owned && as !== '__proto__') {
+      if (owned) {
         const out = rows.slice()
         for (const r of out) r[as] = expr(r)
         return out
       }
-      return rows.map((r) => ({ ...r, [as]: expr(r) }))
+      // (written as vega's Formula writes it, `t[as] = value`, onto a copy: an output named `__proto__` is the copy's prototype --
+      // a value that is no object is no prototype and is dropped -- as it is in every other transform that names its output, never
+      // Object.prototype)
+      return rows.map((r) => {
+        const o = copyTuple(r)
+        o[as] = expr(r)
+        return o
+      })
     }
     case 'filter': {
       required('filter', t, 'expr')
-      const expr = exprRowPass(t.expr as string, ctx)
+      const expr = exprRowPass(t.expr as string, ctx, 'filter')
       return rows.filter((r) => expr(r))
     }
     case 'collect':
@@ -262,30 +270,29 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       return rows
     }
     case 'geoshape': {
-      // Vega's geoshape transform turns the GeoJSON geometry of each tuple's field (by default
-      // `datum`) into an SVG path (default output 'shape'). With a `projection` param the
-      // geometry is projected first.
+      // vega's geoshape: the GeoJSON of each tuple's field (by default the tuple itself) as a shape, written to `as` (default
+      // `shape`); through the named projection, or with none through the default path (the coordinates as they are). Either way
+      // the geo add-on draws it, the path and its unrounded bounds (for the bound pass) in one pass over the geometry.
       const as = (t as { as?: unknown }).as ?? 'shape'
       const field = (t as { field?: unknown }).field
       const projName = (t as { projection?: unknown }).projection
-      const projection = projName != null ? ctx.projections?.get(String(projName)) : undefined
-      if (projection != null && !geoRegistry.projectedPath) requireGeo() // throws: addon not loaded
-      const pointRadius = geoPointRadius((t as { pointRadius?: unknown }).pointRadius, ctx)
-      return rows.map((r) => {
-        // (a mark's transform runs on its items: the field is read off the item, `datum` -- the default -- being its data, and the
-        // path is written on the item, which is the transform's own)
-        const geo = getField(r, field == null ? 'datum' : String(field))
-        // a projected shape's path and its unrounded bounds (for the bound pass) come from one pass over the geometry
-        const shape = projection != null && as === 'shape' && geoRegistry.projectedShape ? geoRegistry.projectedShape(projection, geo, pointRadius) : undefined
-        const p = shape
-          ? shape.path
-          : projection != null
-            ? geoRegistry.projectedPath!(projection, geo, pointRadius)
-            : geoJSONPath(geo)
-        if (p === undefined) return r
-        const out = owned ? r : { ...r }
-        out[as as string] = p
-        if (shape) SHAPE_BOUNDS.set(out, () => shape.bounds)
+      if (!geoRegistry.projectedShape) requireGeo() // throws: the add-on is not loaded
+      const projection = projName != null ? ctx.projections?.get(String(projName)) : null
+      if (projection === undefined) throw new Error(`Unrecognized scale name: ${JSON.stringify(String(projName))}`)
+      const pointRadius = geoPointRadius((t as { pointRadius?: unknown }).pointRadius)
+      // The field is read off the item that draws the shape, as vega's shape generator reads it when drawing (`datum` by default). A
+      // mark's transform runs on its items. A dataset's runs on rows whose shape a mark's encode hands its items: there the item's
+      // `datum` is the row, and any other property of the item is none a row can give.
+      const geoOf = fieldOf(field == null ? 'datum' : field)
+      const read = ctx.inPlace === true ? geoOf : (r: Row): unknown => geoOf({ datum: r })
+      return rows.map((r, i) => {
+        if ((i & 1023) === 1023) meterTick('geoshape', 1024)
+        const geo = read(r)
+        const shape = geoRegistry.projectedShape!(projection ?? null, geo, pointRadius)
+        const out = owned ? r : copyTuple(r)
+        // (a shape that draws nothing is the empty path: the item is still drawn, with no `d`, and bounds to nothing)
+        out[as as string] = shape.path ?? ''
+        if (as === 'shape') SHAPE_BOUNDS.set(out, shape.bounds)
         return out
       })
     }
@@ -363,9 +370,10 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
       // non-empty source keeps the source rows first).
       return rows.length ? [...rows, ...part('reshape').sequenceRows(t)] : part('reshape').sequenceRows(t)
     case 'graticule':
-      return graticuleRows(t as Record<string, unknown>)
+      // A generating transform appends its tuples to the pulse it is given, as `sequence` above does.
+      return rows.length ? [...rows, ...graticuleRows(t as Record<string, unknown>)] : graticuleRows(t as Record<string, unknown>)
     case 'contour':
-      return contourRows(rows, t as Record<string, unknown>, ctx)
+      return contourRows(rows, t as Record<string, unknown>)
     case 'kde2d':
       return requireTransform('kde2d')(rows, t as Record<string, unknown>, ctx, sourceName)
     case 'isocontour':
@@ -391,16 +399,13 @@ function applyTransform(rows: Row[], t0: CompiledTransform, ctx: TransformContex
   }
 }
 
-/** A geo transform's `pointRadius`: a number, or `{expr}` -- an expression of the GeoJSON object being drawn. */
-export function geoPointRadius(param: unknown, ctx: TransformContext): unknown {
-  if (param == null || typeof param !== 'object' || typeof (param as { expr?: unknown }).expr !== 'string') return param
-  const radius = compileExprTransform((param as { expr: string }).expr, ctx)
-  return (feature: unknown): number => +(radius(feature as Row) as number)
-}
-
-export function compileExprTransform(expr: string, ctx: TransformContext) {
-  const fn = ctx.runtime.expr(expr)
-  return (datum: Row): unknown => fn(datum, ctx.signals)
+/**
+ * A geo transform's `pointRadius`: a number, or a function of the GeoJSON object being drawn (written `{expr}` or `{field}`, made an
+ * accessor with the other parameters: d3's path takes `+radius(object)`).
+ */
+export function geoPointRadius(param: unknown): unknown {
+  if (typeof param !== 'function') return param
+  return (feature: unknown): number => +((param as (d: unknown) => unknown)(feature) as number)
 }
 
 /**
@@ -408,8 +413,17 @@ export function compileExprTransform(expr: string, ctx: TransformContext) {
  * loop only evaluates, and what the expression calls is checked: see `exprRows`). What every row reads alike is read once. Not
  * to be kept past that loop: the next pass prepares its own.
  */
-export function exprRowPass(expr: string, ctx: TransformContext): (datum: Row) => unknown {
-  return exprRows(ctx.runtime.expr(expr), ctx.signals)
+export function exprRowPass(expr: string, ctx: TransformContext, what = 'expression rows'): (datum: Row) => unknown {
+  const pass = exprRows(ctx.runtime.expr(expr), ctx.signals)
+  // Inside a limits scope every 1024 rows tick the clock: a formula or filter is a pass over the rows with an expression per row,
+  // which the budget must stop inside (C514). Outside one the pass is the expression itself.
+  const meter = activeMeter()
+  if (!meter) return pass
+  let count = 0
+  return (datum) => {
+    if (++count === 1024) { count = 0; meter.tick(what, 1024) }
+    return pass(datum)
+  }
 }
 
 /**
@@ -466,7 +480,7 @@ export function sortOrder(rows: Row[], sort?: SortSpec, limit = Infinity): numbe
   const order = rows.map((_, i) => i)
   const c = comparatorOf(sort)
   const places = c ? orderOf(rows) : null
-  if (c) sortData(order, (a, b) => c(rows[a]!, rows[b]!) || (places ? places[a]! - places[b]! : 0) || a - b)
+  if (c) sortMetered(order, (a, b) => c(rows[a]!, rows[b]!) || (places ? places[a]! - places[b]! : 0) || a - b, 'collect')
   return Number.isFinite(limit) ? order.slice(0, Math.max(0, limit)) : order
 }
 
@@ -481,77 +495,6 @@ export function sortOrder(rows: Row[], sort?: SortSpec, limit = Infinity): numbe
 // ---------------------------------------------------------------------------
 // aggregate / window / stack
 // ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// geoshape: GeoJSON -> SVG path (identity projection)
-// ---------------------------------------------------------------------------
-
-function fmtCoord(v: unknown): string {
-  const n = typeof v === 'number' ? v : Number(v)
-  if (!Number.isFinite(n)) return String(v)
-  return String(Math.round(n * 1000) / 1000)
-}
-
-/** Build the SVG path for a GeoJSON polygon ring (closing point omitted). */
-function ringPath(ring: unknown[]): string {
-  if (!ring.length) return ''
-  const pts = ring as unknown[][]
-  const n = pts.length
-  let d = `M${fmtCoord(pts[0]![0])},${fmtCoord(pts[0]![1])}`
-  for (let i = 1; i < n; i++) {
-    // GeoJSON rings repeat the first point at the end; d3-geo omits it because
-    // the path closes with Z.
-    if (i === n - 1 && pts[i]![0] === pts[0]![0] && pts[i]![1] === pts[0]![1]) break
-    d += `L${fmtCoord(pts[i]![0])},${fmtCoord(pts[i]![1])}`
-  }
-  return d + 'Z'
-}
-
-function lineStringPath(pts: unknown[][]): string {
-  if (!pts.length) return ''
-  let d = `M${fmtCoord(pts[0]![0])},${fmtCoord(pts[0]![1])}`
-  for (let i = 1; i < pts.length; i++) d += `L${fmtCoord(pts[i]![0])},${fmtCoord(pts[i]![1])}`
-  return d
-}
-
-/**
- * Convert a GeoJSON geometry (or Feature / FeatureCollection) into an SVG path
- * string using an identity projection (no projection). Returns undefined when
- * the geometry type is not handled.
- */
-export function geoJSONPath(geo: unknown): string | undefined {
-  if (geo == null || typeof geo !== 'object') return undefined
-  const g = geo as { type?: string; geometry?: unknown; coordinates?: unknown; features?: unknown[] }
-  if (g.type === 'Feature') return geoJSONPath(g.geometry)
-  if (g.type === 'FeatureCollection' && Array.isArray(g.features)) {
-    let out = ''
-    for (const f of g.features) {
-      const p = geoJSONPath(f)
-      if (p !== undefined) out += p
-    }
-    return out || undefined
-  }
-  const coords = g.coordinates
-  if (g.type === 'Polygon' && Array.isArray(coords)) {
-    return (coords as unknown[][]).map(ringPath).join('')
-  }
-  if (g.type === 'MultiPolygon' && Array.isArray(coords)) {
-    let out = ''
-    for (const poly of coords as unknown[][][]) {
-      for (const ring of poly) out += ringPath(ring)
-    }
-    return out
-  }
-  if (g.type === 'LineString' && Array.isArray(coords)) {
-    return lineStringPath(coords as unknown[][])
-  }
-  if (g.type === 'MultiLineString' && Array.isArray(coords)) {
-    let out = ''
-    for (const line of coords as unknown[][][]) out += lineStringPath(line)
-    return out
-  }
-  return undefined
-}
 
 // ---------------------------------------------------------------------------
 // kde / quantile / regression
@@ -569,24 +512,39 @@ export function geoJSONPath(geo: unknown): string | undefined {
 
 const GEO_EPSILON = 1e-6
 
-/** d3-geo graticuleX: latitude samples along a meridian (step 90, clipped). */
-function graticuleX(y0: number, y1: number, dy: number): (x: number) => number[][] {
-  const y = numberRange(y0, y1 - GEO_EPSILON, dy).concat(y1)
-  return (x) => y.map((yy) => [x, yy])
+/**
+ * The steps of a graticule line: `start, start + step, ...` below `stop`, as d3-array's `range` counts them (a count that is not a
+ * positive number, from a zero or NaN step, is none). The length is checked against the limits before it is allocated.
+ */
+function graticuleRange(start: number, stop: number, step: number): number[] {
+  return (Math.max(0, Math.ceil((stop - start) / step)) | 0) > 0 ? numberRange(start, stop, step) : []
 }
 
-/** d3-geo graticuleY: longitude samples along a parallel (precision spacing). */
-function graticuleY(x0: number, x1: number, dx: number): (y: number) => number[][] {
-  const x = numberRange(x0, x1 - GEO_EPSILON, dx).concat(x1)
-  return (yy) => x.map((xx) => [xx, yy])
+/** A graticule line family: the line through one position, and how many points each line has. */
+type LineFamily = ((at: number) => number[][]) & { points: number }
+
+/** The latitude samples along a meridian (every 90 degrees, clipped to the extent). */
+function graticuleX(y0: number, y1: number, dy: number): LineFamily {
+  const y = graticuleRange(y0, y1 - GEO_EPSILON, dy).concat(y1)
+  return Object.assign((x: number) => { meterTick('graticule', y.length); return y.map((yy) => [x, yy]) }, { points: y.length })
+}
+
+/** The longitude samples along a parallel (every `precision` degrees). */
+function graticuleY(x0: number, x1: number, dx: number): LineFamily {
+  const x = graticuleRange(x0, x1 - GEO_EPSILON, dx).concat(x1)
+  return Object.assign((yy: number) => { meterTick('graticule', x.length); return x.map((xx) => [xx, yy]) }, { points: x.length })
 }
 
 /**
- * The vega `graticule` transform: generate a single GeoJSON MultiLineString
- * geometry of latitude/longitude grid lines (d3-geo `geoGraticule` algorithm).
- * Reproduced operation-for-operation so the generated coordinates (and the
- * identity-projected SVG paths rendered from them) match the oracle to the bit.
+ * The vega `graticule` transform: a single GeoJSON MultiLineString of latitude/longitude grid lines, as d3-geo's `geoGraticule`
+ * draws them, with the same arithmetic so the coordinates match to the bit. What is fixed by the output: the parameters are applied
+ * in the order of vega's definition (extent, extentMajor, extentMinor, step, stepMajor, stepMinor, precision), not the spec's; each value is read as a number (`'45'` is 45, a list of strings is a list of numbers); an extent
+ * given west-east or north-south the wrong way round is swapped; a step or precision of zero (or NaN) gives a line no samples
+ * between its ends, as d3's range does.
  */
+/** The graticule's parameters, in the order vega-geo's Graticule definition lists them. */
+const GRATICULE_PARAMS = ['extent', 'extentMajor', 'extentMinor', 'step', 'stepMajor', 'stepMinor', 'precision'] as const
+
 function graticuleRows(t: Record<string, unknown>): Row[] {
   let x0 = -180, x1 = 180, X0 = -180, X1 = 180
   let y0 = -80 - GEO_EPSILON, y1 = 80 + GEO_EPSILON
@@ -594,51 +552,66 @@ function graticuleRows(t: Record<string, unknown>): Row[] {
   let dx = 10, dy = 10, DX = 90, DY = 360
   let precision = 2.5
 
-  const recompute = () => {
-    X = graticuleX(Y0, Y1, 90)
-    Y = graticuleY(X0, X1, precision)
+  const none: LineFamily = Object.assign(() => [], { points: 0 })
+  let X = none
+  let Y = none
+  let x = none
+  let y = none
+  const setPrecision = (p: unknown) => {
+    precision = +(p as number)
     x = graticuleX(y0, y1, 90)
     y = graticuleY(x0, x1, precision)
+    X = graticuleX(Y0, Y1, 90)
+    Y = graticuleY(X0, X1, precision)
   }
-  let X: (v: number) => number[][] = () => []
-  let Y: (v: number) => number[][] = () => []
-  let x: (v: number) => number[][] = () => []
-  let y: (v: number) => number[][] = () => []
 
-  const extentMajor = (e: number[][]) => {
-    X0 = e[0]![0]!, X1 = e[1]![0]!, Y0 = e[0]![1]!, Y1 = e[1]![1]!
-    recompute()
+  type Corners = ArrayLike<ArrayLike<unknown>>
+  const extentMajor = (e: Corners) => {
+    X0 = +(e[0]![0] as number), X1 = +(e[1]![0] as number)
+    Y0 = +(e[0]![1] as number), Y1 = +(e[1]![1] as number)
+    if (X0 > X1) [X0, X1] = [X1, X0]
+    if (Y0 > Y1) [Y0, Y1] = [Y1, Y0]
+    setPrecision(precision)
   }
-  const extentMinor = (e: number[][]) => {
-    x0 = e[0]![0]!, x1 = e[1]![0]!, y0 = e[0]![1]!, y1 = e[1]![1]!
-    recompute()
+  const extentMinor = (e: Corners) => {
+    x0 = +(e[0]![0] as number), x1 = +(e[1]![0] as number)
+    y0 = +(e[0]![1] as number), y1 = +(e[1]![1] as number)
+    if (x0 > x1) [x0, x1] = [x1, x0]
+    if (y0 > y1) [y0, y1] = [y1, y0]
+    setPrecision(precision)
   }
-  const stepMajor = (s: number[]) => { DX = s[0]!, DY = s[1]! }
-  const stepMinor = (s: number[]) => { dx = s[0]!, dy = s[1]! }
+  const stepMajor = (s: ArrayLike<unknown>) => { DX = +(s[0] as number), DY = +(s[1] as number) }
+  const stepMinor = (s: ArrayLike<unknown>) => { dx = +(s[0] as number), dy = +(s[1] as number) }
 
   // d3-geo geoGraticule default configuration
   extentMajor([[-180, -90 + GEO_EPSILON], [180, 90 - GEO_EPSILON]])
   extentMinor([[-180, -80 - GEO_EPSILON], [180, 80 + GEO_EPSILON]])
 
-  // Apply spec parameters in key order (as vega's Graticule.transform does).
-  for (const key of Object.keys(t)) {
+  // Apply the parameters in the order of the transform's definition, whatever order the spec writes them in (vega's parser builds
+  // the parameters from the definition, and its Graticule applies them in that order)
+  for (const key of GRATICULE_PARAMS) {
+    if (!Object.hasOwn(t, key)) continue
     const v = t[key]
-    if (key === 'extent' && Array.isArray(v)) { extentMajor(v as number[][]); extentMinor(v as number[][]) }
-    else if (key === 'extentMajor' && Array.isArray(v)) extentMajor(v as number[][])
-    else if (key === 'extentMinor' && Array.isArray(v)) extentMinor(v as number[][])
-    else if (key === 'step' && Array.isArray(v)) { stepMajor(v as number[]); stepMinor(v as number[]) }
-    else if (key === 'stepMajor' && Array.isArray(v)) stepMajor(v as number[])
-    else if (key === 'stepMinor' && Array.isArray(v)) stepMinor(v as number[])
-    else if (key === 'precision' && typeof v === 'number') { precision = v; recompute() }
+    if (v === undefined) continue
+    if (key === 'extent') { extentMajor(v as Corners); extentMinor(v as Corners) }
+    else if (key === 'extentMajor') extentMajor(v as Corners)
+    else if (key === 'extentMinor') extentMinor(v as Corners)
+    else if (key === 'step') { stepMajor(v as ArrayLike<unknown>); stepMinor(v as ArrayLike<unknown>) }
+    else if (key === 'stepMajor') stepMajor(v as ArrayLike<unknown>)
+    else if (key === 'stepMinor') stepMinor(v as ArrayLike<unknown>)
+    else if (key === 'precision') setPrecision(v)
   }
 
-  const lines = (): number[][][] =>
-    numberRange(Math.ceil(X0 / DX) * DX, X1, DX).map(X)
-      .concat(numberRange(Math.ceil(Y0 / DY) * DY, Y1, DY).map(Y))
-      .concat(numberRange(Math.ceil(x0 / dx) * dx, x1, dx).filter((xx) => Math.abs(xx % DX) > GEO_EPSILON).map(x))
-      .concat(numberRange(Math.ceil(y0 / dy) * dy, y1, dy).filter((yy) => Math.abs(yy % DY) > GEO_EPSILON).map(y))
+  // The lines of each family, then their points: lines times points per line is what the steps and the precision multiply, so
+  // the positions are bounded (as coordinates, like a topojson decode's) before a line is made.
+  const majorX = graticuleRange(Math.ceil(X0 / DX) * DX, X1, DX)
+  const majorY = graticuleRange(Math.ceil(Y0 / DY) * DY, Y1, DY)
+  const minorX = graticuleRange(Math.ceil(x0 / dx) * dx, x1, dx).filter((xx) => Math.abs(xx % DX) > GEO_EPSILON)
+  const minorY = graticuleRange(Math.ceil(y0 / dy) * dy, y1, dy).filter((yy) => Math.abs(yy % DY) > GEO_EPSILON)
+  allot('coords', majorX.length * X.points + majorY.length * Y.points + minorX.length * x.points + minorY.length * y.points, 'graticule')
+  const lines = majorX.map(X).concat(majorY.map(Y), minorX.map(x), minorY.map(y))
 
-  return [{ type: 'MultiLineString', coordinates: lines() }]
+  return [{ type: 'MultiLineString', coordinates: lines }]
 }
 
 // ---------------------------------------------------------------------------
@@ -659,8 +632,10 @@ export function contourQuantize(levels: number, nice: boolean, zero: boolean): (
   return (values) => {
     let lowest: number | undefined
     let highest: number | undefined
-    for (let i = 0; i < values.length; i++) {
-      const v = values[i] as number
+    // (a grid with no `values` has no cells: its size is what the contour scan refuses, as vega's extent of nothing leads to)
+    const cells = values ?? []
+    for (let i = 0; i < cells.length; i++) {
+      const v = cells[i] as number
       if (v == null || v !== v) continue
       if (lowest === undefined) { lowest = highest = v; continue }
       if (v < lowest) lowest = v
@@ -673,10 +648,10 @@ export function contourQuantize(levels: number, nice: boolean, zero: boolean): (
   }
 }
 
-function contourRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
+function contourRows(rows: Row[], t: Record<string, unknown>): Row[] {
   const values = t.values as ArrayLike<unknown> | undefined
   // The thresholds: given, or `count` levels spanning the values (from zero when the values are given, not estimated).
-  ceiling('items', (t.count as number) || 10, 'contour levels')
+  allot('items', (t.count as number) || 10, 'contour levels')
   const quantize = contourQuantize((t.count as number) || 10, !!t.nice, !!values)
   const given = t.thresholds as number[] | undefined
 
@@ -686,10 +661,9 @@ function contourRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCont
   if (values) cells = values
   else {
     const settings = densitySettings(t)
-    const compile = (expr: string): ((d: Row) => unknown) => compileExprTransform(expr, ctx)
-    const x = t.x != null ? accessorOf(t.x, compile) : (d: Row) => (d as unknown as unknown[])[0]
-    const y = t.y != null ? accessorOf(t.y, compile) : (d: Row) => (d as unknown as unknown[])[1]
-    const weight = t.weight != null ? accessorOf(t.weight, compile) : null
+    const x = t.x != null ? fieldOf(t.x) : (d: Row) => (d as unknown as unknown[])[0]
+    const y = t.y != null ? fieldOf(t.y) : (d: Row) => (d as unknown as unknown[])[1]
+    const weight = t.weight != null ? fieldOf(t.weight) : null
     const grid = densityGrid({
       xs: rows.map((r) => x(r)),
       ys: rows.map((r) => y(r)),
@@ -703,7 +677,7 @@ function contourRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCont
   }
 
   const thresholds = given || quantize(cells as Float32Array)
-  boundedCount(thresholds.length, 'contour thresholds')
+  allot('items', thresholds.length, 'contour thresholds')
   const contourRun = geoRegistry.contourRun
   if (!contourRun) requireGeo() // throws: geo addon not loaded
   const features = contourRun!(cells as Float32Array, thresholds, size, t.smooth !== false)
@@ -772,6 +746,7 @@ export function buildStratifyTree(rows: Row[], key?: string, parentKey?: string)
   const parentIds: Array<string | null> = []
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i]!
+    if ((i & 1023) === 1023) meterTick('stratify', 1024)
     const node = mk(r, i)
     nodes.push(node)
     const id = idOf(r)
@@ -786,6 +761,7 @@ export function buildStratifyTree(rows: Row[], key?: string, parentKey?: string)
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i]!
     const pid = parentIds[i]
+    if ((i & 1023) === 1023) meterTick('stratify', 1024)
     if (pid != null) {
       const parent = byKey.get(pid)
       if (!parent) throw new Error(`[aster] stratify: missing: ${pid}`)

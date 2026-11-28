@@ -4,25 +4,48 @@
  * rule like any other shape.
  */
 import type { Pt, Sub } from './raster-edges.js'
+import { meterTick } from './limits.js'
 
 const TOL = 0.05 // flattening tolerance of a curve being stroked, in pixels
 
+/**
+ * Dashes in one contour past which it is stroked undashed: a canvas gives up dashing there (Skia, which Chromium's canvas is,
+ * draws the path as if no dash were set beyond a million dashes per contour). A pattern far finer than the path is long would
+ * otherwise cut it into more pieces than memory holds, or, past the float spacing of the length, into pieces that never end.
+ */
+const MAX_DASHES = 1_000_000
+/** Points of a full round join or cap past which only the arc facing the canvas is made (r beyond about 170 000 pixels). */
+const MAX_DISK_POINTS = 4096
+
+/** A device-space box `[x0, y0, x1, y1]`: the canvas, grown by as far as a pen's geometry reaches from the point it is drawn at. */
+export type Box = [number, number, number, number]
+
 // --- the pen's view of a path: curves flattened finely ---------------------------------------------
 
-function flatten(s: Sub): Pt[] {
+/**
+ * The points a curve was cut at (not the curve's ends): the path itself has no vertex there, so the pen's join does not apply to
+ * them -- a canvas strokes a curve as the smooth offset of it, whatever `lineJoin` says -- and `outline` joins them round.
+ */
+type Smooth = WeakSet<Pt>
+
+function flatten(s: Sub, smooth: Smooth): Pt[] {
   const pts: Pt[] = [s.start]
   let [px, py] = s.start
   for (const o of s.ops) {
     if (o.k === 'L') pts.push([o.x, o.y])
     else if (o.k === 'Q') {
       const n = curveSteps(Math.hypot(o.cx - px, o.cy - py) + Math.hypot(o.x - o.cx, o.y - o.cy))
+      // bounded: curveSteps() is at most 64
       for (let i = 1; i <= n; i++) {
         const t = i / n
         const u = 1 - t
-        pts.push([u * u * px + 2 * u * t * o.cx + t * t * o.x, u * u * py + 2 * u * t * o.cy + t * t * o.y])
+        const p: Pt = [u * u * px + 2 * u * t * o.cx + t * t * o.x, u * u * py + 2 * u * t * o.cy + t * t * o.y]
+        if (i < n) smooth.add(p)
+        pts.push(p)
       }
     } else {
       const n = curveSteps(Math.hypot(o.c1x - px, o.c1y - py) + Math.hypot(o.c2x - o.c1x, o.c2y - o.c1y) + Math.hypot(o.x - o.c2x, o.y - o.c2y))
+      // bounded: curveSteps() is at most 64
       for (let i = 1; i <= n; i++) {
         const t = i / n
         const u = 1 - t
@@ -30,7 +53,9 @@ function flatten(s: Sub): Pt[] {
         const b = 3 * u * u * t
         const c = 3 * u * t * t
         const d = t * t * t
-        pts.push([a * px + b * o.c1x + c * o.c2x + d * o.x, a * py + b * o.c1y + c * o.c2y + d * o.y])
+        const p: Pt = [a * px + b * o.c1x + c * o.c2x + d * o.x, a * py + b * o.c1y + c * o.c2y + d * o.y]
+        if (i < n) smooth.add(p)
+        pts.push(p)
       }
     }
     px = o.x
@@ -46,6 +71,7 @@ function curveSteps(length: number): number {
 interface Piece {
   pts: Pt[]
   closed: boolean
+  smooth: Smooth
 }
 
 /** Cut a polyline into dashes (device units). */
@@ -56,8 +82,15 @@ function dashed(s: Piece, pattern: number[], offset: number): Piece[] {
   // would never end (a negative dash moves backwards)
   if (!(total > 0) || pattern.some((q) => !(q >= 0) || !Number.isFinite(q))) return [s]
   const pts = s.closed && s.pts.length > 1 ? [...s.pts, s.pts[0]!] : s.pts
+  let length = 0
+  for (let i = 1; i < pts.length; i++) length += Math.hypot(pts[i]![0] - pts[i - 1]![0], pts[i]![1] - pts[i - 1]![1])
+  meterTick('stroke dash', pts.length)
+  // (an infinite length is past any count, and dashing it would never end)
+  const dashes = (length * (pattern.length / 2)) / total
+  if (dashes > MAX_DASHES) return [s]
   let idx = 0
   let into = ((offset % total) + total) % total
+  // bounded: `into` is under one period: at most one step per pattern entry
   while (into >= pattern[idx]!) {
     into -= pattern[idx]!
     idx = (idx + 1) % pattern.length
@@ -65,26 +98,30 @@ function dashed(s: Piece, pattern: number[], offset: number): Piece[] {
   let remaining = pattern[idx]! - into
   let on = idx % 2 === 0
   let cur: Pt[] = on ? [pts[0]!] : []
-  for (let i = 1; i < pts.length; i++) {
-    let [x0, y0] = pts[i - 1]!
-    const [x1, y1] = pts[i]!
-    let len = Math.hypot(x1 - x0, y1 - y0)
-    if (len === 0) continue
-    const ux = (x1 - x0) / len
-    const uy = (y1 - y0) / len
+  // Dash along `len` from (x0, y0) in the direction (ux, uy), to `end`.
+  const walk = (x0: number, y0: number, ux: number, uy: number, len: number, end: Pt): void => {
     while (len > remaining) {
+      meterTick('stroke dash')
       x0 += ux * remaining
       y0 += uy * remaining
       len -= remaining
-      if (on) { cur.push([x0, y0]); out.push({ pts: cur, closed: false }); cur = [] } else cur = [[x0, y0]]
+      if (on) { cur.push([x0, y0]); out.push({ pts: cur, closed: false, smooth: s.smooth }); cur = [] } else cur = [[x0, y0]]
       on = !on
       idx = (idx + 1) % pattern.length
       remaining = pattern[idx]!
     }
     remaining -= len
-    if (on) cur.push([x1, y1])
+    if (on) cur.push(end)
   }
-  if (on && cur.length > 1) out.push({ pts: cur, closed: false })
+  for (let i = 1; i < pts.length; i++) {
+    const [x0, y0] = pts[i - 1]!
+    const end = pts[i]! // (the flattened point itself: whether it is a corner of the path rides on its identity)
+    const [x1, y1] = end
+    const len = Math.hypot(x1 - x0, y1 - y0)
+    if (len === 0) continue
+    walk(x0, y0, (x1 - x0) / len, (y1 - y0) / len, len, end)
+  }
+  if (on && cur.length > 1) out.push({ pts: cur, closed: false, smooth: s.smooth })
   return out
 }
 
@@ -98,15 +135,65 @@ const orient = (poly: Pt[]): Pt[] => {
   return area < 0 ? poly.reverse() : poly
 }
 
-function disk(cx: number, cy: number, r: number): Pt[] {
+const MAX_CACHED_CIRCLE = 128
+const unitCircles = new Map<number, Float64Array>()
+
+function disk(cx: number, cy: number, r: number, near: Box): Pt[] {
   const n = Math.max(8, Math.ceil(Math.PI / Math.acos(1 - Math.min(0.5, TOL / Math.max(r, TOL)))))
-  const p: Pt[] = []
-  for (let i = 0; i < n; i++) p.push([cx + r * Math.cos((i * 2 * Math.PI) / n), cy + r * Math.sin((i * 2 * Math.PI) / n)])
+  if (n > MAX_DISK_POINTS) return diskNear(cx, cy, r, near)
+  meterTick('stroke join', n)
+  // (a curve's stroke makes one disk per flattened vertex: the circle's points are the same for every one of them)
+  let unit = n <= MAX_CACHED_CIRCLE ? unitCircles.get(n) : undefined
+  if (unit === undefined) {
+    unit = new Float64Array(2 * n)
+    // bounded: n is at most MAX_DISK_POINTS, ticked for above
+    for (let i = 0; i < n; i++) { unit[2 * i] = Math.cos((i * 2 * Math.PI) / n); unit[2 * i + 1] = Math.sin((i * 2 * Math.PI) / n) }
+    if (n <= MAX_CACHED_CIRCLE) unitCircles.set(n, unit) // (at most MAX_CACHED_CIRCLE small tables, whatever the widths drawn)
+  }
+  const p: Pt[] = new Array<Pt>(n)
+  // bounded: n is at most MAX_DISK_POINTS, ticked for above
+  for (let i = 0; i < n; i++) p[i] = [cx + r * unit[2 * i]!, cy + r * unit[2 * i + 1]!]
+  return p
+}
+
+/**
+ * A disk too large to make whole (the point count grows with the square root of the radius, and is infinite once `1 - TOL / r`
+ * rounds to 1), as far as `box` sees it: nothing when it misses the box, the box when it holds it, else the slice of it between the
+ * directions in which the box lies from the centre, with the arc made at the tolerance over that angle only. Inside the box the
+ * slice is the disk (every point of the box in the disk lies in one of those directions).
+ */
+function diskNear(cx: number, cy: number, r: number, box: Box): Pt[] {
+  const corners: Pt[] = [[box[0], box[1]], [box[2], box[1]], [box[2], box[3]], [box[0], box[3]]]
+  let far = 0
+  for (let i = 0; i < 4; i++) far = Math.max(far, Math.hypot(corners[i]![0] - cx, corners[i]![1] - cy))
+  if (r >= far) return corners
+  const nearest = Math.hypot(cx - Math.min(Math.max(cx, box[0]), box[2]), cy - Math.min(Math.max(cy, box[1]), box[3]))
+  if (!(r > nearest)) return []
+  // (the centre is outside the box here: inside it, `far` is at most the box's diagonal, and no disk of more than
+  // MAX_DISK_POINTS points is smaller than that for a canvas the `pixels` ceiling admits)
+  const mid = Math.atan2((box[1] + box[3]) / 2 - cy, (box[0] + box[2]) / 2 - cx)
+  let lo = 0
+  let hi = 0
+  for (const [x, y] of corners) {
+    const a = Math.atan2(y - cy, x - cx) - mid
+    const turn = a - 2 * Math.PI * Math.round(a / (2 * Math.PI))
+    if (turn < lo) lo = turn
+    if (turn > hi) hi = turn
+  }
+  const step = 2 * Math.acos(1 - Math.min(0.5, TOL / r))
+  const n = Math.min(MAX_DISK_POINTS, Math.max(2, Math.ceil((hi - lo) / step)))
+  meterTick('stroke join', n)
+  const p: Pt[] = [[cx, cy]]
+  // bounded: n is at most MAX_DISK_POINTS, ticked for above
+  for (let i = 0; i <= n; i++) {
+    const a = mid + lo + ((hi - lo) * i) / n
+    p.push([cx + r * Math.cos(a), cy + r * Math.sin(a)])
+  }
   return p
 }
 
 /** The polygons (all positively oriented, so the non-zero rule unions them) of a stroked polyline. */
-function outline(s: Piece, half: number, cap: string, join: string, miterLimit: number, out: Pt[][]): void {
+function outline(s: Piece, half: number, cap: string, join: string, miterLimit: number, out: Pt[][], near: Box): void {
   // drop repeated points
   const pts: Pt[] = []
   for (const p of s.pts) {
@@ -122,19 +209,21 @@ function outline(s: Piece, half: number, cap: string, join: string, miterLimit: 
   if (pts.length === 1) {
     // a point: a round cap is a disk, a square cap a square, a butt cap nothing
     const [x, y] = pts[0]!
-    if (cap === 'round') out.push(disk(x, y, half))
+    if (cap === 'round') out.push(disk(x, y, half, near))
     else if (cap === 'square') out.push(orient([[x - half, y - half], [x + half, y - half], [x + half, y + half], [x - half, y + half]]))
     return
   }
   const n = pts.length
   const segs = closed ? n : n - 1
   const dirs: Pt[] = []
+  // bounded: one pass over the piece's points (made by a metered flatten or dash walk)
   for (let i = 0; i < segs; i++) {
     const [ax, ay] = pts[i]!
     const [bx, by] = pts[(i + 1) % n]!
     const len = Math.hypot(bx - ax, by - ay)
     dirs.push([(bx - ax) / len, (by - ay) / len])
   }
+  // bounded: one pass over the piece's points (made by a metered flatten or dash walk)
   for (let i = 0; i < segs; i++) {
     const [ax, ay] = pts[i]!
     const [bx, by] = pts[(i + 1) % n]!
@@ -152,10 +241,11 @@ function outline(s: Piece, half: number, cap: string, join: string, miterLimit: 
     out.push(orient([[sx + nx, sy + ny], [ex + nx, ey + ny], [ex - nx, ey - ny], [sx - nx, sy - ny]]))
   }
   if (!closed && cap === 'round') {
-    out.push(disk(pts[0]![0], pts[0]![1], half))
-    out.push(disk(pts[n - 1]![0], pts[n - 1]![1], half))
+    out.push(disk(pts[0]![0], pts[0]![1], half, near))
+    out.push(disk(pts[n - 1]![0], pts[n - 1]![1], half, near))
   }
   const joins = closed ? n : n - 2
+  // bounded: one pass over the piece's points (made by a metered flatten or dash walk)
   for (let j = 0; j < joins; j++) {
     const vi = closed ? j : j + 1
     const [vx, vy] = pts[vi]!
@@ -164,7 +254,8 @@ function outline(s: Piece, half: number, cap: string, join: string, miterLimit: 
     const cross = d0[0] * d1[1] - d0[1] * d1[0]
     const dot = d0[0] * d1[0] + d0[1] * d1[1]
     if (Math.abs(cross) < 1e-12 && dot > 0) continue // straight on
-    if (join === 'round') { out.push(disk(vx, vy, half)); continue }
+    // a vertex the flattening made inside a curve is not the path's: the offset of a smooth curve is round there, whatever the pen's join
+    if (join === 'round' || s.smooth.has(pts[vi]!)) { out.push(disk(vx, vy, half, near)); continue }
     // the outer side of the turn: left of d0 when the path turns right (y down), and the reverse
     const sgn = cross > 0 ? -1 : 1
     const ax = vx + sgn * -d0[1] * half
@@ -188,19 +279,102 @@ function outline(s: Piece, half: number, cap: string, join: string, miterLimit: 
   }
 }
 
-/** Pen parameters in device units. */
-export interface Pen { half: number; cap: string; join: string; miterLimit: number; dash: number[]; dashOffset: number }
+/**
+ * What a hairline along a polyline is made of: `lines`, the segments to draw as Skia's anti-aliased hairline (four numbers each:
+ * x0, y0, x1, y1), and `caps`, the polygons of its round caps. A hairline has no joins; a square cap goes half a pixel past the
+ * end, a round one is the half disk of a pen one pixel wide.
+ */
+export interface Hairlines { lines: number[]; caps: Pt[][] }
+
+/** The half disk of radius `r` around (cx, cy) on the side of direction `angle`, its arc made at the tolerance, closed along the diameter. */
+function halfDisk(cx: number, cy: number, r: number, angle: number): Pt[] {
+  const steps = Math.max(4, Math.ceil(Math.PI / (2 * Math.acos(1 - Math.min(0.5, TOL / Math.max(r, TOL))))))
+  meterTick('stroke join', steps + 1)
+  const p: Pt[] = []
+  // bounded: steps is at most the points of a disk of this radius, which is 1/2 here
+  for (let k = 0; k <= steps; k++) {
+    const a = angle - Math.PI / 2 + (Math.PI * k) / steps
+    p.push([cx + r * Math.cos(a), cy + r * Math.sin(a)])
+  }
+  return orient(p)
+}
+
+function hairOutline(s: Piece, cap: string, out: Hairlines, near: Box): void {
+  const pts: Pt[] = []
+  for (const p of s.pts) {
+    const q = pts[pts.length - 1]
+    if (q === undefined || q[0] !== p[0] || q[1] !== p[1]) pts.push(p)
+  }
+  const closed = s.closed && pts.length > 2
+  if (closed && pts[0]![0] === pts[pts.length - 1]![0] && pts[0]![1] === pts[pts.length - 1]![1]) pts.pop()
+  if (pts.length === 1) {
+    const [x, y] = pts[0]!
+    if (cap === 'round') out.caps.push(disk(x, y, 0.5, near))
+    else if (cap === 'square') out.caps.push(orient([[x - 0.5, y - 0.5], [x + 0.5, y - 0.5], [x + 0.5, y + 0.5], [x - 0.5, y + 0.5]]))
+    return
+  }
+  const n = pts.length
+  const segs = closed ? n : n - 1
+  // bounded: one pass over the piece's points (made by a metered flatten or dash walk)
+  for (let i = 0; i < segs; i++) {
+    let [ax, ay] = pts[i]!
+    let [bx, by] = pts[(i + 1) % n]!
+    if (!closed && cap === 'square') {
+      const len = Math.hypot(bx - ax, by - ay)
+      const ux = (bx - ax) / len
+      const uy = (by - ay) / len
+      if (i === 0) { ax -= ux * 0.5; ay -= uy * 0.5 }
+      if (i === segs - 1) { bx += ux * 0.5; by += uy * 0.5 }
+    }
+    out.lines.push(ax, ay, bx, by)
+  }
+  if (!closed && cap === 'round') {
+    // the half disk past each end, facing away from the line
+    for (const [end, other] of [[pts[0]!, pts[1]!], [pts[n - 1]!, pts[n - 2]!]] as Array<[Pt, Pt]>) {
+      const ux = end[0] - other[0]
+      const uy = end[1] - other[1]
+      out.caps.push(halfDisk(end[0], end[1], 0.5, Math.atan2(uy, ux)))
+    }
+  }
+}
+
+/**
+ * Pen parameters in device units. `canvas`, the box of the pixels drawn into: a round join or cap of an immense pen is made as
+ * far as it can be seen from it.
+ */
+export interface Pen { half: number; cap: string; join: string; miterLimit: number; dash: number[]; dashOffset: number; canvas: Box }
+
+/** The pieces of a subpath the pen runs along: its curves flattened, cut into dashes when the pen dashes. */
+function piecesOf(s: Sub, pen: Pen): Piece[] {
+  meterTick('stroke', s.ops.length + 1)
+  const smooth: Smooth = new WeakSet()
+  const pts = flatten(s, smooth)
+  if (pts.length < 2 && !s.closed) return [] // (a lone moveTo draws nothing)
+  const piece: Piece = { pts, closed: s.closed, smooth }
+  return pen.dash.length > 0 && pen.dash.some((d) => d > 0) ? dashed(piece, pen.dash, pen.dashOffset) : [piece]
+}
 
 /** The polygons a pen covers along the subpaths (all positively oriented, so the non-zero rule unions them). */
 export function strokePolygons(subs: Sub[], pen: Pen): Pt[][] {
   const polys: Pt[][] = []
-  const dashing = pen.dash.length > 0 && pen.dash.some((d) => d > 0)
+  // (a disk matters where it meets the canvas)
+  const box = pen.canvas
+  const disks: Box = [box[0] - 2, box[1] - 2, box[2] + 2, box[3] + 2]
   for (const s of subs) {
-    const pts = flatten(s)
-    if (pts.length < 2 && !s.closed) continue // (a lone moveTo draws nothing)
-    const piece: Piece = { pts, closed: s.closed }
-    const pieces = dashing ? dashed(piece, pen.dash, pen.dashOffset) : [piece]
-    for (const p of pieces) outline(p, pen.half, pen.cap, pen.join, pen.miterLimit, polys)
+    // bounded: the dash walk ticks for every piece it makes; outline() is one pass over a piece's points
+    for (const p of piecesOf(s, pen)) outline(p, pen.half, pen.cap, pen.join, pen.miterLimit, polys, disks)
   }
   return polys
+}
+
+/** The hairlines a pen of a pixel or less draws along the subpaths (`pen.half` is not used: a hairline is one pixel thick). */
+export function strokeHairlines(subs: Sub[], pen: Pen): Hairlines {
+  const out: Hairlines = { lines: [], caps: [] }
+  const box = pen.canvas
+  const disks: Box = [box[0] - 2, box[1] - 2, box[2] + 2, box[3] + 2]
+  for (const s of subs) {
+    // bounded: the dash walk ticks for every piece it makes; hairOutline() is one pass over a piece's points
+    for (const p of piecesOf(s, pen)) hairOutline(p, pen.cap, out, disks)
+  }
+  return out
 }

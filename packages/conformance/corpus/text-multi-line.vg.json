@@ -1,1 +1,61 @@
-{"$schema":"https://vega.github.io/schema/vega/v6.json","width":400,"height":300,"padding":5,"autosize":"none","data":[{"name":"table","values":[{"x":50,"y":50,"text":"Line One"},{"x":50,"y":80,"text":"Line Two"},{"x":50,"y":110,"text":"Line Three"}]}],"marks":[{"type":"text","from":{"data":"table"},"encode":{"update":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"text"},"fill":{"value":"steelblue"},"fontSize":{"value":14},"align":{"value":"left"},"baseline":{"value":"top"}}}}]}
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 420,
+  "height": 300,
+  "padding": 5,
+  "autosize": "none",
+  "data": [
+    {
+      "name": "labels",
+      "values": [
+        { "x": 20, "y": 20, "lines": ["First line", "Second", "Third line here"], "align": "left", "baseline": "top", "angle": 0 },
+        { "x": 210, "y": 20, "lines": ["centred", "two lines"], "align": "center", "baseline": "top", "angle": 0 },
+        { "x": 400, "y": 20, "lines": ["right aligned", "and longer second line", "x"], "align": "right", "baseline": "top", "angle": 0 },
+        { "x": 20, "y": 150, "lines": ["alphabetic", "baseline"], "align": "left", "baseline": "alphabetic", "angle": 0 },
+        { "x": 210, "y": 150, "lines": ["bottom", "baseline", "three"], "align": "center", "baseline": "bottom", "angle": 0 },
+        { "x": 400, "y": 150, "lines": ["middle", "baseline"], "align": "right", "baseline": "middle", "angle": 0 },
+        { "x": 90, "y": 280, "lines": ["rotated", "text"], "align": "left", "baseline": "bottom", "angle": -30 },
+        { "x": 300, "y": 280, "lines": ["rotated", "centred", "block"], "align": "center", "baseline": "middle", "angle": 45 }
+      ]
+    },
+    { "name": "broken", "values": [ { "t": "a\nbreak\nin text", "x": 150, "y": 250 } ] }
+  ],
+  "marks": [
+    {
+      "type": "text",
+      "from": { "data": "labels" },
+      "encode": {
+        "update": {
+          "x": { "field": "x" },
+          "y": { "field": "y" },
+          "text": { "field": "lines" },
+          "align": { "field": "align" },
+          "baseline": { "field": "baseline" },
+          "angle": { "field": "angle" },
+          "fontSize": { "value": 13 },
+          "lineHeight": { "value": 17 },
+          "fill": { "value": "#1b4f72" },
+          "stroke": { "value": "#f5b041" },
+          "strokeWidth": { "value": 0.5 }
+        }
+      }
+    },
+    {
+      "type": "text",
+      "from": { "data": "broken" },
+      "encode": {
+        "update": {
+          "x": { "field": "x" },
+          "y": { "field": "y" },
+          "text": { "field": "t" },
+          "lineBreak": { "value": "\n" },
+          "dx": { "value": 6 },
+          "dy": { "value": -4 },
+          "fontSize": { "value": 11 },
+          "fill": { "value": "firebrick" },
+          "opacity": { "value": 0.8 }
+        }
+      }
+    }
+  ]
+}

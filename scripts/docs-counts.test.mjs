@@ -11,6 +11,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { GATES } from './gates.mjs'
+import { ENTRIES as BUDGET_ENTRIES } from '../packages/benchmarks/scripts/budget-rows.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const read = (rel) => readFileSync(join(root, rel), 'utf8')
@@ -93,6 +94,12 @@ describe('docs/TESTING.md reference results', () => {
     expect(cells(r)[3]).toMatch(new RegExp(`/ ${signals.floor}\\s*$`))
   })
 
+  it('the bundle budget row counts the import-pattern rows of the budget', () => {
+    const m = /all (\d+) import-pattern rows pass/.exec(result('pnpm --filter @aster-charts/benchmarks run budget'))
+    expect(m, 'docs/TESTING.md bundle budget row').not.toBeNull()
+    expect(Number(m[1])).toBe(BUDGET_ENTRIES.length)
+  })
+
   it('names no other corpus size in prose', () => {
     for (const m of TESTING.matchAll(/\b(\d{3,4}) (?:corpus )?specs\b/g)) {
       expect([total, lite, vega].includes(Number(m[1])), `docs/TESTING.md says "${m[0]}"`).toBe(true)
@@ -102,10 +109,10 @@ describe('docs/TESTING.md reference results', () => {
 
 describe('the browser results README.md quotes are the ones docs/TESTING.md reports', () => {
   it('the canvas comparisons and the signal event streams', () => {
-    const canvas = /chromium (\d+)\/(\d+) passed/.exec(result('pnpm conformance:canvas'))
+    // (the canvas gate's verdict is runGate's: it reports what it compared with ink on both sides, not "N/N passed")
+    const canvas = /chromium: (\d+) entries compared with ink on both sides/.exec(result('pnpm conformance:canvas'))
     expect(canvas, 'TESTING.md canvas row').not.toBeNull()
-    expect(canvas[1]).toBe(canvas[2])
-    expect(README).toContain(`(${canvas[1]}/${canvas[2]} pixel comparisons)`)
+    expect(README).toContain(`(${canvas[1]} pixel comparisons with ink on both sides)`)
     const events = /(\d+)\/(\d+) cases agree/.exec(result('pnpm conformance:signals'))
     expect(events, 'TESTING.md signal event streams row').not.toBeNull()
     expect(README).toContain(`(${events[1]}/${events[2]} cases)`)
@@ -123,9 +130,14 @@ describe('docs/INTERACTION.md quotes the signals sweep as it is', () => {
 })
 
 describe('no other doc keeps its own corpus size', () => {
+  it('the pattern finds "of the 1060 specs" (it did not, C378)', () => {
+    expect('of the 1060 specs'.match(/\b(?:all |the |of the )?(\d{3,4}) (?:corpus )?specs\b/)?.[1]).toBe('1060')
+  })
+
   it('ARCHITECTURE.md and TESTING.md name no corpus count in prose', () => {
     for (const doc of ['docs/ARCHITECTURE.md', 'docs/TESTING.md']) {
-      for (const m of read(doc).matchAll(/\b(?:all |the )?(\d{3,4}) corpus specs\b/g)) {
+      // ("the 1060 specs" and "of the 1060 specs" are corpus counts too: the old pattern needed the word "corpus" and missed them, C378)
+      for (const m of read(doc).matchAll(/\b(?:all |the |of the )?(\d{3,4}) (?:corpus )?specs\b/g)) {
         expect([total, lite, vega].includes(Number(m[1])), `${doc} says "${m[0]}"`).toBe(true)
       }
     }

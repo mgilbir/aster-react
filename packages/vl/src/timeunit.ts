@@ -9,9 +9,10 @@ export type { NormalTimeUnit }
 export { normalizeTimeUnit }
 
 /** The parts of a date, coarsest first: the order in which a timeunit transform lists the `units` it cuts to. */
-export const CALENDAR_PARTS = ['year', 'quarter', 'month', 'week', 'day', 'dayofyear', 'date', 'hours', 'minutes', 'seconds', 'milliseconds'] as const
+import { CALENDAR_PARTS, type CalendarPart } from './calendar.js'
 
-export type CalendarPart = (typeof CALENDAR_PARTS)[number]
+export { CALENDAR_PARTS, type CalendarPart }
+
 
 /** The longest name first, so that `dayofyear` is read before `day` and `milliseconds` before `seconds`. */
 const LONGEST_FIRST = [...CALENDAR_PARTS].sort((a, b) => b.length - a.length)

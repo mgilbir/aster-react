@@ -1,6 +1,9 @@
 /**
  * The `timeunit` transform: each value floored to its time bin (units and step given, detected from the data, or chosen for a
  * number of bins over the extent). Part of the engine's time family (engine-parts.ts: `time`), with the calendar it floors by.
+ *
+ * The detection of the units from the data (`detectTimeUnits`) follows `vega-time`'s, which is adapted from the `time-grain-detector`
+ * package (Paul Rosenzweig, ISC); see THIRD_PARTY_NOTICES.md.
  */
 import { error, extent as columnExtent, peek } from './util.js'
 import { fieldOf, required, type Row } from './row-keys.js'
@@ -10,12 +13,10 @@ import {
   durationDay, durationHour, durationMinute, durationMonth, durationSecond, durationWeek, durationYear,
   timeFloor, timeIntervalFor, timeUnits, utcFloor, utcIntervalFor,
 } from './time.js'
+import { meterTick, writableRow } from './limits.js'
 
 type Params = Record<string, unknown>
 type Read = (d: unknown) => unknown
-
-/** A row to write onto: the row itself when the pipeline owns it, otherwise a copy of it. */
-const writable = (row: Row, owned: boolean): Row => (owned ? row : { ...row })
 
 // ---------------------------------------------------------------------------
 // timeunit
@@ -52,6 +53,7 @@ export function timeBin(extent: readonly number[], maxbins?: number): { units: s
   const bins = maxbins || 40
   const target = Math.abs((extent[extent.length - 1]! - extent[0]!) || 0) / bins
   let longer = 0
+  // bounded: the fixed list of grains
   while (longer < BIN_GRAINS.length && BIN_GRAINS[longer]!.ms - target <= 0) longer++
   if (longer === BIN_GRAINS.length) {
     return { units: YEAR_ONLY, step: tickStep(extent[0]! / durationYear, extent[1]! / durationYear, bins) }
@@ -111,7 +113,8 @@ function alignedGrains(dates: readonly Date[], utc: boolean): boolean[] {
 
 /** The coarsest grain every date in `rows` (read through `read`) is aligned to, as the units and step to bin by. */
 function detectTimeUnits(rows: Row[], read: Read, utc: boolean): { units: string[]; step: number } {
-  const dates = rows.map((row) => {
+  const dates = rows.map((row, i) => {
+    if ((i & 1023) === 1023) meterTick('timeunit', 1024)
     const v = read(row)
     const d = new Date(v as string)
     if (Number.isNaN(+d)) error(`Invalid date: ${v}`)
@@ -161,7 +164,7 @@ export function timeunitRows(rows: Row[], p: Params, publish?: (info: TimeUnitIn
   let first: number | Date = Infinity
   let last: number | Date = -Infinity
   const out = rows.map((row) => {
-    const t = writable(row, owned)
+    const t = writableRow(row, owned, 'timeunit')
     const v = read(row)
     if (v == null) {
       t[startName] = null

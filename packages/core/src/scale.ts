@@ -1,7 +1,8 @@
 /**
  * Scales as the chart engine uses them: the registry of scale types (name, kind, inverse members), the choice of ticks and
  * labels for an axis or legend, interpolators by name, colour schemes and gradient stops. The constructors live in
- * `scale-continuous.ts` (including time and UTC) and `scale-discrete.ts`.
+ * `scale-continuous.ts` (linear), `scale-warped.ts` (identity, pow, sqrt, log, symlog, sequential, diverging), `scale-calendar.ts`
+ * (time, UTC), `scale-discrete.ts` (ordinal, band, point) and `scale-classes.ts` (bin-ordinal, quantize, threshold, quantile).
  *
  * What callers observe, and so what is fixed here:
  * - a constructed scale has its `type` set to the registered name (`sequential` keeps that name), carries a mark that says the
@@ -18,7 +19,7 @@
  *   undefined, a gamma applies only to rgb and cubehelix; scheme names are lower-cased and looked up only among the registered.
  */
 import { peek, tickStep } from './arr.js'
-import { boundedCount } from './limits.js'
+import { allot } from './limits.js'
 import {
   interpolateArray,
   interpolateBasis,
@@ -223,8 +224,18 @@ export function tickCount(scale: Scale, count: unknown, minStep?: number): unkno
       const hi = Math.max(domain[0]!, peek(domain))
       wanted = Math.min(wanted, Math.floor((hi - lo) / minStep || 1) + 1)
       if (!scale.bins && !isLogarithmic(scale.type) && !isTemporal(scale.type) && lo < hi) {
-        // a tick step only grows as the count falls, so stepping down finds the largest count that spaces them enough
-        while (wanted > 1 && tickStep(lo, hi, wanted) < minStep) --wanted
+        // a tick step only grows as the count falls: the largest count that spaces them enough, found by halving the counts between
+        // 1 and `wanted` (what counting down one at a time finds, in a number of steps that does not grow with the spec's count)
+        if (wanted > 1 && tickStep(lo, hi, wanted) < minStep) {
+          let fits = 1
+          let short = wanted
+          while (short - fits > 1) {
+            const mid = Math.floor((fits + short) / 2)
+            if (tickStep(lo, hi, mid) < minStep) short = mid
+            else fits = mid
+          }
+          wanted = fits
+        }
       }
     }
     count = wanted
@@ -454,8 +465,7 @@ export function interpolateRange(ramp: (t: number) => unknown, range: number[]):
 
 /** `count` evenly spaced samples of a ramp, none at either end of [0, 1]. */
 export function quantizeInterpolator(ramp: (t: number) => unknown, count: number): unknown[] {
-  boundedCount(count, 'quantized colour samples')
-  const samples = new Array(count)
+  const samples = new Array(allot('items', count, 'quantized colour samples'))
   const n = count + 1
   for (let i = 0; i < count; ) samples[i] = ramp(++i / n)
   return samples

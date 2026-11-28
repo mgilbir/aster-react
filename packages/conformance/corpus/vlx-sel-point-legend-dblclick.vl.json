@@ -53,7 +53,12 @@
    },
    "bind": {
     "legend": "dblclick"
-   }
+   },
+   "value": [
+    {
+     "c": "z"
+    }
+   ]
   }
  ],
  "mark": "point",

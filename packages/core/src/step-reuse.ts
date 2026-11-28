@@ -14,13 +14,14 @@
 import { parseExpressionCached, type Expr } from './expr-parser.js'
 import { refId, valueKey } from './fingerprint.js'
 import { mayDrawRandom } from './random-tape.js'
-import { lexedAsWritten, lexedText } from './expr-text.js'
+import { callPattern, lexedAsWritten, lexedText } from './expr-text.js'
 import type { CompiledTransform } from './types.js'
 
 /** Transform types that read their rows, their parameters and the signals those mention, and nothing else of the view. */
 const READS_ROWS_AND_SIGNALS = new Set([
   'formula', 'filter', 'bin', 'timeunit', 'extent', 'crossfilter', 'resolvefilter', 'aggregate', 'joinaggregate', 'window',
   'collect', 'identifier', 'project', 'fold', 'flatten', 'stack', 'impute', 'pivot', 'sample', 'sequence',
+  'pie', 'dotbin', 'linkpath', 'voronoi',
 ])
 
 /** Expression functions that compute from their arguments alone (the clock, the locale, scales, datasets and the host are not among them). */
@@ -192,14 +193,17 @@ export interface StepRecord {
 }
 
 /**
- * How many steps ran and how many were kept, and how many rows of another dataset a pipeline copied to make rows of its own, since
- * the counters were last read. For the tests; nothing reads them in a build.
+ * Instrumentation, not behaviour (C702): how many steps ran and how many were kept, and how many rows of another dataset a pipeline
+ * copied to make rows of its own, since the counters were last read. The tests that pin what is kept read them; nothing in a build
+ * does, and no public entry exports them (the increments are the only cost). They live here, beside what they count, so that the
+ * counts are of the steps the engine runs and not of a copy of its loop.
  */
 export const stepCounts = { ran: 0, reused: 0, copied: 0 }
 
 /**
- * Whether a step may be kept at all. On unless a test turns it off: the differential that pins the kept steps to the ones the
- * engine makes without keeping any evaluates its reference with this off.
+ * Instrumentation, not behaviour (C702): whether a step may be kept at all. On unless a test turns it off: the differential that pins
+ * the kept steps to the ones the engine makes without keeping any evaluates its reference with this off. No public entry exports it,
+ * so no host can switch reuse off; a build reads it where a step could be kept (runtime.ts).
  */
 export const reuse = { on: true }
 
@@ -380,7 +384,7 @@ function eachNode(tree: unknown, visit: (node: { type: string } & Record<string,
 /** Expression functions that read a dataset's hierarchy (vega-functions' tree lookups): what they read is not keyed by its rows. */
 const TREE_FUNCTIONS = new Set(['treePath', 'treeAncestors'])
 /** Mentions a call that may read a dataset (see {@link DATASET_FUNCTIONS}, {@link TREE_FUNCTIONS}), in lexed text. */
-const DATASET_CALL_TEXT = /\b(data|indata|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve|treePath|treeAncestors)\s*\(/
+const DATASET_CALL_TEXT = callPattern('data|indata|vlSelectionTest|vlSelectionIdTest|vlSelectionResolve|treePath|treeAncestors')
 
 /**
  * The datasets the expression `str` reads by the names it spells out (`data("store")`, `vlSelectionTest("store", datum)`): `[]` when

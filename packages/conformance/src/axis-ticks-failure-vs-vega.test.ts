@@ -25,7 +25,7 @@ async function oracle(spec: Spec): Promise<Outcome> {
   const log = console.error
   console.error = () => {}
   try {
-    const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(vega.parse(spec as never), { renderer: 'none' })
+    const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(vega.parse(structuredClone(spec) as never), { renderer: 'none' })
     try {
       await view.runAsync()
       return { svg: await view.toSVG() }
@@ -96,21 +96,21 @@ function cases(): Case[] {
           const signals = x.signals ?? []
           const scope: Spec = { scales, axes }
           const root: Spec = { width: 100, height: 80, padding: 5, autosize: 'none', signals, data: [] }
-          const dataAt = (where: 'root' | 'inner'): Spec[] => (x.needsData || rn !== 'with nothing after' ? [tData] : []).filter(() => where === 'root' || x.needsData || true)
+          const dataAt = (): Spec[] => (x.needsData || rn !== 'with nothing after' ? [tData] : [])
           let spec: Spec
           switch (placement) {
             case 'the view':
-              spec = { ...root, data: dataAt('root'), ...tail(scope) }
+              spec = { ...root, data: dataAt(), ...tail(scope) }
               break
             case 'a group':
-              spec = { ...root, data: [], marks: [box({ data: dataAt('inner'), ...tail(scope), marks: [...((tail(scope).marks as Spec[]) ?? [])] })] }
+              spec = { ...root, data: [], marks: [box({ data: dataAt(), ...tail(scope), marks: [...((tail(scope).marks as Spec[]) ?? [])] })] }
               delete (spec.marks as Spec[])[0]!.title
               break
             case 'a group with the data outside':
-              spec = { ...root, data: dataAt('root'), marks: [box({ ...tail(scope) }), box({ scales: [y], axes: [left] })] }
+              spec = { ...root, data: dataAt(), marks: [box({ ...tail(scope) }), box({ scales: [y], axes: [left] })] }
               break
             default:
-              spec = { ...root, data: dataAt('root'), marks: [box({ ...tail(scope), marks: [box({ scales: [y], axes: [left] })] })] }
+              spec = { ...root, data: dataAt(), marks: [box({ ...tail(scope), marks: [box({ scales: [y], axes: [left] })] })] }
           }
           out.push({ name: `${xn}, in ${placement}, ${on}, ${rn}`, spec })
         }

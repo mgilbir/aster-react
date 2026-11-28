@@ -4,6 +4,8 @@
  * draw after it. Both walks visit the children of a node first to last.
  */
 
+import { meterTick } from './limits.js'
+
 /** A tree node whose `children` is the list of its children, empty or null for a leaf. */
 export interface TreeLike<T> {
   children: readonly T[] | null
@@ -13,7 +15,10 @@ export interface TreeLike<T> {
 export function walkPreOrder<T extends TreeLike<T>>(root: T, visit: (node: T) => void): void {
   const stack: T[] = [root]
   let node: T | undefined
+  let seen = 0
+  // bounded: each node of the tree once (each is pushed by its parent only); every 1024 nodes tick the clock
   while ((node = stack.pop())) {
+    if ((++seen & 1023) === 0) meterTick('hierarchy', 1024)
     visit(node)
     const kids = node.children
     if (kids) for (let i = kids.length - 1; i >= 0; --i) stack.push(kids[i]!)
@@ -26,10 +31,16 @@ export function walkPostOrder<T extends TreeLike<T>>(root: T, visit: (node: T) =
   const done: T[] = []
   let node: T | undefined
   // a pre-order that takes the last child first, replayed backwards, is the post-order that takes the first child first
+  // bounded: each node of the tree once (each is pushed by its parent only)
   while ((node = stack.pop())) {
     done.push(node)
     const kids = node.children
+    // bounded: the node's children
     if (kids) for (let i = 0; i < kids.length; ++i) stack.push(kids[i]!)
   }
-  while ((node = done.pop())) visit(node)
+  // bounded: each node of the tree once; every 1024 nodes tick the clock
+  while ((node = done.pop())) {
+    if ((done.length & 1023) === 0) meterTick('hierarchy', 1024)
+    visit(node)
+  }
 }

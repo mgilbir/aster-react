@@ -31,7 +31,8 @@ Every interaction check in `packages/react/scripts/browser-interaction.mts` runs
 
 `ViewDomain`, `SelectionInterval` (the `onSelect`/`brush` interval) and the interval of a `SelectValue` have two keys,
 `x` and `y`. They mean **the horizontal and the vertical positional scale**, not scales literally named `x` and `y`.
-The scales are derived from the spec by position (`positionalScales(spec)` in `@aster-charts/react`'s source, not exported):
+The scales are derived from the spec by position (`positionalScales(spec)`, exported from `@aster-charts/react` with its
+`PositionalScales` type, for the helpers that take `names`):
 
 1. Candidates for the horizontal orientation, in order: the scales of axes with `orient` `bottom` or `top`, then the
    scales referenced by the mark channels `x`, `x2`, `xc` in any encode set. For the vertical orientation: axes with
@@ -134,16 +135,18 @@ What works, and how it differs from Vega, precisely:
 - The state is the one Vega computes for the same input; `pnpm conformance:selections` drives the same native
   mouse, wheel and form-control input through vega-lite + Vega and through `@aster-charts/vl` + `<Chart>` and compares every
   signal, every store and the SVG after each step (point click, shift-toggle, hover, `nearest`, brush, move, wheel
-  zoom, legend click, `select` / `radio` / `range` / `checkbox` bindings, `bind: "scales"`, layered filters and lookups, and
+  zoom, legend click, a click in the view's padding (vega leaves a point selection as it is there, though a click on an empty point of the plot clears it; so does Aster), `select` / `radio` / `range` / `checkbox` bindings, `bind: "scales"`, layered filters and lookups, and
   across concat, facet and repeat views: a brush filtering another view, a point selection linking two, a selection
   declared on the composition, a brush or a point per facet cell, bound scales shared by cells, a legend binding).
 - A scale event (`{scale: "x"}`, which an unbound interval selection listens to so that its brush follows its
   scale) fires when the chart is bound to a scene whose scale differs from the previous one's.
-- **Deviation:** a signal write is a fresh render, where Vega keeps the autosize, padding and axis-tick order it first computed
-  ([Signals](#signals)). The selections gate holds this exactly and with no tolerance: a step passes when Aster equals Vega's
+- **A running view** ([Signals](#signals)): `<Chart>` continues its view across signal writes and data changes as Vega's does --
+  an axis keeps the ticks it still shows in their order, and the view keeps its first autosize until `width`, `height` or
+  `padding` change. **Deviation:** once the rows a mark is drawn from came or went (other than rows appended after the others),
+  Vega's item order is its join's, which Aster cannot tell from the rows: from that write on, the chart renders as a NEW Vega view
+  of the same state would. The selections gate holds this exactly and with no tolerance: a step passes when Aster equals Vega's
   retained render, or when it equals the render of a NEW Vega view initialised with the same signals and stores (and Vega's own
-  retained render differs); those steps are counted against a ceiling (`--max-retained`, like `sweep-signals`). Set
-  `autosize: "none"` for a pan/zoom chart whose plot must not move.
+  retained render differs); those steps are counted against a ceiling (`--max-retained`, like `sweep-signals`).
 - **Deviation:** `modify(name, ..., tuple)` / `remove` compare a tuple read back from `data()` by value, where Vega compares tuple
   identity ([Deviations from Vega](ARCHITECTURE.md#deviations-from-vega)).
 - **Selections in concat, facet and repeat views** (linked brushing, a brush per facet cell, a selection declared on the
@@ -181,9 +184,9 @@ scope that never pulsed before; Aster fires it ([Deviations from Vega](ARCHITECT
 
 | Gesture | Needs | Behaviour |
 |---|---|---|
-| wheel / trackpad | `zoom` | zoom around the cursor by an amount that follows `deltaY`; x and y are zoomed, or only x when `|deltaX| > |deltaY|` |
+| wheel / trackpad | `zoom` | zoom x and y around the cursor by Vega-Lite's stretch `1.001 ^ (deltaY * 16 ^ deltaMode)` (a line-mode notch is sixteen pixels, a page 256; a modifier key changes nothing); a wheel with no `deltaY` (a horizontal scroll) is left to the page |
 | two pointers | `zoom` | pinch zoom around the midpoint, both axes |
-| drag | `pan` | pans, unless a selection prop or callback is present: then a plain drag brushes, and shift-drag (or the middle button) pans |
+| drag | `pan` | pans (the data under the pointer when the drag started stays under it), unless a selection prop or callback is present: then a plain drag brushes, and shift-drag (or the middle button) pans |
 | `←` `→` `↑` `↓` | `pan` | pan by 8% of the visible span (25% with Shift) |
 | `+` `=` / `-` `_` | `zoom` | zoom in or out by a factor of 1.5 around the middle of the visible domain |
 | `0` / `Home` | `pan` or `zoom` | reset the view |
@@ -195,6 +198,14 @@ when a continuous axis node is focused. A zoom-only chart does not pan with the 
 pointer, and a pan-only chart does not zoom with the wheel or `+`/`-`. Pointer gestures are handled on the container, so
 marks, tooltips, `signal.on` events and bound inputs underneath keep receiving their own events; a gesture on a form
 control or link is ignored.
+
+Every gesture moves the domain in the space Vega-Lite's `bind: "scales"` moves it in (vega's `panLog`, `zoomPow`,
+`panSymlog`...): a `log` scale pans and zooms in its logarithm (a negative domain mirrored), `pow` in its power, `symlog` in
+`sign(x) * log1p(|x| / constant)`, and `linear`, `sqrt`, `time` and `utc` linearly (a time domain in milliseconds; Vega-Lite
+moves `sqrt` with `panLinear` / `zoomLinear` too). A `log` axis never pans to a negative value. The view of a `time` / `utc`
+scale, and a brushed interval on one, are numbers of milliseconds. `packages/conformance/src/react-panzoom-vs-vega.test.ts`
+feeds the same events to a Vega-Lite chart in Vega and to `<Chart>` and compares the domains after each gesture, for every
+continuous scale type.
 
 ```tsx
 import * as React from 'react'
@@ -223,8 +234,9 @@ export function Zoomable(): React.ReactElement {
 uncontrolled view. `onViewChange` receives the normalized view: a view equal to the base domain on an axis drops that
 axis, and `null` means fully reset. The engine passes the view to the scales as `domainRaw`, so axes, grids, legends
 and marks recompute in one pass, on SVG and canvas. Wheel and pinch zooming is clamped: zooming out never goes beyond the base domain (the
-data extent when not zoomed), and `maxZoom` (default 1000) bounds zooming in (the visible span cannot drop below the
-base span divided by `maxZoom`). The `+`/`-` keys step by a fixed factor and are not clamped. `ChartHandle.getView()`, `setView(view)` and `resetView()` do the same imperatively.
+data extent when not zoomed), and `maxZoom` (default 1000) bounds zooming in (the visible span, measured in the scale's
+own space, cannot drop below the base span divided by `maxZoom`). The `+`/`-` keys step by a fixed factor and are not
+clamped (so `maxZoom` does not stop them). `ChartHandle.getView()`, `setView(view)` and `resetView()` do the same imperatively.
 
 While zoomed, the base domain is the one of an unzoomed evaluation of the same inputs (cached, so a pan frame costs no
 extra evaluation).
@@ -236,6 +248,12 @@ throttle, `consume`, mark-scoped streams such as `@name:click` and `symbol:click
 Updating a signal calls `onSignal(name, value)` and `signalListeners[name](name, value)`, and the value is stored in an
 external store consumed with `useSyncExternalStore`, so each event is one normal React state transition (no tearing
 under concurrent rendering).
+
+A mark's `hover` encode set works as in vega's view with `hover()` on (vega-embed's default for a Vega spec): the pointer
+entering an item encodes it with `hover`, leaving it runs the mark's `update` set, so a channel only `hover` writes stays as
+hover left it (vega's behaviour, not a reset). A hover that raises `zindex` paints the item over its mark's others. The
+`exit` set is accepted as vega accepts it: an item whose row goes is encoded with it and leaves the scene, so nothing of it is
+drawn (vega without a transition shows the same).
 
 ```tsx
 import * as React from 'react'
@@ -291,15 +309,55 @@ export function Signals(): React.ReactElement {
   `config.events.defaults` leaves alone (default `{allow: ['wheel']}`; `prevent` / `allow` lists or booleans as in vega, a `consume`d
   stream always prevents), so dragging a brush selects no text and a wheel still scrolls the page. The `preventDefault` prop is
   vega's `view.preventDefault()`: the verdict when the config names neither `prevent` nor `allow`;
+  `config.events.view`, `.window`, `.selector` and `.timer` block listeners as vega's `permit` does (`false`, or the types
+  listed), and `window` / selector sources are further confined by the host (`eventSources`; by default the window's pointer
+  moves, ends and `resize`, no selector: see [LIMITS.md](LIMITS.md#interactive-charts-and-untrusted-specs-the-threat-model-of-the-event-loop));
   `logger` receives bind-time and run-time errors of the handlers.
+
+### Handlers that re-encode an item (`encode: "<set>"`)
+
+A handler `{events: "*:pointerover", encode: "hover"}` encodes the event's item again with the mark's own `hover` set, as vega
+does (it is the update `encode(item(), "hover")`, so the signal's value becomes the item). What the set writes stays on the item
+until the mark's `update` set runs on it again, which vega does when a signal or scale any of the mark's encode sets reads, or the
+item's datum, changes: `update` then takes back the channels it writes (a `select` that enlarged `size` ends with a pan of the
+scale) and leaves the others (a `hover` fill stays). A mark without the named set, or an event with no item, changes nothing.
+The event loop records each request in the signal store it hands the host, under a symbol key, and the next evaluation applies
+it: a host that copies the store keeps it (`{...signals}`), one that serialises it (JSON, a worker) drops it. Items are named by
+their mark, group instance and row, so the binding needs the scene's picker (`pick`, which `<Chart>` passes; without one an item
+read from the DOM is no scene item and asks nothing). The items of leaf marks are re-encoded; a group mark's own items are not.
+Pinned against vega by `encode-handlers-vs-vega.test.ts`.
+
+### A named mark's `on` triggers (`modify`, C73)
+
+`on: [{trigger, modify, values}]` on a named mark runs as vega's does (vega-parser `parseTrigger`): the operator
+`if(trigger, modify("<mark>", null, null, null, <modify>, <values>), 0)` runs when what it reads changes and, when the trigger
+holds, sets each property of `values` on the mark's item `modify` names (an item of another mark, or no item, is left alone;
+`modify()` of a mark takes `modify` and `values` only, `insert`, `remove` and `toggle` throw `Marks only support modify
+triggers.`). The event loop records each write beside the encode requests, and the next evaluation applies them, before the mark's
+transforms and sort: the mark's `update` set runs on a modified item again, so a write to a channel it writes is taken back at once;
+any other channel (one only `enter` writes, `cursor`, a property no set knows: a `force` layout reads `fx` and `fy`) stays for as
+long as the item has the datum it had when it was written. A trigger runs when what it reads changes, not when the view is built
+(the mark's items are not there yet, as in vega), and a trigger that reads the mark's own `data('<mark>')` runs without end, as in
+vega: hold the item in a signal. One operator per group item for a mark inside a group that declares signals. The items of leaf
+marks take writes; a group mark's own items do not. Pinned against vega by `mark-triggers-vs-vega.test.ts`.
+
+**A force layout that goes on** (`force-continued-vs-vega.test.ts`). vega's `force` transform keeps its simulation: a pulse runs it
+again (alpha 1, its iterations, from the positions and velocities the nodes have) only when its parameters changed or `restart`
+holds while the pulse changed something; a pin (`fx`, `fy`) alone moves nothing until a tick runs, and the first tick sets the node
+to its pin. An evaluation that continues a view (`RuntimeInput.retainFrom`, which `<Chart>` passes) does the same over the nodes the
+scene it continues had (same mark and data, `static` layout); without it the layout is made from the inputs, as the first run of
+vega's is, and a pin is applied from the first tick. The rows a `link` force binds are the layout's own: a change of the link rows
+alone does not run it again.
 
 ### Timers and animation
 
 `timer` event streams (`{"type": "timer", "throttle": 16.7}`, `"timer{100}"`) run on a scheduler with d3-timer's schedule (the one
 vega-view uses), so ticks fall on the same instants with the same `{timestamp, elapsed}` (`pnpm conformance:signals` drives
-real vega and Aster on one fake browser clock and compares frames). The timers belong to the chart's host element, not
-to one rendered SVG: a re-bind after each render keeps the schedule, and they stop when the chart unmounts, when the host
-element is removed from the document, or on `binding.release()` (vega's `view.finalize()`); nothing is left scheduled.
+real vega and Aster on one fake browser clock and compares frames). The timers belong to the chart's host element (and to
+the compiled chart: a different chart bound to the same host stops the previous one's), not to one rendered SVG: a re-bind
+after each render keeps the schedule, and they stop when the chart unmounts, when the host element (or, for an `owner` that
+is not an element, the element last bound) is removed from the document, when an element that was never shown has nothing
+bound to it, or on `binding.release()` (vega's `view.finalize()`); nothing is left scheduled.
 `bindSceneSignals` takes `owner` (the element the timers belong to; `<Chart>` passes its host) and `setTimerClock(clock | null)` from
 `@aster-charts/core/signals` swaps the scheduler's clock (`{ now, setTimeout, clearTimeout, setInterval, clearInterval, requestFrame }`)
 for a controlled one (tests, hosts that step frames themselves); `null` restores the host's globals, and it should only be
@@ -323,11 +381,18 @@ after the one that asked for it. A cycle through streams (a game) settles as veg
 two handlers of ONE source vega's queue pops first (their ranks are equal; the order depends on everything else in the queue,
 every mark that reads a signal included): Aster runs them in the order they were queued.
 
-**Deviation from Vega: a signal write is a fresh render.** Aster is a pure function of (spec, data, signals): the scene
-after a write equals the scene a fresh chart renders with those signal values. Vega's own second render can differ from
-its own fresh render of the same signals, because it retains dataflow state: autosize runs once and again only when
-width, height or padding change (vega-view `initializeResize`; a new `autosize` value waits for one of them), so a chart whose
-content outgrows the view keeps its first size. The signals sweep
+**A running view, and where it stops (C766).** Vega's view retains dataflow state from one run to the next: autosize runs once
+and again only when width, height or padding change (vega-view `initializeResize`; `autosize.resize: true` runs it every time), so a
+chart whose content outgrows the view keeps its first size; an axis joins its tick items by value, so the ticks it still shows
+keep their order and new ones come after them; a mark joins its items by tuple, so items whose rows went are taken out and new ones
+join after the others. Aster stays a pure function of its inputs: an evaluation given the scene it continues
+(`RuntimeInput.retainFrom`; `createChartSession({ runningView: true })` passes its last scene, and `<Chart>`'s session is one) keeps
+that scene's tick order, the categories an ordinal scale given no domain was asked for (a legend over it keeps its entries, as
+vega's scale object does: C70) and, for `autosize` `pad`, its padding, exactly as vega's view does, and equals a fresh evaluation given the
+same scene. **Deviation:** a mark's item order after its rows came or went is the join's history, which the rows do not tell:
+such an evaluation, and every one that continues it, renders as a fresh view of its input (never a mix of the two renders). A fit
+view (`fit`, `fit-x`, `fit-y`) is sized again on every evaluation, as a fresh view is. `evaluateChart` and `renderSpec` without
+`retainFrom` are the first render of their input. The signals sweep
 (`pnpm sweep-signals`, 166 cases) counts those cases as `retained` when Aster equals Vega's fresh render and Vega's
 incremental render differs: 103 ok, 60 retained, 1 both-refused, 2 node-error, 0 differ, with a ceiling on `retained`
 that can only be lowered (`scripts/gates.mjs`).
@@ -378,7 +443,7 @@ that signal's value unless it is `'default'`. Moving off the items resets it; wi
 `cursor: default`, as Vega does. The cursor is React state rendered through the container's `style` (a re-render keeps it,
 a pointermove over the same item renders nothing); a `style.cursor` of the host is shown where the chart says `default`.
 Item cursors need hit testing (`<Chart>`, or `<SvgChart interaction={interaction}>`), on the SVG and the canvas renderer;
-the `cursor` signal works in every variant. Not supported: `config.events.globalCursor` (Vega then writes `document.body`;
+the `cursor` signal works in every variant. The view's own `encode.update.cursor` (a Vega-Lite `view: {cursor}`) is the cursor of the root group item, which the hit index holds like any other item: where the frame is painted (a fill, a `transparent` one too, or a stroke, along it) and nothing else is under the pointer, it is the item (C279). Not supported: `config.events.globalCursor` (Vega then writes `document.body`;
 a chart does not style the page).
 
 ## Accessibility

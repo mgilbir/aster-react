@@ -108,7 +108,16 @@ describe('useChartStream', () => {
     m.unmount()
   })
 
-  it('reports rejected pushes and respects coalescing', async () => {
+  it('reports a rejected push as false (drop-newest, full)', () => {
+    const m = mount({ capacity: 1, policy: 'drop-newest', autoFlush: false })
+    expect(m.result().push({ append: { t: [{ x: 2, y: 3 }] } })).toBe(true)
+    expect(m.result().push({ append: { t: [{ x: 3, y: 4 }] } })).toBe(false)
+    expect(m.result().stats()).toMatchObject({ depth: 1, dropped: 1 })
+    expect(m.result().pending().datasets.get('t')?.addedRanges).toEqual([[2, 3]])
+    m.unmount()
+  })
+
+  it('respects coalescing: a second push folds into the queued one and both are accepted', async () => {
     const m = mount({ capacity: 1, policy: 'coalesce', autoFlush: false })
     expect(m.result().push({ append: { t: [{ x: 2, y: 3 }] } })).toBe(true)
     expect(m.result().push({ append: { t: [{ x: 3, y: 4 }] } })).toBe(true)

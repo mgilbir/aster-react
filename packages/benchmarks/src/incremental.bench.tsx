@@ -34,8 +34,9 @@
  * 224x-303x idle with the floor at 200x); within a pair load cancels. The floors themselves are unchanged.
  *
  * Below the calibrated shape (speedup scales with the dataset) only the >1x check applies. Override with
- * --min-append=, --min-replace=, --min-dom=, --max-append-growth= (used to prove the gate bites). The dense
- * append floor (`DENSE_APPEND_FLOOR`, 200x) has no override.
+ * --min-append=, --min-replace=, --min-dom=, --min-dense=, --max-append-growth= (scripts/incremental-gate.test.mjs sets a floor the
+ * run cannot meet and requires exit 1: that is how the gate is shown to bite). An override must be a finite positive number: `abc` and
+ * an empty value are refused with exit 2, because they used to turn into NaN and 0, which disabled the floor without a word.
  *
  * Run: pnpm bench:incremental [--points=5000] [--batch=1] [--reps=100] [--vega=1]
  */
@@ -44,7 +45,7 @@ import { ensureBuilt } from './ensure-built.js'
 import { summarize, pairedRatio, table, fmt } from './stats.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
 
-cli({ url: import.meta.url, flags: { batch: 'eq', 'dense-points': 'eq', 'max-append-growth': 'eq', points: 'eq', reps: 'eq', vega: 'eq', 'min-append': 'eq', 'min-replace': 'eq', 'min-dom': 'eq' } })
+cli({ url: import.meta.url, flags: { batch: 'eq', 'dense-points': 'eq', 'max-append-growth': 'eq', points: 'eq', reps: 'eq', vega: 'eq', 'min-append': 'eq', 'min-replace': 'eq', 'min-dom': 'eq', 'min-dense': 'eq' } })
 
 /** Ceiling on an append to N rows over one to N/10 (see the call site): at 100,000 points healthy runs read 2.00x-2.03x here and 2.07x-2.78x on the CI runner, the 2026-10-27..2026-11-04 regression
  * 4.27x-4.34x here and 3.63x on the CI runner (2026-11-05). 4x keeps healthy runs clear of it; it catches a regression of that size here,
@@ -63,10 +64,24 @@ async function main(): Promise<void> {
   const batch = Math.max(1, Number(arg('batch', '1')))
   const reps = Math.max(5, Number(arg('reps', '100')))
   const calibrated = points >= 10000 && reps >= 30
-  const floorOf = (name: string, calibratedFloor: number): number => Number(arg(name, String(calibrated ? calibratedFloor : 1)))
+  // A floor override is a finite positive number or the run is refused: `Number('abc')` is NaN and `Number('')` is 0, and both made
+  // `ratio < floor` false, which disabled the floor silently.
+  const overrideOf = (name: string, dflt: number): number => {
+    const given = argv.find((a) => a.startsWith(`--${name}=`))
+    if (given === undefined) return dflt
+    const v = given.slice(name.length + 3)
+    const n = v.trim() === '' ? NaN : Number(v)
+    if (!Number.isFinite(n) || n <= 0) {
+      console.error(`[incremental] --${name} needs a finite number above 0, got ${JSON.stringify(v)}`)
+      process.exit(2)
+    }
+    return n
+  }
+  const floorOf = (name: string, calibratedFloor: number): number => overrideOf(name, calibrated ? calibratedFloor : 1)
   const minAppend = floorOf('min-append', 8)
   const minReplace = floorOf('min-replace', 8)
   const minDom = floorOf('min-dom', 1.6)
+  const minDense = overrideOf('min-dense', DENSE_APPEND_FLOOR)
 
   const { compileChart, evaluateChart, createChartStream, renderSceneToSvg } = await import('@aster-charts/core')
 
@@ -115,7 +130,7 @@ async function main(): Promise<void> {
   // machine does not matter; it was the property every append broke from 2026-10-27 to 2026-11-04 (each one re-scanned the
   // dataset, #103), which the floors against a full evaluation let through.
   const smallPoints = Math.floor(points / 10)
-  const maxGrowth = Number(arg('max-append-growth', String(points >= 100000 && reps >= 30 ? MAX_APPEND_GROWTH : 0)))
+  const maxGrowth = argv.some((a) => a.startsWith('--max-append-growth=')) ? overrideOf('max-append-growth', 0) : points >= 100000 && reps >= 30 ? MAX_APPEND_GROWTH : 0
   const smallStream = maxGrowth > 0 ? createChartStream({ ...spec, data: [{ name: 't', values: rows(smallPoints) }] } as never, { capacity: 8 }) : null
   smallStream?.push({ data: { t: rows(smallPoints) } })
   smallStream?.flush()
@@ -387,11 +402,11 @@ async function main(): Promise<void> {
       ],
     ),
   )
-  if (!(dRatio >= DENSE_APPEND_FLOOR)) {
-    console.error(`\n[incremental] FAIL: a dense append patch is only ${dRatio.toFixed(1)}x cheaper than a full mount (floor ${DENSE_APPEND_FLOOR}x)`)
+  if (!(dRatio >= minDense)) {
+    console.error(`\n[incremental] FAIL: a dense append patch is only ${dRatio.toFixed(1)}x cheaper than a full mount (floor ${minDense}x)`)
     process.exitCode = 1
   } else {
-    console.log(`\n[incremental] dense DOM pass: append patch is ${dRatio.toFixed(1)}x cheaper than a mount (floor ${DENSE_APPEND_FLOOR}x)`)
+    console.log(`\n[incremental] dense DOM pass: append patch is ${dRatio.toFixed(1)}x cheaper than a mount (floor ${minDense}x)`)
   }
 }
 

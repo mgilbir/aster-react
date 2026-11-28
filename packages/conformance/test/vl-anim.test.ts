@@ -17,7 +17,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import * as vl from 'vega-lite'
 import { compile } from '@aster-charts/vl'
-import { renderWithVega } from '../src/render-vega.js'
+import { renderWithVegaChecked } from '../src/render-vega.js'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 
 const ROOT = join(__dirname, '..')
@@ -132,12 +132,15 @@ describe('emitted animation parts match vega-lite: random animations', () => {
 })
 
 describe('the first frame of random animations is what vega-lite draws (real vega on both)', () => {
-  for (const seed of SEEDS.filter((_, i) => i % 5 === 0)) {
+  for (const seed of SEEDS) {
     it(`seed ${seed}`, async () => {
       const spec = genSpec(seed)
-      const oracle = await renderWithVega(JSON.parse(JSON.stringify((vl as any).compile(spec).spec)))
-      const ours = await renderWithVega(JSON.parse(JSON.stringify(compile(JSON.parse(JSON.stringify(spec))))))
-      expect(diffCanonical(canonicalizeSvg(oracle), canonicalizeSvg(ours))).toEqual([])
+      const oracle = await renderWithVegaChecked(JSON.parse(JSON.stringify((vl as any).compile(spec).spec)))
+      const ours = await renderWithVegaChecked(JSON.parse(JSON.stringify(compile(JSON.parse(JSON.stringify(spec))))))
+      // (what vega itself logs of vega-lite's output is not Aster's: only a message Aster's output adds is)
+      const inherited = new Set([...oracle.errors, ...oracle.warnings])
+      expect([...ours.errors, ...ours.warnings].filter((m) => !inherited.has(m)), 'render messages of the emitted spec').toEqual([])
+      expect(diffCanonical(canonicalizeSvg(oracle.svg), canonicalizeSvg(ours.svg))).toEqual([])
     })
   }
 })

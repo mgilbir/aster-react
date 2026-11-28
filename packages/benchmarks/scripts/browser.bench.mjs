@@ -4,7 +4,10 @@
  * time-to-first-render, update latency, frame pacing under a 1-update/frame
  * stream, prop resize, and container resize.
  *
- * Run: pnpm bench:browser [--points=1000] [--kind=line] [--seconds=3]
+ * `aster` is `<Chart incremental={false}>` (string mode: the svg is re-serialized per update), `asterDom` is `<Chart>` (the incremental DOM
+ * patcher, the default); `reactVega` and `embedHook` are the two Vega embeds (src/embeds.tsx).
+ *
+ * Run: pnpm bench:browser [--points=1000] [--kind=line] [--seconds=3] [--reps=9] [--memory=true]
  * Requires: chromium available to playwright (npx playwright install chromium)
  */
 import { build } from 'esbuild'
@@ -14,8 +17,9 @@ import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { summarize, table, fmt } from '../src/stats.js'
 import { ensureBuilt } from '../src/ensure-built.ts'
-import { checkBrowserBench } from '../src/browser-floors.ts'
+import { BROWSER_EMBEDS, checkBrowserBench } from '../src/browser-floors.ts'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { launchBrowser } from '../../../scripts/lib/launch-browser.mjs'
 
 cli({ url: import.meta.url, flags: { kind: 'eq', memory: 'eq', points: 'eq', reps: 'eq', seconds: 'eq' } })
 
@@ -33,7 +37,7 @@ const MEMORY = arg('memory', 'true') === 'true'
 
 ensureBuilt()
 
-const EMBEDS = ['aster', 'asterDom', 'reactVega', 'embedHook']
+const EMBEDS = [...BROWSER_EMBEDS]
 
 rmSync(OUT_DIR, { recursive: true, force: true })
 mkdirSync(OUT_DIR, { recursive: true })
@@ -60,7 +64,7 @@ writeFileSync(
 <body><div id="stage"></div><script src="./bench.js"></script></body></html>`,
 )
 
-const browser = await chromium.launch({
+const browser = await launchBrowser(chromium, {
   headless: true,
   // Container-safe: /dev/shm can be tiny where CI runs, and the JS heap of a
   // 100k-point scene page needs more than Chromium's conservative default.
@@ -93,7 +97,7 @@ function put(key, embed, value) {
 
 // Global warm-up: mount every embed once before any measurement, so the first
 // embed in the run does not pay one-time module/V8/page init (which made the
-// identical `aster`/`asterDom` paths differ by ~1ms in earlier runs).
+// same-component `aster`/`asterDom` rows differ by ~1ms in earlier runs; they are now two modes: string and incremental).
 if (KINDS.length > 0) {
   for (const embed of EMBEDS) {
     await page.evaluate(([e, k, p]) => window.__benchWarmup?.(e, k, p), [embed, KINDS[0], POINTS])
@@ -273,11 +277,8 @@ for (const kind of KINDS) {
   )
   console.log('')
 }
-await browser.close()
-rmSync(OUT_DIR, { recursive: true, force: true })
-
 // The floors (src/browser-floors.ts): a regression fails the run (and the nightly step), it does not just print a table.
-const failures = checkBrowserBench(results, KINDS, pageErrors, differential)
+const failures = checkBrowserBench(results, KINDS, pageErrors, differential, { memory: MEMORY })
 if (failures.length) {
   console.error(`\n[bench:browser] FAIL: ${failures.length} floor(s) crossed`)
   for (const f of failures) console.error(`  - ${f}`)

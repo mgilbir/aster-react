@@ -2,7 +2,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { compileChart, evaluateChart, registerExpressionFunction, renderSceneToSvg } from './index.js'
 import { bindSceneSignals, parseEventSelector, stampDatumAttrs } from './signals.js'
-import type { VgSpec } from './types.js'
+import type { SceneGroup, SceneRoot, VgSpec } from './types.js'
 
 const specWithEventSignal = {
   width: 200,
@@ -112,7 +112,7 @@ describe('event-driven signals', () => {
     const { svg } = mount()
     let got: Record<string, unknown> | null = null
     const binding = bindSceneSignals(svg, evaluateChart(compileChart(spec)), {}, {
-      onSignal: (name, value, all) => { if (name === 'a') got = all },
+      onSignal: (name, _value, all) => { if (name === 'a') got = all },
     })
     binding.setSignal('a', 5)
     expect(got!.b).toBe(10)
@@ -126,7 +126,7 @@ describe('event-driven signals', () => {
 // packages/conformance/scripts/browser-signals.mts; these are the jsdom-level checks)
 // ---------------------------------------------------------------------------
 
-function bindSpec(signals: unknown[], store: Record<string, unknown> = {}, hooks: Parameters<typeof bindSceneSignals>[3] = {}) {
+function bindSpec(signals: unknown[], store: Record<string, unknown> = {}, hooks: Parameters<typeof bindSceneSignals>[3] = {}, opts: Parameters<typeof bindSceneSignals>[4] = {}) {
   const spec = { width: 200, height: 100, signals, marks: [] } as unknown as VgSpec
   const host = document.createElement('div')
   document.body.appendChild(host)
@@ -140,7 +140,7 @@ function bindSpec(signals: unknown[], store: Record<string, unknown> = {}, hooks
     onSignal: (n, v) => calls.push([n, v]),
     logger: { error: (...a) => logs.push('error:' + a.join(' ')), warn: (...a) => logs.push('warn:' + a.join(' ')) },
     ...hooks,
-  })
+  }, opts)
   return { svg, scene, binding, calls, logs, store, host }
 }
 const fire = (el: EventTarget, type: string, init: MouseEventInit = {}): void => {
@@ -200,13 +200,26 @@ describe('signal event streams', () => {
     again.detach()
   })
 
-  it('filters, consume and window / object-form sources', () => {
+  it('a window key source is not bound unless the host allows it (Q1: a spec cannot read the page\'s keystrokes)', () => {
+    const t = bindSpec([
+      { name: 'key', value: '', on: [{ events: { source: 'window', type: 'keydown' }, update: 'event.key' }] },
+      { name: 'moved', value: 0, on: [{ events: 'window:pointermove', update: 'moved + 1' }] },
+    ])
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'q' }))
+    expect(t.store.key).toBeUndefined()
+    expect(t.logs).toEqual([expect.stringMatching(/^warn:Blocked window keydown event listener \(the host allows/), 'warn:Can not resolve event source: window'])
+    window.dispatchEvent(new Event('pointermove'))
+    expect(t.store.moved).toBe(1)
+    t.binding.detach()
+  })
+
+  it('filters, consume and window / object-form sources (a host that allows window sources)', () => {
     const t = bindSpec([
       { name: 'shifted', value: 0, on: [{ events: 'click[event.shiftKey]', update: 'shifted + 1' }] },
       { name: 'consumed', value: 0, on: [{ events: 'mousedown!', update: 'consumed + 1' }] },
       { name: 'leaked', value: 0, on: [{ events: 'window:mousedown', update: 'leaked + 1' }] },
       { name: 'key', value: '', on: [{ events: { source: 'window', type: 'keydown' }, update: 'event.key' }] },
-    ])
+    ], {}, {}, { eventSources: { window: true } })
     fire(t.svg, 'click')
     expect(t.store.shifted).toBeUndefined()
     fire(t.svg, 'click', { shiftKey: true })
@@ -319,11 +332,14 @@ describe('signal event streams', () => {
     expect(Object.keys(store).sort()).toEqual(['__proto__', 'constructor'])
     expect(Object.getOwnPropertyDescriptor(store, '__proto__')!.value).toBe(5)
     expect(store.constructor).toBe('c')
-    // a plain `{}` store keeps ITS prototype too
+    // a plain `{}` store keeps ITS prototype too: the handler writes an OBJECT (a primitive written to `__proto__` is a no-op even
+    // for a naive store), which must land as the store's own `__proto__` signal, not as its prototype (C344)
     const plain: Record<string, unknown> = {}
-    const t2 = bindSpec([{ name: '__proto__', value: 1, on: [{ events: 'click', update: '7' }] }], plain)
+    const t2 = bindSpec([{ name: '__proto__', value: 1, on: [{ events: 'click', update: '{polluted: true}' }] }], plain)
     fire(t2.svg, 'click')
     expect(Object.getPrototypeOf(plain)).toBe(Object.prototype)
+    expect(Object.getOwnPropertyDescriptor(plain, '__proto__')?.value).toEqual({ polluted: true })
+    expect(plain.polluted).toBeUndefined()
     expect(({} as Record<string, unknown>).polluted).toBeUndefined()
     t.binding.detach()
     t2.binding.detach()
@@ -402,8 +418,10 @@ describe('signal event streams', () => {
     it('fires when the scale differs from the one the surface was last bound to, not when it is the same', () => {
       const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
       const store: Record<string, unknown> = {}
+      // (one chart, evaluated again with another signal value, as a host does: a different chart is a different view, C40)
+      const chart = compileChart(specFor(10))
       const bindFor = (lim: number): ReturnType<typeof bindSceneSignals> =>
-        bindSceneSignals(svg, evaluateChart(compileChart(specFor(lim))), store)
+        bindSceneSignals(svg, evaluateChart(chart, { signals: { lim } }), store)
       bindFor(10).detach()
       expect(store.rescaled).toBeUndefined() // the first binding only records the scale
       bindFor(10).detach()
@@ -446,7 +464,7 @@ describe('signal event streams', () => {
 
 describe('group scopes in the signal loop', () => {
   /** Two sibling group marks that declare `signals` (and one mark each, so `inScope` has a group), over a view with its own. */
-  const bindGroups = (groupSignals: unknown[], top: unknown[], hooks: Parameters<typeof bindSceneSignals>[3] = {}) => {
+  const bindGroups = (groupSignals: unknown[], top: unknown[], hooks: Parameters<typeof bindSceneSignals>[3] = {}, opts: Parameters<typeof bindSceneSignals>[4] = {}) => {
     const group = (name: string, x: number): Record<string, unknown> => ({
       type: 'group', name, signals: groupSignals, encode: { update: { x: { value: x }, y: { value: 0 }, width: { value: 80 }, height: { value: 80 } } },
       marks: [{ type: 'rect', encode: { update: { x: { value: 0 }, y: { value: 0 }, width: { value: 10 }, height: { value: 10 } } } }],
@@ -461,7 +479,7 @@ describe('group scopes in the signal loop', () => {
     const store: Record<string, unknown> = {}
     const calls: string[] = []
     const ids = scene.items.map((g) => g.scopeSignals?.id)
-    const binding = bindSceneSignals(svg, scene, store, { onSignal: (n) => calls.push(n), ...hooks })
+    const binding = bindSceneSignals(svg, scene, store, { onSignal: (n) => calls.push(n), ...hooks }, opts)
     return { svg, scene, store, calls, ids, binding }
   }
 
@@ -499,10 +517,29 @@ describe('group scopes in the signal loop', () => {
   })
 
   it('a selector string in a scope defaults to the scope source: only events whose item is in the scope', () => {
-    const t = bindGroups([{ name: 'n', value: 0, on: [{ events: 'click', update: 'n + 1' }] }], [])
-    // no item under the pointer (jsdom picks nothing here): nothing is in scope
-    fire(t.svg, 'click')
+    // (C658) the picker answers the rect of the left group for a point left of x=80, the rect of the right group right of x=100,
+    // and nothing in between: each click counts in the scope its item lies in, and in no other
+    const where: { scene?: SceneRoot } = {}
+    const rectOf = (i: number): object => {
+      const find = (g: SceneGroup): object | undefined => {
+        if (g.marktype === 'rect' && g.role === 'mark') return g.items?.[0] as object | undefined
+        for (const c of g.items ?? []) if (Array.isArray((c as SceneGroup).items)) { const r = find(c as SceneGroup); if (r) return r }
+        return undefined
+      }
+      return find(where.scene!.items[i] as SceneGroup)!
+    }
+    const t = bindGroups([{ name: 'n', value: 0, on: [{ events: 'click', update: 'n + 1' }] }], [], {}, {
+      pick: (x) => (x < 80 ? { item: rectOf(0), marktype: 'rect' } : x >= 100 ? { item: rectOf(1), marktype: 'rect' } : null),
+    })
+    where.scene = t.scene
+    fire(t.svg, 'click', { clientX: 90, clientY: 5 })
     expect(Object.keys(t.store)).toEqual([])
+    fire(t.svg, 'click', { clientX: 5, clientY: 5 })
+    fire(t.svg, 'click', { clientX: 6, clientY: 5 })
+    fire(t.svg, 'click', { clientX: 150, clientY: 5 })
+    expect(t.store[`${t.ids[0]}:n`]).toBe(2)
+    expect(t.store[`${t.ids[1]}:n`]).toBe(1)
+    expect(Object.keys(t.store).sort()).toEqual([`${t.ids[0]}:n`, `${t.ids[1]}:n`].sort())
     t.binding.detach()
   })
 })

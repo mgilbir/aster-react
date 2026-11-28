@@ -49,6 +49,16 @@
     "type": "interval",
     "on": "[pointerdown[event.shiftKey], pointerup] > pointermove",
     "clear": "pointerup"
+   },
+   "value": {
+    "x": [
+     3,
+     5
+    ],
+    "y": [
+     2,
+     4
+    ]
    }
   }
  ],

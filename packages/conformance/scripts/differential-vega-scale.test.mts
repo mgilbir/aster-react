@@ -116,19 +116,19 @@ function runVstick(api: Api, c: Vstick): unknown {
 }
 
 describe('vega-scale 8.1.2 vs Aster scale.ts (live)', () => {
-  scalePrograms.forEach(({ type, dates, ops }: { type: string; dates?: boolean; ops: Op[] }, i: number) => {
+  scalePrograms.forEach(({ type, dates, ops }: { type: string; dates?: boolean; ops: unknown[] }, i: number) => {
     it(`scale #${i} ${type}`, () =>
       withTz('UTC', () => {
-        const want = runScaleOps(vegaApi, type, !!dates, ops)
-        expect(runScaleOps(asterApi, type, !!dates, ops)).toEqual(want)
+        const want = runScaleOps(vegaApi, type, !!dates, ops as Op[])
+        expect(runScaleOps(asterApi, type, !!dates, ops as Op[])).toEqual(want)
       }))
   })
 
-  scaleTzPrograms.forEach(({ type, dates, ops }: { type: string; dates?: boolean; ops: Op[] }, i: number) => {
+  scaleTzPrograms.forEach(({ type, dates, ops }: { type: string; dates?: boolean; ops: unknown[] }, i: number) => {
     it(`scaleTz #${i} ${type} (America/New_York)`, () =>
       withTz('America/New_York', () => {
-        const want = runScaleOps(vegaApi, type, !!dates, ops)
-        expect(runScaleOps(asterApi, type, !!dates, ops)).toEqual(want)
+        const want = runScaleOps(vegaApi, type, !!dates, ops as Op[])
+        expect(runScaleOps(asterApi, type, !!dates, ops as Op[])).toEqual(want)
       }))
   })
 

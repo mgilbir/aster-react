@@ -92,10 +92,10 @@ describe('a row changed in place warns once per chart and dataset', () => {
     const session = createChartSession()
     const t = rows(5)
     const v = rows(5)
-    session.evaluate(spec(), { data: { t, extra: v }, logger })
+    session.evaluate(spec(), { data: { t, u: v }, logger })
     t.push({}); v.push({})
-    session.evaluate(spec(), { data: { t, extra: v }, logger })
-    expect(warnings.map((w) => /Dataset: "(\w+)"/.exec(w)?.[1]).sort()).toEqual(['extra', 't'])
+    session.evaluate(spec(), { data: { t, u: v }, logger })
+    expect(warnings.map((w) => /Dataset: "(\w+)"/.exec(w)?.[1]).sort()).toEqual(['t', 'u'])
   })
 })
 
@@ -198,4 +198,32 @@ describe('no warning where nothing was changed in place', () => {
       process.env.NODE_ENV = saved
     }
   })
+})
+
+describe('rows edited in place and handed back in a new array warn too (C266)', () => {
+  // (the diff takes a row object it saw before for the row it was: `rows[3].v = 3; setData([...rows])` keeps the old picture, so
+  // the watch looks at the sampled rows the new array still holds at their place)
+  const EDITS: Record<string, (a: Array<Record<string, unknown>>) => void> = {
+    'the first row': (a) => { a[0]!.v = 99 },
+    'the last row': (a) => { a[a.length - 1]!.k = 'changed' },
+    // (a sampled row: the second of the 16 evenly spaced ones the watch reads)
+    'a field added to a middle row': (a) => { a[a.length > 1 ? Math.round((a.length - 1) / (Math.min(a.length, 16) - 1)) : 0]!.extra = 1 },
+  }
+  for (const n of [1, 5, 40]) {
+    for (const [name, edit] of Object.entries(EDITS)) {
+      it(`${n} rows, ${name} edited, then [...rows]: one warning; new row objects instead: none`, () => {
+        for (const fresh of [false, true]) {
+          const { warnings, logger } = logged()
+          const session = createChartSession()
+          const data = rows(n)
+          session.evaluate(spec(), { data: { t: data }, logger })
+          const next = fresh ? data.map((r) => ({ ...r })) : data
+          edit(next)
+          session.evaluate(spec(), { data: { t: [...next] }, logger })
+          expect(warnings).toHaveLength(fresh ? 0 : 1)
+          if (!fresh) expect(warnings[0]).toMatch(/^\[aster\] the rows of dataset "t" were changed in place/)
+        }
+      })
+    }
+  }
 })

@@ -81,11 +81,22 @@ describe('modify in the signal event loop', () => {
   })
 
   it('modify updates a field of a tuple of the dataset', () => {
+    const given = [{ a: 1, b: 1 }, { a: 2, b: 2 }]
+    // (`held` is the dataset's second tuple: modify writes `b` of that tuple, and of no other)
+    const { svg, scene } = mount([{ name: 'held', init: 'data("store")[1]' }, on('modify("store", null, null, null, held, {"b": 9})')], [{ name: 'store' }], { data: { store: given } })
+    let rows: unknown[] = []
+    const b = bind(svg, scene, {}, { onData: (_n, r) => { rows = r } }, { data: { store: given } })
+    click(svg)
+    expect(rows).toEqual([{ a: 1, b: 1 }, { a: 2, b: 9 }])
+    expect(given).toEqual([{ a: 1, b: 1 }, { a: 2, b: 2 }])
+    b.detach()
+  })
+
+  it('a modify with no tuple to modify (the datum of a click on the view is undefined) changes no row', () => {
     const t = { a: 1, b: 1 }
     const { svg, scene } = mount([on('modify("store", null, null, null, datum, {"b": 9})')], [{ name: 'store' }])
     let rows: unknown[] = []
     const b = bind(svg, scene, {}, { onData: (_n, r) => { rows = r } }, { data: { store: [t] } })
-    // (datum is undefined for a click on the view: nothing to modify, the dataset is only rewritten)
     click(svg)
     expect(rows).toEqual([t])
     b.detach()

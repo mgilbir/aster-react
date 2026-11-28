@@ -82,6 +82,7 @@ function installImage(delay = 1): void {
 }
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllGlobals()
   imageOutcome.clear()
   encode = async (c) => new Blob([`png ${c.width}x${c.height}`], { type: 'image/png' })
@@ -214,10 +215,16 @@ describe('renderSceneToPng', () => {
     const n = PNG_IMAGE_CONCURRENCY * 3 + 1
     for (let i = 0; i < n; i++) imageOutcome.set(`https://img.example/${i}.png`, 'never')
     const errors: string[] = []
-    const t0 = Date.now()
-    await renderSceneToPng(manyImages(n), { imageTimeoutMs: 40, onImageError: (url, e) => errors.push(`${url}: ${e.message}`) })
-    // one deadline, not one per image: n / 6 batches of 40 ms would be 160 ms and more
-    expect(Date.now() - t0).toBeLessThan(150)
+    // fake timers: the deadline is 40 ms of the test's clock, whatever the machine is doing
+    vi.useFakeTimers()
+    let done = false
+    const rendered = renderSceneToPng(manyImages(n), { imageTimeoutMs: 40, onImageError: (url, e) => errors.push(`${url}: ${e.message}`) }).then(() => { done = true })
+    await vi.advanceTimersByTimeAsync(39)
+    expect(done, 'not before the deadline').toBe(false)
+    // one deadline, not one per image: n / 6 batches of 40 ms would still be waiting at 40 ms
+    await vi.advanceTimersByTimeAsync(1)
+    await rendered
+    expect(done).toBe(true)
     expect(created.length).toBe(PNG_IMAGE_CONCURRENCY)
     expect(flight.aborted).toBe(PNG_IMAGE_CONCURRENCY)
     expect(errors.length).toBe(n)
@@ -231,7 +238,11 @@ describe('renderSceneToPng', () => {
     installImage(20)
     const n = PNG_IMAGE_CONCURRENCY * 3
     const errors: string[] = []
-    await renderSceneToPng(manyImages(n), { imageTimeoutMs: 30, onImageError: (url) => errors.push(url) })
+    // fake timers: the loads settle at 20 ms (the first six) and 40 ms (the next), the deadline is at 30 ms
+    vi.useFakeTimers()
+    const rendered = renderSceneToPng(manyImages(n), { imageTimeoutMs: 30, onImageError: (url) => errors.push(url) })
+    await vi.advanceTimersByTimeAsync(30)
+    await rendered
     expect(canvases[0]!.ctx.draws.length).toBe(PNG_IMAGE_CONCURRENCY)
     expect(errors.length).toBe(n - PNG_IMAGE_CONCURRENCY)
   })

@@ -207,21 +207,25 @@ describe('number format vs d3-format (generated, live)', () => {
     })
   })
 
-  it('formatDefaultLocale replaces the module-level format and formatPrefix', async () => {
+  it('the module-level format and formatPrefix are d3-format\'s default locale, and a public defaultLocale(...) leaves them be (C548)', async () => {
+    // (they are what a scale's tickFormat reads, as d3-scale's reads d3-format's default; vega's defaultLocale never sets that one,
+    // and Aster's module-level default has no setter: the public defaultLocale of locale.ts is the one a host sets)
     const aster = await import('../../core/src/format.ts')
-    const def = { decimal: ',', thousands: '.', grouping: [3], currency: ['', ' €'], minus: '-' }
-    try {
-      d3.formatDefaultLocale(def)
-      aster.formatDefaultLocale(def)
+    const locale = await import('../../core/src/locale.ts')
+    const check = (): void => {
       for (const spec of ['$,.2f', ',.0f', '.3s', '+,d', '%']) {
         for (const v of [1234567.891, -0.5, 0, NaN]) {
           expect(aster.format(spec)(v), `${spec} ${v}`).toBe(d3.format(spec)(v))
           expect(aster.formatPrefix(spec, 1e3)(v), `prefix ${spec} ${v}`).toBe(d3.formatPrefix(spec, 1e3)(v))
         }
       }
+    }
+    check()
+    try {
+      locale.defaultLocale({ decimal: ',', thousands: '.', grouping: [3], currency: ['', ' €'], minus: '-' }, { dateTime: '%x', date: '%d/%m/%Y', time: '%H:%M', periods: ['a', 'p'], days: ['0', '1', '2', '3', '4', '5', '6'], shortDays: ['0', '1', '2', '3', '4', '5', '6'], months: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'], shortMonths: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'] })
+      check()
     } finally {
-      d3.formatDefaultLocale({ thousands: ',', grouping: [3], currency: ['$', ''] })
-      aster.formatDefaultLocale({ thousands: ',', grouping: [3], currency: ['$', ''] })
+      locale.resetDefaultLocale()
     }
   })
 })
@@ -279,7 +283,7 @@ describe('number locale (vega-format) vs the pinned vega-format (generated, live
     const probe = (l: { format(s: string): (v: number) => string; timeFormat(s: string): (d: Date) => string; utcParse(s: string): (t: string) => Date | null }) =>
       [l.format('$,.2f')(1234567.891), l.format('~s')(0.00012), l.timeFormat('%a %b %d')(new Date(Date.UTC(2024, 2, 9, 12))), +(l.utcParse('%d.%m.%Y')('09.03.2024') ?? 0)]
     try {
-      expect(() => aster.defaultLocale(num as never)).toThrow('defaultLocale expects either zero or two arguments.')
+      expect(() => (aster.defaultLocale as (...args: unknown[]) => unknown)(num)).toThrow('defaultLocale expects either zero or two arguments.')
       expect(() => vf.defaultLocale(num as never)).toThrow('defaultLocale expects either zero or two arguments.')
       const want = probe(vf.defaultLocale(num as never, { ...time, dateTime: '%A' } as never) as never)
       expect(probe(aster.defaultLocale(num as never, { ...time, dateTime: '%A' } as never) as never)).toEqual(want)

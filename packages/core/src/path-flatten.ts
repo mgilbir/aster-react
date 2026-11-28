@@ -21,6 +21,11 @@ const TOLERANCE = FLATTEN_TOLERANCE
 const MAX_STEPS = 1024
 const steps = (n: number): number => (n >= 1 ? Math.min(MAX_STEPS, Math.ceil(n)) : 1)
 
+/** The least magnitude a single-precision float of a canvas's path cannot hold (a double of 2^128 - 2^103 or more). */
+export const FLOAT32_OVERFLOW = 3.4028235677973366e38
+/** A number a canvas path command takes: finite, and within single precision. */
+export const held = (v: number): boolean => Math.abs(v) < FLOAT32_OVERFLOW
+
 /** Collects a path as polylines; curves and arcs are flattened to short segments. */
 export class Flattener implements PathSink {
   polys: Poly[] = []
@@ -31,24 +36,37 @@ export class Flattener implements PathSink {
   private startY = 0
   constructor(private readonly t: (x: number, y: number) => [number, number]) {}
   private start(x: number, y: number): void {
+    this.closed = false
     const [tx, ty] = this.t(x, y)
     this.cur = [tx, ty]
     this.polys.push({ pts: this.cur, closed: false })
     this.x = x; this.y = y; this.startX = x; this.startY = y
   }
+  /** A subpath was closed: the current point is its start, where the next one begins (a canvas's `closePath`). */
+  private closed = false
   private push(x: number, y: number, curved = true): void {
-    if (!this.cur) { this.start(x, y); return }
+    if (!this.cur) {
+      // (with no current point, a segment begins the subpath at its own end -- a canvas's "ensure there is a subpath"; after a
+      // close the current point is the closed subpath's start, and the segment is drawn from there)
+      if (!this.closed) { this.start(x, y); return }
+      this.start(this.x, this.y)
+    }
+    const cur = this.cur!
     const [tx, ty] = this.t(x, y)
-    this.cur.push(tx, ty)
+    cur.push(tx, ty)
     if (curved) {
       const poly = this.polys[this.polys.length - 1]!
-      ;(poly.curved ??= [])[this.cur.length / 2 - 1] = true
+      ;(poly.curved ??= [])[cur.length / 2 - 1] = true
     }
     this.x = x; this.y = y
   }
-  moveTo(x: number, y: number): void { this.start(x, y) }
-  lineTo(x: number, y: number): void { this.push(x, y, false) }
+  // A canvas context ignores a path command that has an argument that is not a number it can hold: HTML's "if any of the arguments are
+  // infinite or NaN, then return", and one beyond single precision (its path is made of floats, where that is an infinity: measured in
+  // Chromium, such a point is left out as a NaN one is). The next command goes on from where the path was, and so does this.
+  moveTo(x: number, y: number): void { if (held(x) && held(y)) this.start(x, y) }
+  lineTo(x: number, y: number): void { if (held(x) && held(y)) this.push(x, y, false) }
   bezierCurveTo(c1x: number, c1y: number, c2x: number, c2y: number, x: number, y: number): void {
+    if (!(held(c1x) && held(c1y) && held(c2x) && held(c2y) && held(x) && held(y))) return
     const x0 = this.x, y0 = this.y
     // a cubic's chords stray from it by at most 3/4 of its largest second difference over N^2
     const dd = Math.max(Math.hypot(x0 - 2 * c1x + c2x, y0 - 2 * c1y + c2y), Math.hypot(c1x - 2 * c2x + x, c1y - 2 * c2y + y))
@@ -62,6 +80,7 @@ export class Flattener implements PathSink {
     }
   }
   quadraticCurveTo(cx: number, cy: number, x: number, y: number): void {
+    if (!(held(cx) && held(cy) && held(x) && held(y))) return
     const x0 = this.x, y0 = this.y
     // ... and a quadratic's by a quarter of its second difference over N^2
     const N = steps(Math.sqrt(Math.hypot(x0 - 2 * cx + x, y0 - 2 * cy + y) / (4 * TOLERANCE)))
@@ -71,6 +90,7 @@ export class Flattener implements PathSink {
     }
   }
   arc(cx: number, cy: number, r: number, a0: number, a1: number, ccw = false): void {
+    if (!(held(cx) && held(cy) && held(r) && held(a0) && held(a1))) return
     let da = a1 - a0
     if (ccw) { if (da > 0) da = (da % (2 * Math.PI)) - 2 * Math.PI } else if (da < 0) da = (da % (2 * Math.PI)) + 2 * Math.PI
     if (Math.abs(da) > 2 * Math.PI) da = Math.sign(da) * 2 * Math.PI
@@ -89,6 +109,7 @@ export class Flattener implements PathSink {
     this.polys[this.polys.length - 1]!.closed = true
     // a new subpath after a close starts at the old start point
     this.cur = null
+    this.closed = true
     this.x = this.startX; this.y = this.startY
   }
 }

@@ -2,6 +2,13 @@
  * The generator of the aborted-pass differentials: random trees of nested scopes (groups, faceted groups, groups per datum, own
  * scales and signals, axes, legends of every kind, titles, group transforms, header groups in grid layouts) with failures put at
  * random places (see differential-abort-trees.test.mts).
+ *
+ * Environment (to narrow a failure down; diagnostics only):
+ *   ABORT_KINDS=axis,legend   draw only these kinds of failure
+ *   ABORT_ONE=1               exactly one failure per tree (and no view guide unless a guide kind is drawn)
+ *   ABORT_AUTOSIZE=pad        every tree with this autosize
+ * A run with any of them set tests a part of the space, so it can never pass: differential-abort-trees.test.mts fails it
+ * (`NARROWED_BY`), whatever else it finds.
  */
 import { makeRng, type Rng } from './differential-gen.mts'
 
@@ -10,6 +17,8 @@ type Spec = Record<string, unknown>
 /** The ways a part of the tree fails. */
 export type Fail = 'mark' | 'condition' | 'group' | 'axis' | 'legend' | 'title' | 'signal' | 'scope-signal' | 'scale' | 'late-signal' | 'transform' | 'sort'
   | 'group-transform' | 'header-sort' | 'encode-and-transform' | 'item-transform' | 'layout'
+/** The ABORT_* variables set in this run (empty for a run of the whole generated space). */
+export const NARROWED_BY: readonly string[] = ['ABORT_KINDS', 'ABORT_ONE', 'ABORT_AUTOSIZE'].filter((v) => process.env[v] !== undefined)
 export const FAILS: readonly Fail[] = (process.env.ABORT_KINDS?.split(',') as Fail[] | undefined) ?? ['mark', 'condition', 'group', 'axis', 'legend', 'title', 'signal', 'scope-signal', 'scale', 'late-signal', 'transform', 'sort', 'group-transform', 'header-sort', 'encode-and-transform', 'item-transform', 'layout']
 
 interface Gen {

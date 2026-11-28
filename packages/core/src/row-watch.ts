@@ -60,19 +60,24 @@ function printOf(rows: readonly unknown[]): Print {
     if (at === last) continue
     last = at
     const row = rows[at]
-    const fields: string[] = []
-    const values: unknown[] = []
-    if (row !== null && typeof row === 'object') {
-      for (const f of Object.keys(row)) {
-        if (fields.length === SAMPLE_FIELDS) break
-        const d = Object.getOwnPropertyDescriptor(row, f)
-        fields.push(f)
-        values.push(d === undefined ? undefined : 'value' in d ? d.value : ACCESSOR)
-      }
-    }
-    picks.push({ at, row, fields, values })
+    picks.push({ at, row, ...printRow(row) })
   }
   return { rows, length: n, picks }
+}
+
+/** A row's first fields and their values (a getter is present, never called). */
+function printRow(row: unknown): { fields: string[]; values: unknown[] } {
+  const fields: string[] = []
+  const values: unknown[] = []
+  if (row !== null && typeof row === 'object') {
+    for (const f of Object.keys(row)) {
+      if (fields.length === SAMPLE_FIELDS) break
+      const d = Object.getOwnPropertyDescriptor(row, f)
+      fields.push(f)
+      values.push(d === undefined ? undefined : 'value' in d ? d.value : ACCESSOR)
+    }
+  }
+  return { fields, values }
 }
 
 function samePrint(a: Print, b: Print): boolean {
@@ -84,6 +89,54 @@ function samePrint(a: Print, b: Print): boolean {
     for (let j = 0; j < p.fields.length; j++) if (p.fields[j] !== q.fields[j] || !Object.is(p.values[j], q.values[j])) return false
   }
   return true
+}
+
+/**
+ * Whether `rows`, the array `before` was made of, still prints as `before` does: as long, and each sampled row the very object it was,
+ * holding the same fields with the same values -- `samePrint (before, printOf (rows))` without making the print. The common case of a
+ * flush of a stream or a render with the same array (nothing changed): nothing is allocated but the descriptor of each field read.
+ */
+function unchangedSince(before: Print, rows: readonly unknown[]): boolean {
+  if (before.length !== rows.length) return false
+  for (const p of before.picks) {
+    const row = rows[p.at]
+    if (!Object.is(row, p.row)) return false
+    if (row === null || typeof row !== 'object') continue
+    let j = 0
+    for (const f in row) {
+      if (!Object.hasOwn(row, f)) continue
+      if (j === SAMPLE_FIELDS) break
+      if (f !== p.fields[j]) return false
+      const d = Object.getOwnPropertyDescriptor(row, f)
+      if (!Object.is(d === undefined ? undefined : 'value' in d ? d.value : ACCESSOR, p.values[j])) return false
+      j++
+    }
+    if (j !== p.fields.length) return false
+  }
+  return true
+}
+
+/**
+ * Whether a sampled row of `before` that `rows` (a new array) holds at the same index -- the very row object -- holds other values
+ * now: rows changed in place and handed back in a new array (`rows[3].v = 3; setData([...rows])`), which the diff takes for unchanged
+ * rows (the same objects) as it takes the same array.
+ */
+function rowsChangedInPlace(before: Print, rows: readonly unknown[]): boolean {
+  for (const p of before.picks) {
+    if (rows[p.at] !== p.row || p.row === null || typeof p.row !== 'object') continue
+    // (field by field, as `printRow` reads them, without making a print: this runs on every evaluation given a new array)
+    let j = 0
+    for (const f in p.row) {
+      if (!Object.hasOwn(p.row, f)) continue
+      if (j === SAMPLE_FIELDS) break
+      if (f !== p.fields[j]) return true
+      const d = Object.getOwnPropertyDescriptor(p.row, f)
+      if (!Object.is(d === undefined ? undefined : 'value' in d ? d.value : ACCESSOR, p.values[j])) return true
+      j++
+    }
+    if (j !== p.fields.length) return true
+  }
+  return false
 }
 
 interface Watch {
@@ -100,7 +153,7 @@ function watchOf(owner: object): Watch {
   return w
 }
 
-/** @internal Make `to` keep its fingerprints in `from`'s watch: two sessions of one chart warn once between them. */
+/** Internal plumbing (`@aster-charts/core/internal`, not public API): make `to` keep its fingerprints in `from`'s watch: two sessions of one chart warn once between them. */
 export function shareRowWatch(from: object, to: object): void {
   WATCHES.set(to, watchOf(from))
 }
@@ -123,7 +176,7 @@ export interface RowWatchInput {
 }
 
 /**
- * @internal Compare the rows `spec` and `input` give a chart with the ones it was given last (see the module comment), warn once
+ * Internal plumbing (`@aster-charts/core/internal`, not public API): compare the rows `spec` and `input` give a chart with the ones it was given last (see the module comment), warn once
  * per dataset whose array was changed in place, and keep the new fingerprints. Called only behind a development-build check.
  */
 export function checkChartRows(owner: object, spec: unknown, input: RowWatchInput): void {
@@ -140,14 +193,18 @@ export function checkChartRows(owner: object, spec: unknown, input: RowWatchInpu
     seen.add(name)
     const { rows: arr, vl } = originOf(rows)
     const prev = w.prints.get(name)
+    // (the same array, printing as it did: nothing to keep, nothing to say)
+    if (prev !== undefined && prev.rows === arr && unchangedSince(prev, arr)) return
     const next = printOf(arr)
     w.prints.set(name, next)
-    if (prev === undefined || prev.rows !== arr || hinted.has(name) || w.warned.has(name) || samePrint(prev, next)) return
+    if (prev === undefined || hinted.has(name) || w.warned.has(name)) return
+    if (prev.rows === arr ? samePrint(prev, next) : !rowsChangedInPlace(prev, arr)) return
     w.warned.add(name)
     const what = vl ? 'the inline `data.values` (or `datasets` entry) of the Vega-Lite spec' : `dataset "${name}"`
     ;(input.logger ?? consoleLogger).warn(
       `[aster] the rows of ${what} were changed in place since the last render (the same array, with rows edited, replaced, added or removed). ` +
       'A chart treats the rows it is given as immutable: only what evaluates again sees such a change, so the chart can be inconsistent. ' +
+      'A row object edited and handed back in a new array is changed in place too. ' +
       `Pass a new array instead, or describe the change with \`dataChanges\` (a stream: \`push\` an \`append\` or a \`data\` snapshot). Dataset: "${name}".`,
     )
   }

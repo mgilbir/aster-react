@@ -18,6 +18,7 @@ jobs:
   # tests) happens here, with no token and no write permission.
   verify:
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -64,16 +65,25 @@ jobs:
             (cd "packages/$pkg" && pnpm pack --pack-destination "$GITHUB_WORKSPACE/release-tarballs")
           done
 
+      # The publish job has no checkout: it runs the publish script of the commit the gates verified, shipped beside the tarballs
+      # (the script and the two modules it imports, at the same relative paths).
+      - name: Add the publish script
+        run: |
+          mkdir -p release-tarballs/scripts/lib
+          cp scripts/release-publish.mjs release-tarballs/scripts/
+          cp scripts/lib/cli.mjs scripts/lib/release.mjs release-tarballs/scripts/lib/
+
       - name: Upload tarballs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-tarballs
-          path: release-tarballs/*.tgz
+          path: release-tarballs
           if-no-files-found: error
 
   publish:
     needs: verify
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     # A protected environment: configure required reviewers (and restrict it to tags)
     # under Settings > Environments > npm-release. NPM_TOKEN lives in that environment.
     environment: npm-release
@@ -93,14 +103,11 @@ jobs:
           name: release-tarballs
           path: release-tarballs
 
-      # No install, no build, no lifecycle scripts: only the verified tarballs are published.
+      # No install, no build, no lifecycle scripts: only the verified tarballs are published. The script (scripts/release-publish.mjs,
+      # tested by scripts/release-publish.test.mjs) publishes core, vl, react under the dist-tag the tag's version calls for
+      # (`next` for a prerelease, `latest` otherwise) and skips a version already on the registry, so a run that failed halfway
+      # is finished by re-running the job.
       - name: Publish public packages
-        run: |
-          set -euo pipefail
-          # Dependencies first: @aster-charts/react depends on @aster-charts/core and @aster-charts/vl.
-          # The `./` is required: npm reads `release-tarballs/<file>` as GitHub `owner/repo` shorthand and tries git.
-          for pkg in core vl react; do
-            npm publish ./release-tarballs/aster-charts-"$pkg"-*.tgz --access public --provenance --ignore-scripts
-          done
+        run: node release-tarballs/scripts/release-publish.mjs "$GITHUB_REF_NAME" release-tarballs
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

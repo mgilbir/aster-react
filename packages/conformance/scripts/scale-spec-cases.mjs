@@ -9,8 +9,8 @@
  * only exercises the scale classes themselves.
  *
  * Every case is `{ name, spec, probes? }`; `probes` defaults to values derived
- * from the oracle scale's domain (recorded in the vector so the replay feeds the
- * same inputs).
+ * from the oracle scale's domain (read from the oracle scale on every run, as nothing
+ * is recorded: differential-scale-spec.test.mts).
  */
 
 const W = 300
@@ -638,5 +638,58 @@ add('edge', 'linear/domainMid-no-domain', spec({ type: 'linear', range: [0, 100]
     if (type === 'quantize' && rnd() < 0.3) extra.zero = pick([true, false])
     if (rnd() < 0.15) extra.reverse = true
     add('quantile-messy', `${type}/${String(i).padStart(3, '0')}`, spec({ type, ...domain, range, ...extra }, d(rows)))
+  }
+}
+
+// ---- seeded: every option as a signal (a literal or a constant), the type spelled in any case, hostile bins ---------------------
+// The sections above write every option as a literal value and every type in lower case. A `{signal}` whose text is a literal or a
+// constant expression (`true`, `null`, `1/0`, `[5, 6]`) is a value, not a name (C133); a scale type is looked up as written, so
+// `BAND` is no type (C288); and `bins` takes lists and steps that degenerate. Each is drawn here, across the types.
+{
+  let seed = 0xb1a5
+  const rnd = () => {
+    seed = (seed + 0x6d2b79f5) | 0
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+  const pick = (a) => a[Math.floor(rnd() * a.length)]
+  const chance = (p) => rnd() < p
+  const spellings = [(n) => n, (n) => n.toUpperCase(), (n) => n[0].toUpperCase() + n.slice(1), (n) => [...n].map((c, i) => (i % 2 ? c.toUpperCase() : c)).join(''), (n) => n + ' ', (n) => ' ' + n]
+  // the texts a signal may hold in place of a value: constants (they must evaluate), and expressions that are not numbers
+  const HOSTILE = ['true', 'false', 'null', 'undefined', '1/0', '-1/0', '0/0', '[5, 6]', '"x"', '0', '1', '-1', '1e308', '[]', '{}']
+  const OPTIONS = {
+    cont: [['zero', [true, false]], ['nice', [true, false, 3, 8]], ['clamp', [true, false]], ['round', [true, false]], ['padding', [0, 10, 25]], ['reverse', [true, false]],
+      ['domainMin', [-5, 0, 3]], ['domainMax', [90, 150]], ['domainMid', [4, 40]], ['unknown', ['?', 0, null]], ['interpolateGamma', [1, 2.2]]],
+    pow: [['exponent', [0.5, 2, 3]]], log: [['base', [2, 10, Math.E]]], symlog: [['constant', [0.5, 1, 10]]],
+    disc: [['padding', [0, 0.2, 0.5]], ['paddingInner', [0, 0.3]], ['paddingOuter', [0, 0.4]], ['align', [0, 0.5, 1]], ['round', [true, false]], ['reverse', [true, false]],
+      ['domainImplicit', [true, false]], ['unknown', ['?', 0]]],
+    quant: [['zero', [true, false]], ['nice', [true, 4]], ['reverse', [true, false]], ['schemeCount', [3, 5]]],
+  }
+  const ranges = {
+    cont: () => pick([[0, 100], [100, 0], { scheme: 'blues' }, ['#fee', '#a00']]),
+    disc: () => pick([['a', 'b', 'c'], { scheme: 'category10', count: 4 }]),
+    quant: () => pick([['a', 'b', 'c'], ['a', 'b']]),
+  }
+  const TYPES = ['linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc', 'sequential', 'quantile', 'quantize', 'threshold', 'bin-ordinal', 'ordinal', 'band', 'point']
+  for (let i = 0; i < 480; i++) {
+    const type = pick(TYPES)
+    const family = ['ordinal', 'band', 'point', 'bin-ordinal'].includes(type) ? 'disc' : ['quantile', 'quantize', 'threshold'].includes(type) ? 'quant' : 'cont'
+    const dateType = type === 'time' || type === 'utc'
+    const rows = family === 'disc' ? [{ v: 'a' }, { v: 'b' }, { v: 'c' }, { v: 'a' }] : type === 'log' ? posOnly : dateType ? dates.map((r) => ({ v: r.t })) : nums
+    const s = { type: chance(0.3) ? pick(spellings)(type) : type }
+    s.domain = type === 'threshold' ? [10, 30] : { data: 'd', field: 'v' }
+    s.range = type === 'sequential' ? { scheme: 'viridis' } : type === 'bin-ordinal' ? ['a', 'b', 'c'] : ranges[family]()
+    const pool = [...OPTIONS[family], ...(OPTIONS[type] ?? [])]
+    for (let k = 0, n = 1 + Math.floor(rnd() * 4); k < n; k++) {
+      const [key, values] = pick(pool)
+      let value = pick(values)
+      // half of the options are written as a signal: its text is the value's own text, or a constant of another kind
+      if (chance(0.5)) value = { signal: chance(0.7) ? JSON.stringify(value) : pick(HOSTILE) }
+      s[key] = value
+    }
+    // bins: lists and steps that degenerate (an empty list, one edge, a step of 0 or below, a stop before the start, a signal)
+    if (chance(0.2) && family !== 'disc') s.bins = pick([[], [5], [5, 5], [0, 25, 50], { step: 0 }, { step: -5 }, { start: 10, stop: 0, step: 5 }, { start: 0, stop: 40, step: 10 }, { signal: 'null' }, { signal: '[0, 50, 100]' }, { step: { signal: '1/0' } }])
+    add('signal-forms', `${String(i).padStart(3, '0')}-${type}`, spec(s, d(rows)))
   }
 }

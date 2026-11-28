@@ -15,7 +15,7 @@ type Spec = Record<string, unknown>
 
 async function oracleSvg(spec: Spec): Promise<string> {
   const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(
-    vega.parse(spec as never),
+    vega.parse(structuredClone(spec) as never),
     { renderer: 'none' },
   )
   try {
@@ -30,7 +30,6 @@ const V = (value: unknown) => ({ value })
 const group = (update: Record<string, unknown>, markProps: Record<string, unknown> = {}, scoped = false): Spec => ({
   width: 120, height: 80, padding: 5, autosize: 'none',
   signals: [{ name: 'clipped', value: true }, { name: 'sw', value: 3 }],
-  ...(scoped ? {} : {}),
   marks: [{
     type: 'group', ...markProps,
     ...(scoped ? { scales: [{ name: 'lx', type: 'linear', domain: [0, 10], range: 'width' }] } : {}),

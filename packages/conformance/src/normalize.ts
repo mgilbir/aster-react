@@ -77,6 +77,19 @@
  *                    the paint order (it is still compared as a record).
  *   N-whitespace     text whitespace is collapsed as SVG's default
  *                    xml:space does.
+ *   N-batch          a <path> of several subpaths that paints what its subpaths
+ *                    painted one by one would paint (no two meet; or an opaque
+ *                    nonzero fill of simple closed curves winding the same way, or
+ *                    an opaque undashed stroke) is those subpaths, one record each
+ *                    (`batchPieces`).
+ *
+ * NOT SEEN (so "canonical SVG equal" does not mean byte-equal; each is pinned by normalize.test.ts "what it does not see"):
+ *   - the root <svg>'s role, aria-roledescription, aria-label and class, its preserveAspectRatio and a `background`
+ *     attribute other than the canvas colour (only width, height, viewBox and the background colour are root fields);
+ *   - <title>, <desc> and <metadata> content (nothing is drawn; a host's screen reader may read them);
+ *   - pointer-events, and the class of a shape that carries no role or aria attribute;
+ *   - an attribute with no value, or an unquoted one (the parser drops it), and text whose first character is a raw `>`;
+ *   - offsets below the 0.0005 precision of N-numfmt.
  *
  * Paint order is preserved wherever it can matter. The canonical sequence is
  * the lexicographic normal form of the document order modulo swapping ADJACENT
@@ -153,6 +166,7 @@ export function parseTransform(t: string | undefined): Mat {
   }
   return m
 }
+
 
 // ---------------------------------------------------------------- attributes
 
@@ -466,8 +480,10 @@ function textContent(el: XmlEl, fs: number | null): string {
     for (const c of e.children) {
       if (typeof c === 'string') {
         // (N-entities: the text a node spells with character references is the same text however it is spelt)
-        const t = decodeEntities(c).replace(/\s+/g, ' ')
-        if (t.trim() !== '' || out.length) out.push(t)
+        // (only the four characters XML calls whitespace collapse: U+00A0 and the other Unicode spaces are text, and a run of them is
+        // not one space, as a browser draws it)
+        const t = decodeEntities(c).replace(/[ \t\r\n]+/g, ' ')
+        if (xmlTrim(t) !== '' || out.length) out.push(t)
       } else if (c.tag === 'tspan') {
         const a = attrsOf(c)
         const extra = Object.keys(a).filter((k) => !isNonVisualAttr(k) && !['x', 'y', 'dx', 'dy'].includes(k)).sort()
@@ -481,7 +497,32 @@ function textContent(el: XmlEl, fs: number | null): string {
     }
   }
   collect(el)
-  return out.join('').trim()
+  return xmlTrim(out.join(''))
+}
+
+/** `trim` for XML whitespace only (space, tab, CR, LF): a no-break or other Unicode space at either end is text. */
+function xmlTrim(t: string): string {
+  return t.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '')
+}
+
+/**
+ * The ellipse of an arc (radii rx, ry, turned by `rotDeg`) mapped through the linear part of `m`: its radii (the larger first), and its
+ * turn in [0, 180) degrees (0 for a circle, whose turn draws nothing).
+ */
+function mappedEllipse(m: Mat, rx: number, ry: number, rotDeg: number): { rx: number; ry: number; rot: number } {
+  const r = (rotDeg * Math.PI) / 180
+  const c = Math.cos(r), s = Math.sin(r)
+  // M = L . R(rot) . diag(|rx|, |ry|), as columns [a b] and [cc d]
+  const ax = Math.abs(rx), ay = Math.abs(ry)
+  const a = (m[0] * c + m[2] * s) * ax, b = (m[1] * c + m[3] * s) * ax
+  const cc = (m[0] * -s + m[2] * c) * ay, d = (m[1] * -s + m[3] * c) * ay
+  const E = (a + d) / 2, F = (a - d) / 2, G = (b + cc) / 2, H = (b - cc) / 2
+  const Q = Math.hypot(E, H), R = Math.hypot(F, G)
+  const big = Q + R, small = Math.abs(Q - R)
+  if (big - small <= 1e-9 * Math.max(1, big)) return { rx: big, ry: small, rot: 0 }
+  let rot = ((Math.atan2(H, E) + Math.atan2(G, F)) / 2) * (180 / Math.PI)
+  rot = ((rot % 180) + 180) % 180
+  return { rx: big, ry: small, rot }
 }
 
 /** Absolute path with explicit commands under m (N-path). */
@@ -546,7 +587,13 @@ function canonPath(d: string, m: Mat): string {
       case 'T': cx = ox + v[0]!; cy = oy + v[1]!; out += `T${pt(m, cx, cy)}`; break
       case 'A': {
         if (!isIdentityLinear(m) && !similarity) {
-          throw new Error('canonicalizeSvg: arc under a non-similarity transform is not supported')
+          // (any other linear part: the arc's ellipse mapped through it is an ellipse again -- its radii and turn are the singular values
+          // and the left rotation of L.R(rot).diag(rx, ry) -- the large-arc flag is kept and a reflection turns the sweep)
+          cx = ox + v[5]!; cy = oy + v[6]!
+          const e = mappedEllipse(m, v[0]!, v[1]!, v[2]!)
+          const sweep = m[0] * m[3] - m[1] * m[2] < 0 ? 1 - v[4]! : v[4]!
+          out += `A${num(e.rx)},${num(e.ry)},${num(e.rot)},${v[3]},${sweep},${pt(m, cx, cy)}`
+          break
         }
         const s = isIdentityLinear(m) ? 1 : scale
         const rot = isIdentityLinear(m) ? 0 : angle
@@ -792,6 +839,11 @@ export function canonicalizeSvg(svg: string): CanonicalResult {
       || effects.some((e) => e === 'opacity=0' || e === 'display=none')
       || anc.some((c) => /(^|[{;])(opacity=0|display=none)([;}]|$)/.test(c))
       || style.some((st) => st === 'visibility=hidden' || st === 'visibility=collapse')
+    const pieces = el.tag === 'path' && !paintless ? batchPieces(geom, style, effects, (g) => paintedBox(el, a, m, eff, style, effects, g)) : null
+    if (pieces !== null) {
+      for (const p of pieces) recs.push({ text: [p.geom, style.join(';'), effects.join(';'), anc.join('>')].join('|'), isRect: false, box: p.box, ctx: anc.join('>'), paintless })
+      return
+    }
     recs.push({ text, isRect: isBgCandidate, bgFill: fillStr?.slice(5), box, ctx: anc.join('>'), paintless })
   }
 
@@ -810,6 +862,145 @@ export function canonicalizeSvg(svg: string): CanonicalResult {
 
   const root = `svg|${num(rootW)}|${num(rootH)}|${(ra['viewBox'] ?? '').trim().split(/[\s,]+/).map((v) => num(Number(v))).join(' ')}|bg=${bg}`
   return { records: paintOrderNormalForm(recs), root, structure }
+}
+
+/**
+ * N-batch: a `<path>` of several subpaths that paints exactly what its subpaths painted one by one, in order, would paint -- what a
+ * renderer that batches many items into one path element writes (Aster's `denseMarks` symbol chunks) -- is recorded as those
+ * subpaths, each a record of its own (the paint-order normal form then lets them move past records they cannot touch). It is, when:
+ *   - no two subpaths' painted boxes meet (nothing they paint can interact: no overlap to composite, no winding to share); or
+ *   - the paint is opaque (no opacity, fill-opacity, stroke-opacity, translucent colour or paint server), it is a fill or a stroke but
+ *     not both (one element fills ALL its subpaths before it strokes any), and
+ *       a stroke is not dashed (a stroke of several subpaths is the union of their strokes), or
+ *       a fill uses the nonzero rule and its subpaths are simple closed curves (simple polygons, circles) that all wind the same way
+ *       (each winds once, the same way, so where they overlap the sum is never zero: the union of the shapes).
+ * Anything else stays one record: a fill and a stroke over overlapping subpaths, a translucent overlap, holes -- the cases where one
+ * path paints other pixels than its subpaths painted one by one.
+ */
+const MAX_BATCH_PIECES = 100_000
+
+function batchPieces(geom: string, style: string[], effects: string[], boxOf: (geom: string) => Box | null): Array<{ geom: string; box: Box }> | null {
+  const body = geom.slice(5)
+  const bar = body.indexOf('|')
+  const abs = bar < 0 ? body : body.slice(0, bar)
+  const lin = bar < 0 ? '' : body.slice(bar)
+  const parts = abs.split(/(?=M)/)
+  if (parts.length < 2 || parts.length > MAX_BATCH_PIECES) return null
+  const pieces: Array<{ geom: string; box: Box }> = []
+  for (const part of parts) {
+    const g = `path|${part}${lin}`
+    const box = boxOf(g)
+    if (box === null) return null
+    pieces.push({ geom: g, box })
+  }
+  if (!anyBoxesMeet(pieces.map((p) => p.box))) return pieces
+  const fill = style.find((st) => st.startsWith('fill='))?.slice(5)
+  const stroke = style.find((st) => st.startsWith('stroke='))?.slice(7)
+  const hasFill = fill !== undefined && fill !== 'none'
+  const hasStroke = stroke !== undefined && stroke !== 'none'
+  if (hasFill === hasStroke) return null
+  const paint = (hasFill ? fill : stroke)!
+  if (!/^#[0-9a-f]{6}$/.test(paint)) return null
+  if (effects.some((e) => e.startsWith('opacity=')) || style.some((st) => /^(fill-opacity|stroke-opacity|stroke-dasharray)=/.test(st))) return null
+  if (hasStroke) return pieces
+  if (style.some((st) => st === 'fill-rule=evenodd')) return null
+  return sameWayClosedCurves(parts) ? pieces : null
+}
+
+/** Whether any two of the boxes meet (sorted by left edge; a sweep that stops at the first meeting pair). */
+export function anyBoxesMeet(boxes: Box[]): boolean {
+  const order = boxes.map((_, i) => i).sort((p, q) => boxes[p]![0] - boxes[q]![0])
+  const open: number[] = []
+  for (const i of order) {
+    const b = boxes[i]!
+    for (let k = open.length - 1; k >= 0; k--) {
+      const o = boxes[open[k]!]!
+      if (o[2] + 1e-6 < b[0]) { open.splice(k, 1); continue }
+      if (boxesOverlap(o, b)) return true
+    }
+    open.push(i)
+  }
+  return false
+}
+
+/** Whether a piece is a circle written as two semicircular arcs (`M x,y A r,r,0,1,s,x2,y2 A r,r,0,1,s,x,y`): a curve with no corner. */
+function isCirclePiece(part: string): boolean {
+  const c = pieceCommands(part)
+  if (c.length < 3 || c.length > 4 || c[0]!.c !== 'M' || c[0]!.n.length !== 2) return false
+  if (c.length === 4 && c[3]!.c !== 'Z') return false
+  const [a1, a2] = [c[1]!, c[2]!]
+  if (a1.c !== 'A' || a2.c !== 'A' || a1.n.length !== 7 || a2.n.length !== 7) return false
+  const r = a1.n[0]!
+  if (!(r > 0) || a1.n[1] !== r || a2.n[0] !== r || a2.n[1] !== r || a1.n[3] !== 1 || a2.n[3] !== 1 || a1.n[4] !== a2.n[4]) return false
+  const [x0, y0] = c[0]!.n as [number, number]
+  // (two semicircles: the chord between the ends is the diameter, and the second arc comes back to the start)
+  return Math.abs(Math.hypot(a1.n[5]! - x0, a1.n[6]! - y0) - 2 * r) < 1e-2 && a2.n[5] === x0 && a2.n[6] === y0
+}
+
+/** The numbers of an absolute path piece (`M1,2L3,4Z`), command by command. */
+function pieceCommands(part: string): Array<{ c: string; n: number[] }> {
+  const out: Array<{ c: string; n: number[] }> = []
+  for (const hit of part.matchAll(/([MLCSQTAZ])([^MLCSQTAZ]*)/g)) out.push({ c: hit[1]!, n: hit[2]!.split(',').filter((v) => v !== '').map(Number) })
+  return out
+}
+
+/**
+ * Whether every piece is a simple closed curve -- a simple polygon (`M L.. Z`, no two edges crossing), or a circle drawn as two arcs of
+ * one radius and one sweep (`M A A [Z]`) -- and all wind the same way (a polygon by the sign of its area, a circle by its sweep flag).
+ */
+function sameWayClosedCurves(parts: string[]): boolean {
+  let way = 0
+  for (const part of parts) {
+    const w = windingOfPiece(pieceCommands(part))
+    if (w === 0 || (way !== 0 && w !== way)) return false
+    way = w
+  }
+  return true
+}
+
+function windingOfPiece(cmds: Array<{ c: string; n: number[] }>): number {
+  if (!cmds.length || cmds[0]!.c !== 'M' || cmds[0]!.n.length !== 2) return 0
+  const rest = cmds.slice(1).filter((x, i, all) => !(x.c === 'Z' && i === all.length - 1))
+  if (rest.length === 2 && rest.every((x) => x.c === 'A' && x.n.length === 7 && x.n[0] === x.n[1] && x.n[0] === rest[0]!.n[0] && x.n[0]! > 0 && x.n[4] === rest[0]!.n[4])
+    && rest[1]!.n[5] === cmds[0]!.n[0] && rest[1]!.n[6] === cmds[0]!.n[1]) {
+    return rest[0]!.n[4] === 1 ? 1 : -1
+  }
+  if (cmds[cmds.length - 1]!.c !== 'Z' || !rest.every((x) => x.c === 'L' && x.n.length === 2)) return 0
+  const xy = [...cmds[0]!.n, ...rest.flatMap((x) => x.n)]
+  if (xy.some((v) => !Number.isFinite(v)) || !simplePolygon(xy)) return 0
+  let area = 0
+  for (let i = 0; i < xy.length; i += 2) {
+    const j = (i + 2) % xy.length
+    area += xy[i]! * xy[j + 1]! - xy[j]! * xy[i + 1]!
+  }
+  return area > 0 ? 1 : area < 0 ? -1 : 0
+}
+
+/** A closed polygon (flat x,y list) none of whose edges cross or touch another, but its neighbours at their shared corner. */
+export function simplePolygon(flat: number[]): boolean {
+  // (a corner written twice in a row, the closing corner written out before the Z included, is one corner)
+  const xy: number[] = []
+  for (let i = 0; i + 1 < flat.length; i += 2) {
+    const k = xy.length
+    if (k && xy[k - 2] === flat[i] && xy[k - 1] === flat[i + 1]) continue
+    xy.push(flat[i]!, flat[i + 1]!)
+  }
+  if (xy.length >= 4 && xy[0] === xy[xy.length - 2] && xy[1] === xy[xy.length - 1]) xy.length -= 2
+  const n = xy.length / 2
+  if (n < 3 || n > 64) return false
+  const P = (i: number): [number, number] => [xy[(2 * (i % n))]!, xy[(2 * (i % n)) + 1]!]
+  const cross = (o: [number, number], a: [number, number], b: [number, number]): number => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+  const meets = (a: [number, number], b: [number, number], c: [number, number], d: [number, number]): boolean => {
+    const d1 = cross(c, d, a), d2 = cross(c, d, b), d3 = cross(a, b, c), d4 = cross(a, b, d)
+    return ((d1 > 0) !== (d2 > 0) || d1 === 0 || d2 === 0) && ((d3 > 0) !== (d4 > 0) || d3 === 0 || d4 === 0)
+  }
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (j === i + 1 || (i === 0 && j === n - 1)) continue
+      if (meets(P(i), P(i + 1), P(j), P(j + 1))) return false
+    }
+  }
+  return true
 }
 
 /** N-degenerate: path whose points all coincide and whose stroke cannot draw a zero-length subpath. */
@@ -868,7 +1059,7 @@ export function diffCanonical(a: CanonicalResult, b: CanonicalResult): string[] 
 
 // -------------------------------------------------------- paint-order form
 
-type Box = [number, number, number, number]
+export type Box = [number, number, number, number]
 
 function boxOfPoints(pts: Array<[number, number]>): Box | null {
   if (pts.length === 0) return null
@@ -883,9 +1074,11 @@ function boxOfPoints(pts: Array<[number, number]>): Box | null {
   return [x1, y1, x2, y2]
 }
 
-/** Largest scale the linear part applies (Frobenius norm bounds the spectral norm). */
+/** Largest scale the linear part applies: its spectral norm (the larger singular value), a hair over for rounding. */
 function linScale(m: Mat): number {
-  return Math.sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2] + m[3] * m[3])
+  const s = m[0] * m[0] + m[1] * m[1] + m[2] * m[2] + m[3] * m[3]
+  const det = m[0] * m[3] - m[1] * m[2]
+  return Math.sqrt((s + Math.sqrt(Math.max(0, s * s - 4 * det * det))) / 2) * (1 + 1e-12)
 }
 
 /**
@@ -934,39 +1127,17 @@ function paintedBox(el: XmlEl, a: Record<string, string>, m: Mat, eff: Record<st
     }
     case 'path': {
       // geom is `path|<absolute commands>[|lin=..]`: every coordinate is already absolute.
-      const d = geom.slice(5).split('|')[0]!
-      const pts: Array<[number, number]> = []
-      const segRe = /([MLCSQTAZ])([^MLCSQTAZ]*)/g
-      let hit: RegExpExecArray | null
-      while ((hit = segRe.exec(d))) {
-        const nums = hit[2]!.split(',').filter((v) => v !== '').map(Number)
-        if (hit[1] === 'A') {
-          if (nums.length < 7) return null
-          const r = Math.max(Math.abs(nums[0]!), Math.abs(nums[1]!))
-          pts.push([nums[5]! - r, nums[6]! - r], [nums[5]! + r, nums[6]! + r])
-        } else {
-          for (let i = 0; i + 1 < nums.length; i += 2) pts.push([nums[i]!, nums[i + 1]!])
-        }
-      }
+      const pts = pathHull(geom.slice(5).split('|')[0]!)
+      if (pts === null) return null
       box = boxOfPoints(pts)
       break
     }
     case 'text': {
       const fs = fontSizePx(eff)
       if (fs == null || eff['dominant-baseline'] !== undefined || eff['letter-spacing'] !== undefined || eff['word-spacing'] !== undefined) return null
-      const content = textContent(el, fs)
-      const lines = content.split(/<\/?tspan[^>]*>/).filter((l) => l.trim() !== '')
-      const chars = Math.max(1, ...lines.map((l) => l.length))
-      // Glyph extents of any font stay inside 1.5 em per character horizontally
-      // and [-1.3, 0.5] em (+ 1.6 em per extra line) vertically of the baseline.
-      const w = chars * fs * 1.5
-      const anchor = eff['text-anchor'] ?? 'start'
-      const x0 = anchor === 'middle' ? -w / 2 : anchor === 'end' ? -w : 0
-      const x = numAttr(a['x']) + lengthAttr(a['dx'], fs, 'dx')
-      const y = numAttr(a['y']) + lengthAttr(a['dy'], fs, 'dy')
-      const top = y - 1.3 * fs
-      const bottom = y + 0.5 * fs + Math.max(0, lines.length - 1) * 1.6 * fs
-      box = boxOfPoints([corner(x + x0, top), corner(x + x0 + w, top), corner(x + x0, bottom), corner(x + x0 + w, bottom)])
+      const local = textBox(el, a, fs)
+      if (local === null) return null
+      box = boxOfPoints([corner(local[0], local[1]), corner(local[2], local[1]), corner(local[0], local[3]), corner(local[2], local[3])])
       break
     }
     default:
@@ -980,12 +1151,158 @@ function paintedBox(el: XmlEl, a: Record<string, string>, m: Mat, eff: Record<st
     const ml = Number((style.find((st) => st.startsWith('stroke-miterlimit=')) ?? 'stroke-miterlimit=4').slice(18))
     const cap = style.find((st) => st.startsWith('stroke-linecap='))
     const join = style.find((st) => st.startsWith('stroke-linejoin='))
-    let k = join === undefined || join === 'stroke-linejoin=miter' ? Math.max(1, ml) : 1
+    // (a path of nothing but circles has no corner for a join to miter)
+    const circles = el.tag === 'path' && geom.slice(5).split('|')[0]!.split(/(?=M)/).every(isCirclePiece)
+    let k = !circles && (join === undefined || join === 'stroke-linejoin=miter') ? Math.max(1, ml) : 1
     if (cap === 'stroke-linecap=square') k = Math.max(k, Math.SQRT2)
     if (!Number.isFinite(sw) || !Number.isFinite(k)) return null
     inflate += (sw * linScale(m) * k) / 2
   }
   return [box[0] - inflate, box[1] - inflate, box[2] + inflate, box[3] + inflate]
+}
+
+/**
+ * A box (in the text's own coordinates) that contains every glyph a `<text>` can paint, or null when it cannot be bounded.
+ * Glyph extents of any font stay inside 1.5 em per character horizontally and [-1.3, 0.5] em vertically of their baseline. The
+ * pen is followed through the text's runs: a tspan's `x` / `y` set it, its `dx` / `dy` move it, and a run of n characters moves
+ * it right by between 0 and 1.5 em per character (so the pen is an interval). Whatever the text-anchor, a chunk is shifted by at
+ * most the width of all the text, either way.
+ */
+function textBox(el: XmlEl, a: Record<string, string>, fs: number): Box | null {
+  let total = 0
+  const countChars = (e: XmlEl): void => {
+    for (const c of e.children) {
+      if (typeof c === 'string') total += decodeEntities(c).length
+      else countChars(c)
+    }
+  }
+  countChars(el)
+  const slack = Math.max(1, total) * fs * 1.5
+  const pen = { x0: numAttr(a['x']), x1: numAttr(a['x']), y0: numAttr(a['y']), y1: numAttr(a['y']) }
+  const shift = (dx: number, dy: number): void => { pen.x0 += dx; pen.x1 += dx; pen.y0 += dy; pen.y1 += dy }
+  shift(lengthAttr(a['dx'], fs, 'dx'), lengthAttr(a['dy'], fs, 'dy'))
+  let box: Box | null = null
+  const run = (chars: number): void => {
+    const b: Box = [pen.x0 - slack, pen.y0 - 1.3 * fs, pen.x1 + slack, pen.y1 + 0.5 * fs]
+    box = box === null ? b : [Math.min(box[0], b[0]), Math.min(box[1], b[1]), Math.max(box[2], b[2]), Math.max(box[3], b[3])]
+    pen.x1 += chars * fs * 1.5
+  }
+  const walk = (e: XmlEl): boolean => {
+    for (const c of e.children) {
+      if (typeof c === 'string') {
+        const t = decodeEntities(c)
+        if (t.trim() !== '') run(t.length)
+        continue
+      }
+      if (c.tag !== 'tspan') return false
+      const ta = attrsOf(c)
+      // (an attribute that moves or sizes glyphs in a way this does not follow: the text cannot be bounded)
+      if (Object.keys(ta).some((k) => !isNonVisualAttr(k) && !['x', 'y', 'dx', 'dy', 'fill', 'fill-opacity', 'stroke', 'stroke-opacity', 'font-weight', 'font-style', 'font-family', 'class'].includes(k))) return false
+      if (ta['x'] !== undefined) { pen.x0 = numAttr(ta['x']); pen.x1 = pen.x0 }
+      if (ta['y'] !== undefined) { pen.y0 = numAttr(ta['y']); pen.y1 = pen.y0 }
+      shift(lengthAttr(ta['dx'], fs, 'tspan dx'), lengthAttr(ta['dy'], fs, 'tspan dy'))
+      if (!walk(c)) return false
+    }
+    return true
+  }
+  if (!walk(el)) return null
+  return box ?? [pen.x0 - slack, pen.y0 - 1.3 * fs, pen.x1 + slack, pen.y1 + 0.5 * fs]
+}
+
+/**
+ * Points whose bounding box contains everything an absolute path (canonPath's output: M L C S Q T A Z) can paint, or null when
+ * it cannot be read. A Bézier segment lies inside the hull of its control points, and the implicit first control point of an
+ * `S` / `T` is the reflection of the previous segment's last one. An arc lies on its ellipse, which passes through both ends:
+ * every point of it is within the ellipse's diameter, 2 max(rx, ry) -- after the radii are scaled up to reach the end point
+ * when they are too small (SVG's out-of-range radii correction) -- of the end point.
+ */
+function pathHull(d: string): Array<[number, number]> | null {
+  const pts: Array<[number, number]> = []
+  const segRe = /([MLCSQTAZ])([^MLCSQTAZ]*)/g
+  let cx = 0, cy = 0, sx = 0, sy = 0
+  // the last control point of the previous C / S (for an S) or Q / T (for a T), else the current point
+  let lastCubic: [number, number] | null = null
+  let lastQuad: [number, number] | null = null
+  let hit: RegExpExecArray | null
+  while ((hit = segRe.exec(d))) {
+    const cmd = hit[1]!
+    const n = hit[2]!.split(',').filter((v) => v !== '').map(Number)
+    let cubic: [number, number] | null = null
+    let quad: [number, number] | null = null
+    switch (cmd) {
+      case 'M':
+      case 'L':
+        if (n.length < 2) return null
+        pts.push([n[0]!, n[1]!])
+        cx = n[0]!; cy = n[1]!
+        if (cmd === 'M') { sx = cx; sy = cy }
+        break
+      case 'C':
+        if (n.length < 6) return null
+        pts.push([n[0]!, n[1]!], [n[2]!, n[3]!], [n[4]!, n[5]!])
+        cubic = [n[2]!, n[3]!]
+        cx = n[4]!; cy = n[5]!
+        break
+      case 'S': {
+        if (n.length < 4) return null
+        const c1: [number, number] = lastCubic ? [2 * cx - lastCubic[0], 2 * cy - lastCubic[1]] : [cx, cy]
+        pts.push(c1, [n[0]!, n[1]!], [n[2]!, n[3]!])
+        cubic = [n[0]!, n[1]!]
+        cx = n[2]!; cy = n[3]!
+        break
+      }
+      case 'Q':
+        if (n.length < 4) return null
+        pts.push([n[0]!, n[1]!], [n[2]!, n[3]!])
+        quad = [n[0]!, n[1]!]
+        cx = n[2]!; cy = n[3]!
+        break
+      case 'T': {
+        if (n.length < 2) return null
+        const c: [number, number] = lastQuad ? [2 * cx - lastQuad[0], 2 * cy - lastQuad[1]] : [cx, cy]
+        pts.push(c, [n[0]!, n[1]!])
+        quad = c
+        cx = n[0]!; cy = n[1]!
+        break
+      }
+      case 'A': {
+        if (n.length < 7) return null
+        let rx = Math.abs(n[0]!), ry = Math.abs(n[1]!)
+        const ex = n[5]!, ey = n[6]!
+        if (rx > 0 && ry > 0) {
+          const phi = (n[2]! * Math.PI) / 180
+          const dx = (cx - ex) / 2, dy = (cy - ey) / 2
+          const x1 = Math.cos(phi) * dx + Math.sin(phi) * dy
+          const y1 = -Math.sin(phi) * dx + Math.cos(phi) * dy
+          const lambda = (x1 * x1) / (rx * rx) + (y1 * y1) / (ry * ry)
+          if (lambda > 1) { rx *= Math.sqrt(lambda); ry *= Math.sqrt(lambda) }
+          // (the arc lies on its ellipse, and the ellipse in the disc of its larger radius about its centre: the centre is found from the
+          // ends as the SVG implementation notes F.6.5 do, and the disc grown by what the paths' three decimals can move it (0.0005 a coordinate))
+          const [large, sweep] = [n[3]! !== 0, n[4]! !== 0]
+          const rx2 = rx * rx, ry2 = ry * ry
+          const den = rx2 * y1 * y1 + ry2 * x1 * x1
+          const coef = den > 0 ? (large === sweep ? -1 : 1) * Math.sqrt(Math.max(0, (rx2 * ry2 - den) / den)) : 0
+          const kx = coef * (rx * y1) / ry, ky = coef * (-ry * x1) / rx
+          const mx = Math.cos(phi) * kx - Math.sin(phi) * ky + (cx + ex) / 2
+          const my = Math.sin(phi) * kx + Math.cos(phi) * ky + (cy + ey) / 2
+          const reach = Math.max(rx, ry) + 0.002
+          pts.push([mx - reach, my - reach], [mx + reach, my + reach])
+        }
+        // (a zero radius draws the straight line between the ends)
+        pts.push([cx, cy], [ex, ey])
+        cx = ex; cy = ey
+        break
+      }
+      case 'Z':
+        cx = sx; cy = sy
+        break
+      default:
+        return null
+    }
+    lastCubic = cubic
+    lastQuad = quad
+  }
+  return pts
 }
 
 function boxesOverlap(a: Box, b: Box): boolean {
@@ -1022,7 +1339,24 @@ function paintOrderNormalForm(all: Array<{ text: string; box: Box | null; ctx: s
   return [...out, ...free]
 }
 
+/**
+ * The paint-order normal form of a sequence of paint records of any renderer (a canvas's, see canvas-canonical.ts): adjacent records whose
+ * boxes do not meet may swap; a record with no box is a barrier.
+ */
+export function paintNormalForm(recs: Array<{ text: string; box: Box | null }>): string[] {
+  return paintOrderNormalForm(recs.map((r) => ({ ...r, ctx: '', paintless: false })))
+}
+
 const MAX_OVERLAP_PAIRS = 4_000_000
+/** Box tests the bucketed search may make before it gives up and keeps document order (stricter, still sound). */
+const MAX_CANDIDATE_TESTS = 20_000_000
+/**
+ * Grid cells are counted in whole numbers within +-2^20 (a box past that, up to 1e308 or beyond the view by any amount, lies in the
+ * edge cells): a cell index stays an exact integer, so the walk over a box's cells advances on every step and two overlapping boxes
+ * always share a cell. (Unclamped, a box at 1e300 has a cell index whose `+ 1` is itself, and the walk never ends.)
+ */
+const CELL_LIMIT = 2 ** 20
+const cellOf = (v: number, cell: number): number => Math.max(-CELL_LIMIT, Math.min(CELL_LIMIT, Math.floor(v / cell)))
 
 function normalizeSegment(seg: Array<{ text: string; box: Box }>): string[] {
   const n = seg.length
@@ -1033,17 +1367,19 @@ function normalizeSegment(seg: Array<{ text: string; box: Box }>): string[] {
   const preds: number[][] = Array.from({ length: n }, () => [])
   const succ: number[][] = Array.from({ length: n }, () => [])
   let pairs = 0
+  let tests = 0
   for (let k = 0; k < n; k++) {
     const b = seg[k]!.box
-    const cx1 = Math.floor(b[0] / CELL), cx2 = Math.floor(b[2] / CELL)
-    const cy1 = Math.floor(b[1] / CELL), cy2 = Math.floor(b[3] / CELL)
+    const cx1 = cellOf(b[0], CELL), cx2 = cellOf(b[2], CELL)
+    const cy1 = cellOf(b[1], CELL), cy2 = cellOf(b[3], CELL)
     if ((cx2 - cx1 + 1) * (cy2 - cy1 + 1) > 4096) return seg.map((r) => r.text) // huge box: keep document order (stricter, still sound)
     const seen = new Set<number>()
     for (let cx = cx1; cx <= cx2; cx++) {
       for (let cy = cy1; cy <= cy2; cy++) {
-        const key = cx * 1_000_003 + cy
+        const key = cx * (2 * CELL_LIMIT + 1) + cy
         const bucket = cells.get(key)
         if (bucket) {
+          if ((tests += bucket.length) > MAX_CANDIDATE_TESTS) return seg.map((r) => r.text)
           for (const j of bucket) {
             if (!seen.has(j) && boxesOverlap(seg[j]!.box, b)) {
               seen.add(j)

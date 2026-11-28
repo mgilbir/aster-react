@@ -1,5 +1,8 @@
 // What the default tooltip shows. It ships with the `interaction` capability (only a chart with hit testing shows
 // tooltips), so `<SvgChart>` without it carries none of this.
+//
+// A transcription of vega-tooltip's `formatValue` and its JSON replacer (BSD-3-Clause, Copyright 2016 Interactive Data Lab and
+// contributors): its notice is in THIRD_PARTY_NOTICES.md.
 
 /** The content vega-tooltip shows for a `tooltip` value: a `title` and `key: value` rows for an object, else one line. */
 type TooltipContent = { title?: string; rows: Array<[string, string]> } | { text: string }

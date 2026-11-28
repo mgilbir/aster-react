@@ -47,8 +47,19 @@
    "name": "pick",
    "select": {
     "type": "point",
-    "toggle": "event.altKey"
-   }
+    "toggle": "event.altKey",
+    "fields": [
+     "c"
+    ]
+   },
+   "value": [
+    {
+     "c": "x"
+    },
+    {
+     "c": "z"
+    }
+   ]
   }
  ],
  "mark": "point",

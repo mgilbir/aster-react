@@ -45,7 +45,20 @@
  "params": [
   {
    "name": "pick",
-   "select": "point"
+   "select": {
+    "type": "point",
+    "fields": [
+     "a"
+    ]
+   },
+   "value": [
+    {
+     "a": 2
+    },
+    {
+     "a": 4
+    }
+   ]
   }
  ],
  "mark": "point",

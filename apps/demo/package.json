@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "pnpm --filter @aster-charts/react run build && vite build",
+    "build": "vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -14,14 +14,14 @@
     "@aster-charts/vl": "workspace:*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "vega-embed": "^7.1.0"
+    "vega-embed": "7.1.0"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.0",
     "typescript": "^5.8.0",
-    "vega-lite": "^6.4.3",
+    "vega-lite": "6.4.3",
     "vite": "^6.0.0",
     "wrangler": "^4.0.0"
   }

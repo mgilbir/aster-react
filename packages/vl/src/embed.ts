@@ -19,6 +19,16 @@ const SCALE_FUNCTIONS = new Set(['scale', 'invert', 'domain', 'range', 'bandwidt
 /** Vega expression functions whose FIRST argument is a dataset name. */
 const DATA_FUNCTIONS = new Set(['data', 'indata'])
 
+/**
+ * The `{signal}` objects that hold the user's own expressions (an axis', a legend's or a header's `labelExpr`): vega-lite never rewrites
+ * what the user wrote - a `width` there is the `width` the user named - so the renames of a composition leave them as they are.
+ */
+const USER_EXPRESSIONS = new WeakSet<object>()
+export function userExpression<T extends object>(ref: T): T {
+  USER_EXPRESSIONS.add(ref)
+  return ref
+}
+
 export interface Renames {
   signals: ReadonlyMap<string, string>
   scales: ReadonlyMap<string, string>
@@ -73,7 +83,7 @@ export function renameFragment(node: unknown, r: Renames): void {
     for (const x of node) renameFragment(x, r)
     return
   }
-  if (!isObj(node)) return
+  if (!isObj(node) || USER_EXPRESSIONS.has(node)) return
   for (const [k, v] of Object.entries(node)) {
     if (k === 'signal' && typeof v === 'string') {
       node[k] = renameExpr(v, r)
@@ -93,7 +103,7 @@ export function renameFragment(node: unknown, r: Renames): void {
 }
 
 /** Legend properties that name the scale the legend describes. */
-const LEGEND_SCALE_PROPS = new Set(['fill', 'stroke', 'size', 'shape', 'opacity', 'strokeWidth', 'strokeDash', 'fillOpacity', 'strokeOpacity', 'angle'])
+export const LEGEND_SCALE_PROPS: ReadonlySet<string> = new Set(['fill', 'stroke', 'size', 'shape', 'opacity', 'strokeWidth', 'strokeDash', 'fillOpacity', 'strokeOpacity', 'angle'])
 
 /** Rename dataset references (`from.data`, scale-domain `data`, facet `data`) in place. */
 export function renameDataRefs(node: unknown, map: ReadonlyMap<string, string>): void {
@@ -106,7 +116,11 @@ export function renameDataRefs(node: unknown, map: ReadonlyMap<string, string>):
   for (const v of Object.values(node)) if (v !== null && typeof v === 'object' && !isRows(v)) renameDataRefs(v, map)
 }
 
-/** The keys whose strings are Vega expressions in a compiled view. */
+/**
+ * The keys whose strings are Vega expressions in a compiled view: what `relabelUnits` reads for the units a selection names. The renames
+ * of renameFragment read `signal`, and a signal definition's `update` / `init`, only: an `expr` (a filter, a formula) and a `test` (a
+ * condition) carry the user's own expressions, which vega-lite never rewrites (the dataset `expr`s optimize.ts moves, it renames itself).
+ */
 export const EXPRESSION_KEYS: ReadonlySet<string> = new Set(['signal', 'update', 'init', 'expr', 'test'])
 
 /**

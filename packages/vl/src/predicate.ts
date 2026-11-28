@@ -52,18 +52,37 @@ export function isDateTime(o: unknown): o is Obj {
  * 2012, January, the 1st and midnight; a quarter is the month it starts in and a weekday the date it falls on in the week of January
  * 1st 2012. (A weekday is ignored when the DateTime names anything else, the way the other parts decide the date.)
  */
-function dateTimeArguments(dateTime: Obj): Array<number | string> {
+function dateTimeArguments(dateTime: Obj): number[] {
   const d = dateTime.day !== undefined && Object.keys(dateTime).length > 1 ? { ...dateTime, day: undefined } : dateTime
-  const at = (part: string): number => (d[part] as number | undefined) ?? 0
+  // (each part is a number spliced into an expression: anything else is refused here, where it is written, whatever checked it before)
+  const num = (part: string, dflt: number): number => {
+    const v = d[part]
+    if (v === undefined) return dflt
+    if (typeof v !== 'number' || !Number.isFinite(v)) throw new VLCompileError(`invalid ${part} ${JSON.stringify(v)} in a DateTime: a number`)
+    return v
+  }
   return [
-    (d.year as number | undefined) ?? 2012,
+    num('year', 2012),
     d.month !== undefined ? monthOf(d.month as number | string) : d.quarter !== undefined ? quarterOf(d.quarter as number | string) * 3 : 0,
-    d.date !== undefined ? (d.date as number) : d.day !== undefined ? dayOf(d.day as number | string) + 1 : 1,
-    at('hours'),
-    at('minutes'),
-    at('seconds'),
-    at('milliseconds'),
+    d.date !== undefined ? num('date', 1) : d.day !== undefined ? dayOf(d.day as number | string) + 1 : 1,
+    num('hours', 0),
+    num('minutes', 0),
+    num('seconds', 0),
+    num('milliseconds', 0),
   ]
+}
+
+/** Is `v` a part of a DateTime that `dateTimeToExpr` accepts? `undefined` when it is, the reason when it is not. */
+export function dateTimePartProblem(part: string, v: unknown): string | undefined {
+  if (part === 'utc') return typeof v === 'boolean' ? undefined : 'must be a boolean'
+  if (part === 'month' || part === 'day') {
+    if (typeof v === 'number' && Number.isFinite(v)) return undefined
+    if (typeof v === 'string' && (isNumeric(v) || nameIndex(v, part === 'month' ? MONTH_NAMES : DAY_NAMES) !== -1)) return undefined
+    return `must be a number or the name of a ${part}`
+  }
+  if (part === 'quarter') return typeof v === 'number' ? undefined : 'must be a number (1 to 4)'
+  if (!(CALENDAR_PARTS as readonly string[]).includes(part)) return 'is not a part of a DateTime'
+  return typeof v === 'number' && Number.isFinite(v) ? undefined : 'must be a number'
 }
 
 /** The `datetime(...)` (or `utc(...)`) expression of a DateTime. */
@@ -95,6 +114,17 @@ function operand(v: unknown, unit: string | undefined, temporal: boolean): { exp
   if ((typeof v !== 'string' && typeof v !== 'number') || !time) return { expr: undefined, time }
   const partOfDate = unit !== undefined && SINGLE_PART.test(unit) && ((typeof v === 'number' && v < 10000) || (typeof v === 'string' && Number.isNaN(Date.parse(v))))
   return { expr: partOfDate ? dateTimeToExpr({ [unit]: v }) : `datetime(${JSON.stringify(v)})`, time }
+}
+
+/**
+ * valueArray (channeldef.ts): the values of an axis or a legend, each as the signal that makes it where the field is a time (a date, a
+ * DateTime, or a part of one for a time unit) and as it is anywhere else.
+ */
+export function valueArray(values: readonly unknown[], type: string | undefined, unit: string | undefined): unknown[] {
+  return values.map((v) => {
+    const { expr } = operand(v, unit, type === 'temporal')
+    return expr === undefined ? v : { signal: expr }
+  })
 }
 
 /** A value of a scale's domain: a time as a `datetime(...)`, a signal or an expression as itself, anything else as JSON. */

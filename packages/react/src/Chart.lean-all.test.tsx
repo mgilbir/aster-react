@@ -14,13 +14,13 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { VgSpec } from '@aster-charts/core'
 
-vi.mock('@aster-charts/core/lean', async () => await import('../../core/dist/lean.js'))
-vi.mock('@aster-charts/core/lean/hit', async () => await import('../../core/dist/hit.js'))
+vi.mock('@aster-charts/core/internal', async () => await import('../../core/dist/lean.js'))
+vi.mock('@aster-charts/core/internal/hit', async () => await import('../../core/dist/hit.js'))
 // (the canvas renderer and the signal loop are not mocked into their deferred forms: the opt-in module imports their modules itself,
 // and a mock of either module would stand in for it there too)
 
 const { forEachVariant } = await import('./testing/variants')
-const { ENGINE_PARTS, partLoaded, specNeeds, withdrawParts } = await import('@aster-charts/core/lean')
+const { ENGINE_PARTS, partLoaded, specNeeds, withdrawParts } = await import('@aster-charts/core/internal')
 // a page that starts with every slot empty, then imports the opt-in module (it fills every slot when it runs: once, as an app's import)
 withdrawParts(ENGINE_PARTS)
 await import('./all')
@@ -87,17 +87,19 @@ forEachVariant(['svg'], (Chart, variant) => describe(`${variant.name} with every
     act(() => root.unmount())
   })
 
-  it('and the check can see a wait: a part taken out again makes a chart that needs it suspend', () => {
+  it('and the check can see a wait: a part taken out again makes a chart that needs it suspend', async () => {
     const restore = withdrawParts(['time'])
+    const c = document.createElement('div')
+    document.body.appendChild(c)
+    const root = createRoot(c)
     try {
-      const c = document.createElement('div')
-      document.body.appendChild(c)
-      const root = createRoot(c)
       act(() => { root.render(<React.Suspense fallback={<i id="fb" />}><Chart spec={SPECS[1]![1]} width={300} height={160} /></React.Suspense>) })
       expect(c.querySelector('#fb')).not.toBeNull()
       act(() => root.unmount())
     } finally {
       restore()
     }
+    // (the load the chart started finishes after the unmount: inside an awaited `act`, where React expects such an event)
+    await act(async () => { await new Promise((r) => setTimeout(r, 100)) })
   })
 }))

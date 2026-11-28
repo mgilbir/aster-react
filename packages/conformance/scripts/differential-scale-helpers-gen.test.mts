@@ -13,6 +13,7 @@ import * as aster from '../../core/src/scale.ts'
 import { locale as asterLocale } from '../../core/src/locale.ts'
 import { enc, withTz } from './differential-util.mts'
 import { compareCases, makeRng, scaled, type Rng } from './differential-gen.mts'
+import { schemeNames } from './vega-scale-cases.mjs'
 
 vi.setConfig({ testTimeout: 300_000 })
 
@@ -54,11 +55,22 @@ function planFor(r: Rng): Plan {
   return { type, domain, range, bins, date, wide, clamp: r.chance(0.3), param }
 }
 
+/**
+ * An infinite tick count on a time scale makes d3-time list every millisecond of the domain (NaN and -Infinity list none): over a
+ * span past this many milliseconds the oracle does not answer (it allocates until the process is killed), so nothing can be
+ * compared there. Aster's own guarantee is held instead: the helpers that list ticks refuse it as an AsterLimitError, with no
+ * `limits` (the built-in ceiling, docs/LIMITS.md; C22). Below it both lists are small, and compared as any case.
+ */
+const LISTABLE_MS = 2e5
+const LISTING = new Set(['tickValues', 'tickValuesInterval', 'labelValues', 'labelFormat'])
+const listsEveryMs = (p: Plan, c: unknown, which: string): boolean =>
+  p.date && !p.bins && c === Infinity && LISTING.has(which) && Math.abs((p.domain[1] as number) - (p.domain[0] as number)) > LISTABLE_MS
+/** The case of a count that makes the oracle list every millisecond: the oracle's side is the refusal Aster owes, as a value. */
+const REFUSED = 'AsterLimitError'
+const refusedAs = (f: () => unknown): unknown => { try { f(); return 'answered' } catch (e) { return (e as Error).name === REFUSED ? REFUSED : `${(e as Error).name}: ${(e as Error).message}` } }
 /** Fine interval names list millions of dates over a wide time domain. */
 const fine = (c: unknown): boolean => /minute|hour|day|week/.test(JSON.stringify(c) ?? '')
-/** A NaN or infinite tick count sends d3-time into a loop that allocates without end; the oracle itself does not answer. */
-const unbounded = (c: unknown): boolean => typeof c === 'number' && !Number.isFinite(c)
-const countFor = (r: Rng, p: Plan, pool: unknown[] = COUNTS): unknown => { let c = r.pick(pool); while ((p.wide && fine(c)) || (p.date && unbounded(c))) c = r.pick(pool); return c }
+const countFor = (r: Rng, p: Plan, pool: unknown[] = COUNTS): unknown => { let c = r.pick(pool); while (p.wide && fine(c)) c = r.pick(pool); return c }
 
 function build(side: any, p: Plan): any {
   const s = side.scale(p.type)()
@@ -94,6 +106,7 @@ const fmtImage = (f: any, xs: unknown[]): unknown => (typeof f === 'function' ? 
 describe('scale helpers vs vega-scale 8.1.2 (generated)', () => {
   it('tickCount, tickValues, validTicks', async () => {
     const r = makeRng(0x7c1)
+    let refusals = 0
     const out = await withTz('America/New_York', () => {
       return compareCases('ticks-helpers', scaled(9000), () => {
         const p = planFor(r)
@@ -101,14 +114,20 @@ describe('scale helpers vs vega-scale 8.1.2 (generated)', () => {
         const minStep = r.pick(MIN_STEPS)
         const which = r.pick(['tickCount', 'tickValues', 'valid', 'tickValuesInterval'])
         const cand = samples(p, r)
+        const label = `${which} ${p.type} ${JSON.stringify(p.domain)} bins=${JSON.stringify(p.bins)} count=${JSON.stringify(count)} minStep=${minStep}`
+        if (listsEveryMs(p, count, which)) {
+          refusals++
+          return { label, oracle: () => REFUSED, aster: () => refusedAs(() => run(A, p, which, count, minStep, cand)), informative: () => false }
+        }
         return {
-          label: `${which} ${p.type} ${JSON.stringify(p.domain)} bins=${JSON.stringify(p.bins)} count=${JSON.stringify(count)} minStep=${minStep}`,
+          label,
           oracle: () => run(V, p, which, count, minStep, cand),
           aster: () => run(A, p, which, count, minStep, cand),
         }
       })
     })
-    expect(out.informative).toBeGreaterThan(5000)
+    expect(out.informative).toBeGreaterThan(out.cases * 0.35)
+    expect(refusals, 'cases on which the oracle cannot answer and Aster must refuse').toBeGreaterThan(5)
     function run(side: any, p: Plan, which: string, count: any, minStep: any, cand: unknown[]): unknown {
       const s = build(side, p)
       if (which === 'tickCount') return side.tickCount(s, count, minStep)
@@ -120,6 +139,7 @@ describe('scale helpers vs vega-scale 8.1.2 (generated)', () => {
 
   it('tickFormat, labelValues, labelFormat, labelFraction', async () => {
     const r = makeRng(0x7c2)
+    let refusals = 0
     const out = await withTz('America/New_York', () => {
       return compareCases('label-helpers', scaled(9000), () => {
         const p = planFor(r)
@@ -130,6 +150,7 @@ describe('scale helpers vs vega-scale 8.1.2 (generated)', () => {
         const noSkip = r.pick([undefined, true, false])
         const xs = samples(p, r)
         const which = r.pick(['tickFormat', 'labelValues', 'labelFormat', 'labelFraction'])
+        const label = `${which} ${p.type} ${JSON.stringify(p.domain)} count=${count} spec=${spec} ft=${ft} legend=${legend}`
         const run = (side: any, loc: any): unknown => {
           const s = build(side, p)
           if (which === 'tickFormat') return fmtImage(side.tickFormat(loc, s, count, spec, ft, noSkip), xs)
@@ -138,10 +159,15 @@ describe('scale helpers vs vega-scale 8.1.2 (generated)', () => {
           const vals = side.labelValues(s, count)
           return fmtImage(side.labelFormat(loc, s, count, legend, spec, ft, noSkip), vals)
         }
-        return { label: `${which} ${p.type} ${JSON.stringify(p.domain)} count=${count} spec=${spec} ft=${ft} legend=${legend}`, oracle: () => run(V, vLocale), aster: () => run(A, aLocale) }
+        if (listsEveryMs(p, count, which)) {
+          refusals++
+          return { label, oracle: () => REFUSED, aster: () => refusedAs(() => run(A, aLocale)), informative: () => false }
+        }
+        return { label, oracle: () => run(V, vLocale), aster: () => run(A, aLocale) }
       })
     })
-    expect(out.informative).toBeGreaterThan(3000)
+    expect(out.informative).toBeGreaterThan(out.cases * 0.5)
+    expect(refusals, 'cases on which the oracle cannot answer and Aster must refuse').toBeGreaterThan(20)
   })
 
   it('scaleFraction, scaleCopy, interpolateRange, quantizeInterpolator, interpolateColors', () => {
@@ -170,14 +196,12 @@ describe('scale helpers vs vega-scale 8.1.2 (generated)', () => {
 
   it('every scheme, bandSpace, the type predicates', () => {
     const r = makeRng(0x7c4)
-    const names: string[] = Object.keys(V.scheme ? {} : {}).concat(
-      ...['category10', 'category20', 'category20b', 'category20c', 'accent', 'dark2', 'paired', 'pastel1', 'pastel2', 'set1', 'set2', 'set3', 'tableau10', 'tableau20', 'blues', 'greens', 'greys', 'oranges', 'purples', 'reds', 'blueorange', 'brownbluegreen', 'purplegreen', 'pinkyellowgreen', 'purpleorange', 'redblue', 'redgrey', 'redyellowblue', 'redyellowgreen', 'spectral', 'viridis', 'magma', 'inferno', 'plasma', 'cividis', 'turbo', 'bluegreen', 'bluepurple', 'goldgreen', 'goldorange', 'goldred', 'greenblue', 'orangered', 'purplebluegreen', 'purpleblue', 'purplered', 'redpurple', 'yellowgreenblue', 'yellowgreen', 'yelloworangebrown', 'yelloworangered', 'darkblue', 'darkgold', 'darkgreen', 'darkmulti', 'darkred', 'lightgreyred', 'lightgreyteal', 'lightmulti', 'lightorange', 'lighttealblue', 'rainbow', 'sinebow', 'Blues', 'VIRIDIS', 'nonsense', ''],
-    )
+    // every scheme vega-scale registers (the list vega-scale's own differential runs), and names it does not
+    const names: string[] = [...(schemeNames as string[]), 'Blues', 'VIRIDIS', 'nonsense', '']
+    expect(schemeNames.length, 'the list names every scheme vega-scale registers').toBe(68)
     for (const n of names) {
       expect(sampleScheme(A, n), n).toEqual(sampleScheme(V, n))
     }
-    // the one place Aster differs on purpose: scheme names come from specs, so inherited names are not schemes (vega returns Object's)
-    for (const n of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) expect(A.scheme(n), n).toBeUndefined()
     // the one place Aster differs on purpose: scheme names come from specs, so inherited names are not schemes (vega returns Object's)
     for (const n of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) expect(A.scheme(n), n).toBeUndefined()
     compareCases('band-space', scaled(3000), () => {
@@ -232,7 +256,7 @@ describe('scale helpers vs vega-scale 8.1.2 (generated)', () => {
         }
         return { label: `${which} base=${base} [${a}, ${b}] count=${count} spec=${String(spec)}`, oracle: () => run(V, vLocale), aster: () => run(A, aLocale) }
       })
-      expect(out.informative).toBeGreaterThan(4000)
+      expect(out.informative).toBeGreaterThan(out.cases * 0.5)
     })
   })
 
@@ -258,7 +282,7 @@ describe('scale helpers vs vega-scale 8.1.2 (generated)', () => {
         }
         return { label: `${type} gap=${gap} origin=${origin} n=${n} legend=${legend} spec=${spec} ft=${ft}`, oracle: () => run(V, vLocale), aster: () => run(A, aLocale) }
       })
-      expect(out.informative).toBeGreaterThan(5000)
+      expect(out.informative).toBeGreaterThan(out.cases * 0.7)
     })
   })
 })

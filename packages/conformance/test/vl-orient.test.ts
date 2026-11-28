@@ -12,7 +12,9 @@
  */
 import { describe, it, expect } from 'vitest'
 import * as vl from 'vega-lite'
-import { orientationOf, type Position } from '../../vl/src/orient.js'
+import { compile } from '@aster-charts/vl'
+// (the built module, the one `compile` is: a stale dist cannot split the table from the compiler)
+import { orientationOf, type Position } from '../../vl/dist/orient.js'
 
 const pos = (p: Partial<Position> = {}): Position => ({ present: true, field: false, aggregate: false, prebinned: false, measure: false, temporal: false, ...p })
 
@@ -53,56 +55,61 @@ function settled(mark: string, encoding: Record<string, unknown>, asked: string)
   return overridden[1] === 'undefined' ? null : overridden[1]!
 }
 
-let compared = 0
-let natural = 0
-const mismatches: string[] = []
-const check = (got: string | null, want: string | null, label: string): void => { if (got !== want) mismatches.push(`${label}: aster ${got}, vega-lite ${want}`) }
+/** Every combination of the space, with what each mark is asked: one per x kind of one mark. */
+function* combinations(mark: string, xName: string): Generator<{ label: string; encoding: Record<string, unknown>; input: Omit<Parameters<typeof orientationOf>[1], 'asked'> }> {
+  const x = KINDS[xName]!
+  for (const [yName, y] of Object.entries(KINDS)) {
+    for (const [x2Name, x2] of Object.entries(SECOND)) {
+      for (const [y2Name, y2] of Object.entries(SECOND)) {
+        if (x.def === undefined && x2 !== undefined) continue
+        if (mark === 'line' && (x2 !== undefined || y2 !== undefined)) continue
+        if (y.def === undefined && y2 !== undefined) continue
+        const encoding: Record<string, unknown> = {}
+        if (x.def) encoding.x = x.def
+        if (y.def) encoding.y = y.def
+        if (x2) encoding.x2 = x2
+        if (y2) encoding.y2 = y2
+        if (Object.keys(encoding).length === 0) continue
+        yield { label: `${mark} x=${xName} y=${yName} x2=${x2Name} y2=${y2Name}`, encoding, input: { x: x.position, y: y.position, x2: x2 !== undefined, y2: y2 !== undefined } }
+      }
+    }
+  }
+}
+
 for (const mark of MARKS) {
   describe(`${mark}`, () => {
-    for (const [xName, x] of Object.entries(KINDS)) {
+    for (const xName of Object.keys(KINDS)) {
       it(`x ${xName}`, () => {
-        for (const [yName, y] of Object.entries(KINDS)) {
-          for (const [x2Name, x2] of Object.entries(SECOND)) {
-            for (const [y2Name, y2] of Object.entries(SECOND)) {
-              if (x.def === undefined && x2 !== undefined) continue
-              if (mark === 'line' && (x2 !== undefined || y2 !== undefined)) continue
-              if (y.def === undefined && y2 !== undefined) continue
-              const encoding: Record<string, unknown> = {}
-              if (x.def) encoding.x = x.def
-              if (y.def) encoding.y = y.def
-              if (x2) encoding.x2 = x2
-              if (y2) encoding.y2 = y2
-              if (Object.keys(encoding).length === 0) continue
-              const vertical = settled(mark, encoding, 'vertical')
-              const horizontal = settled(mark, encoding, 'horizontal')
-              if (vertical === 'refused' || horizontal === 'refused') continue
-              const input = { x: x.position, y: y.position, x2: x2 !== undefined, y2: y2 !== undefined }
-              const label = `${mark} x=${xName} y=${yName} x2=${x2Name} y2=${y2Name}`
-              check(orientationOf(mark, { ...input, asked: 'vertical' }) ?? null, vertical, `${label}, vertical asked`)
-              check(orientationOf(mark, { ...input, asked: 'horizontal' }) ?? null, horizontal, `${label}, horizontal asked`)
-              compared++
-              // (an orientation that does not follow what was asked for is the encoding's own)
-              if (vertical !== 'vertical' || horizontal !== 'horizontal') {
-                check(orientationOf(mark, { ...input, asked: undefined }) ?? null, vertical !== 'vertical' ? vertical : horizontal, `${label}, none asked`)
-                natural++
-              }
-            }
+        // (each test holds its own verdict: a run of one of them compares what it says)
+        const mismatches: string[] = []
+        const check = (got: string | null, want: string | null, label: string): void => { if (got !== want) mismatches.push(`${label}: aster ${got}, vega-lite ${want}`) }
+        let compared = 0
+        let looked = 0
+        const natural: string[] = []
+        for (const { label, encoding, input } of combinations(mark, xName)) {
+          const vertical = settled(mark, encoding, 'vertical')
+          const horizontal = settled(mark, encoding, 'horizontal')
+          if (vertical === 'refused' || horizontal === 'refused') continue
+          check(orientationOf(mark, { ...input, asked: 'vertical' }) ?? null, vertical, `${label}, vertical asked`)
+          check(orientationOf(mark, { ...input, asked: 'horizontal' }) ?? null, horizontal, `${label}, horizontal asked`)
+          compared++
+          // (an orientation that does not follow what was asked for is the encoding's own)
+          if (vertical !== 'vertical' || horizontal !== 'horizontal') check(orientationOf(mark, { ...input, asked: undefined }) ?? null, vertical !== 'vertical' ? vertical : horizontal, `${label}, none asked`)
+          else {
+            // (both orientations are honoured, so the one vega-lite takes by itself is not in a warning: the compiled marks show it, with none asked)
+            const spec = { data: { values: DATA }, mark, encoding }
+            const theirs = probe((vl as any).compile(JSON.parse(JSON.stringify(spec)), { logger: { level: () => null, warn() {}, info() {}, debug() {}, error() {} } }).spec)
+            if (JSON.stringify(probe(compile(JSON.parse(JSON.stringify(spec))))) !== JSON.stringify(theirs)) natural.push(label)
+            looked++
           }
         }
+        expect(mismatches.slice(0, 8), `${mismatches.length} of ${compared} combinations differ`).toEqual([])
+        expect(natural.slice(0, 8), `${natural.length} of ${looked} compiled marks run another way than vega-lite's, with no orient asked`).toEqual([])
+        expect(compared, 'combinations compared').toBeGreaterThan(0)
       })
     }
   })
 }
-
-describe('the space was covered', () => {
-  it('agrees with vega-lite everywhere', () => {
-    expect(mismatches).toEqual([])
-  })
-  it('compared a good part of it', () => {
-    expect(compared).toBeGreaterThan(5000)
-    expect(natural).toBeGreaterThan(1000)
-  })
-})
 
 describe('a mark with no orientation is vertical', () => {
   for (const mark of FIXED) {

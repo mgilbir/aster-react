@@ -6,7 +6,7 @@ These are suggestions (a judgement, not measured defaults).
 
 - **Public dashboard:** 100k rows, 50k items, 8 MB SVG, 2 s wall clock, and `maxGeneratedRows: 500_000`.
 - **Unknown spec on a server:** use smaller numbers (10k rows, 250 ms), a `loadSpecData` allowlist, and a **killable worker** for the render.
-- **Specs that need no regular expressions:** add `regex: 'refuse'` (any of the above). The screen below is a heuristic; refusing is
+- **Specs that need no regular expressions:** add `regex: 'refuse'` (any of the above). The screen below is a static model, conservative but not a proof; refusing is
   the only way to rule out a pattern that blocks the thread (see "Refusing every regular expression").
 
 For an untrusted spec you need all three of these; `limits` alone is best-effort (see the two layers below):
@@ -39,7 +39,11 @@ optional: a dimension you do not set is unbounded. There are no default numbers 
 `SpecLimits` (the values below are examples, see "Recommended starting points"), with one
 exception: once a `limits` object is present, even `{}`, a regular expression's input is capped at
 10 000 characters (raise it with `maxStringLength`). What else switches on with a `limits` object is
-under "Passing a `limits` object at all" below.
+under "Passing a `limits` object at all" below. A `limits` object is read as given, wherever a scope
+opens (`renderSpec`, a session, a stream flush, `evaluateChart`, the worker handler, `checkSpecLimits`,
+`checkSceneLimits`, `checkSvgLength`, `createLimitClock`): a key that is no limit (`maxrows`), or a budget
+that is not a number `>= 0` (`NaN`, `'5'`, `null` from a JSON `NaN`, `-1`), is a `TypeError`, never read as
+no budget. `Infinity` is a budget: it removes the cap of its own and replaces the ceiling it stands for.
 
 **What this protects, and what it does not.** There are two layers.
 
@@ -63,28 +67,49 @@ Each ceiling bounds an amount that the SPEC controls and that is expensive in me
 the usual `AsterLimitError` (`code: 'ASTER_LIMIT'`), naming the amount, the ceiling and the limit
 that raises it, for example
 `[aster] limit exceeded: range 50000000 > 1000000 (built-in ceiling that applies even without limits; raise it with limits.maxRows)`.
-Giving the matching limit replaces the ceiling by your number (your budget governs); giving
-unrelated limits (`limits: {}`, `{ maxStringLength }`) leaves it in force. They are exported as
+Giving the matching limit replaces the ceiling by your number (your budget governs), and that limit is
+then compared at the same site, before anything is allocated: a `limits` object is never less safe than
+none (`{ maxGeneratedRows: 1000 }` alone refuses 5e7 `density` steps where it is the budget). Giving
+unrelated limits (`limits: {}`, `{ maxStringLength }`) leaves the ceiling in force. They are exported as
 `HARD_CAPS` and `HARD_MAX_SPEC_DEPTH` from `@aster-charts/core`.
+
+The ceilings are taken where the thing is made, not at the call site that happened to be found: the
+allocating primitives size themselves (`range`, numeric `ticks`, every calendar interval's range, the label
+and word-cloud rasters, the contour scan, the geo event buffers), so a function is bounded whoever calls
+it. A count the Array constructor refuses by itself (2^32 and up) is left to it, so it fails as vega's
+does (`RangeError: Invalid array length`); every other count past a ceiling is an `AsterLimitError`, at
+any size. For the transforms that multiply rows, what is bounded is what they add beyond the rows they are
+given: a pipeline that does not amplify is never refused for the size of the data it is given.
 
 | Ceiling | Value | Where it applies | Replaced by | Largest seen in the gallery / corpus / test suites |
 |---|---|---|---|---|
-| `rows` | 1 000 000 | rows one parameter-sized generator makes: the `sequence` transform and `range`, expression `sequence(...)`, `quantile` and `kde`/`density` step counts | `maxRows`, `maxGeneratedRows` | 5 000 (`sequence` in the gallery: 1 000; `range`: 5 000; `density` steps 200) |
-| `cells` | 10 000 000 | typed-array grids sized by spec parameters: `heatmap` pixels, `kde2d`/contour density grids, the label bitmap | `maxRows`, `maxGeneratedRows` | 58 200 (a `kde2d` grid), 2 448 heatmap pixels |
-| `items` | 100 000 | counts a spec sets: `tickCount` of axes and legends (and so the ticks made), axis ticks drawn, trellis `layout.columns`, `contour` / `isocontour` `levels`, a quantized colour scheme `count` | `maxItems` | 165 axis ticks, 30 facet columns, 40 thresholds |
-| `bytes` | 1 000 000 | one string an expression builtin builds: `pad`, number-format width | `maxStringLength`, `maxGeneratedBytes` | 5 000 (`pad`), 982 (format width) |
-| `coords` | 2 000 000 | positions one topojson decode produces (an arc referenced by many geometries counts every time) | `maxRows`, `maxGeneratedRows` | 101 000 (the gallery's largest map: 55 713) |
+| `rows` | 1 000 000 | array entries one generator or expression builtin makes: the `sequence` transform and `range` (and so a scale's `bins: {step}`), expression `sequence(...)`, `timeSequence(...)` and `utcSequence(...)`, `quantile` (groups x probabilities), `kde` (groups x steps) and `density` steps; and what the multiplying transforms add beyond their input: `cross`, `fold`, `flatten`, `impute`, `pivot` cells (groups x columns), an `aggregate` with `cross` | `maxRows`, `maxGeneratedRows` | 5 852 (a `cross`; `sequence` in the gallery: 1 000; `range`: 5 000; `density` steps 200) |
+| `cells` | 10 000 000 | typed-array grids sized by spec parameters: `heatmap` pixels (ceil(width) x ceil(height) of its window), `kde2d`/contour density grids, the label bitmap, a contour scan's row buffers | `maxRows`, `maxGeneratedRows` | 58 200 (a `kde2d` grid), 2 448 heatmap pixels |
+| `items` | 100 000 | counts a spec sets, and what they make: numeric `ticks` (axes, legends, a gradient legend's default count), axis ticks drawn, legend entries listed, the ticks of a log scale with a whole `base` (every multiple of every power in the domain: a base in the millions makes millions), time ticks, the steps of one search of a stepped calendar interval (`{interval: 'week', step: 2e7}`, `timeOffset('quarter', d, 4e6)`), trellis `layout.columns`, `contour` / `isocontour` `levels` and thresholds, a colour scheme `count`, quantized colour samples | `maxItems` | 551 axis ticks, 30 facet columns, 40 thresholds |
+| `bytes` | 1 000 000 | one string an expression builtin builds: `pad`, number-format width (and, under limits, `join`, `replace`, `upper`, `lower`, `trim`, `truncate`, `substring`, `slice`) | `maxStringLength`, `maxGeneratedBytes` | 5 000 (`pad`), 982 (format width) |
+| `coords` | 2 000 000 | positions one topojson decode produces (an arc referenced by many geometries counts every time), the positions of a `graticule` (lines x points per line) | `maxRows`, `maxGeneratedRows` | 101 000 (the gallery's largest map: 55 713) |
+| `filledCells` | 1 000 000 | cells one delimited-text read (csv, tsv, dsv) fills in for fields a line does not have (`''` for each column a row lacks), the one part of a parse not bounded by the size of the text: a wide header over empty lines | `maxGeneratedRows` (they count against it) | 0 (no csv or tsv file of vega-datasets and no inline text of the corpus or gallery has a short line) |
+| `work` | 100 000 000 | steps of a loop that is the product of spec or data sizes and allocates little: a contour scan (thresholds x declared grid cells) and its hole matching (holes x rings), a static `force` simulation (iterations x the steps of a tick), a `label` placement (labels x anchors and offsets), the candidates of a `cross` with a `filter` (n x n), a `regression` of a polynomial `order` (size² x points), a word cloud's spirals, the edge flips of a Delaunay triangulation. About a second of CPU | `maxTimeMs` (each such loop reads the clock) | 305 045 (a contour scan) |
+| `pixels` | 16 000 000 | one raster a layout draws marks into: the `label` canvases (its `size`), the word cloud's board and sprite sheets | none | 250 000 (a word cloud's board; the label canvases run only on the gallery's browser path, not measured) |
+| `vertices` | 4 000 000 | events one geo buffer holds: a shape's positions after projection, clipping and resampling (a projection's `scale` and `precision` multiply them) | none | 52 344 |
 | `latticeTests` | 50 000 000 | the point-in-outline work of one `intersect()` of an arc, path, shape or geoshape item (vega-lite interval selections over geo marks, or the expression in any signal handler): the rows the item's outline spans inside the box, times its edges, plus each candidate point times its edges. A region beyond 2^52 is refused outright | none (`maxTimeMs` also bounds the walk, cooperatively) | 1 098 884 (the largest in the core test suites: a 3 000-row strip; not measured over the corpus, gallery or the intersect-browser gate) |
 | spec depth | 1 000 (`HARD_MAX_SPEC_DEPTH`) | nesting of the spec object, checked iteratively when it is compiled (`values` data arrays are not walked); a deeper or cyclic spec is an `AsterLimitError` instead of a raw `RangeError` | `maxDepth` can only lower it | 12 |
-| spec size | 5 000 000 objects | objects and arrays visited by that walk (a spec that shares sub-objects can otherwise make it exponential) | none | a few thousand |
+| spec size | 5 000 000 objects | objects and arrays visited by that walk, by a session before it writes the spec's text, and by the pre-flight (`checkSpecLimits`) over the spec's own objects (a spec that shares sub-objects can otherwise make each exponential); inside `values`, a shared object is walked once | none | a few thousand |
+| Vega-Lite spec depth | 1 000 (`MAX_SPEC_DEPTH`, `@aster-charts/vl` rows.ts) | nesting of a Vega-Lite spec's objects and arrays when `compile` copies it (the rows are not walked); a deeper spec, or one that contains itself, is a `VLCompileError` instead of a raw `RangeError` | none | 12 |
+| Vega-Lite view depth | 100 (`MAX_VIEW_DEPTH`, validate.ts) | views nested in views (a layer in a facet in a concat ...): compiling a view is recursive, so this keeps a spec under the spec depth ceiling off the end of the stack too; deeper is a `VLCompileError` | none | 3 |
 
-How the values were chosen: the largest value each site reaches in the gallery (720 specs), the
+How the values were chosen (the `rows` to `vertices` rows re-measured on 2026-11-23 over the corpus, the Vega-Lite corpus and the
+gallery's Node path): the largest value each site reaches in the gallery (720 specs), the
 corpus and the test suites is in the last column; every ceiling is 1 to 3 orders of magnitude above
 it. The upper end is set by memory, not by taste: on Node a million generated rows costs about
 150 MB, a 2-million-position topojson decode about 250 MB, and 5 million rows already fails with
 `--max-old-space-size=512`. A real chart does not draw a million marks; a host that does can raise the matching limit.
 
-`latticeTests` is the one ceiling on work rather than memory. vega answers `intersect()` for an arc or path item by testing
+`latticeTests` and `work` are the ceilings on work rather than memory. `work` holds without `limits`
+and is replaced by `maxTimeMs`: every loop it bounds reads the clock, so a time budget stops it instead.
+`pixels` and `vertices` are replaced by no limit: rows and items are other units.
+
+`latticeTests` in particular: vega answers `intersect()` for an arc or path item by testing
 every lattice point of the item's bounds within the box with `isPointInPath`; Aster gives the same answer row by row (the
 winding test only changes where an edge crosses the row), so the work follows the rows the outline spans and its edges, not the
 region's area. Past the ceiling, or for a region beyond 2^52 (where `x + 1` stops moving), `intersect()` throws an
@@ -95,8 +120,19 @@ Not covered by a ceiling, deliberately: input that is large in itself (inline `v
 loaded files: they are data, not amplification; budget them with `maxRows`, `maxBytes`), and the
 cumulative cost of many sites each just under its ceiling (that is what `maxGeneratedRows`,
 `maxGeneratedBytes` and `maxTimeMs` are for, and for an untrusted spec the worker kill).
-The ceilings guard spec-driven sites only; the lower-level functions (`ticks`, `range`, ...) are
-unchanged, so they still match d3 for any input.
+The lower-level functions (`ticks`, `range`, a calendar interval's `range`, ...) are bounded too, since
+the ceiling is in them: they match d3 for every input under the ceilings, and the differentials that
+compare them with d3 past them run with the ceilings off, by name (`unboundedForParity`, used by tests
+only).
+
+Calendar intervals end where d3-time does not (Q13 of the 2026-11-22 audit: matching an upstream hang is never intended). A
+stepped or filtered interval searches one unit at a time for a date that passes its test; d3-time searches for ever once a step
+leaves the Date range (an Invalid Date passes no test), and also where a local calendar makes a one-day step go round in circles
+(Pacific/Apia skipped 2011-12-30). Aster's search ends with the Invalid Date at the end of the range, and one floor or one move
+of more steps than the `items` ceiling is refused (with `maxTimeMs`, the clock is sampled at every step too). A UTC week interval
+stepped by k (`every(k)`) jumps straight to the next multiple of k, so it answers any k at once; a local one walks, as a jump
+across a daylight-saving gap can land elsewhere than the walk. Each of these is pinned by `scale-time-bounds.test.ts` and by the
+d3-time differential, which runs up to the ends of the Date range.
 Passing a `limits` object at all, even `{}`, turns the limits scope on: that enables
 the pre-flight walk with its hard depth ceiling, the regular-expression screen (including the
 10 000-character input cap, `maxStringLength`) and the default image/link URL policy described below.
@@ -115,7 +151,7 @@ const limits: SpecLimits = {
   maxRows: 100_000,        // see "What maxRows counts"
   maxMarks: 200,           // mark definitions, recursive
   maxDepth: 32,            // spec object nesting (a hard ceiling of 1000 applies even when unset)
-  maxStringLength: 10_000, // any string in the spec, a generated string, a regex input, scene text
+  maxStringLength: 10_000, // any string in the spec, a string a builtin builds, a regex input, any string an item draws
   maxItems: 50_000,        // generated scene items (and axis/legend/time ticks)
   maxPathLength: 1_000_000,// any generated or supplied path `d`
   maxSvgLength: 8_000_000, // length of the serialized SVG string
@@ -139,7 +175,7 @@ checks are separate calls.
 | `renderSpec` | yes | yes | yes | yes |
 | `handleChartWorkerRequest` (`useChartWorker`) | yes | yes | yes | yes |
 | `createChartSession().evaluate` | yes | yes | yes | no (you serialize) |
-| `createChartSession().change` | no | yes | yes | no |
+| `createChartSession().change` | no | yes, under the last evaluation's `limits` unless the change gives its own | yes | no |
 | `createChartStream` flushes | yes (session) | yes | yes | no; `maxRows` also counts the rows the stream holds |
 | `useChart` | yes (session) | yes | yes | yes when `serialize` is on (the default) |
 | `<Chart limits>` | yes (session) | yes | yes | SVG renderer only: the scene is serialized once per evaluation to measure it, and only when `maxSvgLength` is set |
@@ -159,7 +195,46 @@ meters and the same regex screen (and `regex: 'refuse'`) as the evaluation. A
 violation ends that event's run and is logged, as vega logs any handler error. The
 loop keeps working, and the scene the handlers' signals lead to is evaluated under the
 limits again. (Before 0.4.2 the loop ran without limits: a backtracking pattern in a
-handler ran unscreened.)
+handler ran unscreened.) Every propagation of one event meets that clock, including the runs a
+`modify` starts after the one that made it, and one event runs at most 1000 propagations (a
+`modify` whose dataset feeds the signal that modifies it pulses again after every run; vega
+recurses until the stack runs out); a dataset an event edits stays within `maxRows`.
+
+### Interactive charts and untrusted specs: the threat model of the event loop
+
+An interactive chart (`<Chart>`, or any host of `bindSceneSignals`) is meant to be safe for an untrusted spec. What a spec's
+handlers can do is bounded as follows; each point is enforced in one place and tested.
+
+- **What an expression sees of an event.** `event` is a frozen object whose only prototype is a frozen object of the engine's
+  (no built-in one) answering the values Vega expressions observe, read off the event when an expression reads them, as vega's
+  expressions read them, and only when they are a number, a string or a boolean (`type`, `vegaType`, the client / page / offset /
+  screen coordinates, `button(s)`, `key`, `code`, the modifier keys, `deltaX/Y/Z/Mode`, `timeStamp`, the pointer fields, the
+  touches as frozen copies, a timer tick's `timestamp` / `elapsed`: `EVENT_FACADE_FIELDS` in `signals.ts`; a type queued behind
+  another sees `vegaType` as the event was handed over last) plus vega's extension (`item`, the scenegraph item;
+  `vega`, the event functions `x()`, `y()`, `xy()`, `item()`, `group()`; `dataflow`). There is no target or current target
+  node, no `view` (the window), no `composedPath`, no method. Expressions cannot call what they read, cannot read an inherited
+  `Object.prototype` member or a function's `prototype`, and hand no function to a built-in (`expr-interpreter.ts`), so what
+  a handler can reach is that graph; `signals.confinement.test.tsx` walks every path of it, for every kind of source, and
+  checks that nothing belongs to the page.
+- **Which events a spec can listen to.** The chart's own surface (`view` and `scope` sources) and timers, as
+  `config.events` permits (vega's `permit`: `view: false`, `timer: false`, lists of types). `window` and CSS-selector
+  sources reach beyond the chart, so the HOST decides them, through `SignalBindOptions.eventSources`: by default the
+  window's pointer moves, ends and cancels and its `resize` (what Vega-Lite's interval drags and `width: "container"`
+  listen to) and no selector source. A spec cannot read the page's keystrokes or its form fields, and cannot listen to an
+  element outside the chart; its own `config.events` can only narrow the host's policy, never widen it. A blocked listener
+  is reported once (`Blocked window keydown event listener ...`, then vega's `Can not resolve event source: window`).
+  A host that renders trusted specs only can pass `eventSources: { window: true, selector: true }` (to `bindSceneSignals`, or as the `eventSources` prop of `<Chart>` and `<SvgChart interaction>`, which compares it by content). Where a host permits a
+  source, the chart behaves exactly as vega does there: the browser parity gate (`conformance:signals`) runs its window
+  cases (`window:keydown` / `keyup`, a press that bubbles to `window:mousedown`, a merged stream with a window source) with a
+  policy that permits them and requires vega's signals, and runs the same sources under the default policy requiring that
+  vega's signals move and Aster's do not. The default denies the page's keys deliberately (DECISIONS Q1): a spec from
+  elsewhere must not read what is typed anywhere on the page.
+- **What a spec can make the browser do.** The handlers' signals reach the scene, whose image and link URLs go through the
+  URL policy (above); the event loop adds no other way out.
+- **What outlives a binding** (timers, `between` windows, throttle and debounce clocks, `{signal}` handlers' memory, the
+  `{scale}` sources' last view) is kept per host owner AND compiled chart: a different chart bound to the same owner starts
+  afresh, as a new vega view does, and two charts of the same spec never share it.
+- **What a delivery costs.** One event runs under the limits its scene was evaluated with (above).
 
 ## What `maxRows` counts
 
@@ -175,12 +250,18 @@ The pre-flight reads the spec's lists the way the compiler does (vega-util `arra
 - **During evaluation**: each dataset on its own, after load, `source` and every
   transform step (not a sum). Datasets produced by `sequence`, `cross`, `fold` and the
   like count, so generated rows are covered. The cumulative total of generated rows is
-  `maxGeneratedRows`.
+  `maxGeneratedRows`: it meters the rows the evaluation's transforms *produce in that
+  evaluation*. A re-evaluation that takes a pulse (an append, an edit) is charged the rows
+  the pulse produced, and a step kept from the evaluation before produced none; a fresh
+  evaluation of the same inputs produces every row and is charged for all of them, so a
+  session may accept appends that a fresh evaluation of the accumulated rows refuses. The
+  size of what is kept is bounded by `maxRows`, which every path checks per dataset.
 - **`createChartStream`**: the rows the stream holds (base snapshot plus what the flush will
   add), checked before the flush is materialised; they reach the session as its host rows, so
   its pre-flight counts them once, in place of the spec's inline rows they started from.
-- **`loadSpecData`**: rows of each loaded dataset (`limits.maxRows`), and decoded topojson
-  coordinates (against `maxGeneratedRows`, else `maxRows`).
+- **`loadSpecData`**: rows of each loaded dataset (`limits.maxRows`; a csv's rows as they are
+  read, before the next one is made), and decoded topojson coordinates (against
+  `maxGeneratedRows`, else `maxRows`). The same holds for inline csv text read by `renderSpec`.
 
 ## What `maxTimeMs` covers
 
@@ -188,7 +269,12 @@ The pre-flight reads the spec's lists the way the compiler does (vega-util `arra
 `renderSpec`, `evaluateChart`, `getChartInfo`, a session's `evaluate`/`change` and the worker
 handler each open one. It is checked at phase boundaries (`pre-flight`, `compile`,
 `evaluate`, `render`) and, inside the evaluation, every 1024 rows/items or at each metered
-site (see below). It does **not** cover:
+site (see below). Every pass over the rows reads it as it goes, not only after it: the copy of
+the rows a dataset is given, each transform's pass (a `formula` or `filter`'s expression per row,
+the rows `bin`, `timeunit`, `identifier`, `lookup`, `project`, `geopoint` write, a `stack` or
+`pivot`'s grouping), every 1024 comparisons of a sort of the data, and every 1024 nodes of a
+hierarchy walk; a time budget stops a pass over a million rows within a few milliseconds of
+running out (`limits-clock.test.ts`). It does **not** cover:
 
 - anything it cannot interrupt: a single synchronous native call (a regular expression, see
   below), or `compileChart` itself;
@@ -198,10 +284,23 @@ site (see below). It does **not** cover:
   flush, starts a new clock.
 
 A session keeps the limits in its cache key. Re-evaluating the same inputs with the same
-limits returns the cached scene (it was accepted under exactly those limits); a different
-`limits` value re-evaluates and can reject. The only time check on a cache hit is the one
-at the start of `evaluate` (`maxTimeMs: 0` fails there). A failed evaluation leaves the
-session as it was.
+limits returns the cached scene (it was accepted under exactly those limits, and the pre-flight is not
+run again for it); a different `limits` value re-evaluates and can reject. The only time check on a
+cache hit is the one at the start of `evaluate` (`maxTimeMs: 0` fails there). A failed evaluation leaves
+the session as it was, and the scenes it returned before: `datasetsOfScene(scene)` and the scene's
+runtime keep the rows that scene was made with, whatever is evaluated or rejected after it.
+
+## Kept results under `limits`
+
+An evaluation under `limits` keeps a scale or a top-level mark from the evaluation before (signal-scoped reuse: a signal that only a
+rule reads keeps every symbol item of a scatter by identity, and the DOM patcher has nothing to diff) when it was made under the same
+limits, and charges it what making it charged the cumulative budgets (`maxGeneratedRows`, `maxGeneratedBytes`, the coordinates):
+the evaluation counts what a fresh one counts, so a kept result never lets an evaluation through a budget a fresh evaluation of the
+same input would exceed (`packages/core/src/limits-reuse.test.ts` compares the two over generated signal writes and budgets). A result
+made under other limits, or with none, is made again: its single budgets (`maxItems`, `maxStringLength`, ...) were compared with other
+values. A result taken partly from the evaluation before -- items spliced by a data pulse, a mark's channels, a domain census advanced
+in place, a dataset build or a guide kept -- is not kept under `limits` this way: it is made again (a data pulse's steps are charged as
+`maxGeneratedRows` says, the rows they produce in this evaluation). The clock is read for every kept result.
 
 ## How the budgets are enforced: meters, not checkpoints
 
@@ -212,16 +311,17 @@ that shares the one wall clock:
 
 | Where | What is metered |
 |---|---|
-| Pre-flight (`checkSpecLimits`) | every string in the spec (`maxStringLength`), object depth (`maxDepth`, ceiling 1000), mark definitions (`maxMarks`), summed rows the chart is given, each once (see "What `maxRows` counts"). Iterative: a 200 000-deep or cyclic spec is an `AsterLimitError`, never a `RangeError` |
+| Pre-flight (`checkSpecLimits`) | every string in the spec (`maxStringLength`), object depth (`maxDepth`, ceiling 1000), the spec's own objects (the spec-size ceiling), mark definitions (`maxMarks`), summed rows the chart is given, each once (see "What `maxRows` counts"). Iterative: a 200 000-deep or cyclic spec is an `AsterLimitError`, never a `RangeError`; a spec that shares sub-objects is not walked once per path to them |
 | Every dataset | rows after load/`source`/transforms must be `<= maxRows` |
-| Transforms and row emitters | `sequence`, `fold` (rows x fields), `flatten`, `cross` (n x n), `impute`, `kde`/`quantile`/`regression`/`loess`/`countpattern` row counts, contour grid cells and thresholds, label bitmap, `range`: checked **before** the output is allocated; `aggregate`, `joinaggregate`, `pivot`, `bootstrap`, `stack`, `window`, `loess`, `kde`, `wordcloud`, `pack`, `voronoi`, `cross` with a filter and `indata()` sample the clock **inside** their loops |
+| Geo | the projection pipeline (clipping to the sphere and to the extent, resampling, the path and the measures) samples the clock every 128 events, and the rejoining of clipped rings once per crossing it walks (it is linear in the crossings: a ring that crosses the antimeridian 32 000 times takes about 0.1 s); the events one buffer holds count against the `vertices` ceiling, which no limit replaces (`maxRows` counts rows, not coordinates) |
+| Transforms and row emitters | `sequence`, `fold` (rows x fields), `flatten`, `cross` (n x n), `impute`, `pivot` (groups x columns), an `aggregate` with `cross`, `kde` (groups x steps), `density`/`quantile` steps, the `regression` order, `graticule` positions, contour grids (declared size, scan and thresholds), heatmap pixels, the label canvases and bitmap, the word cloud board, `force` iterations, `range`: checked **before** the output is allocated or the loop runs (`maxRows` on the rows made, `maxGeneratedRows` on what is added, or the built-in ceiling). Every loop of the transform, layout, raster and geo code that the spec or its data sizes samples the clock **inside** it (`metered-loops.test.ts` refuses a loop that does not, or does not state its bound): among them `aggregate`, `joinaggregate`, `pivot`, `bootstrap`, `stack`, `window`, `loess`, `kde`, `wordcloud`, `pack`, `force` (every tick and every pass of a force), `label` (each label, each row of its canvases, each searched cell), the label rasterizer (each row it fills, each dash and join it makes), `contour` / `isocontour` (each row of the scan, each hole matched), `heatmap` (each row), `voronoi` (each point, each edge flip), `nest`, `cross` with a filter, the geo pipeline (each batch of projected, clipped and resampled events) and `indata()` |
 | Encode loop | one item per row: `maxItems` is checked before the mark is encoded; the clock is sampled every 1024 items. Group items are metered the same way |
-| Guides and scales | numeric tick counts, calendar-month tick counts, time-interval ranges, quantize colour samples (all against `maxItems`), facet `columns` |
-| Expression builtins | `sequence` (rows), `pad` and number-format width (`maxStringLength`, cumulative `maxGeneratedBytes`), regex pattern/input length. The built-in ceilings apply to these even where the matching limit is unset |
+| Guides and scales | the ticks a numeric count makes, time ticks (counted before they are made where the interval can count, and as they grow), legend entries listed, axis ticks drawn, quantize colour samples (all against `maxItems`), facet `columns` |
+| Expression builtins | `sequence` (the length it allocates, after vega's `\| 0`: rows), `pad` and number-format width (`maxStringLength`, cumulative `maxGeneratedBytes`), regex pattern/input length; the built-in ceilings apply to these even where the matching limit is unset. Under limits also: the string `join` and `replace` build, bounded before it is built (`replace` keeps the result within `maxStringLength` as each replacement is made, `$&`, `` $` `` and `$'` included), the pieces `split` makes (as rows, counted before the array is made), the strings `upper`, `lower`, `trim`, `truncate`, `substring` and `slice` make (`maxStringLength`, cumulative `maxGeneratedBytes`), and a string `+` builds (`maxStringLength`: a doubling `s + s` stops there) |
 | Expression parser | nesting depth (1000): an `AsterLimitError`, not a stack overflow. Always thrown by the parser; see "A limit error cannot be swallowed" for what happens without a scope |
 | Topojson | decoded coordinates against `maxGeneratedRows` (else `maxRows`) |
 | Serialisation | every generated path `d` is checked as it is written (`maxPathLength`); `maxSvgLength` on the result where the entry point checks it (see the table above) |
-| Scene (`checkSceneLimits`) | leaf items (`maxItems`), item `path` strings (`maxPathLength`), the total length of string and array `text` (`maxStringLength`), and a lower bound for line/area paths (4 characters per point) |
+| Scene (`checkSceneLimits`) | leaf items (`maxItems`), item `path` strings (`maxPathLength`), the total length of string and array `text` and every other string an item draws (`href`, `description`, a paint, `font`, `cursor`, an image `url`: `maxStringLength`; the item's `datum` is data, not drawn), and a lower bound for line/area paths (4 characters per point) |
 
 Properties worth knowing:
 
@@ -233,11 +333,10 @@ Properties worth knowing:
 - **A limit error cannot be swallowed, inside a scope.** The runtime has defensive
   `catch` blocks (a signal expression that fails falls back to a default). The first
   violation in a scope is recorded on the meter, every later meter call re-throws it,
-  and the scope re-throws it on exit even if a `catch` ate it. Without `limits` there
-  is no scope: the expression parser still throws its nesting error, but a defensive
-  `catch` can turn it into the default value (a 5000-term `1+1+...` signal renders
-  without error when no `limits` is given and fails with `maxDepth 1001 > 1000
-  (expression nesting)` when it is).
+  and the scope re-throws it on exit even if a `catch` ate it. Without `limits` the entry
+  points open a scope of their own for the built-in ceilings and the parser's nesting error,
+  with the same rule: a 5000-term `1+1+...` signal fails with `maxDepth 1001 > 1000
+  (expression nesting)` with or without `limits`.
 - **Cost with limits off:** every site is one module-level null test. Limits ON
   adds an amortised clock read per 1024 rows/items.
 
@@ -251,15 +350,19 @@ deliberate difference; each applies only where noted.
 | Any budget in `SpecLimits`; rows, items, strings, paths, generated rows/bytes, SVG length and time are refused with `AsterLimitError` | vega renders whatever it is given |
 | Built-in ceilings (previous section): a few spec-controlled amounts are refused above fixed values **even without `limits`**, and a spec nested deeper than 1000 or cyclic is an `AsterLimitError` even without `limits` | a few hundred bytes of spec can otherwise exhaust the process (a fatal out-of-memory, not an error) |
 | Pre-flight depth ceiling: with a `limits` object, spec nesting deeper than `HARD_MAX_SPEC_DEPTH` (1000, exported from `@aster-charts/core`) fails even when `maxDepth` is unset, and a cyclic spec fails (`spec contains a cycle`) | an unbounded walk overflows the stack |
-| `sequence`, `range`, numeric `ticks`, calendar and time-interval ranges, `pad` and number-format width are bounded by the active limits before they allocate | one call can otherwise allocate gigabytes |
-| Expression nesting deeper than 1000 (parser and AST) throws `AsterLimitError` (the parser does so with or without `limits`; see "A limit error cannot be swallowed") | vega throws a raw `RangeError` at a stack-dependent depth |
+| `sequence`, `range`, numeric `ticks`, calendar and time-interval ranges, `pad` and number-format width are bounded by the active limits (and the built-in ceilings) before they allocate | one call can otherwise allocate gigabytes |
+| A loop that is the product of spec or data sizes (a contour scan, a static `force`, a `label` placement, a filtered `cross`, a polynomial `regression`, a word cloud's spirals) past the `work` ceiling is refused, without `limits` too; a `maxTimeMs` budget replaces it | vega runs it to the end, which for some inputs is hours or never |
+| A stroke the label rasterizer draws: a contour of more than a million dashes is stroked undashed; a round join or cap of an immense pen is made only as far as the canvas sees it (which is the disk, inside the canvas) | Skia, the canvas of Chromium, gives up dashing past a million dashes in the same way; cutting such a stroke exactly would take more memory than any canvas |
+| Expression nesting deeper than 1000 throws `AsterLimitError` (the parser does so with or without `limits`; see "A limit error cannot be swallowed"). The parser counts 1000 nested unary and conditional productions, and a level of parentheses, brackets, call arguments or object values takes two of them, so 999 nested `!` and 499 nested parentheses parse; the tree may be 1000 levels tall | vega throws a raw `RangeError` at a stack-dependent depth |
 | `bin`: a step that can never grow (underflowed to 0, `base` <= 1 that never reaches `maxbins`) throws `[aster] bin: cannot derive a step size ...` | vega loops forever. `maxbins: 0` (treated as 20) and `maxbins: -1` (NaN bins) give vega's output |
 | `stratify` throws vega's errors (`cycle`, `multiple roots`, `missing: id`, `ambiguous: id`, `no root`) with an `[aster] stratify:` prefix | the messages are vega's; the prefix marks them as never recovered by the logger |
 | Regex patterns with catastrophic-backtracking shapes, patterns > 1024 characters, and regex inputs longer than `maxStringLength` (default 10 000) are refused **under limits** | see the regex section |
 | Decoded topojson coordinates are budgeted against `maxGeneratedRows` (else `maxRows`) | arcs are shared, so a few KB of input can decode to millions of points |
 | `topojson` object names are looked up as own properties (`constructor`, `__proto__` are "not found") | the name is spec-controlled |
-| `loadSpecData` and its URL policy: only public `http(s)` by default, no credentials, redirects re-vetted, timeout and size caps | a spec's `url` is a request made on the host's behalf |
-| Image and `href` URLs go through the same policy **when `limits` or `urlPolicy` is given** (without either: vega parity) | a spec can name any URL |
+| `loadSpecData` and its URL policy: a network url needs an explicit allowlist (`allow`, or the `baseURL` origin), non-public hosts are refused, no credentials, every redirect hop vetted before it is requested (a redirect a browser hides is refused), timeout, size, request and byte caps | a spec's `url` is a request made on the host's behalf |
+| A delimited text (csv, tsv, dsv) whose lines are shorter than its header fills in at most 1 000 000 missing cells per read (the `filledCells` ceiling; `maxGeneratedRows` replaces it), and under `limits` its rows are counted against `maxRows` as they are read | a wide header over empty lines is a few KB that vega pads to gigabytes |
+| A malformed topology (an arc index out of range or not an integer, a `GeometryCollection` without `geometries`, an arc of fewer than two positions, a `transform` without `scale`/`translate`, a list that is not one) is an `[aster] topojson: ...` error | vega throws a raw `TypeError`, or walks a sparse array up to a huge arc index for minutes |
+| Image and `href` URLs go through the same policy, and every URL a renderer writes is vetted where it is written, **always** (the defaults with neither `limits` nor `urlPolicy`; see "Every URL in the output") | a spec can name any URL |
 | With `limits.regex: 'refuse'`, a spec that makes a regular expression is refused before it runs | no limit can stop a regular expression once it runs, and the screen is a heuristic |
 | A paint (`fill`, `stroke`, the background) never references another document in SVG output (string and DOM), always: a leading `url(...)` naming one draws its fallback colour, else `none`; a `url(...)` anywhere else drops the attribute. `url(#id)` (within the page) is kept (see "Paint references" below) | vega's SVG renderers write paint as given, and Chromium fetches a paint server from another document, a request no URL policy sees |
 | A mark's `blend` reaches SVG output (string and DOM) only as a `mix-blend-mode` keyword, always; any other value draws as if no blend were set (see "Blend modes" below) | vega's string renderer writes the value into the `style` attribute as given, where a value from the data can add CSS declarations of its own |
@@ -277,28 +380,67 @@ before a pattern is compiled or run, for every pattern a spec or its data can
 supply (`test`, `regexp`, `replace`/`split` with a RegExp or a `/literal/`,
 `countpattern`):
 
-1. **Static screen** (`regex-screen.ts`): the pattern is parsed into a small AST
-   (not matched with another regex) and refused, with an `AsterLimitError`
-   (`regexSafety: ...`), when it has one of the known catastrophic shapes:
-   - a group under an unbounded quantifier whose body contains another unbounded
-     quantifier (`(a+)+`, `(\w+\s?)*`, `(.*a){2,}`);
-   - an unbounded-quantified alternation whose branches can start with the same
-     character (`(a|a)*`, `(a|aa)+`, `(\w|\d)+`);
-   - a backreference inside a group that repeats more than once (`(?:(a)\1)*`, `(?:(a)\1){2,}`).
-   - three or more **adjacent** unbounded quantifiers over overlapping characters
-     (`a*a*a*b`, `.*.*.*x`, `\d+\d+\d+$`): polynomial backtracking of degree 3 or more, which
-     on the 9 000 characters of a long input ran for over 20 seconds. Two adjacent ones (`\s*.*`,
-     `\d+\.?\d*`) and the trim idiom `^\s*(.*?)\s*$` are not touched; no regular expression in
-     the gallery, the corpus or the test suites has the refused shape.
-2. **Length caps**: a pattern over 1024 characters, or an input longer than
-   `maxStringLength` (default 10 000), is refused. This bounds linear patterns.
+1. **Static screen** (`regex-screen.ts`). The pattern is read by a parser of the whole ECMAScript 2025 pattern grammar, in
+   the mode its flags select (the legacy Annex B mode without `u`/`v`, where `\u{`, `\x`, `\k`, `\c` and a lone `{` are
+   literals; the `u` mode; the `v` mode with set operations and strings), checked against a reference parser
+   (`@eslint-community/regexpp`) on every generated pattern of its differential. A pattern the RegExp constructor rejects is
+   left to it (its SyntaxError surfaces); **a valid pattern the screen cannot read, or cannot analyse within its budget, is
+   refused** (fail closed). The pattern then becomes its position automaton, with the number of distinct ways each step can
+   be taken (a backtracking matcher enumerates parse trees), and with the search's own loop in front unless every branch
+   starts with `^` (outside `m` mode): V8 tries each start position in turn. It is refused, with an `AsterLimitError`
+   (`regexSafety: ...`), whatever its input, when:
+   - **exponential**: a part of it can match the same input in two ways and repeat (`(a+)+`, `(a|aa)+`, `(\w+\s?){1,50}`,
+     `((a|a))*`, `(.*a){12}`). A repeat that may run twice or more is read as unbounded (`(a+){1,60}` is `(a+)+`),
+     except a repeat of one character set, which is expanded exactly up to 64;
+   - **too many live paths**: over 4 096 ways to have matched one input so far (`(a|a)(a|a)...`), a loop counted as
+     absorbing any length of it;
+   - a **backreference** inside a group that repeats (`(?:(a)\1)*`).
 
-**This is a heuristic, not a guarantee.** It blocks the known catastrophic
-shapes. It does not prove a pattern safe: polynomial blow-ups whose quantifiers are not
-adjacent, such as `.*a.*a.*a.*b`, pass, and safe patterns with a repeated group around an unbounded quantifier,
-such as `(\d+\.)*\d+`, are refused (rewrite them without the nesting). Syntax
-the screen cannot parse is passed to the RegExp constructor unscreened (its own
-syntax error then surfaces). Without limits nothing is screened (vega parity).
+   Otherwise the pattern is accepted, with its **cost**, and **every run of it is checked before it starts, on the subject it
+   is given**, since nothing can interrupt a running RegExp:
+   - the cost is `work * n ** degree` steps on `n` characters. `degree` is the longest chain of loops each able to hand the
+     same input on to the next, the search's own loop counted: `a*b` searched and `\s+$` are 2, `\s*.*x` searched and the
+     trim idiom `^\s*(.*?)\s*$` 3, `a*a*a*b` 4; a loop after which the match can always end is no link of a chain
+     (`\s*.*`, `\d+\.?\d*`) but still reads the input (1). `work` is the transitions tried per character from the live
+     paths of one start, counted on the whole automaton, so a bounded run after a loop over the same characters, entered from
+     every place the loop can stop, weighs its length (`a*a{1,3}x` 15, `a*x` 5);
+   - a step is taken to cost `REGEX_NS_PER_UNIT` = 8 ns: the slowest of 130 measured shapes took 1.93 ns (`a+a{30}x`;
+     `(\w?)+!` 1.80, the median 0.16) on a machine at load 5 to 10, with a margin of 4 for a loaded machine;
+   - before each run (`test`, `replace`, `split`, a method of a string given a RegExp, `countpattern` on each text and its
+     stopwords on each token) the run's cost on the actual subject must fit the time left under `maxTimeMs`, else
+     `REGEX_RUN_BUDGET_MS` = 100 ms per run; otherwise that run is refused, with an `AsterLimitError` saying what was computed:
+     `regexSafety: polynomial backtracking of degree 2: about 2400 ms on 10000 characters, over the 100 ms a run may take: /\s+$/`.
+     The subject is already at most `maxStringLength` (default 10 000, `REGEX_MAX_INPUT`). The check reads the pattern's cost
+     kept with the RegExp (O(1), no allocation), as the row and size caps act on data.
+
+   So a pattern is refused only for data that would actually make it too slow: `\s+$` runs on a 1 000-character text
+   (24 ms by the model) and is refused on a 10 000-character one (2 400 ms) unless `maxTimeMs` leaves that much; the trim idiom
+   runs on a 100-character text; linear patterns run on any text the caps allow. Measured (the soundness test,
+   `regex-screen.test.ts`): every generated pattern the screen accepts, driven through the engine on attack inputs of
+   10 000 and of 1 000 characters, either ran within the 100 ms or was refused before it ran; the patterns the screen refused
+   before by shape are refused here by cost on the subjects that made them hang (`\s*.*x` ran 14 s on 4 000 spaces,
+   `.*foo.*bar` 16 s on 6 000 characters, the trim idiom 19.7 s on 4 000 spaces before `x\n\nx`, `a*[ab]{0,20}x` 11 s and
+   `a+a{30}x` 14.6 s on 10 000 characters). The screen's own analysis of a pattern is cached by its text (a bounded table of
+   256 patterns), and counts against the evaluation: it samples the clock every 4 096 steps (`maxTimeMs`), and all the patterns of
+   one evaluation share 1 000 000 steps (`SCREEN_STEPS`): the step budget applies under
+   `maxTimeMs` too, as a second bound, and whichever runs out first stops the evaluation. Past either the
+   evaluation fails with the limit error and the pattern is refused (fail closed), so a spec's many patterns cannot add up.
+   The slowest generated pattern took 0.27 s to analyse; forty distinct ones like it stop within a 200 ms `maxTimeMs` (by the clock
+   or by the steps, whichever comes first on the machine). A run of single characters (the literal text of a pattern, groups
+   allowed) is analysed in steps proportional to its length, so a pattern of the full 1 024 characters costs a few thousand of
+   the million.
+   A lookaround body is screened as a pattern of its own for its hazards, and adds its cost to every step of the match that
+   reaches it. A Unicode property is read as "any character", a
+   case-insensitive set is closed under every case mapping V8 applies (derived from V8's own `iu` matching, about 0.15 s
+   once per process on the first case-insensitive pattern), and a `v`-mode set operation keeps an upper and a lower bound,
+   so nothing a pattern can match is left out of the analysis.
+2. **Length caps**: a pattern over 1024 characters (a fixed cap: no limit raises it, and a `maxStringLength` below 1024 lowers it),
+   or an input longer than `maxStringLength` (default 10 000), is refused.
+
+**This is a static model of a backtracking matcher, not a proof.** It is conservative by construction, so a few safe
+patterns are refused (`(a|a){2}`, `.{1,100}.{1,100}x`; rewrite them without the ambiguity). Its soundness is tested by
+running every pattern it accepts out of a generated set, for the subject length and budget of two limits, on attack inputs of
+that length in V8, against that budget. Without limits nothing is screened (vega parity).
 
 **If specs are untrusted, run the render in a killable worker** (a
 `worker_threads` Worker you can `terminate()`, or a child process with a
@@ -333,27 +475,98 @@ makes: two filter on a search box with `test(regexp(...))`, and the word cloud c
 `url` datasets are fetched by `loadSpecData` from `@aster-charts/core/load`, never by
 `renderSpec` (a `url` dataset that was not loaded is an error that tells you to
 call it, not an empty chart). It resolves `url` datasets at the top level **and**
-inside group marks at any depth, and returns a new spec.
+inside group marks at any depth, and returns a copy of the spec with those paths
+replaced (the input itself when it has none; the input is never mutated).
+
+**A network url needs an explicit URL policy.** Give `allow` (an allowlist; `allowOrigins([...])`
+makes one from origins), or a `baseURL` the url is on. Without either, every `http(s)` url is
+refused with an `AsterUrlError` before any request is made (`loadSpecData needs an explicit URL policy
+for network urls ...`). This holds in every environment, a browser included: the request is made
+with the viewer's network position and cookies.
 
 Every URL a spec names passes the policy before any request is made:
 
 | Option | Default | Meaning |
 |---|---|---|
-| `fetch` | `globalThis.fetch` | your fetch; Aster still applies the policy and the caps around it |
-| `baseURL` | none | base for relative `url`s. Without it a relative url is an `AsterUrlError`. A url on the base's own origin is host-chosen: it is exempt from the private-network check (not from `allow`, which is still consulted) |
-| `protocols` | `['http:', 'https:']` | allowed protocols. Anything not listed is refused (`data:`, `file:`, `javascript:`, `ftp:`, `blob:`, ...); add `'data:'` to permit data URLs. URLs with embedded credentials are refused whatever `protocols` says |
-| `allow(url)` | none | veto hook, awaited for the first URL **and every redirect hop**; it must return exactly `true` to permit. This is the place for an origin allowlist |
-| `allowPrivateNetwork` | `false` | permit loopback, private, link-local (cloud metadata), CGNAT, multicast hosts, `localhost`, `*.local`, `*.internal`, and their IPv6/mapped/NAT64/6to4 forms. Not applied to the `baseURL` origin or to `data:` URLs. `allow` alone cannot override it |
+| `allow(url)` | none | **the URL policy**: awaited for the first URL **and every redirect hop**, before it is requested; it must return exactly `true` to permit. Required for any network url that is not on the `baseURL`'s origin. When given, it decides every url, the base's origin included. `allowOrigins(['https://data.example.com'])` is an origin allowlist |
+| `baseURL` | none | base for relative `url`s (without it a relative url is an `AsterUrlError`). When no `allow` is given, a url on the base's own origin is permitted (the base is the host's choice) and every other network url is refused. The base's own origin is exempt from the private-network check |
+| `fetch` | `globalThis.fetch` | your fetch; Aster still applies the policy and the caps around it. It must honour `redirect: 'manual'`: a response that says it followed a redirect on its own is refused (the hop was requested before it could be vetted) |
+| `protocols` | `['http:', 'https:']` | allowed protocols. Anything not listed is refused (`data:`, `file:`, `javascript:`, `ftp:`, `blob:`, ...); add `'data:'` to permit data URLs, which need no `allow` (they reach nothing). URLs with embedded credentials are refused whatever `protocols` says |
+| `allowPrivateNetwork` | `false` | permit non-public hosts (see "Which hosts are non-public" below). Not applied to the `baseURL` origin or to `data:` URLs. `allow` alone cannot override it |
 | `timeoutMs` | 10 000 | per request, covering headers **and** body (an `AsterLimitError`) |
-| `maxBytes` | 10 MiB (10 485 760 bytes) | enforced **while the body streams** (a declared `content-length` over it is refused up front); the reader is cancelled, not buffered first. A fetch shim whose response has no stream is measured after the text exists |
+| `maxBytes` | 10 MiB (10 485 760 bytes) | per response, enforced **while the body streams** (a declared `content-length` over it is refused up front); the reader is cancelled, not buffered first. A fetch shim whose response has no stream is measured after the text exists |
+| `maxTotalBytes` | 50 MiB (52 428 800 bytes) | bytes read into datasets in one call, summed over them (a dataset naming a url another one loaded counts again: each is parsed) |
+| `maxRequests` | 100 | HTTP requests one call makes, redirect hops included. Several datasets naming one url make one request |
 | `maxConcurrent` | 4 | requests in flight at once |
-| `maxRedirects` | 5 | redirects are followed manually; each hop goes through the whole policy **before** it is requested |
+| `maxRedirects` | 5 | redirect hops followed per request; each hop goes through the whole policy **before** it is requested |
 | `signal` | none | abort the whole load |
-| `limits` | none | `maxRows` per loaded dataset, topojson coordinates, and `maxTimeMs` over the whole call (`maxTimeMs exceeded during loadSpecData`) |
+| `signals` | none | the values the host sets on the spec's top-level signals, read by a `{signal}` url instead of the spec's own initial values |
+| `limits` | none | `maxRows` per loaded dataset (checked row by row while a csv is read), topojson coordinates, every budget over the `{signal}` url expressions it evaluates, and `maxTimeMs` over the whole call (`maxTimeMs exceeded during loadSpecData`) |
 
-The defaults are exported as `LOAD_DEFAULTS` (`timeoutMs`, `maxBytes`, `maxConcurrent`, `maxRedirects`) from `@aster-charts/core/load`.
-Policy refusals are `AsterUrlError`; timeout, size, redirect and budget failures are `AsterLimitError`; an HTTP error
-status is a plain `Error` (`[aster] failed to load dataset url ...: HTTP 404`).
+Every option is checked once, before anything is planned or requested: a value of the wrong type, or a
+number that is not a whole number in its range (`NaN`, `Infinity`, `-1`, `1.5`, `'100'`), is a `TypeError`
+(`[aster] loadSpecData: maxBytes must be an integer from 0 to ...`), never a cap silently turned off.
+
+The defaults are exported as `LOAD_DEFAULTS` (`timeoutMs`, `maxBytes`, `maxTotalBytes`, `maxRequests`, `maxConcurrent`,
+`maxRedirects`) from `@aster-charts/core/load`. Policy refusals are `AsterUrlError`; timeout, size, request, redirect and
+budget failures are `AsterLimitError`; an HTTP error status is a plain `Error` (`[aster] failed to load dataset url ...: HTTP 404`).
+
+**The clock does not depend on the fetch.** `timeoutMs`, `limits.maxTimeMs` and `signal` end the call at
+their time whatever the `fetch`, the `allow` hook or the response body do: every step (the hook, the
+request, the body, each chunk) is raced against the abort, and a value that arrives after it is never
+taken. The abort is also passed to `fetch` as `init.signal`, so a fetch that honours it releases the
+connection; one that ignores it may keep the socket open after the call has failed.
+
+**Redirects.** Every hop is vetted by the whole policy before it is requested, in every environment.
+`fetch` is called with `redirect: 'manual'`; a browser answers that with an opaque response that hides
+the next location, so a redirect there cannot be vetted and is refused (`the response is a redirect whose
+target this environment hides ...`): serve browser-loaded data without a redirect. A `Location` that is not
+a URL is an `AsterUrlError`.
+
+**`{signal}` urls.** A dataset whose `url` is a `{signal}` is loaded for the value the signal has when the
+view starts: the expression is evaluated under `limits` (the regular-expression screen and the clock apply),
+over the signals it reads and only those, each taken from its own scope (a group mark's signals shadow the
+view's) and from `signals` for the host's values. vega reloads such a dataset whenever the signal changes;
+`loadSpecData` loads once. `useChartData` in `@aster-charts/react` passes its `signals` to the loader, so a
+host-set signal that changes loads again. `<Chart urlLoad={{ ... }}>` keeps the data current as vega does: it
+loads the url datasets itself (the load add-on, imported lazily) and loads again whenever the urls the chart's
+signals now give are not the ones it loaded (`datasetUrls(spec, { signals, limits })`, internal, `@aster-charts/core/internal/load`: a
+signal change that leaves every url as it was loads nothing), a change made inside the chart included (a bound
+input, an event handler, `setSignal`). The whole policy above applies, with the chart's `limits` and `signals`:
+a network url needs `allow` / `allowOrigins([...])` or a `baseURL` it is on, else the load fails with an
+`AsterUrlError` and nothing is requested; the per-load caps (`timeoutMs`, `maxBytes`, `maxTotalBytes`,
+`maxRequests`, `maxRedirects`, `limits.maxTimeMs`, `limits.maxRows`) bound every load, and each url change is
+one more load under them (a url an event stream rewrites on every pointer move requests as often as the
+pointer moves: bound it with the spec, as with vega). The load a newer url supersedes is aborted, and so is one
+still running at unmount. Until the first load arrives the datasets are empty (`emptyUrlData`), the previous
+rows stay while a newer url loads, and a failed load is reported through `onError` (else the logger) once,
+the chart keeping the rows and the bound inputs it has so the next url can recover it; it is not retried by
+itself.
+
+**The format.** A url dataset is read in the format its `format.type` names, `json` by default, as vega does: the url's
+extension is not read. A `.csv` url with no `format` is json, and a body that is not JSON is an error
+(`[aster] invalid JSON data: ...`), where vega logs the failed ingestion and goes on.
+
+### Which hosts are non-public
+
+The host is read as the URL parser reads it (so decimal, octal, hex, short and full-width IPv4 spellings are the
+addresses they spell), and it is non-public when it is:
+
+- a name with no dot, after every trailing dot is dropped (`http://metadata/`, `http://intranet/`, Docker Compose and
+  Kubernetes service names, `localhost..`): such a name only resolves through a local search domain or hosts file;
+- a name under a special-use or private-use suffix: `test`, `localhost`, `invalid`, `example`, `local`, `onion`, `alt`,
+  `arpa` (`home.arpa`, the reverse zones), `internal`, and the de-facto internal `localdomain`, `lan`, `home`, `corp`,
+  `intranet`, `private`, `svc`;
+- an IPv4 address in a block the IANA special-purpose registry lists as not globally reachable (this-network, private,
+  shared/CGNAT, loopback, link-local and cloud metadata, the IETF protocol block, the three documentation blocks,
+  benchmarking, the deprecated 6to4 relay), or multicast, reserved or broadcast;
+- an IPv6 address outside global unicast `2000::/3` (unspecified, loopback, IPv4-compatible, SIIT, local-use NAT64,
+  discard, unique local, link-local, site-local, multicast, unassigned), or inside it in `2001::/23` (Teredo and the
+  other protocol assignments), `2001:db8::/32` or `3fff::/20` (documentation). The IPv4-mapped (`::ffff:a.b.c.d`),
+  well-known NAT64 (`64:ff9b::a.b.c.d`) and 6to4 (`2002:aabb:ccdd::`) forms are judged by the IPv4 address they carry;
+- anything the parser does not read as a host.
+
+`isNonPublicHost(hostname)` from `@aster-charts/core/load` is this check.
 
 ### Why these defaults
 
@@ -362,25 +575,36 @@ behalf. The attack is not "fetch a public CSV" (that is the feature); it is
 reaching what only the host can reach: loopback and internal services, cloud
 metadata, and slow or endless responses that pin the process. So:
 
-- public `http(s)` works out of the box (`useSpecData` and plain hosts keep
-  working), while **non-public destinations are denied by default** and need an
-  explicit `allowPrivateNetwork: true`;
-- anything beyond that is the host's call through `allow(url)` (origin
-  allowlist) and `baseURL` (relative-only deployments);
-- time, size and concurrency are bounded by default because the alternative is
+- no network url is requested unless the host said which ones may be (`allow`, or the
+  `baseURL` origin): the host knows where its data lives, the spec does not get to choose;
+- non-public destinations are denied on top of that, and need an explicit
+  `allowPrivateNetwork: true`;
+- time, size, requests and concurrency are bounded by default because the alternative is
   an unbounded wait, buffer and fan-out.
 
-What the defaults cannot see: DNS. A public name that resolves to a private
-address passes the host-literal check. If that matters, give `allow` an origin
-allowlist or enforce egress at the network. For maximum strictness set
-`allow: (u) => u.origin === 'https://data.example.com'` and `baseURL`.
+### What the policy cannot see: DNS
+
+The non-public check reads the host as written. A public name that resolves to a private
+address (`127.0.0.1.nip.io`, a name whose owner points it at your network) passes it. Aster
+does not resolve names itself, deliberately: a check that resolves the name and then lets
+`fetch` connect is not a check of the address `fetch` connects to, because `fetch` resolves
+the name again. A resolver that answers a public address to the first lookup and a loopback
+one to the second (DNS rebinding, a zero TTL) gets the request through; measured on Node 26,
+a pre-check saw `93.184.216.34` and the following `fetch` read a server on `127.0.0.1` (two
+lookups). Closing that needs the address checked at the moment the connection is made, which
+only the connection layer can do, and a browser has no DNS API at all.
+
+So the control for names is the required `allow` policy: list the origins your data lives on.
+If you must accept names you do not control, give `loadSpecData` a `fetch` whose connections
+check the address they connect to (on Node, an undici `Agent` whose `connect.lookup` refuses
+addresses `isNonPublicHost` flags), or enforce egress at the network.
 
 Trusted specs (a demo, a test harness) can opt out explicitly with
 `loadSpecData(spec, TRUSTED_LOAD_OPTIONS)`. Never use that for specs you did
 not write.
 
 ```ts
-import { loadSpecData } from '@aster-charts/core/load'
+import { allowOrigins, loadSpecData } from '@aster-charts/core/load'
 import type { VgSpec } from '@aster-charts/core'
 
 const spec: VgSpec = {
@@ -392,14 +616,14 @@ const spec: VgSpec = {
 
 const loaded = await loadSpecData(spec, {
   baseURL: 'https://data.example.com/',
-  allow: (url) => url.origin === 'https://data.example.com',
+  allow: allowOrigins(['https://data.example.com']),
   maxBytes: 2_000_000,
   limits: { maxRows: 100_000, maxTimeMs: 5_000 },
 })
 ```
 
 `format.parse` accepts vega's `date:'%d/%m/%Y'` and `utc:'%Y-%m-%d'` patterns
-(quoted or not), resolved through the default locale like `vega-loader`.
+(quoted or not), resolved through the chart's locale (`config.locale`, else the default one) like `vega-loader`.
 
 ## Refusing url datasets: `urlData`
 
@@ -442,12 +666,32 @@ try {
   with both closed: `urlData: 'refuse'` and a `urlPolicy` whose `allow` returns `false`.
 - `'allow'` (the default) keeps today's behaviour: resolve url datasets with `loadSpecData`, or give their rows in `data`.
 
+## Every URL in the output
+
+A URL is vetted at the one place each renderer writes it, whatever channel, guide or code path put it on the scene: the
+attribute sink both SVG renderers write every attribute through (a link's or an image's `xlink:href`, and any attribute that is
+CSS -- a `url()` there never names another document), the urls a canvas host loads (`sceneImageUrls`, what `<Chart>` and
+`renderSceneToPng` load), and the cursor a host shows (`resolveCursor`). This is on by default and fails closed:
+
+- the policy is the one the scene was evaluated under (`urlPolicy`, or the defaults under `limits`); with neither, the
+  defaults: a link is one of `http:`, `https:`, `mailto:`, `tel:` or relative, an image one of `http:`, `https:`, `data:` or
+  relative, and neither carries credentials. A URL that cannot be read, or is refused, is not written: the item is drawn
+  without its link, an image with an empty `href`, and nothing is requested. vega's own rewrites are applied first
+  (`file://` stripped to the path, `//host` given `http:`), and the text that is written is the one judged (a
+  `file://javascript:` link is refused; vega writes it as `javascript:`).
+- a scene posted from a worker (a structured clone) carries no policy: it is vetted against the defaults where it is drawn, so
+  a host that widens `protocols` in the worker sees those links dropped on the page (fail closed).
+- the evaluation applies the policy too, to every URL channel it knows (`href` on any item of any mark, guide or title, an
+  image's `url` and the `src` of an `image` object): that is where a refusal throws `AsterUrlError`, or calls `onDeny`.
+- No encode channel can name the engine's own state on an item (`__domDesc`, `_hit`, `items`, `dataDatum`, ...): a spec that
+  tries is refused with a `SpecParseError` ([ERRORS](ERRORS.md)).
+
 ## Image URLs
 
 Image marks take their `url` from data, so a hostile spec can make the viewer's
 browser request a tracking pixel or a `javascript:` URL. Image `url`s pass the
 same checks, applied while the scene is built so the string renderer, the DOM
-path and canvas all see vetted items:
+path and canvas all see vetted items (and vetted again where they are written, above):
 
 ```ts
 import { renderSpec, type VgSpec } from '@aster-charts/core'
@@ -476,17 +720,19 @@ console.log(svg.includes('cdn.example.com'), svg.includes('tracker.example.net')
   `data:`). With `limits` and no `urlPolicy` the defaults apply (the spec is
   untrusted): `http:`, `https:`, `data:` and relative URLs only, no credentials;
   anything else throws `AsterUrlError` (or is dropped when `onDeny` is set).
-- With neither, images are not vetted. That is parity with Vega, which draws any
-  `url`, and an SVG `<image>` cannot execute script, so `javascript:` is not an
-  injection vector there. **Residual risk:** a spec can still make the viewer's
-  browser request an arbitrary URL (a tracking pixel, an IP leak, a request to an
-  internal address the viewer can reach). If you render specs you did not write,
-  pass `limits` (which turns the defaults on) or a `urlPolicy` with `allow`.
+- With neither, the output still vets every image url against the defaults (above): a
+  `javascript:`, `file:`, `blob:` or credential-carrying url is drawn as no url (vega draws any
+  `url`). **Residual risk:** a spec can still make the viewer's browser request an arbitrary
+  `http(s)` URL (a tracking pixel, an IP leak, a request to an internal address the viewer can
+  reach). If you render specs you did not write, pass a `urlPolicy` with `allow`.
 - `allow` for images is synchronous. A relative URL needs `baseURL` once `allow`
   is set (fail closed).
 - With a `baseURL` a relative image URL is drawn resolved against it, the way vega's loader
-  does (`base` + `/` + `url`, `//host` getting `http:`); the resolved URL goes through the
-  policy again, so `allow` sees what is drawn. Without one it is drawn as written.
+  does: a text prefix (`base` + `/` + `url`, `//host` getting `http:`), not a WHATWG resolution,
+  so give a directory URL, not a page URL such as `location.href`, whose file name or query would
+  become part of every path. `allow` is asked once, about exactly the url that is drawn; the text
+  as written also passes the protocol and credential checks (a `file:` url is refused even though
+  its drawn form would be a path). Without a base it is drawn as written.
 - Where to pass it: `renderSpec`/`evaluateChart`/sessions take `urlPolicy` in the runtime
   input; `<Chart urlPolicy>`, `useChart(spec, { urlPolicy })` and `<ChartStream urlPolicy>`
   forward it (a denial without `onDeny` is a render error reported through `onError`; the
@@ -501,13 +747,27 @@ A mark's `href` channel is drawn the way Vega's SVG renderer draws it: the item'
 sits inside `<a xlink:href="...">` (string renderer and DOM path alike; line, area and trail
 link through their first item). Two checks apply to the value:
 
-- Always, in every renderer: Vega's own link sanitizer. Only `http(s):`, `ftp:`, `mailto:`,
-  `tel:`, `callto:`, `cid:`, `xmpp:`, `file:`, `data:` and scheme-less (relative) URIs are
-  linked; `javascript:`, `vbscript:` and the like produce no link, whatever the spec says.
-  (`//host/p` gets `http:`, `file://` is stripped to the path, as in Vega.)
+- Always, in every renderer, with or without a policy: the link is vetted where it is written (see "Every URL in the
+  output"). Only `http:`, `https:`, `mailto:`, `tel:` and scheme-less (relative) URIs are linked, without credentials
+  (Vega's sanitizer also links `ftp:`, `callto:`, `cid:`, `xmpp:`, `file:` and `data:`, and lets `file://javascript:` through);
+  `javascript:`, `vbscript:` and the like produce no link, whatever the spec says. (`//host/p` gets `http:`, `file://` is
+  stripped to the path, as in Vega; a host-naming text with no scheme, `\\host\p`, is written as the URL it was judged as.)
 - Under `limits` or an explicit `urlPolicy`, the URL policy above applies with the link
   protocols `http:`, `https:`, `mailto:`, `tel:` (and relative URLs): anything else throws
   `AsterUrlError`, or is dropped (the item is drawn without its link) when `onDeny` is set.
+
+## The cursor
+
+A mark's `cursor` channel and a spec's `cursor` signal reach the host as `resolveCursor` resolves them (vega-view's rule).
+Only a CSS cursor keyword (`pointer`, `grab`, `zoom-in`, ...: the list of CSS Basic User Interface 4, ASCII case ignored) is
+shown; any other value counts as no cursor. A CSS cursor may be a `url()` list, an image the viewer's browser fetches that no
+URL policy would see, so a value that is not a keyword is never handed on (vega hands the text on as it is).
+
+## The accessible tree
+
+`buildA11yTree` is bounded whatever the data (`summaryThreshold`, default 150): over that many mark items in the whole scene
+every mark is one summary node, no more than that many mark nodes are made in all (the rest fold into one), and a legend gives
+no more than that many entry nodes.
 
 ## Blend modes (`blend`)
 
@@ -556,7 +816,8 @@ takes colours only. The canvas renderer ignores a `url()` paint.
 `containerSize: { width, height }` in the runtime input; Vega-Lite's own fallback size then
 applies. A host that has a DOM element to fill passes its `clientWidth` / `clientHeight`.
 
-`measuredSize: { width, height }` is the element a host lets the chart fill. It is the view size of a
+`measuredSize: { width?, height? }` is the element a host lets the chart fill, each dimension on its own (`<Chart>` passes it
+only for a `width` / `height` given as `'container'`; without size props a chart is the size its spec makes it, as in Vega). It is the view size of a
 spec with no `width` / `height` signal; a spec that drives those signals keeps doing so (the container
 reaches it through `containerSize()`, which falls back to `measuredSize`); nor does it size a dimension the spec gives no value at all (no number, no signal): in Vega that is 0 and the autosize pass grows it to the content; nor a spec whose autosize is `none`, whose whole size in Vega is its `width`, `height` and `padding`. The view size has one value
 for every consumer (scales, layout, marks and expressions); from the strongest: a fixed `width` /
@@ -564,9 +825,9 @@ for every consumer (scales, layout, marks and expressions); from the strongest: 
 
 ## Locale and formatter caches
 
-Expression `format`, `timeFormat`, `monthFormat`, ... read the **current**
+Expression `format`, `timeFormat`, `monthFormat`, ... read the chart's locale (`config.locale`) or the **current**
 default locale on every call, so `defaultLocale(...)` after import takes
-effect. Memoised formatters are bounded (512 per table, least-recently-used out)
+effect. A chart's own locale makes its formatter tables once, with the compiled chart, and they go with it. Memoised formatters are bounded (512 per table, least-recently-used out)
 so arbitrary specifiers in data cannot grow the process without bound. The same holds for the
 expression `pluck` accessor table (1024, least-recently-used out): an accessor is a pure function of
 its name, so a dropped one is simply rebuilt.
@@ -584,11 +845,24 @@ its name, so a dropped one is simply rebuilt.
   hooks turn it into an `AsterLimitError` (see `docs/ERRORS.md`).
 - `useSpecData`, `useChartData` and `loadSpecData` from `@aster-charts/react` take the same
   options as `loadSpecData` in `@aster-charts/core/load`, so the URL policy and `limits` apply to
-  Suspense loading too.
+  Suspense loading too. The resource is keyed on the options: the data ones by content, the function ones (`allow`, `fetch`) by
+  identity, so define `allow` once (at module scope) or give a `cacheKey`; an inline one without a `cacheKey` ends in an
+  `AsterUnstableLoadOptionError` instead of a load per render (see `loadSpecDataResource` in docs/API.md).
 - `urlData="refuse"` refuses a spec with a url dataset in every shell, hook and worker, before any add-on is imported
   (see [Refusing url datasets](#refusing-url-datasets-urldata)).
-- A worker is not a kill switch by itself. To get the hard guarantee described above,
-  terminate the Worker you created (`worker.terminate()`) when your own deadline passes.
+- Bound inputs (`signal.bind`) are confined to the chart: a generated input takes only the input types and field attributes an
+  input can safely have (Vega copies every key of `bind` onto it as an attribute, so a spec could add an inline `on*` event
+  handler), a radio group is named with the chart's own React id (no spec-chosen field names in a host `<form>`), and
+  `bind.element`, which in Vega places an input in, or binds the signal to, an element of the page found by CSS selector, is
+  not honoured (it is reported through the logger, and an input with a type is drawn under the chart). An untrusted spec thus
+  cannot place controls in, or read values from, the page around the chart (DECISIONS Q1).
+- `data`, size props and controlled `view` / `brush` / interval values are checked at the boundary: a dataset that is not an
+  array of rows and a size that is not a finite number of pixels or `'container'` put the chart in its error state; a bad
+  view or interval axis is reported and left out. None reaches the engine.
+- The worker hooks own a hard deadline (`timeoutMs`, default 30 000 ms; DECISIONS Q4): a request the worker does not answer in
+  time terminates it, the hook reports an `AsterWorkerTimeoutError`, and a worker made by `workerFactory` is replaced. A
+  `worker` you supply is terminated too and cannot be replaced by the hook: give a new one. Outside the hooks (your own
+  `worker_threads` Worker, a child process) the deadline is yours: terminate the worker when it passes.
 - The worker handler serializes the SVG inside the same limits scope as the evaluation (one meter and clock),
   so `maxPathLength` and the other serialization checks apply there exactly as in `renderSpec`.
 

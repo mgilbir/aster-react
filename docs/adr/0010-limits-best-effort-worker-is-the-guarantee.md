@@ -27,7 +27,9 @@ by a deadline.
    child process, with a memory cap and a deadline, and `terminate()` or kill it when the
    deadline passes. A worker is not a kill switch by itself; the host must terminate the one it
    created. `maxTimeMs` and the rest then give friendly errors in the common case, and the kill
-   covers whatever they miss.
+   covers whatever they miss. (Amended by DECISIONS Q4, 2026-11: the React worker hooks own that
+   deadline themselves -- `timeoutMs`, terminate, replace a worker made by `workerFactory`, and a
+   typed `AsterWorkerTimeoutError` -- so a host using them no longer has to.)
 
 ## Consequences
 
@@ -48,3 +50,14 @@ by a deadline.
   an `AsterLimitError` within a CPU-time bound.
 - `packages/core/src/limits.test.ts`, `packages/core/src/expression-limits.test.ts`.
 - The two layers, the ceilings and the enforcement table: [LIMITS.md](../LIMITS.md).
+
+## Amendments
+
+*2026-11-25, to match the code (audit C374).*
+
+- The regular-expression screen now has the mitigation the last consequence asks for: `limits.regex: 'refuse'` (0.4.2) refuses
+  a spec that makes a regular expression at all, for a host that would rather lose a safe pattern than pass a dangerous one
+  ([LIMITS.md](../LIMITS.md)); and the screen costs a run at the length of the text it is given (LIMITS.md, "Regular expressions")
+  rather than refusing by shape alone for what depends on the input. The trade-off of the default is unchanged.
+- [ROADMAP.md](../ROADMAP.md) section 4 says "bounded ... with the documented caveats", and means this record: `limits` are
+  best-effort and the worker is the guarantee.

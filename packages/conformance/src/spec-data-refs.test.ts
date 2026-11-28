@@ -20,7 +20,7 @@ type Spec = Record<string, unknown>
 async function oracle(spec: Spec): Promise<{ svg: string } | { error: string }> {
   try {
     const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(
-      vega.parse(spec as never), { renderer: 'none', logLevel: 0 })
+      vega.parse(structuredClone(spec) as never), { renderer: 'none', logLevel: 0 })
     try {
       await view.runAsync()
       return { svg: await view.toSVG() }
@@ -121,7 +121,7 @@ describe('vega-util array(): scope lists given as a lone object, null or a scala
       expect(want).toHaveProperty('svg')
       const got = engine(spec)
       expect(got).toHaveProperty('svg')
-      expect(diffCanonical(canonicalizeSvg((got as { svg: string }).svg), canonicalizeSvg((want as { svg: string }).svg))).toEqual([])
+      expect(diffCanonical(canonicalizeSvg((want as { svg: string }).svg), canonicalizeSvg((got as { svg: string }).svg))).toEqual([])
     })
   }
 })

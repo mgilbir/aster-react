@@ -12,6 +12,8 @@
  * parts of the albersUsa composite) be interleaved again in the order the input events arrived.
  */
 
+import { allot } from './limits.js'
+
 export const POINT = 0
 export const LINE_START = 1
 export const LINE_END = 2
@@ -73,7 +75,11 @@ export class Events {
   }
 
   private grow(atLeast = 0): void {
-    const capacity = Math.max(this.op.length * 2, atLeast)
+    // (a buffer grows with what a stage makes of a shape, resampling included: bounded before it is allocated)
+    const capacity = allot('vertices', Math.max(this.op.length * 2, atLeast), 'geo events')
+    // (the events one geometry makes are a spec's to multiply: a projection's precision resamples a segment into thousands, a
+    // graticule's step makes lines by the thousand. The ceiling is on events, not rows: no `maxRows` replaces it, and under limits the
+    // allotment also samples the clock)
     const op = new Uint8Array(capacity)
     const x = new Float64Array(capacity)
     const y = new Float64Array(capacity)
@@ -150,6 +156,7 @@ function addPoint(out: Events, c: Coordinate): void {
 function addLine(out: Events, coordinates: ArrayLike<Coordinate>, dropLast: number): void {
   out.mark(LINE_START, out.length)
   const n = coordinates.length - dropLast
+  // bounded: the positions of one line of the data, written to a buffer that is bounded as it grows
   for (let i = 0; i < n; i++) addPoint(out, coordinates[i]!)
   out.mark(LINE_END, out.length)
 }
@@ -228,11 +235,13 @@ export function forEachChunk(object: unknown, visit: (ev: Events) => void, bare 
   if (!o) return
   const wrapped = !bare && Object.hasOwn(OBJECT_TYPES, o.type)
   const features = wrapped && o.type !== 'Feature' ? o.features : null
+  // bounded: the features of the object (the data), each flattened into a buffer that is bounded as it grows
   for (let k = 0, n = features ? features.length : 1; k < n; k++) {
     const geometry: AnyObject | null | undefined = features ? features[k].geometry : wrapped ? o.geometry : o
     if (!geometry) continue
     if (geometry.type === 'GeometryCollection') {
       const parts = geometry.geometries
+      // bounded: the geometries of a collection (the data)
       for (let i = 0; i < parts.length; i++) forEachChunk(parts[i], visit, true)
       continue
     }
@@ -255,9 +264,11 @@ export function forEachChunk(object: unknown, visit: (ev: Events) => void, bare 
 export function interleave(parts: readonly Events[]): Events {
   const out = Events.take(parts.reduce((n, part) => n + part.length, 0))
   const at = parts.map(() => 0)
+  // bounded: every pass writes one event to a buffer that is bounded as it grows, until the parts are used up
   for (;;) {
     let best = -1
     let bestSrc = Infinity
+    // bounded: the parts: at most the 3 pipelines of a composite projection
     for (let k = 0; k < parts.length; k++) {
       const part = parts[k]!
       if (at[k]! < part.length && part.src[at[k]!]! < bestSrc) {

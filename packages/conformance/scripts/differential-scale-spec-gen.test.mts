@@ -3,12 +3,15 @@
  * `differential-scale-spec` reach thinly: where a DISCRETE or QUANTILE domain comes from. Each case is a Vega spec holding
  * one scale `s`; real Vega (vega-parser + vega-encode) builds it, Aster builds it (`getChartInfo`), in one process, and the
  * two scales are projected identically (type, domain, range, outputs for the domain values, bins, thresholds, bandwidth)
- * and compared exactly. A spec Vega rejects must be rejected by Aster.
+ * and compared exactly. A spec Vega rejects must be rejected by Aster, with Vega's message: thrown or logged (Aster logs the
+ * parse-time refusals and goes on without the scale, docs/ERRORS.md); a spec Vega builds must be built with nothing logged.
  *
  * What is drawn: columns that mix numbers, numeric strings, booleans, null, NaN and text (so `1`, `'1'` and `true` meet);
  * sorts by key, by count, by an aggregate of another column, descending, through signals, and unsupported ones; domains of
  * one field, of several fields of one dataset, of several datasets, and of literal lists and signals among the fields;
- * quantile and numeric multi-field domains; and ranges that name entries of `config.range`, chains of them and loops.
+ * quantile and numeric multi-field domains; ranges that name entries of `config.range`, chains of them and loops; the scale's
+ * options as literals AND as `{signal: <text>}` (a literal or constant text is a value, a free name is a signal); and the type
+ * spelled in other cases (`BAND` is no type).
  */
 import { describe, expect, it, vi } from 'vitest'
 import * as vega from 'vega'
@@ -34,15 +37,28 @@ function project(s: AnyScale, probes: unknown[]): Record<string, unknown> {
   return o
 }
 
-async function vegaScale(spec: unknown): Promise<AnyScale> {
+const text = (e: unknown): string => (e instanceof Error ? e.message : String(e)).replace(/^Error: /, '')
+
+/** The scale vega builds, or its refusal: a parse error (no view), or the first error logged while the view runs. */
+async function vegaScale(spec: unknown): Promise<AnyScale | { refusal: string; incidental?: true }> {
+  // (an error of the JavaScript engine itself -- a TypeError, a stack overflow -- is worded by the engine, not by vega: only that
+  // vega refuses is compared, as `outcome` in differential-gen.mts does)
+  const refusalOf = (e: unknown): { refusal: string; incidental?: true } => ({ refusal: text(e), ...(e instanceof TypeError || e instanceof RangeError ? { incidental: true as const } : {}) })
+  let runtime: ReturnType<typeof vega.parse>
+  try { runtime = vega.parse(structuredClone(spec) as vega.Spec) } catch (e) { return refusalOf(e) }
   const errors: unknown[][] = []
   const quiet = quietLogger(errors)
-  const view = new vega.View(vega.parse(structuredClone(spec) as vega.Spec), { renderer: 'none', logLevel: vega.None, logger: quiet as never })
-  view.logger(quiet as never)
-  await view.runAsync()
-  if (errors.length) throw new Error(String(errors[0]))
+  let view: vega.View
+  try {
+    view = new vega.View(runtime, { renderer: 'none', logLevel: vega.None, logger: quiet as never })
+    view.logger(quiet as never)
+    await view.runAsync()
+  } catch (e) { return refusalOf(e) }
+  if (errors.length) return refusalOf(errors[0]![0])
   return view.scale('s') as unknown as AnyScale
 }
+/** Aster words one refusal on purpose: `[aster] <what> (vega: <vega's message>)`. */
+const WORDED = (m: string): string => /^\[aster\] .*\(vega: (.*)\)$/s.exec(m)?.[1] ?? m
 
 const MIXED: unknown[] = ['a', 'b', 'c', 'a b', 'A', '', ' ', 1, 2, 10, '1', '2', '10', 0, '0', true, false, 'true', null, NaN, 'NaN', 1.5, -1, '-1', 'x', 'y']
 const SORT_OPS = ['count', 'sum', 'min', 'max', 'mean', 'median', 'distinct', 'valid', 'missing', 'q1', 'average', 'bogus']
@@ -109,9 +125,13 @@ function genDomain(r: Rng, type: string): unknown {
   }
 }
 
+/** Texts a `{signal}` may hold in place of a value: constants and expressions of every kind. */
+const SIGNAL_TEXTS = ['true', 'false', 'null', 'undefined', '1/0', '0/0', '[5, 6]', '"x"', '0', '0.5', '-1', '[]', 'sig', 'scalar', 'sord']
+const SPELLINGS: Array<(n: string) => string> = [(n) => n.toUpperCase(), (n) => n[0]!.toUpperCase() + n.slice(1), (n) => [...n].map((c, i) => (i % 2 ? c.toUpperCase() : c)).join(''), (n) => `${n} `]
+
 function genSpec(r: Rng): { spec: unknown; probes: unknown[] } {
   const type = r.pick(['ordinal', 'ordinal', 'band', 'point', 'quantile', 'bin-ordinal', 'linear', 'ordinal'])
-  const s: Record<string, unknown> = { name: 's', type }
+  const s: Record<string, unknown> = { name: 's', type: r.chance(0.08) ? r.pick(SPELLINGS)(type) : type }
   s.domain = genDomain(r, type)
   const config: Record<string, unknown> = {}
   switch (r.int(8)) {
@@ -124,8 +144,22 @@ function genSpec(r: Rng): { spec: unknown; probes: unknown[] } {
     case 6: s.range = type === 'band' || type === 'point' ? [0, 300] : ['red', 'green', 'blue', 'black']; break
     default: s.range = { scheme: 'category10', count: 3 }; break
   }
-  if (r.chance(0.2)) s.domainImplicit = r.chance(0.5)
-  if (r.chance(0.2)) s.padding = r.pick([0, 0.2, 0.5])
+  // options, each written as a value or as a `{signal}` of its own text or of a text of another kind
+  const option = (key: string, values: unknown[]): void => {
+    if (!r.chance(0.2)) return
+    const v = r.pick(values)
+    s[key] = r.chance(0.4) ? { signal: r.chance(0.6) ? JSON.stringify(v) : r.pick(SIGNAL_TEXTS) } : v
+  }
+  option('domainImplicit', [true, false])
+  option('padding', [0, 0.2, 0.5])
+  option('paddingInner', [0, 0.3])
+  option('paddingOuter', [0, 0.4])
+  option('align', [0, 0.5, 1])
+  option('round', [true, false])
+  option('reverse', [true, false])
+  option('zero', [true, false])
+  option('nice', [true, 4])
+  option('clamp', [true, false])
   const signals = [
     { name: 'sig', value: ['p', 1, '1', 'q', 'a'] },
     { name: 'scalar', value: r.pick([5, 'five', null]) },
@@ -152,19 +186,32 @@ async function sweep(count: number, gen: () => { spec: unknown; probes: unknown[
   for (let i = 0; i < count; i++) {
     const { spec, probes } = gen()
     let want: unknown
-    try {
-      want = project(await vegaScale(spec), probes)
-      built++
-    } catch {
+    const made = await vegaScale(spec)
+    let refusal: string | undefined
+    let incidental = false
+    if ('refusal' in made) {
       want = { $: 'throw' }
+      refusal = made.refusal
+      incidental = made.incidental === true
       refused++
+    } else {
+      want = project(made, probes)
+      built++
     }
     let got: unknown
+    let said: string | undefined
+    const logged: string[] = []
     try {
-      const s = getChartInfo(structuredClone(spec) as never).scales.get('s') as AnyScale | undefined
+      const s = getChartInfo(structuredClone(spec) as never, { logger: { error: (...a: unknown[]) => { logged.push(text(a[0])) }, warn: () => {} } } as never).scales.get('s') as AnyScale | undefined
       got = s ? project(s, probes) : { $: 'throw' }
-    } catch {
+    } catch (e) {
       got = { $: 'throw' }
+      said = text(e)
+    }
+    said ??= logged[0]
+    // the message: vega's when it refuses, none when it builds (an Aster log there is a difference)
+    if ((incidental ? (said === undefined ? undefined : refusal) : refusal === undefined ? said : said === undefined ? said : WORDED(said)) !== refusal && bad.length < 4) {
+      bad.push(`#${i} ${JSON.stringify((spec as { scales: unknown[] }).scales)}\n   vega refusal ${JSON.stringify(refusal)}\n   aster said    ${JSON.stringify(said)}`)
     }
     if (JSON.stringify(want) !== JSON.stringify(got) && bad.length < 4) {
       const sp = spec as { scales: unknown[]; config?: unknown; signals: unknown[]; data: unknown[] }

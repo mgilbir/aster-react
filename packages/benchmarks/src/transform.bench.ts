@@ -93,23 +93,27 @@ async function main(): Promise<void> {
   const out: string[][] = []
   for (const c of cases) {
     if (only.length && !only.some((o) => c.name.includes(o))) continue
-    const data = (c.rows ?? mk)()
-    const run = (): void => {
+    // A fresh row set per run, made outside the timed window: a transform may write onto, or cache against, the rows it is given, and a
+    // set reused by every rep would measure the second pass over rows the first already touched.
+    const makeRows = c.rows ?? mk
+    const run = (data: Row[]): void => {
       const ctx = { runtime, signals: Object.create(null), datasets: (n: string) => (n === 'lk' ? lookupTable : undefined), hierarchies: new Map() }
       applyTransforms(data, c.t, ctx, 'src')
     }
-    try { run(); run() } catch (e) { // warm-up; a build that lacks the transform/op is reported, not fatal
-      out.push([c.name, String(data.length), 'unsupported', (e as Error).message.slice(0, 40), ''])
+    let rowCount = 0
+    try { for (let w = 0; w < 2; w++) { const d = makeRows(); rowCount = d.length; run(d) } } catch (e) { // warm-up; a build that lacks the transform/op is reported, not fatal
+      out.push([c.name, String(rowCount), 'unsupported', (e as Error).message.slice(0, 40), ''])
       continue
     }
     const samples: number[] = []
     for (let r = 0; r < reps; r++) {
+      const data = makeRows()
       const t0 = performance.now()
-      run()
+      run(data)
       samples.push(performance.now() - t0)
     }
     const s = summarize(samples)
-    out.push([c.name, String(data.length), fmt(s.median, 2), fmt(s.p95, 2), fmt(s.min, 2)])
+    out.push([c.name, String(rowCount), fmt(s.median, 2), fmt(s.p95, 2), fmt(s.min, 2)])
   }
   console.log(table(`transform microbenchmark (${N} rows, ${reps} reps; ms)`, ['transform', 'rows', 'median', 'p95', 'min'], out))
 }

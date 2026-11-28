@@ -7,7 +7,7 @@
  * thing, the test counts instead ("refused before encoding").
  */
 import { describe, it, expect } from 'vitest'
-import { attack, expectLimit } from './attack.testkit.js'
+import { attack, expectLimit, expectReturned } from './attack.testkit.js'
 
 const T = 40_000
 /**
@@ -16,6 +16,23 @@ const T = 40_000
  * the refusal is still asserted, on CPU time (the third argument of expectLimit), which load does not inflate.
  */
 const BACKSTOP_MS = 5000
+
+describe('the kit tells a crashed child from a clean return (C199)', () => {
+  it('a child that dies of the heap cap fails expectReturned and expectLimit with how it died', async () => {
+    const r = await attack(`const hold = []; for (;;) hold.push(new Array(1000000).fill(1.5))`)
+    expect(r.killed, r.stderr).toBe(false)
+    expect(r.reported, r.stderr).toBe(false)
+    expect(r.exitCode === 0 && r.signal === null, `exit ${r.exitCode} signal ${r.signal}`).toBe(false)
+    expect(() => expectReturned(r)).toThrow(/died without reporting/)
+    expect(() => expectLimit(r, /./)).toThrow(/died without reporting/)
+  }, T)
+  it('a body that returns is a return, with its value', async () => {
+    const r = await attack(`return 7`)
+    expectReturned(r, 7)
+    expect(() => expectReturned(r, 8)).toThrow()
+    expect(() => expectLimit(r, /./)).toThrow(/no error thrown/)
+  }, T)
+})
 
 describe('single-call allocators are bounded before they allocate', () => {
   it('sequence transform: 5e7 rows under maxRows', async () => {
@@ -26,10 +43,22 @@ describe('single-call allocators are bounded before they allocate', () => {
   }, T)
 
   it('sequence transform with only a time budget is cut off by the clock inside the loop', async () => {
+    // Below the rows ceiling (1e8 rows is refused by the ceiling before the loop runs, which said nothing of the clock: C200). The
+    // clock is VIRTUAL, as in the fit-loop test below: each read advances it by one, so the budget is a count of clock reads. Half
+    // the reads of a whole run land inside the sequence's loop, which is most of them; a loop that did not read the clock would
+    // leave the budget to run out at a checkpoint after it.
     const r = await attack(`
-      core.renderSpec({ data: [{ name: 't', transform: [{ type: 'sequence', start: 0, stop: 1e8, as: 'x' }] }] },
-        { limits: { maxTimeMs: 50 } })`)
-    expectLimit(r, /maxTimeMs|maxRows/, 50)
+      const spec = { data: [{ name: 't', transform: [{ type: 'sequence', start: 0, stop: 900000, as: 'x' }] }] }
+      const realNow = performance.now
+      let reads = 0
+      performance.now = () => ++reads
+      try {
+        core.renderSpec(spec, { limits: { maxTimeMs: 1e12 } })
+        const total = reads
+        reads = 0
+        core.renderSpec(spec, { limits: { maxTimeMs: Math.floor(total / 2) } })
+      } finally { performance.now = realNow }`)
+    expectLimit(r, /maxTimeMs exceeded during sequence$/)
   }, T)
 
   it('expression sequence(0, 5e7) in a formula', async () => {
@@ -212,12 +241,25 @@ describe('generated rows count against maxRows', () => {
 })
 
 describe('wall clock is sampled inside synchronous work', () => {
-  it('the encode loop samples the clock: 2.5M rows under 500 ms', async () => {
+  it('the encode loop samples the clock: 400k rows, the budget ends inside the encoding', async () => {
+    // The copy of the rows reads the clock too (every 1024 rows), so a real-time budget can end there and the test would name any
+    // phase: the budget is a count of reads of a VIRTUAL clock, set to run out at 85% of the reads of a whole run, which is past the
+    // copy and the dataset build, inside the loop that encodes the items. A loop that did not read the clock would leave the budget
+    // to run out at a checkpoint after it (and the phase would not be the mark's).
     const r = await attack(`
-      core.renderSpec({ width: 100, height: 100, data: [{ name: 't' }],
-        marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { field: 'a' }, y: { field: 'a' }, size: { value: 4 } } } }] },
-        { data: { t: new Array(2500000).fill({ a: 1 }) }, limits: { maxTimeMs: 500 } })`)
-    expectLimit(r, /maxTimeMs exceeded during (mark (symbol )?encoding|dataset build|startup)/, 500)
+      const spec = { width: 100, height: 100, data: [{ name: 't' }],
+        marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { field: 'a' }, y: { field: 'a' }, size: { value: 4 } } } }] }
+      const data = { t: new Array(400000).fill({ a: 1 }) }
+      const realNow = performance.now
+      let reads = 0
+      performance.now = () => ++reads
+      try {
+        core.renderSpec(spec, { data, limits: { maxTimeMs: 1e12 } })
+        const total = reads
+        reads = 0
+        core.renderSpec(spec, { data, limits: { maxTimeMs: Math.floor(total * 0.85) } })
+      } finally { performance.now = realNow }`)
+    expectLimit(r, /maxTimeMs exceeded during mark (symbol )?encoding$/)
   }, T)
 
   it('O(n^2) window median over 20k rows under 250 ms', async () => {
@@ -337,7 +379,16 @@ describe('regular expressions: the caps that can be enforced', () => {
     const r = await attack(`
       core.renderSpec({ data: [{ name: 't', values: [{ a: 1 }], transform: [{ type: 'formula', as: 'n', expr: "test(regexp(pad('a', 5000, 'a')), 'a')" }] }] },
         { limits: { maxStringLength: 100000, maxTimeMs: ${BACKSTOP_MS} } })`)
-    expectLimit(r, /maxStringLength/, 200)
+    // The pattern cap is fixed (1024): a maxStringLength of 100 000 neither raises it nor is the limit named (C655).
+    expectLimit(r, /regexSafety: pattern length 5000 > 1024 \(the fixed cap/, 200)
+    expect(r.threw?.message).not.toMatch(/maxStringLength/)
+  }, T)
+
+  it('regexp() with a pattern over a maxStringLength below the fixed cap names maxStringLength', async () => {
+    const r = await attack(`
+      core.renderSpec({ data: [{ name: 't', transform: [{ type: 'formula', as: 'n', expr: "test(regexp(datum.p), 'a')" }] }] },
+        { data: { t: [{ p: 'a'.repeat(500) }] }, limits: { maxStringLength: 100, maxTimeMs: ${BACKSTOP_MS} } })`)
+    expectLimit(r, /maxStringLength 500 > 100 \(regular expression pattern\)/, 200)
   }, T)
 })
 
@@ -389,10 +440,11 @@ describe('maxPathLength and maxStringLength cover generated paths and text array
 // raw RangeError. Each is paired with a large-but-legitimate input that must still render (the ceilings sit far above it).
 // ---------------------------------------------------------------------------
 describe('built-in ceilings hold without limits (crash-class amplification)', () => {
-  const okResult = (r: Awaited<ReturnType<typeof attack>>): void => {
-    expect(r.killed, `child had to be killed. stderr: ${r.stderr}`).toBe(false)
-    expect(r.threw, JSON.stringify(r)).toBeNull()
-  }
+  // The legitimate input rendered: the child reported, nothing threw, and the body returned `true` (a non-empty SVG). A child that
+  // died of the 512 MB cap reports nothing; it must fail here, not pass as "no error" (C199).
+  const okResult = (r: Awaited<ReturnType<typeof attack>>): void => expectReturned(r, true)
+  /** The body that renders `args` and returns whether the SVG is non-empty. */
+  const renders = (args: string): string => `return core.renderSpec(${args}).length > 0`
   const CEILING = /built-in ceiling that applies even without limits/
   const axisSpec = (extra: string) => `{
     width: 300, height: 200,
@@ -411,8 +463,8 @@ describe('built-in ceilings hold without limits (crash-class amplification)', ()
     expect(r.threw!.message).toMatch(/limits\.maxRows/)
   }, T)
   it('topojson: a topology decoding to 1M positions still renders; limits.maxGeneratedRows raises the ceiling', async () => {
-    okResult(await attack(`${topo(1000)}; core.renderSpec(${topoSpec})`))
-    okResult(await attack(`${topo(2500)}; core.renderSpec(${topoSpec}, { limits: { maxGeneratedRows: 4000000 } })`))
+    okResult(await attack(`${topo(1000)}; ${renders(topoSpec)}`))
+    okResult(await attack(`${topo(2500)}; ${renders(`${topoSpec}, { limits: { maxGeneratedRows: 4000000 } }`)}`))
   }, T)
 
   it('axis tickCount 2e6 with an empty limits object (fatal OOM before)', async () => {
@@ -424,11 +476,11 @@ describe('built-in ceilings hold without limits (crash-class amplification)', ()
     expectLimit(await attack(`core.renderSpec(${axisSpec('tickCount: 2000000')})`), CEILING, 200)
   }, T)
   it('a dense axis (tickCount 5000) still renders; limits.maxItems raises the ceiling', async () => {
-    okResult(await attack(`core.renderSpec(${axisSpec('tickCount: 5000')})`))
-    okResult(await attack(`core.renderSpec(${axisSpec('tickCount: 150000')}, { limits: { maxItems: 1000000 } })`))
+    okResult(await attack(renders(axisSpec('tickCount: 5000'))))
+    okResult(await attack(renders(`${axisSpec('tickCount: 150000')}, { limits: { maxItems: 1000000 } }`)))
   }, T)
 
-  const seq = (stop: string, limits = '') => `core.renderSpec({ data: [{ name: 't', transform: [{ type: 'sequence', start: 0, stop: ${stop}, as: 'x' }] }] }${limits})`
+  const seq = (stop: string, limits = '') => `return core.renderSpec({ data: [{ name: 't', transform: [{ type: 'sequence', start: 0, stop: ${stop}, as: 'x' }] }] }${limits}).length > 0`
   it('sequence transform 5e7 rows: with no limits, and with limits that do not name rows', async () => {
     expectLimit(await attack(seq('5e7')), CEILING, 200)
     expectLimit(await attack(seq('5e7', ', { limits: { maxStringLength: 10000, maxItems: 1000 } }')), CEILING, 200)
@@ -447,7 +499,7 @@ describe('built-in ceilings hold without limits (crash-class amplification)', ()
   const cols = (n: number, limits = '') => `
     const spec = JSON.parse(trellisSpec)
     spec.layout.columns = ${n}
-    core.renderSpec(spec${limits})`
+    return core.renderSpec(spec${limits}).length > 0`
   it('trellis layout.columns 5e7 (3.7 s before, even under maxTimeMs 100)', async () => {
     // Under a 100 ms time budget the attack must be bounded either way: on a fast machine the facet-columns ceiling trips first,
     // on a slow or loaded one the clock can trip first (both are AsterLimitError). Which limit names the error is a race, so this
@@ -466,7 +518,7 @@ describe('built-in ceilings hold without limits (crash-class amplification)', ()
   const nested = (depth: number, limits = '') => `
     let o = { type: 'group' }; const root = o
     for (let i = 0; i < ${depth}; i++) { const n = { type: 'group' }; o.marks = [n]; o = n }
-    core.renderSpec({ width: 10, height: 10, marks: [root] }${limits})`
+    return core.renderSpec({ width: 10, height: 10, marks: [root] }${limits}).length > 0`
   it('a spec nested 20000 deep with no limits is a typed error, not a RangeError', async () => {
     const r = await attack(nested(20000))
     expectLimit(r, /maxDepth 1001 > 1000/, 100)

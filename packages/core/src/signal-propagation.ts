@@ -43,8 +43,13 @@ export function follow(source: SignalNode, target: SignalNode): void {
   if (!source.targets.includes(target)) source.targets.push(target)
 }
 
-/** A bound on the walk below, for a cycle that does not come back to the node being placed. */
-const ORDER_LIMIT = 1_000_000
+/**
+ * Propagations one delivery may run before it is abandoned (a `modify` whose dataset feeds the signal that modifies it pulses
+ * again after every run): far more than any chart needs, and what a run-away chain reaches in a fraction of a second.
+ */
+export const MAX_PROPAGATIONS = 1000
+/** What `propagate` answers for a propagation the delivery's budget refused. */
+const ABANDONED: Array<() => void> = []
 
 export class Propagation {
   /** The number of the current (or last) propagation; the first is 1. */
@@ -56,8 +61,17 @@ export class Propagation {
   private running = false
   private after: Array<{ priority: number; callback: () => void }> = []
 
-  /** `onError`: an error raised by a node (the rest of that propagation is abandoned) or by a handler. */
-  constructor(private readonly onError: (e: unknown) => void) {}
+  /** Propagations run since the outermost `evaluate` began (see MAX_PROPAGATIONS). */
+  private runs = 0
+  /** Inside the outermost `evaluate`, running callbacks: a nested `evaluate` is run after the callback that asked, not inside it. */
+  private draining = false
+  private requested = false
+
+  /**
+   * `onError`: an error raised by a node (the rest of that propagation is abandoned) or by a handler. `beforeRun`: called before
+   * every propagation of a delivery with how many it has run (the delivery's budget: its clock), and may throw to end it.
+   */
+  constructor(private readonly onError: (e: unknown) => void, private readonly beforeRun: (runs: number) => void = () => {}) {}
 
   /** Give `n` the next place in the order. */
   add(n: SignalNode): SignalNode {
@@ -68,19 +82,28 @@ export class Propagation {
   /**
    * `target` reads `sources`: when one of them comes after it, it and everything downstream of it are placed after all that is
    * placed. Throws on a cycle that comes back to `target`.
+   *
+   * vega-dataflow's `rerank` walks every PATH from `target` (a stack, no visited set), giving each node it pops the next rank, so
+   * a node reached by several paths ends at the rank of its last visit: exponential in a lattice of diamonds. The same final order
+   * is that of the last visit in a pre-order walk of the paths, which is the reverse post-order of a depth-first walk that visits
+   * each node once, children last-to-first: computed here in time linear in what is downstream (the property test compares the
+   * two on generated graphs). A cycle is a path that comes back to `target`.
    */
   connect(target: SignalNode, sources: readonly SignalNode[]): void {
     if (!sources.some((s) => target.order < s.order)) return
-    const pending = [target]
-    for (let steps = 0; pending.length; ++steps) {
-      if (steps > ORDER_LIMIT) throw new Error('Cycle detected in dataflow graph.')
-      const n = pending.pop()!
-      this.add(n)
-      for (let i = n.targets.length; --i >= 0;) {
-        pending.push(n.targets[i]!)
-        if (n.targets[i] === target) throw new Error('Cycle detected in dataflow graph.')
-      }
+    const seen = new Set<SignalNode>([target])
+    const post: SignalNode[] = []
+    const stack: Array<[SignalNode, number]> = [[target, target.targets.length]]
+    while (stack.length) {
+      const top = stack[stack.length - 1]!
+      if (top[1] === 0) { stack.pop(); post.push(top[0]); continue }
+      const child = top[0].targets[--top[1]]!
+      if (child === target) throw new Error('Cycle detected in dataflow graph.')
+      if (seen.has(child)) continue
+      seen.add(child)
+      stack.push([child, child.targets.length])
     }
+    for (let i = post.length; --i >= 0;) this.add(post[i]!)
   }
 
   /**
@@ -107,16 +130,59 @@ export class Propagation {
       this.onError(new Error('Dataflow already running. Use runAsync() to chain invocations.'))
       return
     }
+    if (this.draining) {
+      // (a callback asks for another propagation, as vega's modify does from its `runAfter`: it runs once the callback returns,
+      // with its own callbacks, before the next callback of the propagation that queued this one, as vega's awaited `run()`
+      // does; a chain of them is a loop here, not a stack)
+      if (handlers) {
+        try { handlers() } catch (e) { this.onError(e) }
+      }
+      this.requested = true
+      return
+    }
+    this.runs = 0
+    this.draining = true
+    try {
+      const frames: Array<Array<() => void>> = [this.propagate(handlers)]
+      while (frames.length) {
+        const frame = frames[frames.length - 1]!
+        const callback = frame.shift()
+        if (callback === undefined) { frames.pop(); continue }
+        this.requested = false
+        try { callback() } catch (e) { this.onError(e) }
+        if (!this.requested) continue
+        this.requested = false
+        const next = this.propagate()
+        // (a delivery past its budget ends: nothing it queued runs)
+        if (next === ABANDONED) frames.length = 0
+        else frames.push(next)
+      }
+    } finally {
+      this.draining = false
+      this.requested = false
+    }
+  }
+
+  /** One propagation (after `handlers`): its callbacks, highest priority first; ABANDONED when the delivery's budget ended it. */
+  private propagate(handlers?: () => void): Array<() => void> {
     if (handlers) {
       try { handlers() } catch (e) { this.onError(e) }
     }
-    if (!this.touched.length) return
+    if (!this.touched.length) return []
+    try {
+      if (++this.runs > MAX_PROPAGATIONS) throw new Error(`a delivery ran more than ${MAX_PROPAGATIONS} propagations (a modify that feeds itself?)`)
+      this.beforeRun(this.runs)
+    } catch (e) {
+      this.touched = []
+      this.after = []
+      this.onError(e)
+      return ABANDONED
+    }
     ++this.clock
     this.running = true
     const touched = this.touched
     this.touched = []
     for (const n of touched) this.enqueue(n)
-    let failed = false
     try {
       while (this.queue.length) {
         const n = this.queue.pop()!
@@ -126,18 +192,15 @@ export class Propagation {
       }
     } catch (e) {
       this.queue.length = 0
-      failed = true
       this.running = false
       this.after = []
       this.onError(e)
+      return []
     }
     this.running = false
-    if (failed || !this.after.length) return
-    const callbacks = this.after.sort((a, b) => b.priority - a.priority)
+    const callbacks = this.after.sort((a, b) => b.priority - a.priority).map((a) => a.callback)
     this.after = []
-    for (const { callback } of callbacks) {
-      try { callback() } catch (e) { this.onError(e) }
-    }
+    return callbacks
   }
 
   /** Queue `n` if it has not been queued in this propagation: the queue is kept with the next to run last, equals in the order they came. */

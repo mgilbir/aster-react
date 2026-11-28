@@ -24,3 +24,13 @@ export function lexedText(str: string): string {
   return str.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16))).replace(WIDE_BLANKS, ' ')
 }
 
+
+/**
+ * A pattern that finds a call of one of `names` (a regular-expression alternation) in text read by {@link lexedText}, the way the
+ * evaluator resolves the callee and not the way a call is usually written: the parentheses around a callee change nothing
+ * (`(data)('t')`, `((now))()`) and the encoders' `_name` is `name`. It is a filter before a parse (a word in a string literal, or a
+ * property of that name, finds a call that is not there, at worst), so it finds every spelling and never fewer.
+ */
+export function callPattern(names: string): RegExp {
+  return new RegExp(`(?<!\\w)_?(?:${names})\\b[\\s)]*\\(`)
+}

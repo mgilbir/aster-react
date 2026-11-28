@@ -16,7 +16,8 @@
  *     and its `types` and `default` targets exist,
  *  6. `tsc` typechecks a consumer file that uses the public types, with
  *     `module: nodenext` so the `exports` map and its `types` conditions are
- *     resolved exactly as a consumer's compiler resolves them,
+ *     resolved exactly as a consumer's compiler resolves them; the internal entries
+     (`@aster-charts/core/internal*`, not public API) must declare nothing to it,
  *  7. a Vega and a Vega-Lite render run through the installed packages,
  *  8. a consumer app that depends on import side effects (`@aster-charts/react/vl`, `@aster-charts/core/geo`,
  *     `@aster-charts/core/transforms`, the guide captions) is BUNDLED from the installed tarballs with esbuild
@@ -29,11 +30,11 @@
  */
 import { build } from 'esbuild'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { cli } from './lib/cli.mjs'
+import { makeTempDir, removeTempDir } from './lib/temp-dir.mjs'
 
 cli({ url: import.meta.url })
 
@@ -58,12 +59,32 @@ for (const pkg of PUBLIC) {
   }
 }
 
+/** An internal entry (plumbing for the sibling packages; not public API): `@aster-charts/core/internal*`. */
+const isInternalEntry = (sub) => /^\.\/internal(\/|$)/.test(sub)
+
 /** Every `exports` key except `./package.json`, as [subpath, { types, default }]. */
 function entriesOf(manifest) {
   return Object.entries(manifest.exports ?? {}).filter(([k]) => k !== './package.json')
 }
 
-const tmp = mkdtempSync(join(tmpdir(), 'aster-publish-'))
+/** Every string leaf of an `exports` target, whatever the conditions around it (`types`, `default`, `browser`, `import`, ...). */
+function leavesOf(target) {
+  if (typeof target === 'string') return [target]
+  if (Array.isArray(target)) return target.flatMap(leavesOf)
+  if (target && typeof target === 'object') return Object.values(target).flatMap(leavesOf)
+  return []
+}
+
+/** The string leaves a `browser` condition (at any depth) points at. */
+function browserLeavesOf(target) {
+  if (target && typeof target === 'object' && !Array.isArray(target)) {
+    return Object.entries(target).flatMap(([cond, v]) => (cond === 'browser' ? leavesOf(v) : browserLeavesOf(v)))
+  }
+  return Array.isArray(target) ? target.flatMap(browserLeavesOf) : []
+}
+
+// `fail()` ends the process with process.exit, which skips the `finally` below: the directory is also removed on exit (temp-dir.mjs).
+const tmp = makeTempDir('aster-publish-')
 try {
   // 1) Pack the way the release packs: `pnpm pack` rewrites `workspace:` ranges to real versions.
   const tarballs = new Map()
@@ -99,11 +120,21 @@ try {
     const m = manifests.get(pkg)
     const wanted = [...REQUIRED]
     for (const [sub, target] of entriesOf(m)) {
-      for (const cond of ['types', 'default']) {
-        if (typeof target?.[cond] !== 'string') fail(`@aster-charts/${pkg} exports["${sub}"] has no "${cond}" condition`)
-        wanted.push(target[cond].replace(/^\.\//, ''))
+      if (isInternalEntry(sub)) {
+        // a consumer's declaration is a module that declares nothing (step 6b proves it); the repo's own `aster-internal` condition
+        // names the real one, which is a build product and is not asked for here
+        if (target?.types !== './dist/not-public.d.ts') fail(`@aster-charts/${pkg} exports["${sub}"] is internal (not public API) and must declare nothing to a consumer: "types": "./dist/not-public.d.ts"`)
+        if (typeof target?.default !== 'string') fail(`@aster-charts/${pkg} exports["${sub}"] has no "default" condition`)
+      } else {
+        for (const cond of ['types', 'default']) {
+          if (typeof target?.[cond] !== 'string') fail(`@aster-charts/${pkg} exports["${sub}"] has no "${cond}" condition`)
+        }
       }
+      // every file ANY condition names ships (the `browser` targets are not what Node resolves, so nothing else would read them)
+      for (const leaf of leavesOf(target)) wanted.push(leaf.replace(/^\.\//, ''))
     }
+    for (const top of ['main', 'module', 'types', 'typings', 'browser']) if (typeof m[top] === 'string') wanted.push(m[top].replace(/^\.\//, ''))
+    for (const bin of typeof m.bin === 'string' ? [m.bin] : Object.values(m.bin ?? {})) wanted.push(bin.replace(/^\.\//, ''))
     for (const want of wanted) {
       if (!names.has(want)) fail(`@aster-charts/${pkg} tarball is missing ${want}`)
     }
@@ -162,7 +193,8 @@ for (const s of specifiers) {
   }
 
   // 6) Typecheck a consumer that uses the public types, resolving through the `exports` map.
-  const typeImports = specifiers.map((s, i) => `import * as entry${i} from '${s}'\nvoid entry${i}`).join('\n')
+  const publicSpecifiers = specifiers.filter((s) => !/^@aster-charts\/[a-z]+\/internal(\/|$)/.test(s))
+  const typeImports = publicSpecifiers.map((s, i) => `import * as entry${i} from '${s}'\nvoid entry${i}`).join('\n')
   writeFileSync(join(project, 'consumer.ts'), `${typeImports}
 import type { VgSpec, RuntimeInput, SceneRoot, SpecLimits, ChartInfo } from '@aster-charts/core'
 import { renderSpec, evaluateChart, compileChart, getChartInfo, chartInfoFromScene, AsterLimitError } from '@aster-charts/core'
@@ -232,12 +264,36 @@ void [exported, fromLite, pngLiteEl, direct, PNG_MAX_PIXELS]
   }
   console.log('[verify-publish] consumer typecheck PASS (module nodenext, skipLibCheck off)')
 
+  // 6b) The internal entries are not public API: they declare nothing to a consumer, so TypeScript refuses every name imported from
+  //     one (they still import at run time: step 5, the React shells need them).
+  const internalSpecifiers = specifiers.filter((s) => !publicSpecifiers.includes(s))
+  if (internalSpecifiers.length === 0) fail('no internal entry is declared: the internal-entry check below would be vacuous')
+  mkdirSync(join(project, 'internal-probe'), { recursive: true })
+  writeFileSync(join(project, 'internal-probe', 'probe.ts'), internalSpecifiers.map((s, i) => `import { notPublicApi as internal${i} } from '${s}'\nvoid internal${i}`).join('\n') + '\n')
+  writeFileSync(join(project, 'internal-probe', 'tsconfig.json'), JSON.stringify({
+    compilerOptions: { target: 'es2022', module: 'nodenext', moduleResolution: 'nodenext', strict: true, noEmit: true, skipLibCheck: false, types: [], lib: ['es2022', 'dom'] },
+    files: ['probe.ts'],
+  }))
+  let probeOutput = ''
+  try {
+    run(process.execPath, [TSC, '-p', 'internal-probe/tsconfig.json'], { cwd: project, stdio: ['ignore', 'pipe', 'pipe'] })
+  } catch (e) {
+    probeOutput = String(e.stdout ?? '')
+  }
+  // (TypeScript names the one module every internal entry resolves to, so each import is matched by its line: the i-th is on line 2i+1)
+  const refused = internalSpecifiers.filter((_s, i) => new RegExp(`probe\\.ts\\(${2 * i + 1},\\d+\\): error TS2305: .*has no exported member 'notPublicApi'`).test(probeOutput))
+  if (refused.length !== internalSpecifiers.length) {
+    fail(`a consumer's TypeScript resolves declarations for internal entries (not public API): ${internalSpecifiers.filter((s) => !refused.includes(s)).join(', ')}\n${probeOutput.slice(0, 4000)}`)
+  }
+  console.log(`[verify-publish] the ${internalSpecifiers.length} internal entries declare nothing to a consumer PASS`)
+
   // 7) Render Vega and Vega-Lite through the installed packages.
   writeFileSync(join(project, 'smoke.mjs'), `
 import assert from 'node:assert'
 import { createElement } from 'react'
 import { renderToString, renderToReadableStream } from 'react-dom/server'
-import { renderSpec, compileChart, evaluateChart, transformRegistry } from '@aster-charts/core'
+import { renderSpec, compileChart, evaluateChart } from '@aster-charts/core'
+import { isAddonLoaded } from '@aster-charts/core/addons'
 import { createChartSession, patchSceneDom } from '@aster-charts/core/dom'
 import { renderSceneToCanvas } from '@aster-charts/core/canvas'
 import { buildHitIndex } from '@aster-charts/core/hit'
@@ -306,14 +362,14 @@ assert.ok(Object.isFrozen(interaction) && typeof interaction.buildHitIndex === '
 
 // The packed packages load the add-ons a spec needs by themselves (nothing above registered the transforms add-on): a streaming
 // server render waits for the dynamic import, in Node's own ESM loader, from the installed tarball, and sends the chart.
-assert.equal(transformRegistry.size, 0, 'no add-on is registered before the auto-load')
+assert.equal(isAddonLoaded('transforms'), false, 'no add-on is registered before the auto-load')
 const pie = { width: 120, height: 120, padding: 0, data: [{ name: 't', values: [{ v: 1 }, { v: 2 }, { v: 3 }], transform: [{ type: 'pie', field: 'v' }] }],
   marks: [{ type: 'arc', from: { data: 't' }, encode: { update: { x: { value: 60 }, y: { value: 60 }, outerRadius: { value: 50 }, startAngle: { field: 'startAngle' }, endAngle: { field: 'endAngle' }, fill: { value: 'tomato' } } } }] }
 const streamed = await renderToReadableStream(createElement(Chart, { spec: pie, width: 120, height: 120, a11y: false }))
 await streamed.allReady
 const pieHtml = await new Response(streamed).text()
 assert.ok(pieHtml.includes('<svg') && pieHtml.includes('mark-arc'), '<Chart> loaded the transforms add-on by itself and rendered the pie')
-assert.ok(transformRegistry.size > 0, 'and the add-on is registered now')
+assert.ok(isAddonLoaded('transforms'), 'and the add-on is registered now')
 
 const worker = handleChartWorkerRequest({ id: 1, spec: vega })
 assert.ok(worker.svg && worker.svg.includes('<svg'), 'worker request handler')
@@ -444,7 +500,32 @@ console.log('reeval ok')
     }
   }
   console.log('[verify-publish] the incremental engine from the installed tarballs: not in a renderSpec bundle, handed to an evaluateChart one')
+  // 8d) The `browser` condition of every export, from the INSTALLED tarballs: a bundle of one app that imports each such entry, resolved
+  //     with `conditions: ['browser']` the way a browser build does. Node resolves `default`, so no import above ever reads a `browser`
+  //     target; the file list of step 3 only proves the file exists, this proves the manifest resolves to it.
+  const browserEntries = []
+  for (const pkg of PUBLIC) {
+    for (const [sub, target] of entriesOf(manifests.get(pkg))) {
+      const leaves = browserLeavesOf(target)
+      if (leaves.length) browserEntries.push({ spec: sub === '.' ? manifests.get(pkg).name : `${manifests.get(pkg).name}/${sub.slice(2)}`, pkg, leaves })
+    }
+  }
+  if (browserEntries.length) {
+    const browserApp = browserEntries.map((e) => `import ${JSON.stringify(e.spec)}`).join('\n') + '\n'
+    const result = await build({
+      stdin: { contents: browserApp, resolveDir: project, loader: 'js' }, bundle: true, write: false, metafile: true, conditions: ['browser'],
+      format: 'esm', platform: 'browser', external: ['react', 'react-dom', 'react-dom/*', 'react/jsx-runtime'], define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent',
+    }).catch((e) => fail(`bundling every \`browser\` entry from the installed tarballs failed: ${e.message.split('\n')[0]}`))
+    const inputs = Object.keys(result.metafile.inputs).map((f) => f.replace(/\\/g, '/'))
+    for (const e of browserEntries) {
+      for (const leaf of e.leaves) {
+        const want = `${manifests.get(e.pkg).name}/${leaf.replace(/^\.\//, '')}`
+        if (!inputs.some((f) => f.endsWith(want))) fail(`${e.spec}: a bundle built with the browser condition does not read ${leaf} (it resolved the entry to something else)`)
+      }
+    }
+    console.log(`[verify-publish] ${browserEntries.length} entries with a browser condition resolve to their browser targets in a bundle built from the installed tarballs`)
+  }
   console.log('[verify-publish] PASS — packed with pnpm, installed with npm, every export imports and typechecks, Vega and Vega-Lite render, a tree-shaken bundle keeps its side effects')
 } finally {
-  rmSync(tmp, { recursive: true, force: true })
+  removeTempDir(tmp)
 }

@@ -323,9 +323,12 @@ export function accessor<Out>(
   }) as Accessor<Out>
 }
 
-/** The accessor's display name, or `null` for a non-accessor. */
-export function accessorName(fn: unknown): string | null {
-  return fn == null ? null : ((fn as Accessor).fname ?? null)
+/**
+ * The accessor's display name, or `null` for no accessor. An accessor made with no name (an `{expr}` parameter) has none:
+ * `undefined`, which an output written under it shows as the key `"undefined"`, as upstream does.
+ */
+export function accessorName(fn: unknown): string | null | undefined {
+  return fn == null ? null : (fn as Accessor).fname
 }
 
 /** The field names an accessor reads, or `null` for a non-accessor. */
@@ -473,6 +476,45 @@ export function pushAll<T>(target: T[], src: ArrayLike<T>): void {
 
 export const one = /* @__PURE__ */ accessor(() => 1, [], 'one')
 
+// --- process-wide tables keyed by text ----------------------------------------------------------------
+
+/** Every {@link TextTable} and {@link recentlyUsed} table, by name, with what it holds (for the test that bounds them all). */
+const TEXT_TABLES = new Map<string, () => { entries: number; chars: number; maxEntries: number; maxChars: number }>()
+/** Record a table bounded as a TextTable is but kept otherwise (expr-check.ts's two generations). */
+export function registerTextTable(name: string, stats: () => { entries: number; chars: number; maxEntries: number; maxChars: number }): void {
+  TEXT_TABLES.set(name, stats)
+}
+/** @internal what each process-wide text-keyed table holds now, against its bounds. */
+export const textTableStats = (): Array<{ name: string; entries: number; chars: number; maxEntries: number; maxChars: number }> =>
+  [...TEXT_TABLES].map(([name, stats]) => ({ name, ...stats() }))
+
+/**
+ * A process-wide table keyed by text that a spec or its data chooses (an expression, a selector, a field name, a path): bounded by
+ * its number of entries AND by the total length of its keys, since what an entry holds grows with its key (a tree, a path's
+ * numbers) and a count alone lets a few huge keys hold the process's memory. The oldest entries leave first; a key longer than a
+ * quarter of the character budget is not kept at all (it is made again when it is met again).
+ */
+export class TextTable<V> {
+  private readonly map = new Map<string, V>()
+  private chars = 0
+  constructor(name: string, readonly maxEntries: number, readonly maxChars: number) {
+    TEXT_TABLES.set(name, () => ({ entries: this.map.size, chars: this.chars, maxEntries, maxChars }))
+  }
+  get size(): number { return this.map.size }
+  get(key: string): V | undefined { return this.map.get(key) }
+  set(key: string, value: V): void {
+    if (key.length > this.maxChars / 4) return
+    if (this.map.has(key)) this.map.delete(key)
+    else this.chars += key.length
+    this.map.set(key, value)
+    while (this.map.size > this.maxEntries || this.chars > this.maxChars) {
+      const first = this.map.keys().next().value as string
+      this.map.delete(first)
+      this.chars -= first.length
+    }
+  }
+}
+
 // --- expression helpers ------------------------------------------------------
 
 /** Accessors `pluck` remembers; the least recently used is dropped past it. */
@@ -488,9 +530,12 @@ export const PLUCK_CACHE_MAX = 1024
  * the young half and is not next to go. So a loop over one or a few keys reads the table without rewriting it, and an entry used
  * within the last `max / 2` distinct keys is never dropped (recency among the young half is not kept). `size` is for the tests.
  */
-export function recentlyUsed<A, T>(max: number, make: (key: A) => T): ((key: A) => T) & { size: () => number } {
+export function recentlyUsed<A, T>(max: number, make: (key: A) => T, name = 'recentlyUsed', maxChars = 1 << 20): ((key: A) => T) & { size: () => number } {
   const table = new Map<string, { value: T; moved: number }>()
   let tick = 0
+  // (bounded by the length of the keys too, as a TextTable is: a key longer than a quarter of the budget is made each time)
+  let chars = 0
+  TEXT_TABLES.set(name, () => ({ entries: table.size, chars, maxEntries: max, maxChars }))
   const get = (key: A): T => {
     const id = String(key)
     const known = table.get(id)
@@ -503,8 +548,14 @@ export function recentlyUsed<A, T>(max: number, make: (key: A) => T): ((key: A) 
       return known.value
     }
     const value = make(key)
+    if (id.length > maxChars / 4) return value
     table.set(id, { value, moved: ++tick })
-    if (table.size > max) table.delete(table.keys().next().value as string)
+    chars += id.length
+    while (table.size > max || chars > maxChars) {
+      const first = table.keys().next().value as string
+      table.delete(first)
+      chars -= first.length
+    }
     return value
   }
   return Object.assign(get, { size: () => table.size })
@@ -518,7 +569,7 @@ export function recentlyUsed<A, T>(max: number, make: (key: A) => T): ((key: A) 
  * so the table keeps only the most recently used {@link PLUCK_CACHE_MAX} (an
  * accessor is a pure function of its name: a dropped one is simply rebuilt).
  */
-const pluckAccessors = recentlyUsed(PLUCK_CACHE_MAX, (name: unknown) => field(name))
+const pluckAccessors = recentlyUsed(PLUCK_CACHE_MAX, (name: unknown) => field(name), 'pluck accessors')
 
 /**
  * Read `name` off a datum, or off every datum of an array — the upstream
@@ -620,6 +671,28 @@ export const zoomLog = (domain: readonly number[], anchor: Anchor, scale: number
 export const zoomPow = (domain: readonly number[], anchor: Anchor, scale: number, exponent: number): [number, number] => zoom(domain, anchor, scale, powT(exponent), powT(1 / exponent))
 export const zoomSymlog = (domain: readonly number[], anchor: Anchor, scale: number, constant: number): [number, number] => zoom(domain, anchor, scale, symlogT(constant), symexpT(constant))
 
+/** The space a scale's interactive pan and zoom work in: `lift` takes a domain value there, `ground` brings it back. */
+export interface ScaleSpace { lift: TransformFn; ground: TransformFn }
+
+/**
+ * The space Vega-Lite's `bind: "scales"` pans and zooms a scale of `type` in (`panLog` / `panPow` / `panSymlog`, else
+ * `panLinear`), for a domain that starts at `d0`: the same lift and ground as those functions, so a move made in it is theirs.
+ * `sqrt`, `time` and `utc`, like `linear`, are linear (Vega-Lite maps only `log`, `pow` and `symlog` to their own functions).
+ */
+export function scaleSpace(type: unknown, d0: number, exponent = 1, constant = 1): ScaleSpace {
+  if (type === 'log') {
+    const sign = Math.sign(d0)
+    return { lift: logT(sign), ground: expT(sign) }
+  }
+  if (type === 'pow') return { lift: powT(exponent), ground: powT(1 / exponent) }
+  if (type === 'symlog') return { lift: symlogT(constant), ground: symexpT(constant) }
+  return { lift: coerceNumber, ground: identityT }
+}
+
+/** A move of a domain in a scale's space (see `scaleSpace`): vega-util's `pan` and `zoom`, given the space. */
+export const panIn = (space: ScaleSpace, domain: readonly number[], delta: number): [number, number] => pan(domain, delta, space.lift, space.ground)
+export const zoomIn = (space: ScaleSpace, domain: readonly number[], anchor: Anchor, scale: number): [number, number] => zoom(domain, anchor, scale, space.lift, space.ground)
+
 // --- tuples ------------------------------------------------------------------
 
 /**
@@ -667,6 +740,64 @@ export function markTupleAlways(t: object): void {
  */
 export const MARK_NODE: unique symbol = Symbol.for('aster.markNode') as never
 
+/** The scene node the `mark` of vega's root group item stands for (its root mark): `intersect()` walks the whole scene for it. */
+export const ROOT_MARK_NODE: object = Object.freeze({ root: true })
+
+/**
+ * Tuple identity across the engine's copies. vega hands every mark item, every transform that writes onto rows (a formula, a
+ * stack, a window) and every dataset derived by `source` the very tuple object, so an expression may compare rows by identity --
+ * `datum === src`, where an event put an item's `datum` in `src` (vega/reorderable-matrix). The engine copies a row where vega
+ * writes onto it, and a mark item's datum is a copy of its row: each such copy records the tuple it stands for (its origin), and
+ * the equality operators of the expression language compare two objects by the tuples they stand for (`sameTuple`). An origin
+ * outlives an evaluation as long as the rows it was copied from do (the host's rows, the spec's, the rows a kept step made).
+ * Recorded only while a chart whose expressions compare two objects is evaluated (see `CompiledChart.comparesTuples`).
+ */
+const ORIGINS = new WeakMap<object, object>()
+let linking = false
+
+/** Run `fn` recording the origin of the copies it makes when `on` (see above). */
+export function withTupleOrigins<T>(on: boolean, fn: () => T): T {
+  const outer = linking
+  linking = on
+  try { return fn() } finally { linking = outer }
+}
+
+/** A copy of row `r` that stands for the same tuple (see above). */
+export function copyTuple<T extends object>(r: T): T {
+  const c = { ...r }
+  if (linking) ORIGINS.set(c, ORIGINS.get(r) ?? r)
+  return c
+}
+
+/** A copy of row `r` with more fields (`{...r, ...more}`) that stands for the same tuple: a transform that writes onto it in vega. */
+export function copyTupleWith<T extends object>(r: T, more: Record<string, unknown>): T {
+  const c = { ...r, ...more }
+  if (linking) ORIGINS.set(c, ORIGINS.get(r) ?? r)
+  return c
+}
+
+/**
+ * Say that row `r` stands for the tuple `t` stands for: a host's row equal to the one it replaces, in an array the host's session found
+ * equal to the one before (the rows are the same tuples: vega's view keeps them). Recorded only while origins are (see above).
+ */
+export function standFor(r: object, t: object): void {
+  if (linking && r !== t) ORIGINS.set(r, ORIGINS.get(t) ?? t)
+}
+
+/** The row a copy stands for (the first row of the chain of copies it was made by), or the row itself (see above). */
+export function tupleOrigin(r: object): object {
+  return ORIGINS.get(r) ?? r
+}
+
+/** Whether `a` and `b` stand for one tuple: the same object, or copies of one (the expression language's `===` on objects). */
+export function sameTuple(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false
+  const ra = ORIGINS.get(a)
+  const rb = ORIGINS.get(b)
+  return (ra !== undefined || rb !== undefined) && (ra ?? a) === (rb ?? b)
+}
+
 /** vega-dataflow `isTuple`: whether the value is a registered tuple. */
 export function isTuple(t: unknown): boolean {
   return t !== null && typeof t === 'object' && TUPLES.has(t)
@@ -696,4 +827,27 @@ export const PRIMITIVE_TUPLE: unique symbol = Symbol('aster.primitiveTuple')
 /** The datum a tuple is: the primitive a box holds, else the tuple itself. */
 export function tupleDatum(t: unknown): unknown {
   return t !== null && typeof t === 'object' && PRIMITIVE_TUPLE in t ? (t as { [PRIMITIVE_TUPLE]: unknown })[PRIMITIVE_TUPLE] : t
+}
+
+/**
+ * Where a group item's content is drawn, relative to the frame around it: vega's renderers translate by `x || 0`, `y || 0` as the
+ * item holds them -- the SVG's `translate(x,y)`, the canvas's `translate(x, y)` -- and both drop a translate that is not two finite
+ * numbers (an SVG transform that does not parse is no transform; a canvas ignores a non-finite translate). So a group whose x is an
+ * infinity, or a string that is not a number, draws its content at the origin of the frame around it, whatever its y.
+ */
+export function drawnOffset(g: { x?: unknown; y?: unknown }): [number, number] {
+  const x = +((g.x || 0) as number)
+  const y = +((g.y || 0) as number)
+  return Number.isFinite(x) && Number.isFinite(y) ? [x, y] : [0, 0]
+}
+
+/**
+ * A group's width or height as vega's renderers read it for the frame of what it holds (a clip, the frame a mark's `clip` cuts to):
+ * `width || 0` as a number -- a missing or NaN size is 0, a numeric string its number, a negative or infinite size stays one (a
+ * canvas clips to a negative box; an SVG `rect` of negative or infinite size draws nothing, so its clip holds nothing). A group that
+ * is not an item of a group mark (a guide's, which has no size of its own) is the frame around it: `fallback`.
+ */
+export function frameSize(g: { width?: unknown; height?: unknown; _scope?: unknown; contentClip?: unknown }, side: 'width' | 'height', fallback: number): number {
+  const v = g[side]
+  return v === undefined && g._scope !== true && g.contentClip !== true ? fallback : +((v || 0) as number)
 }

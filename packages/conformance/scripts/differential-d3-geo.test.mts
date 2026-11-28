@@ -92,8 +92,8 @@ function runAsterOps(type: string, ops: Op[], digits: number | null | undefined)
         case 'bounds': return path().bounds(samples[args[0] as string])
         case 'centroid': return path().centroid(samples[args[0] as string])
         case 'measure': return path().measure(samples[args[0] as string])
-        case 'call': return p.project(args[0][0], args[0][1])
-        case 'invert': return p.invert ? p.invert(args[0][0], args[0][1]) : undefined
+        case 'call': return p.project((args[0] as [number, number])[0], (args[0] as [number, number])[1])
+        case 'invert': return p.invert ? p.invert((args[0] as [number, number])[0], (args[0] as [number, number])[1]) : undefined
         default: throw new Error('unknown geo op ' + name)
       }
     }),

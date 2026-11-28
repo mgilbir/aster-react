@@ -28,7 +28,7 @@ interface Topology {
   transform?: Transform
 }
 
-interface TopoObject {
+export interface TopoObject {
   type: string
   id?: string | number
   bbox?: number[]
@@ -58,8 +58,78 @@ interface Feature {
 /** The object a name or an object refers to; a name must be an own property of `objects` (not `constructor`, ...). */
 function resolveObject(topology: Topology, object: TopoObject | string | undefined): TopoObject {
   if (typeof object !== 'string') return object as TopoObject
-  if (!Object.hasOwn(topology.objects ?? {}, object)) throw new Error(`[aster] topojson object "${object}" not found`)
-  return topology.objects[object] as TopoObject
+  const objects = topology.objects as unknown
+  if (objects === null || typeof objects !== 'object' || !Object.hasOwn(objects, object)) throw new Error(`[aster] topojson object "${object}" not found`)
+  const o = (objects as Record<string, unknown>)[object]
+  if (o === null || typeof o !== 'object') throw malformed(`object "${object}" is not a geometry object`)
+  return o as TopoObject
+}
+
+// -- what the decoder reads, checked as it reads it -------------------------------------------------------------------
+//
+// A topology is data from a url or a spec: one that does not have the shape TopoJSON defines is an `[aster] topojson: ...`
+// error naming what is wrong, never a raw TypeError from deep inside the decoder, and an arc index is checked before it
+// sizes anything (an index of 4e9 must not make a walk over 4e9 slots).
+
+function malformed(what: string): Error {
+  return new Error(`[aster] topojson: ${what}`)
+}
+
+/** `v` as a list, or a malformed-topology error naming `what`. */
+function listOf<T>(v: unknown, what: string): T[] {
+  if (!Array.isArray(v)) throw malformed(`${what} must be an array`)
+  return v as T[]
+}
+
+/** The arc list of a topology. */
+function arcsOfTopology(topology: Topology): number[][][] {
+  return listOf<number[][]>(topology.arcs, 'the topology\'s "arcs"')
+}
+
+/** The array position of a signed arc index (`~i` for arc `i` walked backwards), checked against the arcs there are. */
+function arcSlot(index: unknown, count: number): number {
+  if (typeof index !== 'number' || !Number.isInteger(index)) throw malformed(`an arc index must be an integer, got ${JSON.stringify(index) ?? String(index)}`)
+  const slot = index < 0 ? ~index : index
+  if (slot >= count) throw malformed(`arc index ${index} refers to arc ${slot}, but the topology has ${count} arcs`)
+  return slot
+}
+
+/**
+ * A reader of the arcs by signed index: each arc a list (of positions; a list of fewer than two decodes as upstream decodes it,
+ * and only the mesh's stitching, which reads an arc's second position, needs two). Each position is checked where it is read
+ * ({@link position}): a second pass over the arc would cost as much as decoding it.
+ */
+function arcReader(arcs: readonly unknown[], minLength = 0): (index: unknown) => Position[] {
+  const count = arcs.length
+  return (index) => {
+    // (arcSlot, with the common case inline: this is read once per arc a geometry refers to)
+    const slot = typeof index === 'number' && index >= 0 && index < count && (index | 0) === index ? index : arcSlot(index, count)
+    const arc = arcs[slot]
+    if (!Array.isArray(arc) || arc.length < minLength) {
+      throw malformed(minLength ? `arc ${slot} must be a list of at least ${minLength} positions` : `arc ${slot} must be a list`)
+    }
+    return arc as Position[]
+  }
+}
+
+/**
+ * A position as read from an arc. A delta-encoded one is read by index, so anything but null or undefined decodes (a value that
+ * is not a list to NaN, as upstream); a plain one is copied, so it must be a list.
+ */
+function position(p: unknown, copied = false): Position {
+  if (p == null || (copied && !Array.isArray(p))) throw malformed(`a position must be a list, got ${JSON.stringify(p) ?? String(p)}`)
+  return p as Position
+}
+
+/** A topology's transform, when it has one: a `scale` and a `translate`, each two numbers. */
+function transformOf(topology: Topology): Transform | undefined {
+  const t = topology.transform as unknown
+  if (t == null) return undefined
+  const pair = (v: unknown): boolean => Array.isArray(v) && v.length >= 2 && typeof v[0] === 'number' && typeof v[1] === 'number'
+  if (typeof t !== 'object' || !pair((t as Transform).scale) || !pair((t as Transform).translate)) {
+    throw malformed('a transform needs "scale" and "translate", each a pair of numbers')
+  }
+  return t as Transform
 }
 
 // -- geometry -------------------------------------------------------------------------------------------------------
@@ -69,7 +139,7 @@ function decodePositions(positions: readonly Position[], transform: Transform | 
   const n = positions.length
   const out = new Array<Position>(n)
   if (!transform) {
-    for (let i = 0; i < n; i++) out[i] = positions[i]!.slice()
+    for (let i = 0; i < n; i++) out[i] = position(positions[i], true).slice()
     return out
   }
   const kx = transform.scale[0]
@@ -79,8 +149,9 @@ function decodePositions(positions: readonly Position[], transform: Transform | 
   let x = 0
   let y = 0
   for (let i = 0; i < n; i++) {
-    const p = positions[i]!
+    const p = position(positions[i])
     const q = [(x += p[0]!) * kx + dx, (y += p[1]!) * ky + dy]
+    // bounded: a position's extra dimensions (z, m, ...)
     for (let j = 2; j < p.length; j++) q.push(p[j]!)
     out[i] = q
   }
@@ -97,7 +168,9 @@ function appendTransformed(out: Position[], raw: readonly Position[], transform:
   let y = 0
   for (let i = 0; i < raw.length; i++) {
     const p = raw[i]!
+    if (p == null) position(p)
     const q = [(x += p[0]!) * kx + dx, (y += p[1]!) * ky + dy]
+    // bounded: a position's extra dimensions (z, m, ...)
     for (let j = 2; j < p.length; j++) q.push(p[j]!)
     out.push(q)
   }
@@ -105,6 +178,7 @@ function appendTransformed(out: Position[], raw: readonly Position[], transform:
 
 /** Reverse `points` from index `from` to the end. */
 function reverseTail(points: Position[], from: number): void {
+  // bounded: two ends meeting in the middle of the list
   for (let i = from, j = points.length - 1; i < j; i++, j--) {
     const t = points[i]!
     points[i] = points[j]!
@@ -114,58 +188,67 @@ function reverseTail(points: Position[], from: number): void {
 
 /** Decodes the geometries of one topology. */
 function decoder(topology: Topology) {
-  const { arcs, transform } = topology
+  const arcAt = arcReader(arcsOfTopology(topology))
+  const transform = transformOf(topology)
   let decoded = 0
 
   /** Append arc `index` (negative: backwards) to `points`, which already holds the line so far. */
   function appendArc(points: Position[], index: number): void {
     // the joint is the previous arc's last position and this arc's first: keep one
     if (points.length) points.pop()
-    const raw = arcs[index < 0 ? ~index : index] as Position[]
+    const raw = arcAt(index)
     // one arc can be referenced from any number of geometries, so the decoded size is not bounded by the input's
     meterCoords(raw.length, 'topojson arcs', (decoded += raw.length))
     const first = points.length
     if (transform) appendTransformed(points, raw, transform)
-    else for (let i = 0; i < raw.length; i++) points.push(raw[i]!.slice())
+    else for (let i = 0; i < raw.length; i++) points.push(position(raw[i], true).slice())
     if (index < 0) reverseTail(points, first)
   }
 
-  function line(indices: number[]): Position[] {
+  function line(indices: unknown): Position[] {
     const points: Position[] = []
-    for (const index of indices) appendArc(points, index)
+    for (const index of listOf<number>(indices, 'a line\'s "arcs"')) appendArc(points, index)
     if (points.length < 2) points.push(points[0] as Position)
     return points
   }
 
-  function ring(indices: number[]): Position[] {
+  function ring(indices: unknown): Position[] {
     const points = line(indices)
+    // bounded: at most 3 points are added
     while (points.length < 4) points.push(points[0] as Position)
     return points
   }
 
-  const polygon = (rings: number[][]): Position[][] => rings.map(ring)
+  const polygon = (rings: unknown): Position[][] => listOf<number[]>(rings, 'a polygon\'s "arcs"').map(ring)
   /** A point geometry's position is absolute (scaled and shifted), not a delta from another position. */
-  const point = (p: Position): Position => decodePositions([p], transform)[0]!
+  const point = (p: unknown): Position => decodePositions([listOf<number>(p, 'a point\'s position')], transform)[0]!
 
   function geometry(o: TopoObject): Geometry | null {
     const type = o.type
     switch (type) {
-      case 'GeometryCollection': return { type, geometries: o.geometries!.map(geometry) }
-      case 'Point': return { type, coordinates: point(o.coordinates as Position) }
-      case 'MultiPoint': return { type, coordinates: (o.coordinates as Position[]).map(point) }
-      case 'LineString': return { type, coordinates: line(o.arcs as number[]) }
-      case 'MultiLineString': return { type, coordinates: (o.arcs as number[][]).map(line) }
-      case 'Polygon': return { type, coordinates: polygon(o.arcs as number[][]) }
-      case 'MultiPolygon': return { type, coordinates: (o.arcs as number[][][]).map(polygon) }
+      case 'GeometryCollection': return { type, geometries: geometriesOf(o).map(geometry) }
+      case 'Point': return { type, coordinates: point(o.coordinates) }
+      case 'MultiPoint': return { type, coordinates: listOf<Position>(o.coordinates, 'a MultiPoint\'s "coordinates"').map(point) }
+      case 'LineString': return { type, coordinates: line(o.arcs) }
+      case 'MultiLineString': return { type, coordinates: listOf<number[]>(o.arcs, 'a MultiLineString\'s "arcs"').map(line) }
+      case 'Polygon': return { type, coordinates: polygon(o.arcs) }
+      case 'MultiPolygon': return { type, coordinates: listOf<number[][]>(o.arcs, 'a MultiPolygon\'s "arcs"').map(polygon) }
       default: return null
     }
   }
   return geometry
 }
 
+/** The members of a GeometryCollection, each a geometry object. */
+function geometriesOf(o: TopoObject): TopoObject[] {
+  const list = listOf<TopoObject>(o.geometries, 'a GeometryCollection\'s "geometries"')
+  for (const g of list) if (g === null || typeof g !== 'object') throw malformed('a GeometryCollection has a member that is not a geometry object')
+  return list
+}
+
 // -- feature --------------------------------------------------------------------------------------------------------
 
-function featureOf(topology: Topology, o: TopoObject, geometry: (o: TopoObject) => Geometry | null): Feature {
+function featureOf(o: TopoObject, geometry: (o: TopoObject) => Geometry | null): Feature {
   const { id, bbox } = o
   const properties = o.properties == null ? {} : o.properties
   const g = geometry(o)
@@ -179,13 +262,14 @@ export function feature(topology: Topology, object: TopoObject | string): Featur
   const o = resolveObject(topology, object)
   const geometry = decoder(topology)
   return o.type === 'GeometryCollection'
-    ? { type: 'FeatureCollection', features: o.geometries!.map((g) => featureOf(topology, g, geometry)) }
-    : featureOf(topology, o, geometry)
+    ? { type: 'FeatureCollection', features: geometriesOf(o).map((g) => featureOf(g, geometry)) }
+    : featureOf(o, geometry)
 }
 
 // -- mesh -----------------------------------------------------------------------------------------------------------
 
-type Filter = (a: TopoObject, b: TopoObject) => boolean
+/** Which arcs a mesh keeps: called with the first and the last geometry object that use an arc. */
+export type MeshFilter = (a: TopoObject, b: TopoObject) => boolean
 
 /**
  * The arcs a geometry uses, one entry per arc in ascending arc index: the arc as first referenced (its sign says which
@@ -193,16 +277,17 @@ type Filter = (a: TopoObject, b: TopoObject) => boolean
  * the usual `a !== b` that keeps the arcs shared by two different shapes (interior borders); with `a === b` the arcs
  * used by one shape only (the outline).
  */
-function arcsOf(root: TopoObject, filter: Filter | undefined): number[] {
+function arcsOf(root: TopoObject, filter: MeshFilter | undefined, arcCount: number): number[] {
   const first: number[] = []
   const firstGeometry: TopoObject[] = []
   const lastGeometry: TopoObject[] = []
   let current: TopoObject
 
-  const note = (index: number): void => {
-    const arc = index < 0 ? ~index : index
+  const note = (index: unknown): void => {
+    // (checked before it sizes the tables: an index past the arcs there are is an error, not a walk over that many slots)
+    const arc = arcSlot(index, arcCount)
     if (firstGeometry[arc] === undefined) {
-      first[arc] = index
+      first[arc] = index as number
       firstGeometry[arc] = current
     }
     lastGeometry[arc] = current
@@ -210,10 +295,13 @@ function arcsOf(root: TopoObject, filter: Filter | undefined): number[] {
   const visit = (o: TopoObject): void => {
     current = o
     switch (o.type) {
-      case 'GeometryCollection': o.geometries!.forEach(visit); break
-      case 'LineString': (o.arcs as number[]).forEach(note); break
-      case 'MultiLineString': case 'Polygon': (o.arcs as number[][]).forEach((a) => a.forEach(note)); break
-      case 'MultiPolygon': (o.arcs as number[][][]).forEach((p) => p.forEach((a) => a.forEach(note))); break
+      case 'GeometryCollection': geometriesOf(o).forEach(visit); break
+      case 'LineString': listOf<number>(o.arcs, 'a LineString\'s "arcs"').forEach(note); break
+      case 'MultiLineString': case 'Polygon':
+        listOf<unknown>(o.arcs, `a ${o.type}'s "arcs"`).forEach((a) => listOf<number>(a, `a ${o.type}'s "arcs"`).forEach(note)); break
+      case 'MultiPolygon':
+        // bounded: the arcs of one geometry (the decode meters the positions they make)
+        listOf<unknown>(o.arcs, 'a MultiPolygon\'s "arcs"').forEach((p) => listOf<unknown>(p, 'a MultiPolygon\'s "arcs"').forEach((a) => listOf<number>(a, 'a MultiPolygon\'s "arcs"').forEach(note))); break
     }
   }
   visit(root)
@@ -245,14 +333,14 @@ const keyOf = (p: ArrayLike<number>): string =>
  * to the back), then those found only by start, then any arc that ended up in none as a run of its own.
  */
 function stitch(topology: Topology, indices: number[]): number[][] {
-  const { arcs: arcData, transform } = topology
-  const dataOf = (index: number): Position[] => arcData[index < 0 ? ~index : index] as Position[]
+  const dataOf = arcReader(arcsOfTopology(topology), 2)
+  const transform = transformOf(topology)
 
   // arcs of one or two positions with no movement go first, since another arc may subsume them
   for (let j = 0, placed = -1; j < indices.length; j++) {
     const index = indices[j]!
     const arc = dataOf(index)
-    if (arc.length < 3 && !arc[1]![0] && !arc[1]![1]) {
+    if (arc.length < 3 && !position(arc[1])[0] && !arc[1]![1]) {
       const displaced = indices[++placed]!
       indices[placed] = index
       indices[j] = displaced
@@ -262,17 +350,18 @@ function stitch(topology: Topology, indices: number[]): number[][] {
   /** The keys of an arc's first and last position, as walked (a negative index walks it backwards). */
   const ends = (index: number): [string, string] => {
     const arc = dataOf(index)
-    const first = arc[0] as Position
+    const first = position(arc[0])
     let last: Position
     if (transform) {
       // deltas: the last position is the sum of all of them
       last = [0, 0]
-      for (const delta of arc) {
+      for (const d of arc) {
+        const delta = position(d)
         last[0]! += delta[0]!
         last[1]! += delta[1]!
       }
     } else {
-      last = arc[arc.length - 1] as Position
+      last = position(arc[arc.length - 1])
     }
     return index < 0 ? [keyOf(last), keyOf(first)] : [keyOf(first), keyOf(last)]
   }
@@ -331,10 +420,11 @@ function stitch(topology: Topology, indices: number[]): number[][] {
  * `mesh(topology)`: every arc once, stitched. `mesh(topology, object, filter)`: the arcs of the object (or the named
  * object), optionally only those `filter` keeps (see `arcsOf`). A MultiLineString geometry.
  */
-export function mesh(topology: Topology, object?: TopoObject | string, filter?: Filter): Geometry {
+export function mesh(topology: Topology, object?: TopoObject | string, filter?: MeshFilter): Geometry {
+  const arcCount = arcsOfTopology(topology).length
   const indices = object === undefined
-    ? Array.from({ length: topology.arcs.length }, (_, i) => i)
-    : arcsOf(resolveObject(topology, object), filter)
+    ? Array.from({ length: arcCount }, (_, i) => i)
+    : arcsOf(resolveObject(topology, object), filter, arcCount)
   const lines = decoder(topology)({ type: 'MultiLineString', arcs: stitch(topology, indices) })
   return lines as Geometry
 }

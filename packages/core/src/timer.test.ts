@@ -36,10 +36,11 @@ describe('timer (d3-timer port)', () => {
 
   it('a timer starts after its delay, measured from `time` when given', () => {
     const { clock, timers } = setup()
-    const first: number[] = []
-    timers.timer((e) => first.push(e), 50, 10)
+    const first: Array<[number, number]> = []
+    timers.timer((e) => first.push([clock.now(), e]), 50, 10)
     clock.advance(200)
-    expect(first[0]).toBe(0) // due at 60: the long wait wakes on a timeout exactly then
+    // due at time + delay = 60 (not at 50, which is what a `time` that is ignored gives): the wait wakes on a timeout exactly then
+    expect(first[0]).toEqual([60, 0])
   })
 
   it('stop is idempotent, ends the ticks, and a stopped scheduler holds nothing once its last frame has run', () => {
@@ -99,22 +100,85 @@ describe('timer (d3-timer port)', () => {
     const t = timers.timer(() => log.push('first'), 10)
     t.restart(() => log.push('second'), 40)
     clock.advance(100)
-    expect(log).toEqual(['second', 'second', 'second', 'second', 'second', 'second'].slice(0, log.length))
-    expect(log.every((x) => x === 'second')).toBe(true)
+    // a timer runs on every frame once due: the restart moved it from 10 to 40, so the frames at 48, 64, 80 and 96
+    expect(log).toEqual(['second', 'second', 'second', 'second'])
     expect(() => t.restart(undefined as never)).toThrowError(TypeError)
     t.stop()
   })
 
-  it('a clock that jumps forward does not make an interval fire a burst', () => {
-    const { clock, timers } = setup()
-    let n = 0
-    timers.interval(() => n++, 100)
-    clock.advance(16)
-    // a 10 s stall in one step: one tick, then the schedule continues from there
-    clock.advance(10_000)
-    expect(n).toBeGreaterThan(0)
-    const before = n
-    clock.advance(1000)
-    expect(n - before).toBeLessThanOrEqual(11)
+  it('a stall seen by a frame first is caught up at frame rate, one tick per frame, as d3-timer does', () => {
+    for (const delay of [20, 100, 500]) {
+      const { clock, timers } = setup()
+      const ticks: number[] = []
+      timers.interval(() => ticks.push(clock.now()), delay)
+      clock.advance(delay * 2) // running normally
+      const before = ticks.length
+      clock.jump(10_000) // a stall: the frame that was already requested is the first thing to run, and it reads the new time
+      clock.advance(1000)
+      const caught = ticks.slice(before)
+      // the missed ticks (10 s / delay of them) are run one per frame until the schedule has caught up: no tick is dropped
+      // and none is doubled up on a frame (d3-timer gives 63 / 62 / 21 for the same clock)
+      expect(caught.length).toBeGreaterThanOrEqual(Math.min(60, Math.floor(10_000 / delay)))
+      expect(caught.length).toBeLessThanOrEqual(Math.ceil(1000 / 16) + 1)
+      expect(new Set(caught).size).toBe(caught.length)
+    }
+  })
+
+  describe('the 1 s poll (while a frame loop runs): a clock that jumps while no frame is delivered does not make an interval fire a burst', () => {
+    // a clock whose animation frames can be held back, as a hidden tab does while its timeouts and intervals still run
+    class HiddenTabClock extends FakeClock {
+      hidden = false
+      private held: Array<() => void> = []
+      override requestFrame(fn: () => void): number {
+        if (!this.hidden) return super.requestFrame(fn)
+        this.held.push(fn)
+        return -1
+      }
+      show(): void {
+        this.hidden = false
+        for (const fn of this.held.splice(0)) super.requestFrame(fn)
+      }
+    }
+
+    /** a frame-driven timer keeps the frame loop (and its poll) alive; the interval is what a stall would burst */
+    const run = (stall: boolean): { before: number; after: number } => {
+      const clock = new HiddenTabClock(16)
+      const timers = createTimers(clock)
+      timers.timer(() => {})
+      let n = 0
+      timers.interval(() => n++, 100)
+      clock.advance(200)
+      const before = n
+      clock.hidden = true // the tab goes to the background: no frame is delivered from here on
+      clock.advance(32)
+      if (stall) clock.jump(10_000) // suspended; the poll's interval is due the moment the machine wakes
+      clock.advance(0)
+      clock.show()
+      clock.advance(1000)
+      return { before, after: n - before }
+    }
+
+    it('after the jump the second the tab is shown ticks as a second does (the poll took the jump off the schedule)', () => {
+      const { after } = run(true)
+      // without the poll: one tick per frame for the whole 10 s backlog, about 62 in this second
+      expect(after).toBeGreaterThanOrEqual(9)
+      expect(after).toBeLessThanOrEqual(13)
+    })
+
+    it('with no jump the same second ticks the same (the control: what the stall changes is the poll)', () => {
+      const { after } = run(false)
+      expect(after).toBeGreaterThanOrEqual(9)
+      expect(after).toBeLessThanOrEqual(13)
+    })
+
+    it('a clock that did not jump is left alone by five polls', () => {
+      const clock = new HiddenTabClock(16)
+      const timers = createTimers(clock)
+      timers.timer(() => {})
+      const ticks: number[] = []
+      timers.interval((elapsed) => ticks.push(elapsed), 100)
+      clock.advance(5050)
+      expect(ticks).toHaveLength(50)
+    })
   })
 })

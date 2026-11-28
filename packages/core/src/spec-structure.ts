@@ -15,6 +15,15 @@
  * compiler will actually run.
  */
 import { SpecParseError } from './parse-error.js'
+import type { ScaleType } from './types.js'
+import { MARK_TYPES } from './event-selector.js'
+import { LEGEND_SCALES } from './legend-scales.js'
+
+/**
+ * The mark types vega draws (the ones an event selector can name, but `*`). Any other `type` -- an unknown name, Vega-Lite's
+ * `circle`, `bar` or `geoshape`, another spelling, none -- is refused when the mark is compiled.
+ */
+export const VEGA_MARK_TYPES: ReadonlySet<string> = new Set(Object.keys(MARK_TYPES).filter((t) => t !== '*'))
 
 /** vega-util `array()`: a non-array becomes the one-element list, `null`/`undefined` the empty list. */
 export function specList(value: unknown): unknown[] {
@@ -163,12 +172,29 @@ export function checkFrom(from: unknown, group: boolean, names: Names): void {
 
 const DISCRETE_SCALE_TYPES: ReadonlySet<string> = new Set(['ordinal', 'band', 'point', 'bin-ordinal'])
 
-/** vega-parser `parseSort`: a domain sorted by an aggregate op needs the field it aggregates (`count` counts the values themselves). */
-function checkSort(sort: unknown): void {
+/** The aggregates a sort over several fields can combine (vega-parser's `MULTIDOMAIN_SORT_OPS`). */
+const MULTIDOMAIN_SORT_OPS: ReadonlySet<string> = new Set(['min', 'max', 'count'])
+
+/**
+ * vega-parser `parseSort`: a domain sorted by an aggregate op needs the field it aggregates (`count` counts the values themselves),
+ * and a domain of several fields can only be sorted by an op that combines across them. Vega reads the sort when it parses the
+ * domain, before the domain's members and every other option of the scale.
+ */
+function checkSort(sort: unknown, severalFields = false): void {
   if (!sort || typeof sort !== 'object') return
   const o = sort as Record<string, unknown>
   if (!o.field && o.op && o.op !== 'count') throw new SpecParseError('No field provided for sort aggregate op: ' + String(o.op))
+  if (!o.field && !o.op) return
+  if (severalFields && o.field && o.op && !(typeof o.op === 'string' && MULTIDOMAIN_SORT_OPS.has(o.op))) throw new SpecParseError('Multiple domain scales can not be sorted using ' + String(o.op))
 }
+
+/** vega-scale's registered scale types (`isValidScaleType`): vega-parser refuses any other. */
+const SCALE_TYPES: ReadonlySet<string> = new Set<ScaleType>([
+  'identity', 'linear', 'log', 'pow', 'sqrt', 'symlog', 'time', 'utc',
+  'sequential', 'sequential-linear', 'sequential-log', 'sequential-pow', 'sequential-sqrt', 'sequential-symlog',
+  'diverging-linear', 'diverging-log', 'diverging-pow', 'diverging-sqrt', 'diverging-symlog',
+  'quantile', 'quantize', 'threshold', 'ordinal', 'band', 'point', 'bin-ordinal',
+])
 
 /**
  * vega-parser `parseScaleDomain`: a `domainMin` / `domainMax` needs a domain to override; a domain read from data names data sets of
@@ -177,6 +203,33 @@ function checkSort(sort: unknown): void {
  */
 export function checkScale(s: unknown, names: Names): void {
   if (!isRecord(s)) return
+  // (vega-parser parseScale: `Unrecognized scale type`, thrown before any view exists and before the scale's own expressions are read; no
+  // type -- or a falsy one -- is vega's default, linear)
+  if (s.type && !SCALE_TYPES.has(s.type as string)) throw new SpecParseError(`Unrecognized scale type: ${JSON.stringify(s.type)}`)
+  checkScaleDomain(s, names)
+  checkScaleLiterals(s)
+}
+
+/**
+ * vega-parser `parseScaleInterpolate` / `parseScaleNice` read the interpolation (its type, its gamma) and the `interval` / `step` of a
+ * `nice` object with `parseLiteral(v)` and NO scope, so a `{signal}` in one of those positions fails to parse: the TypeError of the
+ * missing scope (`scope.signalRef`), before any view exists. (A `nice` that is itself a `{signal}` has a scope and is read; any other
+ * object there is `Unsupported object`, read when the scale is built.) Refused as a `SpecParseError` with vega's message, in vega's
+ * order: after the domain and the range, interpolation before `nice`.
+ */
+function checkScaleLiterals(s: Record<string, unknown>): void {
+  const signalRef = (v: unknown): boolean => isRecord(v) && !!v.signal
+  const refuse = (): never => { throw new SpecParseError("Cannot read properties of undefined (reading 'signalRef')") }
+  const interpolate = s.interpolate
+  if (interpolate != null) {
+    if (signalRef(isRecord(interpolate) && interpolate.type ? interpolate.type : interpolate)) refuse()
+    if (isRecord(interpolate) && interpolate.gamma != null && signalRef(interpolate.gamma)) refuse()
+  }
+  const nice = s.nice
+  if (nice != null && isRecord(nice) && !nice.signal && (signalRef(nice.interval) || signalRef(nice.step))) refuse()
+}
+
+function checkScaleDomain(s: Record<string, unknown>, names: Names): void {
   const domain = s.domain
   if (!domain) {
     if (s.domainMin != null || s.domainMax != null) throw new SpecParseError('No scale domain defined for domainMin/domainMax to override.')
@@ -187,7 +240,7 @@ export function checkScale(s: unknown, names: Names): void {
   if (d.signal) return
   const discrete = DISCRETE_SCALE_TYPES.has(String(s.type))
   if (d.fields) {
-    if (discrete) checkSort(d.sort)
+    if (discrete) checkSort(d.sort, true)
     for (const f of specList(d.fields)) {
       if (typeof f === 'string') need(names, d.data)
       else if (Array.isArray(f) || (f as Record<string, unknown>)?.signal) continue
@@ -272,17 +325,20 @@ export function parseAxisNames(a: unknown, names: Names, cfg: () => Record<strin
 }
 
 /** The channels a legend can have a scale for, in the order the first of them gives the legend its canonical scale (vega-parser `LegendScales`). */
-export const LEGEND_CHANNELS = ['size', 'shape', 'fill', 'stroke', 'strokeWidth', 'strokeDash', 'opacity'] as const
+export const LEGEND_CHANNELS = LEGEND_SCALES
 
-/** vega-parser `legendType`: a symbol legend, a gradient, or a gradient in steps; the type given, else by the kind of its one scale. */
-export function legendType(l: Record<string, unknown>, scaleType: string | undefined): 'symbol' | 'gradient' | 'discrete' {
+/**
+ * vega-parser `legendType`: the type given (`spec.type || 'symbol'`, whatever it is), else by the kind of the legend's one color scale --
+ * a gradient on a continuous scale, bands (`discrete`) on a discretizing one, symbols otherwise; a gradient on a discretizing scale is
+ * bands. The one definition: the compile check, the runtime and the legend builder read it.
+ */
+export function legendType(l: Record<string, unknown>, scaleType: string | undefined): string {
   const present = LEGEND_CHANNELS.filter((c) => !!l[c]).length
-  let type = typeof l.type === 'string' && l.type ? l.type : 'symbol'
+  let type = (l.type as string) || 'symbol'
   if (!l.type && present === 1 && (l.fill || l.stroke)) {
     type = scaleType && CONTINUOUS_SCALE_TYPES.has(scaleType) ? 'gradient' : scaleType && DISCRETIZING_SCALE_TYPES.has(scaleType) ? 'discrete' : 'symbol'
   }
-  if (type === 'gradient' && scaleType && DISCRETIZING_SCALE_TYPES.has(scaleType)) type = 'discrete'
-  return type as 'symbol' | 'gradient' | 'discrete'
+  return type === 'gradient' && scaleType && DISCRETIZING_SCALE_TYPES.has(scaleType) ? 'discrete' : type
 }
 
 /** vega-parser `parseLegend`: which marks a legend is made of depends on its type, and a symbol legend nests two scopes. */

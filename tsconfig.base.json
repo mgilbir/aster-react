@@ -7,12 +7,16 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedParameters": true,
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
     "declaration": true,
     "esModuleInterop": true,
-    "noEmit": true
+    "noEmit": true,
+    "customConditions": ["aster-internal"]
   }
 }

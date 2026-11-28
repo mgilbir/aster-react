@@ -4,12 +4,14 @@ import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, afterEach } from 'vitest'
 import { AsterLimitError, createChartStream, renderSceneToSvg, type ChartStream } from '@aster-charts/core'
+import { patchSceneDom, renderSceneToDomElement, sceneScaleMap, sceneScaleSnapshots } from '@aster-charts/core/internal'
 import {
   cloneableScene, handleChartWorkerRequest, handleChartWorkerStreamRequest, handleWorkerMessage,
   registerWorkerTextMetrics, useChartWorker,
-  type ChartWorkerRequest, type ChartWorkerResponse, type ChartWorkerStreamRequest, type ChartWorkerStreamResponse,
-} from './worker'
+  type ChartWorkerResponse, type ChartWorkerStreamResponse,
+} from './worker-impl'
 import { useChartWorkerStream } from './useChartWorkerStream'
+import { FakeWorker } from './testing/fake-worker'
 
 const specOf = (n: number, extra: Record<string, unknown> = {}): never => ({
   $schema: 'https://vega.github.io/schema/vega/v6.json',
@@ -22,34 +24,6 @@ const specOf = (n: number, extra: Record<string, unknown> = {}): never => ({
   marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, size: { value: 20 } } } }],
   ...extra,
 }) as never
-
-/** A worker that answers both protocols, crossing a real structured-clone boundary. */
-class FakeWorker {
-  listeners = new Map<string, Set<(event: unknown) => void>>()
-  streams = new Map<number, ChartStream>()
-  posted: Array<{ id: number; kind?: string; op?: string; streamId?: number } & Record<string, unknown>> = []
-  held: Array<() => void> = []
-  hold = false
-  terminated = false
-  addEventListener(type: string, fn: (event: unknown) => void): void {
-    if (!this.listeners.has(type)) this.listeners.set(type, new Set())
-    this.listeners.get(type)!.add(fn)
-  }
-  removeEventListener(type: string, fn: (event: unknown) => void): void { this.listeners.get(type)?.delete(fn) }
-  emit(type: string, event: unknown): void { for (const fn of this.listeners.get(type) ?? []) fn(event) }
-  postMessage(request: ChartWorkerRequest | ChartWorkerStreamRequest): void {
-    const wire = structuredClone(request) as typeof request & { kind?: string }
-    this.posted.push(wire as never)
-    const respond = (): void => {
-      const response = handleWorkerMessage(wire, this.streams)
-      if (response) queueMicrotask(() => this.emit('message', { data: structuredClone(response) }))
-    }
-    if (this.hold) this.held.push(respond)
-    else respond()
-  }
-  release(): void { for (const r of this.held.splice(0)) r() }
-  terminate(): void { this.terminated = true }
-}
 
 registerWorkerTextMetrics('huge', { measure: () => 500 })
 
@@ -231,6 +205,56 @@ describe('worker hook lifecycle', () => {
     }
   })
 
+  it('answers that arrive out of order: the latest request\'s answer is the one shown', async () => {
+    const fake = new FakeWorker()
+    fake.hold = true
+    let width = 200
+    const m = mountProbe(() => useChartWorker(specOf(3), { worker: fake as unknown as Worker, width }))
+    await act(async () => { await wait() })
+    width = 250
+    await m.rerender()
+    expect(fake.held).toHaveLength(2)
+    // the second request is answered first, the first (stale) one after it
+    await act(async () => { fake.hold = false; fake.release('reverse'); await wait() })
+    expect(m.result().pending).toBe(false)
+    expect(m.result().svg).toContain('width="250"')
+    expect(m.result().svg).not.toContain('width="200"')
+  })
+
+  it('a stream flush the worker holds is delivered when it answers, in the order the pushes were made', async () => {
+    const fake = new FakeWorker()
+    const m = mountProbe(() => useChartWorkerStream(specOf(2), { worker: fake as unknown as Worker, autoFlush: false }))
+    await act(async () => { await wait() })
+    fake.hold = true
+    let accepted = false
+    await act(async () => {
+      accepted = m.result().push({ append: { t: [{ x: 5, y: 5 }] } })
+      m.result().flush()
+      await wait()
+    })
+    // the worker has the flush and has not answered: the chart still shows the rows it had, and the push said "delivered"
+    expect(accepted).toBe(true)
+    expect(fake.posted.filter((p) => p.op === 'flush')).toHaveLength(1)
+    expect((m.result().scene!.items[0] as { items: unknown[] }).items).toHaveLength(2)
+    await act(async () => { fake.hold = false; fake.release(); await wait() })
+    expect((m.result().scene!.items[0] as { items: unknown[] }).items).toHaveLength(3)
+  })
+
+  it('a silent worker leaves the request pending; unmounting while it is silent, and a late answer after, update nothing', async () => {
+    const fake = new FakeWorker()
+    fake.silent = true
+    const m = mountProbe(() => useChartWorker(specOf(3), { worker: fake as unknown as Worker }))
+    await act(async () => { await wait() })
+    expect(fake.posted).toHaveLength(1)
+    expect(m.result().pending).toBe(true)
+    act(() => { m.root.unmount() })
+    // (the act-environment setup fails this test if the late answer sets state on the unmounted hook)
+    const request = fake.posted[0]!
+    fake.silent = false
+    await act(async () => { fake.emit('message', { data: { id: request.id, error: { name: 'Error', message: 'late' } } }); await wait() })
+    expect(m.result().pending).toBe(true)
+  })
+
   it('a worker crash fails the stream hook too', async () => {
     const fake = new FakeWorker()
     fake.hold = true
@@ -278,21 +302,34 @@ describe('worker stream payloads and queue', () => {
     expect(m.result().svg).toBeNull()
   })
 
-  it('cloneableScene never mutates the live scene and keeps __scales snapshots', () => {
+  it('cloneableScene never mutates the live scene and keeps __scales snapshots; the DOM patcher leaves nothing on the nodes to strip', () => {
     const stream = createChartStream(specOf(3))
     stream.flush()
+    // a scene the DOM patcher has really worked on, mounted and then patched after an append: its per-node caches (the descriptors)
+    // live in WeakMaps beside the scene (core's dom.ts), so no node carries a property the worker boundary would have to remove
+    const svg = renderSceneToDomElement(stream.scene()!, document)
+    stream.push({ append: { t: [{ x: 5, y: 5 }] } })
+    stream.flush()
     const live = stream.scene()!
-    const first = (live.items[0] as unknown as { items: Array<Record<string, unknown>>; __scales?: unknown })
-    first.items[0]!.__domDesc = { el: 'patched' }
-    ;(live.items[0] as unknown as Record<string, unknown>).__domDesc = { el: 'group' }
+    patchSceneDom(svg, live)
+    const nodes: Array<Record<string, unknown>> = []
+    const walk = (n: unknown): void => {
+      if (n == null || typeof n !== 'object') return
+      nodes.push(n as Record<string, unknown>)
+      for (const c of (n as { items?: unknown[] }).items ?? []) walk(c)
+    }
+    for (const item of live.items) walk(item)
+    expect(nodes.length).toBeGreaterThan(3)
+    expect(nodes.flatMap((n) => Object.keys(n).filter((k) => k.startsWith('__dom') || k === '__desc'))).toEqual([])
+    const keysBefore = nodes.map((n) => Object.keys(n).join())
     const clone = cloneableScene(live)
-    expect((first.items[0] as Record<string, unknown>).__domDesc).toEqual({ el: 'patched' })
-    expect((live.items[0] as unknown as Record<string, unknown>).__domDesc).toEqual({ el: 'group' })
-    expect(live.__scaleMap).toBeDefined()
+    expect(nodes.map((n) => Object.keys(n).join())).toEqual(keysBefore)
+    expect(clone.items).not.toBe(live.items)
+    expect(clone.items).toEqual(live.items)
+    expect(sceneScaleMap(live)).toBeDefined()
     expect(live.runtime).toBeDefined()
     expect(live.compiled).toBeDefined()
-    expect(clone.__scales?.length).toBeGreaterThan(0)
-    expect(JSON.stringify(clone.items)).not.toContain('patched')
+    expect(sceneScaleSnapshots(clone)?.length).toBeGreaterThan(0)
     expect(() => structuredClone(clone)).not.toThrow()
     expect(renderSceneToSvg(live)).toContain('<svg')
   })
@@ -318,7 +355,9 @@ describe('worker stream payloads and queue', () => {
       const { results, batches, hook } = await run('drop-newest', 2)
       expect(results).toEqual([true, true, false])
       expect(batches.map((b) => b.append.t[0]!.x)).toEqual([1, 2])
-      expect(hook().rejected()).toBe(0) // nothing was left for the worker to reject
+      // (C718: accepted()/rejected() count what push answered since mount; they were the worker's last-response values)
+      expect(hook().accepted()).toBe(2)
+      expect(hook().rejected()).toBe(1)
     })
     it('drop-oldest keeps the newest batches', async () => {
       const { results, batches } = await run('drop-oldest', 2)

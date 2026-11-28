@@ -9,12 +9,16 @@ import { spawnAsync } from '../../../scripts/lib/spawn-async.mjs'
 
 const pkg = join(dirname(fileURLToPath(import.meta.url)), '..')
 const SWEEP = '../../test-fixtures/sweep-fixture'
+/** Shorter than the tests' own timeout (60 s), so a hung sweep fails through its output, not as a vitest timeout. */
+const SPAWN_TIMEOUT = 45_000
 const OK = ['--floor', '1', '--min-ok', '0', '--max-node-error', '0']
 
 async function sweep(fixture, ...args) {
   const r = await spawnAsync('npx', ['tsx', 'src/run-sweep.ts', SWEEP, ...args], {
-    cwd: pkg, encoding: 'utf8', env: { ...process.env, FIXTURE: fixture }, timeout: 120_000,
+    cwd: pkg, encoding: 'utf8', env: { ...process.env, FIXTURE: fixture }, timeout: SPAWN_TIMEOUT,
   })
+  // a child that hung is reported here, as what it is, and not as the test's own timeout
+  expect(r.error, `the sweep did not finish in ${SPAWN_TIMEOUT} ms: ${r.stdout + r.stderr}`).toBeUndefined()
   return { code: r.status, out: r.stdout + r.stderr }
 }
 
@@ -103,6 +107,19 @@ describe('run-sweep verdicts', { timeout: 60_000 }, () => {
     expect(within.code, within.out).toBe(0)
   })
 
+  it('a spec vega logs an error for and then fails to draw is refused, not a node-error, when Aster logs the same error', async () => {
+    const alike = await sweep('refused-alike', '--floor', '2', '--min-ok', '1', '--max-node-error', '0')
+    expect(alike.code, alike.out).toBe(0)
+    expect(alike.out).toMatch(/1 ok, 0 retained, 1 both-refused, 0 node-error/)
+    // another message from Aster, or none: the oracle's crash is its own, and counts against the ceiling
+    for (const fixture of ['refused-differently', 'crash-unexplained']) {
+      const other = await sweep(fixture, '--floor', '2', '--min-ok', '1', '--max-node-error', '0')
+      expect(other.code, other.out).toBe(1)
+      expect(other.out, fixture).toMatch(/\[node-error\] goldred-4: Cannot read properties of undefined/)
+      expect(other.out).toMatch(/NODE-ERROR CEILING EXCEEDED/)
+    }
+  })
+
   it('a signal write the engine renders like vega is ok', async () => {
     const r = await sweep('write-ok', '--floor', '1', '--min-ok', '1', '--max-node-error', '0')
     expect(r.code, r.out).toBe(0)
@@ -123,6 +140,26 @@ describe('run-sweep verdicts', { timeout: 60_000 }, () => {
     expect(over.out).toMatch(/RETAINED CEILING EXCEEDED/)
     const within = await sweep('write-retained', '--floor', '1', '--min-ok', '0', '--max-node-error', '0', '--max-retained', '1')
     expect(within.code, within.out).toBe(0)
+  })
+
+  it("each engine gets its own copy: an engine with the oracle's transform removed differs (C61)", async () => {
+    const r = await sweep('transform-removed', '--floor', '1', '--min-ok', '0', '--max-node-error', '0')
+    expect(r.code, r.out).toBe(1)
+    expect(r.out).toMatch(/\[differ\] stacked/)
+    expect(r.out).toMatch(/0 ok, .* 1 differ/)
+  })
+
+  it("a later case does not read what an earlier case's oracle wrote onto a shared table (C61)", async () => {
+    const r = await sweep('shared-table', '--floor', '2', '--min-ok', '0', '--max-node-error', '0')
+    expect(r.code, r.out).toBe(1)
+    expect(r.out).toMatch(/1 ok, .* 1 differ/)
+    expect(r.out).toMatch(/\[differ\] b-unstacked/)
+  })
+
+  it('the Vega-Lite path compiles each engine from its own copy (C61)', async () => {
+    const r = await sweep('vl-transform-removed', '--floor', '1', '--min-ok', '0', '--max-node-error', '0')
+    expect(r.code, r.out).toBe(1)
+    expect(r.out).toMatch(/\[differ\] vl-stacked/)
   })
 
   it('retained cases without a ceiling are not a pass', async () => {

@@ -20,6 +20,7 @@ import { arcInto, arcPath, itemArcPath } from '../../core/src/render.ts'
 import { Bounds, boundArcItem } from '../../core/src/bounds.ts'
 import { BoundsPen } from '../../core/src/bounds-pen.ts'
 import { enc, exact } from './differential-util.mts'
+import { scaled } from './differential-gen.mts'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -92,15 +93,17 @@ const asterCalls = (s: ArcSpec): Call[] => {
 
 // --- the corpus ----------------------------------------------------------------------------------
 
-const CASES = 12000
+const CASES = scaled(12000)
 const seedOf = (i: number): number => 0xa7c5 + i * 15485863
 const cases = Array.from({ length: CASES }, (_, i) => arcSpec(seedOf(i)))
 
-function compare(label: string, i: number, want: () => unknown, got: () => unknown): void {
+/** `input` names a case that has no entry of the arc list (the bounds pen's draws): what a failure prints in place of the spec. */
+function compare(label: string, i: number, want: () => unknown, got: () => unknown, input?: unknown): void {
   const w = exact(want)
   const g = exact(got)
   if (JSON.stringify(w) !== JSON.stringify(g)) {
-    expect({ case: label, seed: seedOf(i), spec: enc(cases[i]), got: g }).toEqual({ case: label, seed: seedOf(i), spec: enc(cases[i]), got: w })
+    const who = input === undefined ? { seed: seedOf(i), spec: enc(cases[i]) } : { input: enc(input) }
+    expect({ case: label, ...who, got: g }).toEqual({ case: label, ...who, got: w })
   }
 }
 
@@ -121,8 +124,9 @@ describe('generated d3-shape arc differential', () => {
       for (const k of Object.keys(item)) if (r() < 0.25) item[k] = odd[Math.floor(r() * odd.length)]
       if (r() < 0.1) { item.radius = item.outerRadius; delete item.outerRadius }
       const f = (k: string) => (it: Record<string, unknown>) => (it[k] as number) || 0
-      // (the legacy `radius` stands in for a missing outer radius)
-      const outer = (it: Record<string, unknown>) => ((it.outerRadius ?? it.radius) as number) || 0
+      // (vega's arc accessor reads `outerRadius || 0` alone -- vega-scenegraph path/shapes.js -- so an item that holds only a
+      // `radius`, a text channel, is an arc of outer radius 0)
+      const outer = f('outerRadius')
       const want = () => d3Shape.arc<Record<string, unknown>>().startAngle(f('startAngle')).endAngle(f('endAngle')).padAngle(f('padAngle')).innerRadius(f('innerRadius')).outerRadius(outer)
         .cornerRadius(f('cornerRadius')).digits(3)(item) ?? ''
       compare('item d@3', i, want, () => itemArcPath(item as never))
@@ -150,7 +154,7 @@ describe('the bounds pen\'s arc is vega\'s boundContext arc', () => {
     const angle = (): number => (r() < 0.25 ? angles[Math.floor(r() * angles.length)]! : (r() - 0.4) * (r() < 0.8 ? 14 : 400))
     const box = (b: any): unknown => [b.x1, b.y1, b.x2, b.y2]
     let walked = 0
-    for (let i = 0; i < 20000; i++) {
+    for (let i = 0, n = scaled(20000); i < n; i++) {
       const cx = r() < 0.3 ? 0 : (r() - 0.5) * 300
       const cy = r() < 0.3 ? 0 : (r() - 0.5) * 300
       const rad = r() < 0.05 ? [0, -3, NaN][Math.floor(r() * 3)]! : r() * 120
@@ -160,7 +164,8 @@ describe('the bounds pen\'s arc is vega\'s boundContext arc', () => {
       const turn = r() < 0.5 ? 0 : [30, 90, -45, 180, 400, 1e-9][Math.floor(r() * 6)]!
       if (Math.abs(a1 - a0) < TAU - 1e-8) walked++
       compare('pen', 0, () => { const b = new (vega as any).Bounds(); (vega as any).boundContext(b, turn).arc(cx, cy, rad, a0, a1, ccw); return box(b) },
-        () => { const b = new Bounds(); new BoundsPen(b, turn).arc(cx, cy, rad, a0, a1, ccw); return box(b) })
+        () => { const b = new Bounds(); new BoundsPen(b, turn).arc(cx, cy, rad, a0, a1, ccw); return box(b) },
+        { cx, cy, rad, a0, a1, ccw, turn, draw: i })
     }
     expect(walked).toBeGreaterThan(10000)
   })
@@ -178,9 +183,9 @@ describe('generated arc corpus coverage', () => {
     expect(has((c) => arcs(c) >= 6)).toBeGreaterThan(300) // rounded on both radii
     expect(has((c, s) => s.pad > 0.001 && s.pad < 3 && arcs(c) >= 2)).toBeGreaterThan(1000) // padded
     expect(has((c, s) => s.corner > 0 && s.corner > Math.abs(s.outer - s.inner) && arcs(c) >= 2)).toBeGreaterThan(80) // corner larger than the band
-    expect(has((c, s) => s.end < s.start)).toBeGreaterThan(1500) // reversed
-    expect(has((c, s) => Math.abs(s.end - s.start) > TAU && Number.isFinite(s.end))).toBeGreaterThan(500) // more than a turn
-    expect(has((c, s) => Math.abs(s.end - s.start) < 1e-11)).toBeGreaterThan(200) // a tiny span
+    expect(has((_c, s) => s.end < s.start)).toBeGreaterThan(1500) // reversed
+    expect(has((_c, s) => Math.abs(s.end - s.start) > TAU && Number.isFinite(s.end))).toBeGreaterThan(500) // more than a turn
+    expect(has((_c, s) => Math.abs(s.end - s.start) < 1e-11)).toBeGreaterThan(200) // a tiny span
     expect(has((c) => c.some((x) => x.some((v) => typeof v === 'number' && !Number.isFinite(v))))).toBeGreaterThan(300) // non-finite output
   })
 })

@@ -11,7 +11,7 @@ import type { ChartHandle, ChartProps } from './chart-types.js'
 import type { InteractionCapability } from './capabilities.js'
 import type {
   SVG_CHART_EXCLUDED_HANDLE, SVG_CHART_EXCLUDED_PROPS, SVG_CHART_INTERACTION_PROPS, SVG_CHART_SHARED_HANDLE,
-  SVG_CHART_SHARED_PROPS, SvgChartHandle, SvgChartProps,
+  SVG_CHART_PLUMBING_PROPS, SVG_CHART_SHARED_PROPS, SvgChartHandle, SvgChartProps,
 } from './svg-chart-types.js'
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false
@@ -21,6 +21,7 @@ type AllTrue<T extends Record<string, boolean>> = false extends T[keyof T] ? fal
 type Shared = (typeof SVG_CHART_SHARED_PROPS)[number]
 type InteractionOnly = (typeof SVG_CHART_INTERACTION_PROPS)[number]
 type Excluded = keyof typeof SVG_CHART_EXCLUDED_PROPS
+type Plumbing = (typeof SVG_CHART_PLUMBING_PROPS)[number]
 type HandleShared = (typeof SVG_CHART_SHARED_HANDLE)[number]
 type HandleExcluded = keyof typeof SVG_CHART_EXCLUDED_HANDLE
 
@@ -28,11 +29,12 @@ type WithInteraction = Extract<SvgChartProps, { interaction: InteractionCapabili
 type WithoutInteraction = Exclude<SvgChartProps, { interaction: InteractionCapability }>
 
 // Exhaustive: no ChartProps key is undecided, and no list names a key ChartProps lacks.
-export type PropsDecided = Assert<Equal<keyof ChartProps, Shared | InteractionOnly | Excluded>>
+export type PropsDecided = Assert<Equal<keyof ChartProps, Shared | InteractionOnly | Excluded | Plumbing>>
 export type HandleDecided = Assert<Equal<keyof ChartHandle, HandleShared | HandleExcluded>>
 // A key is in one list only.
 export type PropsDisjoint = Assert<Equal<Shared & InteractionOnly, never>>
 export type PropsDisjoint2 = Assert<Equal<(Shared | InteractionOnly) & Excluded, never>>
+export type PropsDisjoint3 = Assert<Equal<(Shared | InteractionOnly | Excluded) & Plumbing, never>>
 export type HandleDisjoint = Assert<Equal<HandleShared & HandleExcluded, never>>
 
 // Same type, key by key.

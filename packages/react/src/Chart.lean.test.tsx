@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * The shells as a browser build runs them: `@aster-charts/core/lean` under the `browser` export condition, without the parts of the
+ * The shells as a browser build runs them: `@aster-charts/core/internal` under the `browser` export condition, without the parts of the
  * engine most charts never run (the other tests of this package resolve the subpath outside a browser build, where every part is
  * there). The mocks below point the subpaths at the browser variants; the slots are emptied before each test, as a page starts.
  *
@@ -22,7 +22,7 @@ import type { VgSpec } from '@aster-charts/core'
 
 /** A detection miss planted in `specNeeds` (the part it leaves out), for the test that the engine refuses rather than misdraws. */
 const planted = vi.hoisted(() => ({ drop: null as string | null }))
-vi.mock('@aster-charts/core/lean', async () => {
+vi.mock('@aster-charts/core/internal', async () => {
   const lean = await import('../../core/dist/lean.js')
   const specNeeds: typeof lean.specNeeds = (spec, options) => {
     const needs = lean.specNeeds(spec, options)
@@ -30,22 +30,22 @@ vi.mock('@aster-charts/core/lean', async () => {
   }
   return { ...lean, specNeeds }
 })
-vi.mock('@aster-charts/core/lean/hit', async () => await import('../../core/dist/hit.js'))
+vi.mock('@aster-charts/core/internal/hit', async () => await import('../../core/dist/hit.js'))
 // (the same for the signal loop: the browser variant, signals-deferred.ts, loads part-signals.js when a chart first binds it)
-vi.mock('@aster-charts/core/lean/signals', async () => ({
+vi.mock('@aster-charts/core/internal/signals', async () => ({
   loadSignalsPart: async () => (await import('../../core/dist/part-signals.js')).loadSignalsPart(),
 }))
-// (outside a browser build `/lean/canvas` IS part-canvas.js, the module the browser variant defers: mocked here by what the deferred
+// (outside a browser build `/internal/canvas` IS part-canvas.js, the module the browser variant defers: mocked here by what the deferred
 // module does, loading the real one when a chart first asks for a canvas)
-vi.mock('@aster-charts/core/lean/canvas', async (importOriginal) => ({
+vi.mock('@aster-charts/core/internal/canvas', async (importOriginal) => ({
   loadCanvasPart: async () => (await importOriginal<{ loadCanvasPart: () => Promise<void> }>()).loadCanvasPart(),
 }))
 
 const { forEachVariant } = await import('./testing/variants')
-const { ENGINE_PARTS, loadParts, partLoaded, specNeeds, withdrawParts } = await import('@aster-charts/core/lean')
+const { ENGINE_PARTS, loadParts, partLoaded, specNeeds, withdrawParts } = await import('@aster-charts/core/internal')
 const { preloadParts } = await import('./preload')
-const { loadCanvasPart } = await vi.importActual<{ loadCanvasPart: () => Promise<void> }>('@aster-charts/core/lean/canvas')
-const { loadSignalsPart } = await import('@aster-charts/core/lean/signals')
+const { loadCanvasPart } = await vi.importActual<{ loadCanvasPart: () => Promise<void> }>('@aster-charts/core/internal/canvas')
+const { loadSignalsPart } = await import('@aster-charts/core/internal/signals')
 
 const CORPUS = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'conformance', 'corpus')
 const corpus = (name: string): VgSpec => JSON.parse(readFileSync(join(CORPUS, name), 'utf8')) as VgSpec
@@ -228,15 +228,21 @@ forEachVariant(['svg'], (Chart, variant) => describe(`${variant.name} on the lea
     document.body.appendChild(c)
     const before = c.innerHTML
     const errors: unknown[] = []
-    let root!: ReturnType<typeof hydrateRoot>
-    act(() => { root = hydrateRoot(c, <Chart spec={LEGEND} width={300} height={200} />, { onRecoverableError: (e) => errors.push(e) }) })
-    roots.push(root)
-    // while the legend builder loads, the server's markup stays
-    expect(c.innerHTML).toBe(before)
-    await settle()
-    expect(partLoaded('legend')).toBe(true)
-    expect(errors).toEqual([])
-    expect(c.querySelector('svg')).not.toBeNull()
+    // (React reports markup that differs inside `dangerouslySetInnerHTML` with console.error only, never as a recoverable error)
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      let root!: ReturnType<typeof hydrateRoot>
+      act(() => { root = hydrateRoot(c, <Chart spec={LEGEND} width={300} height={200} />, { onRecoverableError: (e) => errors.push(e) }) })
+      roots.push(root)
+      // while the legend builder loads, the server's markup stays
+      expect(c.innerHTML).toBe(before)
+      await settle()
+      expect(partLoaded('legend')).toBe(true)
+      expect(errors).toEqual([])
+      expect(logged.mock.calls.map((a) => String(a[0]))).toEqual([])
+    } finally { logged.mockRestore() }
+    // the server's picture was this client's picture: what hydration leaves is it, drawn with the legend the lean engine loaded
+    expect(c.querySelector('svg')!.outerHTML).toBe(new DOMParser().parseFromString(before, 'text/html').querySelector('svg')!.outerHTML)
   })
 
   it('a chart that needs the parts most charts never run suspends until exactly those are there, then draws what it draws with every part', async () => {
@@ -290,14 +296,18 @@ forEachVariant(['svg'], (Chart, variant) => describe(`${variant.name} on the lea
     document.body.appendChild(c)
     const before = c.innerHTML
     const errors: unknown[] = []
-    let root!: ReturnType<typeof hydrateRoot>
-    act(() => { root = hydrateRoot(c, <Chart spec={RARE()} width={300} height={160} />, { onRecoverableError: (e) => errors.push(e) }) })
-    roots.push(root)
-    // while the parts load, the server's markup stays; once they are there it is still what the server drew
-    expect(c.innerHTML).toBe(before)
-    await settle()
-    expect(ENGINE_PARTS.filter(partLoaded)).toEqual(expect.arrayContaining(RARE_PARTS))
-    expect(errors).toEqual([])
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      let root!: ReturnType<typeof hydrateRoot>
+      act(() => { root = hydrateRoot(c, <Chart spec={RARE()} width={300} height={160} />, { onRecoverableError: (e) => errors.push(e) }) })
+      roots.push(root)
+      // while the parts load, the server's markup stays; once they are there it is still what the server drew
+      expect(c.innerHTML).toBe(before)
+      await settle()
+      expect(ENGINE_PARTS.filter(partLoaded)).toEqual(expect.arrayContaining(RARE_PARTS))
+      expect(errors).toEqual([])
+      expect(logged.mock.calls.map((a) => String(a[0]))).toEqual([])
+    } finally { logged.mockRestore() }
     expect(c.querySelector('svg')!.outerHTML).toBe(new DOMParser().parseFromString(before, 'text/html').querySelector('svg')!.outerHTML)
   })
 

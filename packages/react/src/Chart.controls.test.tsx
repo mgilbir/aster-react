@@ -7,6 +7,7 @@ import { AsterLimitError } from '@aster-charts/core'
 import type { ChartHandle } from './Chart'
 import { useChart, type UseChartResult } from './useChart'
 import { forEachVariant } from './testing/variants'
+import { stubPointerCapture, type PointerCaptureStub } from './testing/pointer-capture'
 
 function mount(node: React.ReactElement) {
   const container = document.createElement('div')
@@ -16,11 +17,11 @@ function mount(node: React.ReactElement) {
   return { container, root, rerender: (n: React.ReactElement) => act(() => { root.render(n) }) }
 }
 
+let pointerCapture: PointerCaptureStub
 beforeEach(() => {
-  ;(Element.prototype as unknown as Record<string, unknown>).setPointerCapture = vi.fn()
-  ;(Element.prototype as unknown as Record<string, unknown>).releasePointerCapture = vi.fn()
+  pointerCapture = stubPointerCapture()
 })
-afterEach(() => { document.body.innerHTML = '' })
+afterEach(() => { pointerCapture.restore(); document.body.innerHTML = '' })
 
 const setInputValue = (input: HTMLInputElement, value: string): void => {
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
@@ -93,6 +94,35 @@ describe('bound signal inputs', () => {
       act(() => { box.click() })
       expect(listener).toHaveBeenCalledWith('flag', false)
     })
+  })
+
+  // The row of inputs and the accessible overlay are siblings in the chart's element: each is ONE element whatever renders the
+  // chart again (an input, a prop, a measurement). With both keyed alike, React added a row on every render, which a container
+  // sized by the chart measured as growth, and a page then had two of every input.
+  forEachVariant(['svg'], (Chart, variant) => {
+    for (const renderer of variant.has(['canvas']) ? ['svg', 'canvas'] as const : ['svg'] as const) {
+      it(`one row of inputs and one accessible overlay through re-renders (${renderer})`, () => {
+        const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+        try {
+          const { container, rerender } = mount(<Chart spec={spec} renderer={renderer} />)
+          const counts = (): number[] => [
+            container.querySelectorAll('[data-aster-binds]').length,
+            container.querySelectorAll('[data-testid="chart-a11y"]').length,
+            container.querySelectorAll('input[type="range"]').length,
+            container.querySelectorAll('select').length,
+          ]
+          expect(counts()).toEqual([1, 1, 1, 1])
+          setInputValue(container.querySelector('input[type="range"]') as HTMLInputElement, '40')
+          act(() => { (container.querySelector('input[type="checkbox"]') as HTMLInputElement).click() })
+          for (const w of [120, 140, 160]) rerender(<Chart spec={spec} renderer={renderer} width={w} />)
+          expect(counts()).toEqual([1, 1, 1, 1])
+          // (React's own report of siblings it cannot tell apart)
+          expect(errors.mock.calls.filter((c) => String(c[0]).includes('same key'))).toEqual([])
+        } finally {
+          errors.mockRestore()
+        }
+      })
+    }
   })
 })
 

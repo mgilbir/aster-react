@@ -109,7 +109,7 @@ async function oracle(spec: Spec): Promise<{ error: string } | { svg: string }> 
   const log = console.error
   console.error = () => {}
   try {
-    const rt = vega.parse(spec as never)
+    const rt = vega.parse(structuredClone(spec) as never)
     const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(rt, { renderer: 'none', logLevel: 0 })
     try { await view.runAsync(); return { svg: await view.toSVG() } } finally { view.finalize() }
   } catch (e) {
@@ -126,7 +126,7 @@ function engine(spec: Spec): { error: string; name: string } | { svg: string } {
 
 /** `vega.parse` alone: the parser's refusals (the whole matrix is about those; drawing is compared by `agree`). */
 function parses(spec: Spec): { error: string } | { ok: true } {
-  try { vega.parse(spec as never); return { ok: true } } catch (e) { return { error: (e as Error).message } }
+  try { vega.parse(structuredClone(spec) as never); return { ok: true } } catch (e) { return { error: (e as Error).message } }
 }
 function agreeOnParsing(spec: Spec, what: string): 'refused' | 'accepted' {
   const want = parses(spec)
@@ -137,7 +137,15 @@ function agreeOnParsing(spec: Spec, what: string): 'refused' | 'accepted' {
     expect((got as Error).message, what).toBe(want.error)
     return 'refused'
   }
-  expect(() => compileChart(spec as never), `${what}: vega accepts it`).not.toThrow()
+  let got: unknown
+  try { compileChart(spec as never) } catch (e) { got = e }
+  if (got !== undefined) {
+    // (the one spec vega accepts that Aster refuses, after every error of vega's: a group mark with a guide's role that holds something --
+    // it is refused at compile, C205, mark-role-config-vs-vega.test.ts -- and only there)
+    expect(what, `${what}: vega accepts it and Aster refuses it with ${(got as Error).message}`).toMatch(/guide role/)
+    expect(got).toBeInstanceOf(SpecParseError)
+    expect((got as Error).message).toMatch(/^\[aster\] a group mark with the role "axis-like" that holds /)
+  }
   return 'accepted'
 }
 
@@ -152,7 +160,7 @@ async function agree(spec: Spec, what: string, drawing = true): Promise<'refused
     return 'refused'
   }
   expect(got, `${what}: vega accepts it`).toHaveProperty('svg')
-  if (drawing) expect(diffCanonical(canonicalizeSvg((got as { svg: string }).svg), canonicalizeSvg(want.svg)), what).toEqual([])
+  if (drawing) expect(diffCanonical(canonicalizeSvg(want.svg), canonicalizeSvg((got as { svg: string }).svg)), what).toEqual([])
   return 'accepted'
 }
 

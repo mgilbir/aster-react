@@ -21,14 +21,16 @@
  *
  * The stream owns a `ChartSession` and a spec. It never mutates the spec.
  */
-import { createChartSession, type ChartSession } from './session.js'
+import { createChartSession, noteDeepFrozen, type ChartSession } from './session.js'
 import { installPart, partLoaded } from './engine-parts.js'
 import { applyPipelineWithPulse } from './incremental-engine.js'
 import { dict } from './util.js'
+import { assertSpecObject } from './spec-guards.js'
 import { dataInputOf } from './spec-structure.js'
-import { diffRows, type DataPulse, type DatasetPulse, type PulseRange } from './pulse.js'
+import { diffRows, pulseChangeOf, type DataPulse, type DatasetPulse, type PulseChangeInput, type PulseRange, type RowDiff } from './pulse.js'
 import { AsterLimitError, type SpecLimits } from './limits.js'
 import { notATuple } from './data-format.js'
+import { checkChartRows } from './row-watch.js'
 import type { TextMetricsProvider } from './text-metrics.js'
 import type { RuntimeInput, SceneRoot, VgSpec } from './types.js'
 
@@ -56,8 +58,9 @@ export interface StreamOptions {
   policy?: StreamPolicy
   /**
    * Initial input (data/signals/size) used for the first flush. `initial.urlPolicy`
-   * (the image-URL policy), `initial.urlData` (whether url datasets are refused) and
-   * `initial.logger` (where the dataflow errors of an evaluation go) apply to every flush;
+   * (the image-URL policy), `initial.urlData` (whether url datasets are refused),
+   * `initial.logger` (where the dataflow errors of an evaluation go) and `initial.random`
+   * (the source of random numbers, as `RuntimeInput.random`) apply to every flush;
    * they are fixed for the stream's life.
    */
   initial?: RuntimeInput
@@ -71,19 +74,10 @@ export interface StreamOptions {
   textMetrics?: TextMetricsProvider
 }
 
-export interface StreamPulse {
-  changed?: number[]
-  from?: number[]
-  to?: number[]
-  added?: PulseRange[]
-  removed?: PulseRange[]
-  /** Retained rows keep their index; `baseLength` is the previous row count. */
-  appendOnly?: boolean
-  baseLength?: number
-}
+export type StreamPulse = PulseChangeInput
 
-/** Per-dataset explicit pulse offered with a batch. */
-export type StreamPulseInput = Record<string, StreamPulse>
+/** Per-dataset explicit pulse offered with a batch: the long form, or the `RowDiff` that `diffRows` returned. */
+export type StreamPulseInput = Record<string, StreamPulse | RowDiff>
 
 export interface StreamBatch {
   /** Full row snapshot per dataset. Diffed against the last flushed snapshot. */
@@ -102,8 +96,8 @@ export interface StreamBatch {
   height?: number
   /** The container the spec is sized to (`containerSize()`), as `RuntimeInput.containerSize`; the later value wins. */
   containerSize?: { width: number; height: number }
-  /** The element the chart fills, as `RuntimeInput.measuredSize`; the later value wins. */
-  measuredSize?: { width: number; height: number }
+  /** The element the chart fills, as `RuntimeInput.measuredSize` (each dimension its own); the later value wins. */
+  measuredSize?: { width?: number; height?: number }
   /**
    * Scale-domain overrides, merged into the stream's current overrides. A
    * `null` value clears that scale's override (back to the data-derived
@@ -176,7 +170,7 @@ export interface ChartStream {
    * all queued batches go. Never touches committed rows or the last scene.
    */
   discard(): number
-  /** The underlying session (for `last()`, imperative `change()`, ...). Throws after `close()`. */
+  /** The underlying session (for imperative `change()`, `pulse()`, ...). Throws after `close()`. */
   session(): ChartSession
 }
 
@@ -309,7 +303,7 @@ interface Fold {
   width?: number
   height?: number
   containerSize?: { width: number; height: number }
-  measuredSize?: { width: number; height: number }
+  measuredSize?: { width?: number; height?: number }
   /** `null` clears that scale's override. */
   domainRaw?: Record<string, unknown[] | null>
   limits?: SpecLimits
@@ -320,8 +314,30 @@ const newFold = (): Fold => ({ targets: new Map(), rows: 0 })
 
 const has = (o: object | undefined, k: string): boolean => !!o && Object.prototype.hasOwnProperty.call(o, k)
 
+/** A stream bound as given: a number (not NaN; `Infinity` is no bound), or a TypeError, never read as no bound by accident. */
+function streamBound(v: unknown, name: string): number | undefined {
+  if (v === undefined) return undefined
+  if (typeof v !== 'number' || v !== v) throw new TypeError(`[aster] stream ${name} must be a number, got ${typeof v === 'number' ? 'NaN' : JSON.stringify(v) ?? typeof v}`)
+  // (a bound below one batch / one row would be read as one, with no word; `Infinity` is no bound)
+  if (v < 1) throw new TypeError(`[aster] stream ${name} must be at least 1 (or Infinity for no bound), got ${v}`)
+  return v
+}
+
+const STREAM_POLICIES: readonly StreamPolicy[] = ['coalesce', 'drop-oldest', 'drop-newest', 'error']
+
+/**
+ * The keys of a batch. A key this list lacks is a typo (`push({ rows })`, `push({ appends })`) and is refused: a batch that says
+ * nothing the stream reads would be delivered as an empty flush, with `push` answering `true`. `satisfies` ties the list to the type.
+ */
+const BATCH_KEYS = new Set(Object.keys({
+  data: 0, append: 0, pulse: 0, signals: 0, width: 0, height: 0, containerSize: 0, measuredSize: 0, domainRaw: 0, limits: 0, textMetrics: 0,
+} satisfies Record<keyof StreamBatch, 0>))
+
 function checkBatch(batch: StreamBatch): void {
   if (batch == null || typeof batch !== 'object') throw new TypeError('[aster] stream batch must be an object')
+  for (const key of Object.keys(batch)) {
+    if (!BATCH_KEYS.has(key)) throw new TypeError(`[aster] stream batch.${key} is not a batch field (known: ${[...BATCH_KEYS].join(', ')})`)
+  }
   for (const [field, rec] of [['data', batch.data], ['append', batch.append]] as const) {
     if (rec == null) continue
     for (const [name, list] of Object.entries(rec)) {
@@ -349,10 +365,13 @@ function compose(t: Target, p: StreamPulse, preLen: number): boolean {
   if (p.from) {
     if (p.from.length !== newLen) return false
     const nf = new Array<number>(newLen)
+    // (each old row is at most one new row: a mapping that names one twice is inconsistent, and the dataset is re-derived)
+    const taken = new Uint8Array(preLen)
     for (let i = 0; i < newLen; i++) {
       const q = p.from[i]!
       if (q < 0) { nf[i] = -1; continue }
-      if (q >= preLen) return false
+      if (!(q < preLen) || q !== Math.floor(q) || taken[q]) return false
+      taken[q] = 1
       nf[i] = t.from ? t.from[q]! : q < t.baseLen ? q : -1
     }
     const nc = new Set<number>()
@@ -388,7 +407,8 @@ function foldBatch(fold: Fold, batch: StreamBatch, baseLenOf: (name: string) => 
     const preLen = t.len
     const snapshot = batch.data && has(batch.data, name) ? batch.data[name]! : undefined
     const appended = batch.append && has(batch.append, name) ? batch.append[name]! : undefined
-    const pulse = batch.pulse && has(batch.pulse, name) ? batch.pulse[name] : undefined
+    const given = batch.pulse && has(batch.pulse, name) ? batch.pulse[name] : undefined
+    const pulse = given === undefined ? undefined : pulseChangeOf(given)
     if (snapshot) {
       fold.rows += snapshot.length - t.rows
       t.replace = snapshot
@@ -436,12 +456,66 @@ function foldBatch(fold: Fold, batch: StreamBatch, baseLenOf: (name: string) => 
   if (batch.textMetrics) fold.textMetrics = batch.textMetrics
 }
 
-export function createChartStream(spec: VgSpec, options: StreamOptions = {}): ChartStream {
+/**
+ * A private, deep-frozen copy of the spec a stream was created with: the stream evaluates it on every flush, and a deep-frozen spec is
+ * read by the session once (its skeleton is kept: session.ts `isDeepFrozen`), where the host's own object would be read in full each
+ * time. What the host does to its object afterwards does not reach the running stream (the spec is read when the stream is made, as a
+ * JSON input is read by content). Plain objects and arrays are copied, sharing and cycles kept (iteratively: a spec of any depth); any
+ * other object (a function, a Date, a typed array, a class instance) is left as it is and not frozen -- the copy is then not deep-frozen
+ * and is read in full on every flush, as before.
+ */
+function frozenSnapshot(spec: VgSpec): VgSpec {
+  const copies = new Map<object, object>()
+  const plain = (v: unknown): v is object => {
+    if (v === null || typeof v !== 'object') return false
+    if (Array.isArray(v)) return Object.getPrototypeOf(v) === Array.prototype
+    const proto = Object.getPrototypeOf(v)
+    return proto === Object.prototype || proto === null
+  }
+  const copyOf = (v: object): object => {
+    let c = copies.get(v)
+    if (c === undefined) {
+      c = Array.isArray(v) ? new Array<unknown>(v.length) : Object.create(Object.getPrototypeOf(v)) as object
+      copies.set(v, c)
+      pending.push(v)
+    }
+    return c
+  }
+  const pending: object[] = []
+  let deep = true
+  const root = copyOf(spec)
+  while (pending.length) {
+    const from = pending.pop()!
+    const to = copies.get(from)! as Record<string, unknown>
+    for (const k of Object.keys(from)) {
+      const v = (from as Record<string, unknown>)[k]
+      if (plain(v)) to[k] = copyOf(v)
+      else {
+        // (anything else that is an object, and a function, is shared as it is and is not frozen: the copy is then not deep-frozen)
+        if (v !== null && (typeof v === 'object' || typeof v === 'function')) deep = false
+        to[k] = v
+      }
+    }
+  }
+  for (const c of copies.values()) Object.freeze(c)
+  // (every object of the copy is ours, frozen, with data properties only: the session need not walk it again to know it is deep-frozen,
+  // which for a spec with its rows in it is a walk of every row at the first flush)
+  if (deep) noteDeepFrozen(copies.values())
+  return root as VgSpec
+}
+
+export function createChartStream(given: VgSpec, options: StreamOptions = {}): ChartStream {
+  assertSpecObject(given, 'createChartStream')
+  const spec = frozenSnapshot(given)
+  // (the stream evaluates its own copy: a row of the host's spec changed in place afterwards reaches nothing, which the development
+  // row watch tells the host at the next flush, as it tells a session's host -- see row-watch.ts)
+  const hostWatch = {}
   // a stream is a chart whose data changes: its session takes every batch as a pulse, so it carries the pulse path (engine-parts.ts)
   if (!partLoaded('pulse')) installPart('pulse', { applyPipelineWithPulse })
   const policy: StreamPolicy = options.policy ?? 'coalesce'
-  const batchCapacity = Math.max(1, options.capacity ?? DEFAULT_CAPACITY)
-  const maxQueuedRows = Math.max(1, options.maxQueuedRows ?? DEFAULT_MAX_QUEUED_ROWS)
+  if (!STREAM_POLICIES.includes(policy)) throw new TypeError(`[aster] stream policy must be one of ${STREAM_POLICIES.join(', ')}, got ${JSON.stringify(policy) ?? typeof policy}`)
+  const batchCapacity = streamBound(options.capacity, 'capacity') ?? DEFAULT_CAPACITY
+  const maxQueuedRows = streamBound(options.maxQueuedRows, 'maxQueuedRows') ?? DEFAULT_MAX_QUEUED_ROWS
   // Under coalesce the whole queue is one folded batch: that is its real bound.
   const capacity = policy === 'coalesce' ? 1 : batchCapacity
   let session: ChartSession | null = createChartSession()
@@ -452,7 +526,16 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
     const at = rows.findIndex((r) => r == null)
     if (at >= 0) throw notATuple(rows[at] as null | undefined, { dataset, source: 'values' }, at)
   }
-  if (options.initial?.data) for (const [name, rows] of Object.entries(options.initial.data)) base.set(name, rows)
+  if (options.initial?.data) {
+    for (const [name, rows] of Object.entries(options.initial.data)) {
+      // (the host's first rows are its rows from the start, checked as a snapshot pushed later is)
+      if (Array.isArray(rows)) {
+        const at = rows.findIndex((r) => r == null)
+        if (at >= 0) throw notATuple(rows[at] as null | undefined, { dataset: name, source: 'snapshot' }, at)
+      }
+      base.set(name, rows)
+    }
+  }
   const owned = new Set<string>()
   let signals: Record<string, unknown> = dict(options.initial?.signals)
   let width = options.initial?.width
@@ -464,6 +547,8 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
   let textMetrics = options.textMetrics ?? options.initial?.textMetrics
   /** coalesce: the single folded batch. */
   let fold: Fold | null = null
+  /** coalesce, while a flush runs: the batches pushed meanwhile (put back after the flushed ones if the flush fails). */
+  let meanwhile: StreamBatch[] | null = null
   /** other policies: whole batches in push order. */
   let queue: Array<{ batch: StreamBatch; rows: number }> = []
   let queuedRows = 0
@@ -477,10 +562,12 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
   const depth = (): number => (policy === 'coalesce' ? (fold ? 1 : 0) : queue.length)
   const rowsQueued = (): number => (policy === 'coalesce' ? fold?.rows ?? 0 : queuedRows)
 
-  const cloneAppend = (append: Record<string, unknown[]> | undefined): Record<string, unknown[]> | undefined => {
-    if (!append) return undefined
+  // (a batch's row lists are copied when it is queued: rows the host adds to its arrays after `push` are not in the batch, and the
+  // row counts the queue was checked with stay what is flushed)
+  const cloneLists = (lists: Record<string, unknown[]> | undefined): Record<string, unknown[]> | undefined => {
+    if (!lists) return undefined
     const out = dict<unknown[]>()
-    for (const [name, list] of Object.entries(append)) out[name] = list.slice()
+    for (const [name, list] of Object.entries(lists)) out[name] = list.slice()
     return out
   }
   const batchRows = (b: StreamBatch): number => {
@@ -507,11 +594,12 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
   const enqueue = (batch: StreamBatch): boolean => {
     if (closed) return false
     checkBatch(batch)
-    const owned_ = { ...batch, append: cloneAppend(batch.append) }
+    const owned_ = { ...batch, data: cloneLists(batch.data), append: cloneLists(batch.append) }
     if (policy === 'coalesce') {
       if (rowDelta(fold, owned_) + (fold?.rows ?? 0) > maxQueuedRows) return reject('rows', maxQueuedRows)
       if (fold) stats.coalesced++
       foldBatch((fold ??= newFold()), owned_, baseLenOf)
+      meanwhile?.push(owned_)
       return true
     }
     const rows = batchRows(owned_)
@@ -581,18 +669,14 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
         || (addedRanges.length > 0 && (pulse.baseLength ?? t.baseLen) !== t.len)
       if (!changed.length && !addedRanges.length && !lengthChanging) continue
       if (lengthChanging) structural.add(name)
-      datasets.set(name, {
-        name,
-        changed,
-        sameLength: !lengthChanging,
-        added: pulse.added?.[0] ?? null,
-        removed: pulse.removed?.[0] ?? null,
-        ...(pulse.from ? { from: pulse.from } : {}),
-        ...(pulse.to ? { to: pulse.to } : {}),
-        ...(pulse.added?.length ? { addedRanges: pulse.added } : {}),
-        ...(pulse.removed?.length ? { removedRanges: pulse.removed } : {}),
-        ...(pulse.appendOnly ? { appendOnly: true, baseLength: pulse.baseLength } : {}),
-      })
+      // (assigned, not spread: this runs for every dataset of every flush)
+      const entry: DatasetPulse = { name, changed, sameLength: !lengthChanging, added: pulse.added?.[0] ?? null, removed: pulse.removed?.[0] ?? null }
+      if (pulse.from) entry.from = pulse.from
+      if (pulse.to) entry.to = pulse.to
+      if (pulse.added?.length) entry.addedRanges = pulse.added
+      if (pulse.removed?.length) entry.removedRanges = pulse.removed
+      if (pulse.appendOnly) { entry.appendOnly = true; entry.baseLength = pulse.baseLength }
+      datasets.set(name, entry)
     }
     return { pulse: { datasets, structural }, lengths }
   }
@@ -616,6 +700,29 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
     if (closed || (!hasQueue() && lastScene)) return null
     const f = currentFold()
     const consumed = depth()
+    // (coalesce: the fold being flushed is taken off the queue while the evaluation runs, so a push made meanwhile -- from a logger,
+    // an expression function -- starts a fold of its own, which the next flush delivers; on failure the taken fold is put back
+    // with what was pushed meanwhile folded after it)
+    const taken = fold
+    if (policy === 'coalesce') {
+      fold = null
+      meanwhile = []
+    }
+    try {
+      return flushFold(f, consumed)
+    } catch (err) {
+      if (policy === 'coalesce') {
+        const pushed = meanwhile ?? []
+        fold = taken
+        for (const b of pushed) foldBatch((fold ??= newFold()), b, baseLenOf)
+      }
+      throw err
+    } finally {
+      meanwhile = null
+    }
+  }
+
+  const flushFold = (f: Fold, consumed: number): StreamFlush => {
     const { pulse, lengths } = planPulse(f)
     const changedDatasets = [...pulse.structural]
     const dataPulse: NonNullable<RuntimeInput['dataPulse']> = {}
@@ -623,14 +730,13 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
     for (const [name, p] of pulse.datasets) {
       if (p.sameLength) dataChanges[name] = p.changed
       else {
-        dataPulse[name] = {
-          changed: p.changed,
-          ...(p.from ? { from: p.from } : {}),
-          ...(p.to ? { to: p.to } : {}),
-          ...(p.addedRanges ? { added: p.addedRanges } : {}),
-          ...(p.removedRanges ? { removed: p.removedRanges } : {}),
-          ...(p.appendOnly ? { appendOnly: true, baseLength: p.baseLength } : {}),
-        }
+        const out: NonNullable<RuntimeInput['dataPulse']>[string] = { changed: p.changed }
+        if (p.from) out.from = p.from
+        if (p.to) out.to = p.to
+        if (p.addedRanges) out.added = p.addedRanges
+        if (p.removedRanges) out.removed = p.removedRanges
+        if (p.appendOnly) { out.appendOnly = true; out.baseLength = p.baseLength }
+        dataPulse[name] = out
       }
     }
     // Stage every scalar: nothing is committed until the evaluation succeeds.
@@ -653,7 +759,8 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
     // Materialise queued rows now, at flush time (never per push), with an
     // undo log so a throwing evaluation leaves the committed rows untouched.
     // A base array that came from the spec/host is copied once, then mutated
-    // in place so repeated appends are O(appended).
+    // in place so repeated appends are O(appended). (A scene never holds these
+    // arrays: the evaluation copies a host's rows into the datasets it publishes.)
     const undo: Array<() => void> = []
     const rollback = (): void => { for (let i = undo.length - 1; i >= 0; i--) undo[i]!() }
     let scene: SceneRoot
@@ -686,23 +793,28 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
       // datasets that need a re-derive), so the session must not second-guess
       // it by diffing row identity: a row object edited in place compares
       // equal to itself and its change would be lost.
-      const input: RuntimeInput = {
-        data: Object.fromEntries(base),
-        autoChanges: false,
-        ...(Object.keys(nextSignals).length ? { signals: nextSignals } : {}),
-        ...(nextWidth != null ? { width: nextWidth } : {}),
-        ...(nextHeight != null ? { height: nextHeight } : {}),
-        ...(nextContainerSize != null ? { containerSize: nextContainerSize } : {}),
-        ...(nextMeasuredSize != null ? { measuredSize: nextMeasuredSize } : {}),
-        ...(nextDomainRaw ? { domainRaw: nextDomainRaw } : {}),
-        ...(nextLimits ? { limits: nextLimits } : {}),
-        ...(nextTextMetrics ? { textMetrics: nextTextMetrics } : {}),
-        ...(options.initial?.urlPolicy ? { urlPolicy: options.initial.urlPolicy } : {}),
-        ...(options.initial?.urlData !== undefined ? { urlData: options.initial.urlData } : {}),
-        ...(options.initial?.logger ? { logger: options.initial.logger } : {}),
-        ...(Object.keys(dataPulse).length ? { dataPulse } : {}),
-        ...(Object.keys(dataChanges).length ? { dataChanges } : {}),
-        ...(changedDatasets.length ? { changedDatasets } : {}),
+      // (assigned, not spread: this is built for every flush)
+      const input: RuntimeInput = { data: Object.fromEntries(base), autoChanges: false }
+      if (nextSignals !== undefined && Object.keys(nextSignals).length) input.signals = nextSignals
+      if (nextWidth != null) input.width = nextWidth
+      if (nextHeight != null) input.height = nextHeight
+      if (nextContainerSize != null) input.containerSize = nextContainerSize
+      if (nextMeasuredSize != null) input.measuredSize = nextMeasuredSize
+      if (nextDomainRaw) input.domainRaw = nextDomainRaw
+      if (nextLimits) input.limits = nextLimits
+      if (nextTextMetrics) input.textMetrics = nextTextMetrics
+      const initial = options.initial
+      if (initial?.urlPolicy) input.urlPolicy = initial.urlPolicy
+      if (initial?.urlData !== undefined) input.urlData = initial.urlData
+      if (initial?.logger) input.logger = initial.logger
+      if (initial?.random) input.random = initial.random
+      if (Object.keys(dataPulse).length) input.dataPulse = dataPulse
+      if (Object.keys(dataChanges).length) input.dataChanges = dataChanges
+      if (changedDatasets.length) input.changedDatasets = changedDatasets
+      try {
+        if (process.env.NODE_ENV !== 'production') checkChartRows(hostWatch, given, { ...(options.initial?.logger ? { logger: options.initial.logger } : {}) })
+      } catch (e) {
+        if (typeof process !== 'undefined') throw e
       }
       scene = session!.evaluate(spec, input)
     } catch (err) {
@@ -718,8 +830,8 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
     domainRaw = nextDomainRaw
     limits = nextLimits
     textMetrics = nextTextMetrics
-    if (policy === 'coalesce') { if (fold === f) fold = null }
-    else { const gone = queue.splice(0, consumed); for (const e of gone) queuedRows -= e.rows }
+    // (coalesce: the flushed fold was taken off the queue when the flush began; what is queued now was pushed meanwhile)
+    if (policy !== 'coalesce') { const gone = queue.splice(0, consumed); for (const e of gone) queuedRows -= e.rows }
     const delivered = pulse
     const noop = !delivered.datasets.size && !delivered.structural.size && scene === lastScene
     lastScene = scene
@@ -730,6 +842,8 @@ export function createChartStream(spec: VgSpec, options: StreamOptions = {}): Ch
 
   const stream: ChartStream = {
     push(batch) {
+      // (a closed stream takes nothing, whatever it is given: `push` returns false)
+      if (closed) return false
       // (rows enter the datasets as vega inserts them: a `null` or `undefined` row is refused before anything is queued, as
       // `view.insert` throws before it changes anything)
       for (const [set, source] of [[batch.data, 'snapshot'], [batch.append, 'append']] as const) {

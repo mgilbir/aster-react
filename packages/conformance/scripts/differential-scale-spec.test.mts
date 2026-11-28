@@ -3,10 +3,15 @@
  * scale `s` (`scale-spec-cases.mjs`). It is built by real Vega (vega-parser + vega-encode's
  * Scale transform) and by Aster (`getChartInfo`), in the same process and engine, and the
  * two scales are projected identically (type, domain, range, sampled outputs, bins,
- * thresholds, ticks, invertExtent...) and compared exactly. A spec Vega rejects must throw
- * in Aster too. See `differential-util.mts` for why nothing is recorded: pow, log, symlog and
- * the interpolators go through Math.pow/exp/log, which differ in the last bit between V8
- * versions (this suite had three such failures on CI's Node 22 against Node 26 recordings).
+ * thresholds, ticks, invertExtent...) and compared exactly.
+ *
+ * A spec Vega refuses is compared by what the refusal says: its kind (`parse`: vega.parse throws, no view exists; `run`: an
+ * operator fails while the view runs, and is logged) and its message. Aster reads a spec in one pass, so it either throws or
+ * logs the error and goes on without the scale (docs/ERRORS.md: a parse-time refusal is logged, the chart is drawn without what
+ * failed); both are the same refusal here, and the MESSAGE must be Vega's (one deliberate difference is named in `WORDED`). A
+ * spec Vega builds must be built by Aster with nothing logged. See `differential-util.mts` for why nothing is recorded: pow,
+ * log, symlog and the interpolators go through Math.pow/exp/log, which differ in the last bit between V8 versions (this suite
+ * had three such failures on CI's Node 22 against Node 26 recordings).
  *
  * Every case runs under UTC and under the non-UTC zones below: the scales under test are
  * UTC or numeric (they must not move with the zone), and local-time (`time`) scales must
@@ -65,35 +70,51 @@ function project(s: AnyScale, probes: unknown[]): Record<string, unknown> {
   return o
 }
 
-/** The oracle: real Vega's scale `s` (an operator error is a THROW, not a half-configured scale). */
-async function vegaScale(spec: unknown): Promise<AnyScale> {
+/** What a refusal is: vega's kind of it and its message. */
+interface Refusal { kind: 'parse' | 'run'; message: string }
+const text = (e: unknown): string => (e instanceof Error ? e.message : String(e)).replace(/^Error: /, '')
+
+/** The oracle: real Vega's scale `s`, or how Vega refuses the spec (an operator error is a refusal, not a half-configured scale). */
+async function vegaScale(spec: unknown): Promise<{ scale: AnyScale } | { refusal: Refusal }> {
+  let runtime: ReturnType<typeof vega.parse>
+  try {
+    runtime = vega.parse(structuredClone(spec) as vega.Spec)
+  } catch (e) {
+    return { refusal: { kind: 'parse', message: text(e) } }
+  }
   const errors: unknown[][] = []
   const quiet = quietLogger(errors)
-  const view = new vega.View(vega.parse(structuredClone(spec) as vega.Spec), { renderer: 'none', logLevel: vega.None, logger: quiet as never })
+  const view = new vega.View(runtime, { renderer: 'none', logLevel: vega.None, logger: quiet as never })
   view.logger(quiet as never)
   await view.runAsync()
-  if (errors.length) throw new Error(String(errors[0]))
-  return view.scale('s') as unknown as AnyScale
+  if (errors.length) return { refusal: { kind: 'run', message: text(errors[0]![0]) } }
+  return { scale: view.scale('s') as unknown as AnyScale }
 }
 
-async function oracle(c: Case): Promise<{ want: unknown; probes: unknown[] }> {
+async function oracle(c: Case): Promise<{ want: unknown; refusal?: Refusal; probes: unknown[] }> {
+  const built = await vegaScale(c.spec)
+  if ('refusal' in built) return { want: { $: 'throw' }, refusal: built.refusal, probes: c.probes ?? [] }
+  const probes = c.probes ?? autoProbes(built.scale)
+  return { want: project(built.scale, probes), probes }
+}
+
+/** Where Aster words a refusal differently, on purpose: it quotes vega's message inside its own (`[aster] <what> (vega: <message>)`). */
+const WORDED = (m: string): string => /^\[aster\] .*\(vega: (.*)\)$/s.exec(m)?.[1] ?? m
+
+/** Aster's side: the projected scale, and the errors it threw or logged (a spec it refuses may also return no scale `s`). */
+function aster(spec: unknown, probes: unknown[]): { got: unknown; thrown?: string; logged: string[] } {
+  const logged: string[] = []
+  const logger = { error: (...a: unknown[]) => { logged.push(text(a[0])) }, warn: () => {} }
   try {
-    const s = await vegaScale(c.spec)
-    const probes = c.probes ?? autoProbes(s)
-    return { want: project(s, probes), probes }
-  } catch {
-    return { want: { $: 'throw' }, probes: c.probes ?? [] }
+    const s = getChartInfo(structuredClone(spec) as never, { logger } as never).scales.get('s') as AnyScale | undefined
+    return { got: s ? project(s, probes) : { $: 'throw' }, logged }
+  } catch (e) {
+    return { got: { $: 'throw' }, thrown: text(e), logged }
   }
 }
 
-function aster(spec: unknown, probes: unknown[]): unknown {
-  try {
-    const s = getChartInfo(structuredClone(spec) as never).scales.get('s') as AnyScale | undefined
-    return s ? project(s, probes) : { $: 'throw' }
-  } catch {
-    return { $: 'throw' }
-  }
-}
+/** How the two sides refused, tallied: [vega kind, how Aster ended] -> cases. */
+const tally = new Map<string, number>()
 
 describe(`scale specs vs vega@${vega.version} (live, every zone: ${ZONES.join(', ')})`, () => {
   for (const tz of ZONES) {
@@ -107,15 +128,36 @@ describe(`scale specs vs vega@${vega.version} (live, every zone: ${ZONES.join(',
         it(c.name, async () => {
           for (const tz of ZONES) {
             await withTz(tz, async () => {
-              const { want, probes } = await oracle(c)
-              expect(aster(c.spec, probes), `[${tz}]`).toEqual(want)
+              const { want, refusal, probes } = await oracle(c)
+              const a = aster(c.spec, probes)
+              expect(a.got, `[${tz}]`).toEqual(want)
+              if (!refusal) {
+                // vega built the scale: Aster builds it and says nothing
+                expect(a.thrown ?? a.logged[0], `[${tz}] Aster refused or logged where vega built the scale`).toBeUndefined()
+                return
+              }
+              // vega refused: Aster refuses with vega's message, by throwing or by logging it (the chart then has no scale)
+              const said = a.thrown ?? a.logged[0]
+              expect(said === undefined ? said : WORDED(said), `[${tz}] Aster's refusal (vega ${refusal.kind}: ${refusal.message})`).toBe(refusal.message)
+              const key = `${refusal.kind} -> ${a.thrown !== undefined ? 'throws' : 'logs'}`
+              tally.set(key, (tally.get(key) ?? 0) + 1)
             })
           }
         })
       }
     })
   }
+  it('a spec vega refuses is refused by Aster in the documented way: a parse refusal is thrown or logged, a run refusal likewise', () => {
+    // (the tally is of the three zones together: every refusal is counted once per zone)
+    const kinds = [...tally.keys()].sort()
+    expect(kinds.every((k) => /^(parse|run) -> (throws|logs)$/.test(k)), kinds.join()).toBe(true)
+    const total = [...tally.values()].reduce((n, v) => n + v, 0)
+    expect(total, 'refusals compared').toBeGreaterThan(ZONES.length * 100)
+    // most of what vega refuses at parse time Aster logs (ERRORS.md): if none were, the map above would say nothing
+    expect(tally.get('parse -> logs') ?? 0).toBeGreaterThan(ZONES.length * 20)
+  })
+
   it('covers the whole case list', () => {
-    expect(Object.values(suites).reduce((n, l) => n + l.length, 0)).toBeGreaterThanOrEqual(1838)
+    expect(Object.values(suites).reduce((n, l) => n + l.length, 0)).toBeGreaterThanOrEqual(2478)
   })
 })

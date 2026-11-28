@@ -10,7 +10,11 @@
  * manifest. Any mismatch fails the run (the bad file is removed). Idempotent: a file already present with the right hash is skipped.
  *
  * `--regenerate` is for a maintainer bumping the pins (edit `sources[*].tag/commit` first): it lists the examples directory of the
- * pinned commit through the GitHub trees API, downloads the files and rewrites the hashes. A normal fetch never needs the API.
+ * pinned commit through the GitHub trees API, downloads the files into the cache and rewrites the hashes. A normal fetch never
+ * needs the API. Every mode ends by verifying the cache against the manifest, and fails on any problem (`--regenerate` used to
+ * print `ok` over a cache that did not match).
+ *
+ * Every request has a deadline (FETCH_TIMEOUT_MS; a stalled connection used to hang the step) and is tried four times.
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -18,18 +22,26 @@ import { fileURLToPath } from 'node:url'
 import { CACHE_DIR, MANIFEST_PATH, sha256, verifyCache, type Manifest, type Source } from '../src/gallery/cache.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
 
-const raw = (s: Source, path: string): string => `https://raw.githubusercontent.com/${s.repo}/${s.commit}/${path}`
+/** The deadline of one request (a whole file or a tree listing); a request that outlives it is aborted and tried again. */
+export const FETCH_TIMEOUT_MS = 30_000
 
-async function download(url: string): Promise<Uint8Array> {
+/** Where the files and the tree listings come from (a test serves them itself). */
+export interface Endpoints { raw: string; api: string; timeoutMs: number; backoffMs: number }
+const GITHUB: Endpoints = { raw: 'https://raw.githubusercontent.com', api: 'https://api.github.com', timeoutMs: FETCH_TIMEOUT_MS, backoffMs: 400 }
+
+const raw = (s: Source, path: string, at: Endpoints = GITHUB): string => `${at.raw}/${s.repo}/${s.commit}/${path}`
+
+/** The body at `url`, tried four times, each attempt aborted after `timeoutMs`. */
+export async function download(url: string, at: Pick<Endpoints, 'timeoutMs' | 'backoffMs'> = GITHUB): Promise<Uint8Array> {
   let last: unknown
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
-      const res = await fetch(url)
+      const res = await fetch(url, { signal: AbortSignal.timeout(at.timeoutMs) })
       if (res.ok) return new Uint8Array(await res.arrayBuffer())
       last = new Error(`${res.status} ${res.statusText}`)
       if (res.status === 404) break
     } catch (e) { last = e }
-    await new Promise((r) => setTimeout(r, 400 * (attempt + 1)))
+    await new Promise((r) => setTimeout(r, at.backoffMs * (attempt + 1)))
   }
   throw new Error(`${url}: ${last instanceof Error ? last.message : String(last)}`)
 }
@@ -60,21 +72,33 @@ async function fetchAll(manifest: Manifest): Promise<void> {
   }
 }
 
-async function regenerate(manifest: Manifest): Promise<void> {
+/**
+ * Re-list the pinned commits, download every file INTO the cache (`cacheDir`) and rewrite the manifest's hashes (written to
+ * `manifestPath`, null: not written).
+ */
+export async function regenerate(manifest: Manifest, cacheDir: string = CACHE_DIR, manifestPath: string | null = MANIFEST_PATH, at: Endpoints = GITHUB): Promise<void> {
   for (const s of Object.values(manifest.sources)) {
-    const res = await fetch(`https://api.github.com/repos/${s.repo}/git/trees/${s.commit}?recursive=1`, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'aster-gallery-fetch' } })
+    const res = await fetch(`${at.api}/repos/${s.repo}/git/trees/${s.commit}?recursive=1`, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'aster-gallery-fetch' }, signal: AbortSignal.timeout(at.timeoutMs) })
     if (!res.ok) throw new Error(`tree listing of ${s.repo}@${s.commit}: ${res.status}`)
     const tree = (await res.json()) as { truncated: boolean; tree: Array<{ path: string; type: string }> }
     if (tree.truncated) throw new Error('GitHub truncated the tree listing; list the directory another way')
     const prefix = `${s.upstreamDir}/`
     const names = tree.tree.filter((e) => e.type === 'blob' && e.path.startsWith(prefix) && !e.path.slice(prefix.length).includes('/') && e.path.endsWith(s.suffix)).map((e) => e.path.slice(prefix.length)).sort()
+    const dir = join(cacheDir, s.cacheDir)
+    mkdirSync(dir, { recursive: true })
     const files: Record<string, string> = {}
-    await pool(names, 16, async (n) => { files[n] = sha256(await download(raw(s, `${s.upstreamDir}/${n}`))) })
+    await pool(names, 16, async (n) => {
+      const body = await download(raw(s, `${s.upstreamDir}/${n}`, at), at)
+      files[n] = sha256(body)
+      writeFileSync(join(dir, n), body)
+    })
     s.files = Object.fromEntries(Object.entries(files).sort(([a], [b]) => (a < b ? -1 : 1)))
-    s.licenseSha256 = sha256(await download(raw(s, 'LICENSE')))
+    const license = await download(raw(s, 'LICENSE', at), at)
+    s.licenseSha256 = sha256(license)
+    writeFileSync(join(dir, 'LICENSE'), license)
     console.log(`[gallery:fetch] ${s.cacheDir}: ${names.length} files listed at ${s.commit.slice(0, 8)}`)
   }
-  writeFileSync(MANIFEST_PATH, JSON.stringify(manifest, null, 2) + '\n')
+  if (manifestPath !== null) writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n')
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
@@ -84,8 +108,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
     if (flags.includes('--regenerate')) await regenerate(manifest)
     else if (!flags.includes('--verify')) await fetchAll(manifest)
+    // (in every mode: a regenerated manifest must describe the cache it was made from, files left over from the old pins included)
     const problems = verifyCache(manifest)
-    if (problems.length && !flags.includes('--regenerate')) {
+    if (problems.length) {
       console.error(`[gallery:fetch] cache does not match the manifest:\n  ${problems.slice(0, 20).join('\n  ')}${problems.length > 20 ? `\n  ... ${problems.length} problems` : ''}`)
       process.exit(1)
     }

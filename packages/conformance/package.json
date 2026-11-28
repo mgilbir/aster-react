@@ -23,20 +23,23 @@
     "a11y-parity": "tsx scripts/a11y-parity.mts",
     "conformance:canvas": "tsx scripts/browser-canvas-parity.mts",
     "conformance:batch": "tsx scripts/browser-svg-batch-parity.mts",
-    "conformance:signals": "tsx scripts/browser-signals.mts --min-cases=73 --max-canvas-as-svg=2",
+    "conformance:signals": "tsx scripts/browser-signals.mts --min-cases=78 --max-canvas-as-svg=2",
     "gallery:fetch": "tsx scripts/gallery-fetch.mts",
     "conformance:gallery": "tsx src/gallery/run.ts",
     "conformance:intersect": "tsx scripts/browser-intersect.mts",
-    "conformance:selections": "tsx scripts/browser-vl-selections.mts --min-cases=54 --max-retained=13 --max-retained-canvas=10"
+    "conformance:geometry": "tsx scripts/browser-geometry.mts",
+    "conformance:selections": "tsx scripts/browser-vl-selections.mts --min-cases=56 --max-retained=16 --max-retained-canvas=12",
+    "conformance:url-reload": "tsx scripts/browser-url-reload.mts"
   },
   "dependencies": {
     "@aster-charts/core": "workspace:*",
     "@aster-charts/react": "workspace:*",
     "@aster-charts/vl": "workspace:*",
-    "vega": "^6.3.1",
-    "vega-lite": "^6.4.3"
+    "vega": "6.3.1",
+    "vega-lite": "6.4.3"
   },
   "devDependencies": {
+    "@eslint-community/regexpp": "4.12.3",
     "@types/node": "^22.20.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.2.4",
@@ -56,7 +59,7 @@
     "tsx": "^4.19.0",
     "typescript": "^5.8.0",
     "vega-datasets": "3.2.1",
-    "vega-embed": "^7.1.0",
+    "vega-embed": "7.1.0",
     "vega-expression": "6.2.1",
     "vega-format": "2.1.2",
     "vega-functions": "6.1.3",

@@ -4,16 +4,17 @@
  * placed against each other from the bounds of what was drawn, and the legend is sized to hold them. See guide-encode.ts for how a
  * property becomes a channel of an item.
  */
+import { legendType } from './spec-structure.js'
 import { markTuple, markTuples } from './util.js'
+import { allot } from './limits.js'
 import type { EncodeValue, SceneGroup, SceneItem } from './types.js'
 import { Bounds, boundLeaf, boundLegendGroup, boundStroke, multiLineOffset } from './bounds.js'
 import { placeGrid } from './trellis.js'
-import { LEGEND_SCALES } from './legend-scales.js'
 import { rectItemPath, symbolPath } from './render.js'
 import { boundFailure } from './bound-failure.js'
 import type { Locale } from './locale.js'
 import {
-  DiscreteLegend, GradientLegend, SymbolLegend, isContinuous, isDiscretizing, labelFormat, labelFraction, labelValues, scaleFraction, tickCount,
+  DiscreteLegend, GradientLegend, SymbolLegend, labelFormat, labelFraction, labelValues, scaleFraction, tickCount,
   type LabelValues,
 } from './scale.js'
 import { thinOverlaps } from './guide-axis.js'
@@ -26,20 +27,9 @@ import {
 type Rec = Record<string, unknown>
 type Scale = ((v: unknown) => unknown) & Rec
 
-export { LEGEND_SCALES }
 
-/**
- * What kind of legend a spec makes: as it says, or from its scale. A legend for one color channel with no `type` is a gradient on a
- * continuous scale, bands on a discretizing one and symbols otherwise; a gradient on a discretizing scale is bands.
- */
-export function legendType(spec: Rec, scaleType: string): string {
-  const channels = LEGEND_SCALES.filter((c) => spec[c]).length
-  let type = (spec.type as string) || SymbolLegend
-  if (!spec.type && channels === 1 && (spec.fill || spec.stroke)) {
-    type = isContinuous(scaleType) ? GradientLegend : isDiscretizing(scaleType) ? DiscreteLegend : SymbolLegend
-  }
-  return type === GradientLegend && isDiscretizing(scaleType) ? DiscreteLegend : type
-}
+/** What kind of legend a spec makes (spec-structure.ts, the one definition). */
+export { legendType }
 
 // --- the entries a legend lists -----------------------------------------------------------------------------------------------
 
@@ -90,6 +80,9 @@ function listEntries(p: EntriesParams): LegendEntry[] {
   const count = tickCount(scale as never, p.count == null ? 5 : p.count, p.minstep)
   const format = labelFormat(p.locale, scale as never, count, type, p.formatSpecifier, p.formatType, !!p.values || type === SymbolLegend)
   const values: LabelValues = (p.values as LabelValues | undefined) || labelValues(scale as never, count)
+  // (every entry is a few scene items, like an axis tick: the entries listed are bounded as the ticks an axis draws are, before
+  // they are made; a symbol legend lists no more than its limit)
+  const listed = (n: number): void => { allot('items', n, 'legend entries') }
 
   if (type === SymbolLegend) {
     const roomOf = p.size!
@@ -99,6 +92,7 @@ function listEntries(p: EntriesParams): LegendEntry[] {
     if (cut) p.warn('Symbol legend count exceeds limit, filtering items.')
     // (a slice is a plain list: it has lost the `max` of the intervals' last upper end)
     let shown: unknown[] = cut ? values.slice(0, limit - 1) : values
+    listed(shown.length + (cut ? 1 : 0))
     // a first value that maps to nothing (size 0) is not listed unless the values were given
     if (!p.values && (scale as (v: unknown) => unknown)(shown[0]) === 0) shown = shown.slice(1)
     const offset = shown.reduce((widest: number, v) => Math.max(widest, roomOf(v)), 0)
@@ -117,10 +111,12 @@ function listEntries(p: EntriesParams): LegendEntry[] {
     const fraction = scaleFraction(scale as never, first, last)
     // generated labels that come to two or fewer are replaced by the two ends of the domain
     const labelled = values.length < 3 && !p.values && first !== last ? [first, last] : values
+    listed(labelled.length)
     return labelled.map((v, index) => ({ index, label: format(v, index, labelled as LabelValues), value: v, perc: fraction(v as number) as number }))
   }
   // bands: each value starts one and the next value ends it (the last ends at 1)
   const fraction = labelFraction(scale as never)
+  listed(values.length)
   return values.map((v, index) => ({
     index, label: format(v, index, values), value: v,
     perc: index ? fraction(v) : 0,
@@ -354,10 +350,20 @@ export interface LegendBuildInput {
    * the scope had made, an operator parsed after the entries that read it).
    */
   lateLabels?: boolean
+  /**
+   * The strip (the gradient, or the bands) reads a scale ranked late (its domain reads data): vega's dataflow ranks what reads such a
+   * scale after every operator that reads none, the legend's title among them, so the title is made before the strip is.
+   */
+  lateStrip?: boolean
   /** a gradient's late labels are not made: the pass stopped before them */
   labels?: 'none'
   /** the pass stopped, but after the layout of the entries' grid: it ran, though the legend itself was not laid out (`raw`) */
   entryGrid?: boolean
+  /**
+   * The operators that list the entries never ran (they read a scale that was never evaluated): the legend has what reads nothing of
+   * it -- its title, encoded as any -- and a gradient's strip, joined and left unencoded.
+   */
+  entriesUnrun?: boolean
 }
 
 export interface GuideHost extends EntryHost {
@@ -498,7 +504,7 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
   let titleItem = undefined as (SceneItem & Rec) | undefined
   const title: Placed = { x: 0, y: 0, box: new Bounds() }
   const makeTitle = (): void => {
-    if (!datum.title) return
+    if (!datum.title || titleItem !== undefined) return
     stage('title', () => {
       const def = markOf(defs, 'title', () => legendTitle(k))
       titleItem = make(def, datum, 'title')
@@ -515,7 +521,11 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
   let strip = new Bounds()
   const entryLeaves: SceneItem[] = []
   stage('entry', () => {})
-  if (type !== GradientLegend && type !== DiscreteLegend) {
+  if (inp.entriesUnrun === true) {
+    makeTitle()
+    if (type === GradientLegend) entryLeaves.push({ _part: 'gradient', _kind: 'rect', _bare: true, x: 0, y: 0, path: 'M0,0h0v0h0Z' } as unknown as SceneItem)
+    cutShort = true
+  } else if (type !== GradientLegend && type !== DiscreteLegend) {
     // (a symbol legend's entries are instances of their own, ranked after the title)
     makeTitle()
     if (inp.entries === 'none') cutShort = true
@@ -541,6 +551,7 @@ export function buildLegend(inp: LegendBuildInput): LegendBuilt {
     markTuples(keyed)
     let strips: Array<SceneItem & Rec> = []
     let labels: Array<SceneItem & Rec> = []
+    if (inp.lateStrip === true) makeTitle()
     stage('strip', () => {
       strips = isGradient ? [make(stripDef, datum, 'gradient')] : keyed.map((e) => make(stripDef, e, 'band'))
       partMeta[isGradient ? 'gradient' : 'band'] = { name: stripDef.name, interactive: stripDef.interactive }
@@ -970,8 +981,9 @@ export function placeLegendStack(
     : orient === 'top-right' ? { x: width - offset, y: offset, column: 'end' }
     : orient === 'bottom-left' ? { x: offset, y: height - offset, row: 'end' }
     : orient === 'bottom-right' ? { x: width - offset, y: height - offset, column: 'end', row: 'end' }
-    // right, and any orient not named
-    : { x: Math.ceil(sideBounds.x2) + offset, y: alongY, row: anchor }
+    : orient === 'right' ? { x: Math.ceil(sideBounds.x2) + offset, y: alongY, row: anchor }
+    // (an orient vega does not know has no anchor: the block is laid out at the origin, as vega-view-transforms' legendParams leaves it)
+    : {}
 
   // a legend is as big as its frame (flush) or as everything it draws (full), measured from its own origin
   const whole = setting('bounds', 'flush') !== 'flush'

@@ -16,6 +16,15 @@
  *
  * Local-time parsing is pinned to UTC so vectors are machine-independent.
  *
+ * A recording is reproducible: no input depends on the clock or on randomness, and regenerating
+ * writes the same bytes (src/vectors-reproducible.test.ts regenerates and compares; the colour file
+ * is compared within the replay's tolerance because its maths goes through Math.cbrt/pow, whose last
+ * bit differs between V8 builds). Two recorded strings depend on the recording engine's ICU data:
+ * type `d` (and `,d`) on |x| >= 1e21 and on +-Infinity goes through `toLocaleString('en')` in d3-format
+ * (formatDecimal.js), so those eight wants are ICU output (`"1000000000000000000000"`, `"∞"`, `"−∞"`).
+ * A runtime without full Intl would record `"1e+21"` / `"Infinity"` and fail them; every supported
+ * Node ships full ICU. Every other string comes from toFixed, toExponential, toString(radix) or toPrecision.
+ *
  * Only results that do NOT depend on the V8 version belong here. The suites whose results go
  * through Math.pow/exp/log/sin/cos/atan2/sqrt (vega-scale, d3-geo, d3-shape, vega-expression)
  * are LIVE differentials instead (`differential-*.test.mts`, with their inputs in the
@@ -23,11 +32,12 @@
  */
 import { createRequire } from 'node:module'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { enc } from './vector-codec.mjs'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { cli } from '../../../scripts/lib/cli.mjs'
 
-cli({ url: import.meta.url })
+cli({ url: import.meta.url, flags: { out: 'value' } })
 
 process.env.TZ = 'UTC'
 
@@ -37,32 +47,9 @@ const here = dirname(fileURLToPath(import.meta.url))
 const req = createRequire(join(here, '..', 'package.json'))
 
 // --- value codec -------------------------------------------------------------
-// JSON cannot express NaN/Infinity/-0/undefined/Dates/RegExp/Symbols, so
-// values are tagged. The replay test (`oracle-vectors.test.ts` (packages/core/src)) mirrors this
-// codec; the two must agree.
-
-function enc(v) {
-  if (v === undefined) return { $: 'undef' }
-  if (typeof v === 'number') {
-    if (Number.isNaN(v)) return { $: 'nan' }
-    if (v === Infinity) return { $: 'inf' }
-    if (v === -Infinity) return { $: '-inf' }
-    if (v === 0 && 1 / v < 0) return { $: '-0' }
-    return v
-  }
-  if (v instanceof Date) return { $: 'date', ms: v.getTime() }
-  if (v instanceof RegExp) return { $: 're', src: v.source, flags: v.flags }
-  if (typeof v === 'symbol') return { $: 'symbol', desc: v.description ?? null }
-  if (v instanceof Int8Array) return { $: 'int8array' }
-  if (typeof v === 'function') return { $: 'fn' }
-  if (Array.isArray(v)) return v.map(enc)
-  if (v !== null && typeof v === 'object') {
-    const o = {}
-    for (const k of Object.keys(v).sort()) o[k] = enc(v[k])
-    return o
-  }
-  return v
-}
+// JSON cannot express NaN/Infinity/-0/undefined/Dates/RegExp/Symbols, so values are tagged (vector-codec.mjs; an invalid
+// Date keeps its NaN time). The replay test (`oracle-vectors.test.ts` (packages/core/src)) mirrors this codec; the two must
+// agree, and vector-codec.test.mts checks the recorded files.
 
 /** Call fn, capturing a throw as a tagged value (type and message both pinned). */
 function call(fn, args) {
@@ -99,6 +86,10 @@ function proj(c) {
     darker: colorFields(c.darker()),
     clamp: c.clamp ? colorFields(c.clamp()) : null,
     rgb: colorFields(c.rgb()),
+    string: String(c),
+    brighterHalf: colorFields(c.brighter(0.5)),
+    darker2: colorFields(c.darker(2)),
+    copy: colorFields(c.copy({ opacity: 0.25 })),
   }
 }
 
@@ -220,7 +211,7 @@ const utilSuites = {
     [true], [false], [0], [1], [''], ['true'], [null], [undefined],
   ]),
   isDate: fnSuite('vega-util', vegaUtil, 'isDate', [
-    [new Date(0)], [new Date('not a date')], [0], ['2020-01-01'], [null], [undefined], [Date.now()],
+    [new Date(0)], [new Date('not a date')], [0], ['2020-01-01'], [null], [undefined], [1700000000000],
   ]),
   isNumber: fnSuite('vega-util', vegaUtil, 'isNumber', [
     [0], [-0], [NaN], [Infinity], ['1'], [null], [undefined], [true], [new Date(0)],
@@ -298,14 +289,57 @@ function tzSuite(kind, pkgName, mod, name, tz, cases) {
   }
 }
 
-// Timestamps chosen to straddle the 2024 US transitions (2024-03-10 02:00 local,
-// 2024-11-03 02:00 local) plus an ambiguous/absolute pair for each.
+// Timestamps around the 2024 US transitions in America/New_York (spring forward 2024-03-10 07:00Z,
+// fall back 2024-11-03 06:00Z), and instants that vary every field a floor, an offset or a format
+// reads. The comment used to say these straddled the transitions; the first eleven did not: they
+// are all BEFORE the offset change of their day (the first 01:30 of Nov 3 is the only one that
+// sits in the repeated hour). What each group is for:
+//   - before the change:    03-10T05:30Z (00:30 EST), 03-10T06:30Z (01:30 EST), 11-03T04:30Z (00:30 EDT),
+//                           11-03T05:30Z (the FIRST 01:30 EDT)
+//   - after the change:     03-10T07:30Z (03:30 EDT, the first instant after the gap), 11-03T06:30Z
+//                           (the SECOND 01:30, now EST)
+//   - one day before, so a +1 day offset lands IN the gap (03-09T07:30Z is 02:30 EST; +1 day is
+//                           the nonexistent 02:30 of Mar 10) or on the repeated hour (11-02T05:30Z is 01:30 EDT)
+//   - sub-second fields:    03-10T06:59:59.999Z (the last millisecond before the gap), 06-15T12:37:41.123Z
+//                           and 12:37:41.457Z (minutes 37, seconds 41 and milliseconds 123 / 457: the minutes are a multiple
+//                           of neither 3 nor 5, the milliseconds of 3 only at .123; seconds and milliseconds are non-zero)
 const dstDates = [
   '2024-03-09T12:00:00Z', '2024-03-10T05:30:00Z', '2024-03-10T06:30:00Z',
   '2024-11-02T12:00:00Z', '2024-11-03T04:30:00Z', '2024-11-03T05:30:00Z',
   '2024-01-15T12:00:00Z', '2024-07-15T12:00:00Z', '1970-01-01T00:00:00Z',
   '1999-12-31T23:59:59Z', '2000-02-29T00:00:00Z',
+  '2024-03-10T07:30:00Z', '2024-11-03T06:30:00Z',
+  '2024-03-09T07:30:00Z', '2024-11-02T05:30:00Z',
+  '2024-03-10T06:59:59.999Z', '2024-06-15T12:37:41.123Z', '2024-06-15T12:37:41.457Z',
 ].map((s) => new Date(s))
+
+// Instants on a local boundary of each level of a multi-format object (America/New_York for the local
+// suites, the same wall-clock instants in UTC for the UTC suites): the first instant of a year, a
+// non-quarter month, a quarter, a Sunday, a weekday, an hour, a minute, a second, a millisecond.
+/** The instants of both lists, each once (a case recorded twice checks nothing the first did not). */
+const distinctDates = (...lists) => [...new Map(lists.flat().map((d) => [d.getTime(), d])).values()]
+const multiFormatLocalDates = [
+  '2024-01-01T05:00:00Z', '2024-03-01T05:00:00Z', '2024-04-01T04:00:00Z',
+  '2024-03-10T05:00:00Z', '2024-03-12T04:00:00Z', '2024-06-15T16:00:00Z',
+  '2024-06-15T16:37:00Z', '2024-06-15T16:37:41Z', '2024-06-15T16:37:41.123Z',
+].map((s) => new Date(s))
+const multiFormatUtcDates = [
+  '2024-01-01T00:00:00Z', '2024-03-01T00:00:00Z', '2024-04-01T00:00:00Z',
+  '2024-03-10T00:00:00Z', '2024-03-12T00:00:00Z', '2024-06-15T12:00:00Z',
+  '2024-06-15T12:37:00Z', '2024-06-15T12:37:41Z', '2024-06-15T12:37:41.123Z',
+].map((s) => new Date(s))
+// Objects: the clock-only pair of the first recording, the date-only object, the empty object (all
+// defaults), and one that overrides every level with a marker so each level's pattern is observable.
+const multiFormatObjects = [
+  { year: '%Y', month: '%b', date: '%d' },
+  { seconds: ':%S', minutes: '%H:%M', hours: '%H %p' },
+  {},
+  {
+    milliseconds: 'L%L', seconds: 'S%S', minutes: 'M%M', hours: 'H%H', date: 'D%d', week: 'W%b%d',
+    month: 'Mo%m', quarter: 'Q%q', year: 'Y%Y',
+  },
+  { day: 'A%a', quarter: 'Qu%q' },
+]
 
 const unitsList = [
   ['year'], ['quarter'], ['month'], ['week'], ['date'], ['day'], ['hours'],
@@ -317,9 +351,14 @@ const unitsList = [
 ]
 
 const offsetCases = []
-for (const unit of ['year', 'quarter', 'month', 'week', 'date', 'day', 'hours', 'minutes', 'seconds', 'milliseconds']) {
+// Steps: integers, zero, and the coercion branch (a fractional step floors: -0.5 is one back, 1.5 is one
+// forward; an absent step is 1).
+for (const unit of ['year', 'quarter', 'month', 'week', 'date', 'day', 'dayofyear', 'hours', 'minutes', 'seconds', 'milliseconds']) {
   for (const d of dstDates) {
-    offsetCases.push([unit, d, 1], [unit, d, 3], [unit, d, -2], [unit, d, 12])
+    offsetCases.push(
+      [unit, d, 1], [unit, d, 3], [unit, d, -2], [unit, d, 12],
+      [unit, d, 0], [unit, d, 1.5], [unit, d, -0.5], [unit, d, undefined],
+    )
   }
 }
 
@@ -331,6 +370,8 @@ const sequenceUnits = [
   ['month', '2023-01-01T00:00:00Z', '2024-10-01T00:00:00Z'],
   ['week', '2024-01-01T00:00:00Z', '2024-03-15T00:00:00Z'],
   ['date', '2024-01-01T00:00:00Z', '2024-01-20T00:00:00Z'],
+  ['day', '2024-01-01T00:00:00Z', '2024-01-20T00:00:00Z'],
+  ['dayofyear', '2024-01-01T00:00:00Z', '2024-01-20T00:00:00Z'],
   ['hours', '2024-03-08T00:00:00Z', '2024-03-13T00:00:00Z'],
   ['minutes', '2024-03-10T05:00:00Z', '2024-03-10T05:30:00Z'],
   ['seconds', '2024-03-10T05:29:00Z', '2024-03-10T05:29:30Z'],
@@ -341,19 +382,24 @@ const sequenceUnits = [
   ['hours', '2024-11-01T00:00:00Z', '2024-11-06T00:00:00Z', 6],
   ['date', '2024-06-01T00:00:00Z', '2024-06-10T00:00:00Z', 0],
   ['minutes', '2024-03-10T05:00:00Z', '2024-03-10T05:01:00Z', 30],
+  ['day', '2024-03-08T00:00:00Z', '2024-03-20T00:00:00Z', 2],
+  ['dayofyear', '2024-03-08T00:00:00Z', '2024-03-20T00:00:00Z', 3],
 ]
 const sequenceCases = sequenceUnits.map((u) => [
   u[0], new Date(u[1]), new Date(u[2]), u[3] !== undefined ? Number(u[3]) : undefined,
 ])
 
 const floorCases = []
+// Every instant of dstDates: the first recording sliced the first eight, all of which have zero seconds
+// and milliseconds and minutes of 0 or 30, so the seconds and milliseconds units, every minute/second/
+// millisecond step and the y-m-d-H-M-S floor could not fail.
 for (const units of unitsList) {
-  for (const d of dstDates.slice(0, 8)) {
+  for (const d of dstDates) {
     floorCases.push([units, undefined, d], [units, 5, d], [units, 3, d])
   }
 }
-// 'year' with step 5 floors across 2024 fine; 'hours'/'minutes' steps are the
-// interesting ones under DST.
+// Steps act on the finest unit of the list, so the hours/minutes/seconds/milliseconds steps under DST
+// are only distinguishable on instants whose field is not a multiple of the step (src/vectors-coverage.test.ts).
 
 const dayHelpers = dstDates.map((d) => [d])
 
@@ -364,6 +410,15 @@ const specifierCases = [
   [['year', 'date']], [['month', 'date']], [['dayofyear']],
   [['year', 'month'], { year: 'Y', month: 'M' }],
   [['hours', 'minutes', 'seconds'], { hours: 'H', minutes: 'M', seconds: 'S' }],
+  // The case above ('year','month' with year/month overrides) is inert: the default composite key
+  // 'year-month' wins. These override the composite keys themselves, and pass null / undefined specifiers.
+  [['year', 'month'], { 'year-month': '%Y/%m' }],
+  [['year', 'month', 'date'], { 'year-month-date': '%d.%m.%Y', year: 'Y' }],
+  [['hours', 'minutes'], { 'hours-minutes': '%I:%M %p' }],
+  [['year', 'month'], null],
+  [['year', 'month'], { 'year-month': null }],
+  [['year', 'month'], { year: null, month: 'M' }],
+  [['dayofyear'], { dayofyear: 'D%j' }],
 ]
 
 const unitValidation = [
@@ -378,7 +433,48 @@ const intervalOps = [
   ['round', '2024-03-10T05:30:00Z', undefined],
   ['offset', '2024-03-10T05:30:00Z', 2],
   ['offset', '2024-11-03T04:30:00Z', -3],
+  // an instant off every boundary (the one above is on a boundary of the millisecond, second and minute
+  // intervals, so floor, ceil and round returned the input there)
+  ['floor', '2024-03-10T05:30:17.345Z', undefined],
+  ['ceil', '2024-03-10T05:30:17.345Z', undefined],
+  ['round', '2024-03-10T05:30:17.345Z', undefined],
+  ['offset', '2024-03-10T05:30:17.345Z', 5],
+  ['offset', '2024-03-10T05:30:17.345Z', -5],
 ]
+
+// count / range / every(3).range windows per interval, sized to the unit. The sub-day windows start
+// off-boundary; the local hour and minute windows straddle the spring transition (2024-03-10 07:00Z).
+// The year window starts mid-2021 and contains 2022, 2025 and 2028: every(3) of a year is a multiple of three, so a window
+// without one wants [] whatever its floor does.
+const intervalWindows = {
+  Millisecond: [['2024-03-10T05:30:17.345Z', '2024-03-10T05:30:17.395Z']],
+  Second: [['2024-03-10T05:29:17.345Z', '2024-03-10T05:30:02.500Z']],
+  Minute: [['2024-03-10T06:41:17.345Z', '2024-03-10T07:12:30.000Z']],
+  Hour: [['2024-03-09T20:17:00.000Z', '2024-03-10T12:00:00.000Z']],
+  Day: [['2024-03-01T05:30:00Z', '2024-03-20T00:00:00Z']],
+  Week: [['2024-01-03T12:00:00Z', '2024-04-20T00:00:00Z']],
+  Month: [['2023-01-15T00:00:00Z', '2024-10-01T00:00:00Z']],
+  Year: [['2021-06-15T00:00:00Z', '2030-01-01T00:00:00Z']],
+}
+// The first recording's windows (day and larger): a count over 2024, a range over Jan-Feb,
+// every(3) over the first half of 2024. Both zones record them.
+const legacyIntervalCases = ['Day', 'Week', 'Month', 'Year'].flatMap((unit) => [
+  { op: 'count', w: ['2024-01-01', '2025-01-01'] },
+  { op: 'range', w: ['2024-01-01', '2024-03-01'] },
+  { op: 'every3_range', w: ['2024-01-01', '2024-07-01'] },
+].map((c) => ({ ...c, unit })))
+function intervalWindowCases(prefix) {
+  return [
+    ...legacyIntervalCases,
+    ...Object.entries(intervalWindows).flatMap(([unit, ws]) => ws.flatMap((w) => ['count', 'range', 'every3_range'].map((op) => ({ op, w, unit })))),
+  ].map((c) => ({ ...c, name: `${prefix}${c.unit}` }))
+}
+function intervalWindowRecord(mod, { name, op, w }) {
+  const [a, b] = w
+  const want = op === 'count' ? callIntervalCount(mod, name, a, b)
+    : op === 'range' ? callIntervalRange(mod, name, a, b) : callIntervalEveryRange(mod, name, a, b)
+  return { args: [name, op, new Date(a), new Date(b)].map(enc), want: enc(want) }
+}
 
 const timeSuites = {
   timeOffset: tzSuite('fn', 'vega-time', vegaTime, 'timeOffset', TZ_DST, offsetCases),
@@ -406,13 +502,8 @@ const timeSuites = {
           args: [unit, op, new Date(date), step].filter((a) => a !== undefined).map(enc),
           want: enc(callInterval(d3Time, unit, op, new Date(date), step)),
         })))
-        .concat(
-          ['timeDay', 'timeWeek', 'timeMonth', 'timeYear'].flatMap((unit) => [
-            { args: [unit, 'count', new Date('2024-01-01'), new Date('2025-01-01')].map(enc), want: enc(callIntervalCount(d3Time, unit, '2024-01-01', '2025-01-01')) },
-            { args: [unit, 'range', new Date('2024-01-01'), new Date('2024-03-01')].map(enc), want: enc(callIntervalRange(d3Time, unit, '2024-01-01', '2024-03-01')) },
-            { args: [unit, 'every3_range', new Date('2024-01-01'), new Date('2024-07-01')].map(enc), want: enc(callIntervalEveryRange(d3Time, unit, '2024-01-01', '2024-07-01')) },
-          ]),
-        ),
+        .concat(intervalWindowCases('time')
+          .map((c) => intervalWindowRecord(d3Time, c))),
     }
   })(),
   utcIntervals: (() => {
@@ -425,7 +516,9 @@ const timeSuites = {
         .flatMap((unit) => intervalOps.map(([op, date, step]) => ({
           args: [unit, op, new Date(date), step].filter((a) => a !== undefined).map(enc),
           want: enc(callInterval(d3Time, unit, op, new Date(date), step)),
-        }))),
+        })))
+        .concat(intervalWindowCases('utc')
+          .map((c) => intervalWindowRecord(d3Time, c))),
     }
   })(),
 }
@@ -467,18 +560,26 @@ const parseSpecs = [
   'red', 'rebeccapurple', 'lime', 'gray', 'grey', 'darkslategray',
   'darkslategrey', 'steelblue', 'transparent', 'none', '', 'notacolor',
   'REDBLUE', 'red ', ' steelblue', 'red\t', 'rgb(255,0,0) ',
+  // percent with alpha, 4- and 8-digit hex with real alpha bytes, case folding, fractional/out-of-range
+  // hue and alpha (the first table never entered the rgba(%) branch, never read a non-zero 4-digit alpha,
+  // and only ever lower-cased a hex)
+  'rgba(100%,0%,0%,0.5)', 'rgba(10%, 20.5%, 30%, 0)', 'rgba(100%,0%,0%,2)', '#f008', '#abcd', '#FF0000C0', '#12345678', '#ff0000ff',
+  'RGB(255,0,0)', 'Red', 'TRANSPARENT', 'RGBA(1,2,3,0.5)', 'HSL(120,50%,50%)', 'HSLA(120,50%,50%,0.25)', 'SteelBlue',
+  'hsl(1.5,50%,50%)', 'hsl(120deg,50%,50%)', 'hsla(120,50%,50%,2)', 'rgba(1,2,3,2)', 'rgba(1,2,3,-1)', 'rgb(1.5,2.5,3.5)',
 ]
 
 const colorSuites = {
   parse: colorSuite('d3-color', d3Color, 'color', parseSpecs.map((s) => [s])),
   rgb: colorSuite('d3-color', d3Color, 'rgb', [
     ...parseSpecs.map((s) => [s]),
+    [undefined], [null], [0x112233], [255, 128, 0, undefined], [255, 128, 0, null],
     [255, 128, 0], [255, 128, 0, 0.5], [255, 128, 0, '0.5'], [255, 128, 0, 0],
     [255.7, 128.2, 0.9, 0.1], [300, 0, 0], [-5, 0, 0], [NaN, 0, 0],
     [0, 0, 0], [255, 255, 255], [128, 128, 128, 0],
   ]),
   hsl: colorSuite('d3-color', d3Color, 'hsl', [
     ...parseSpecs.map((s) => [s]),
+    [undefined], [null], [0x112233],
     [120, 0.5, 0.5], [120, 0.5, 0.5, 0.5], [120, 0.5, 0.5, 0],
     [-240, 1, 0.5], [480, 1, 0.5], [0, 0, 0], [0, 0, 1],
     [0, 1, 0.5], [120, 1.5, 0.5], [120, 0.5, 1.5], [120, NaN, 0.5],
@@ -506,15 +607,25 @@ const colorSuites = {
 const formatSpecs = [
   'd', 'f', '.2f', '.0f', 'g', '.3g', 's', '.2s', 'e', '.2e', '%', '.1%',
   'r', '.3r', 'p', '.2p', '~g', '~s', ',.2f', ',d', '08.3f', '>10.2f',
-  '<10.2f', '^10.2f', '=10.2f', '+$, .2f', '#x', '#o', '#X', 'b', 'n', '',
+  '<10.2f', '^10.2f', '=10.2f', '$x', '#x', '#o', '#X', 'b', 'n', '',
   '.12g', '.1f', 'c', '5', '.5', ',', '~', 'x', 'X', 'o',
 ]
-const invalidFormatSpecs = ['zzz', '.zzf', '10.2.3f', '#', '+', 'q']
-
+// Specifiers that fail to parse (the formatSpecifier suite records the throw).
+// ('+$, .2f' is the typo this list once carried among the valid ones: a space after the comma is not a specifier)
+const invalidFormatSpecs = ['zzz', '.zzf', '10.2.3f', '+$, .2f', '$#x']
+// Specifiers that parse, with the options each one switches: a bare '#', '+' and 'q' (an unknown type
+// falls back to ~.12g) and every sign / symbol / zero-pad / grouping option reaching a value. They go
+// through the format suite as well as the formatSpecifier suite: the first recording only parsed them.
+const edgeFormatSpecs = [
+  '#', '+', 'q', '.3q', '+.2f', '-.2f', ' .2f', '(.2f', '$.2f', '$,.2f', '+$,.2f', '($,.2f', '$.2s', '+,.3s', '(.2e', '+.2%', '$d', '+d', '(d',
+  '+08.2f', '$010,.2f', '#.0f', '#b', '#.3s', '~%', '.0%', '.2~s', '+~g', '0=10d', '*^12.3f',
+]
 const formatValues = [
   0, -0, 1, -1, 1.5, -1.5, 12345.678, 0.5, 2 / 3, 100, 255, 0.000001, 1e-7,
   1e15, 1e21, 1e22, NaN, Infinity, -Infinity, -1234.5678, 987654321.123,
   0.1, 1e-21, 42,
+  // beyond the SI prefixes (y below 1e-24, Y above 1e24), and what d3 coerces with +value
+  1e-24, 1e-27, 1e24, 1e27, 7.5e-26, '42', ' 12.5 ', '1e3', '', 'abc', null, undefined, true, false, [], [5],
 ]
 
 const specifierProjection = (spec) => {
@@ -535,7 +646,7 @@ const formatSuites = {
     oracle: oracleOf('d3-format'),
     kind: 'apply1',
     tz: TZ_UTC,
-    cases: formatSpecs.flatMap((spec) => formatValues.map((v) => ({
+    cases: [...formatSpecs, ...edgeFormatSpecs].flatMap((spec) => formatValues.map((v) => ({
       args: [spec, v].map(enc),
       want: enc(call((s, v) => d3Format.format(s)(v), [spec, v])),
     }))),
@@ -545,9 +656,16 @@ const formatSuites = {
     oracle: oracleOf('d3-format'),
     kind: 'apply1',
     tz: TZ_UTC,
-    cases: ['.2s', 's', '.0s', '.3s'].flatMap((spec) =>
-      [0, 1, 999, 1000, 1500, 1e6, 2.5e9, -3.7e12, 7e15].flatMap((ref) =>
-        [ref, ref * 0.5, 1].map((v) => ({
+    // Refs cover every prefix (y .. Y), the clamp beyond 1e+-24, zero (formatDecimalParts is null for 0, so
+    // the want is "NaN") and the non-finite refs. A value triple [ref, ref / 2, 1] collides for ref 0 and 1
+    // (each repeated an earlier case), so triples are de-duplicated and ref * 3 is added as a value that
+    // does not collide. More specs than the plain `s` family: grouping, sign, symbol, trim.
+    cases: ['.2s', 's', '.0s', '.3s', '~s', ',.3s', '+.2s', '$.2s', '.2~s', '(.1s', '08.2s', '.2f', 'd'].flatMap((spec) =>
+      [0, 1e-24, 1e-21, 1e-18, 1e-15, 1e-12, 1e-9, 1e-6, 0.001, 0.5, 1, 999, 1000, 1500, 1e6, 2.5e9, -3.7e12, 7e15, 1e18, 1e21, 1e24, 1e27, NaN, Infinity, -Infinity].flatMap((ref) =>
+        // (the prefix scales the value by Math.pow(10, -e), which differs in the last bit between V8 builds for |e| >= 18: a
+        // value that lands on a rounding boundary after it, ref / 2 under `.0s`, would record the engine, not d3. Those refs
+        // are applied to themselves and to 3 * ref, which no precision of these specs rounds at a boundary)
+        [...new Set([ref, ...(Math.abs(ref) >= 1e18 ? [] : [ref * 0.5, 1]), ref * 3, ...(Math.abs(ref) >= 1e18 ? [] : [123456])])].map((v) => ({
           args: [spec, ref, v].map(enc),
           want: enc(call((s, r, v) => d3Format.formatPrefix(s, r)(v), [spec, ref, v])),
         })),
@@ -557,16 +675,26 @@ const formatSuites = {
     oracle: oracleOf('d3-format'),
     kind: 'specifier',
     tz: TZ_UTC,
-    cases: [...formatSpecs, ...invalidFormatSpecs].map((spec) => ({
+    cases: [...formatSpecs, ...edgeFormatSpecs, ...invalidFormatSpecs].map((spec) => ({
       args: [spec].map(enc),
       want: enc(call(specifierProjection, [spec])),
     })),
   },
   precisionFixed: fnSuiteTz('d3-format', [[1], [0.1], [0.01], [0.001], [0.25], [1e-7], [10], [0], [NaN]], (s) => d3Format.precisionFixed(s)),
-  precisionPrefix: fnSuiteTz('d3-format', [[1, 1], [0.1, 100], [0.001, 2.5e9], [10, 1e3], [0.25, 50], [1e-7, 1e9]], (s, v) => d3Format.precisionPrefix(s, v)),
-  precisionRound: fnSuiteTz('d3-format', [[1, 10], [0.1, 100], [0.001, 2.5e9], [10, 1e3], [0.25, 50], [0.5, 0.75]], (s, m) => d3Format.precisionRound(s, m)),
+  // zero, negative, NaN and infinite steps / values / maxima (precisionFixed already records 0 and NaN)
+  precisionPrefix: fnSuiteTz('d3-format', [[1, 1], [0.1, 100], [0.001, 2.5e9], [10, 1e3], [0.25, 50], [1e-7, 1e9],
+    [0, 1], [1, 0], [-1, 1e3], [1, -1e3], [NaN, 1], [1, NaN], [Infinity, 1], [1, Infinity], [-Infinity, 1], [1, -Infinity],
+    [0.5, 1e-9], [5, 1e24], [1e-30, 1e27], [1, 1e-30], [-0, 1], [1, -0]], (s, v) => d3Format.precisionPrefix(s, v)),
+  precisionRound: fnSuiteTz('d3-format', [[1, 10], [0.1, 100], [0.001, 2.5e9], [10, 1e3], [0.25, 50], [0.5, 0.75],
+    [0, 1], [1, 0], [-1, 10], [1, -10], [NaN, 1], [1, NaN], [Infinity, 1], [1, Infinity], [1, -Infinity], [-Infinity, 1],
+    [0.5, 1e-9], [1e-30, 1], [-0, 1], [1, -0], [1, 1], [1, 0.5]], (s, m) => d3Format.precisionRound(s, m)),
   // d3-array's tickStep backs formatSpan and (later) the scale ticks
-  tickStep: fnSuiteTz('d3-array', [[0, 1, 10], [0, 10, 3], [1, 0, 10], [0, 1, 5], [0.5, 1.5, 7], [-1, 1, 4], [0, 100, 7], [1.2, 3.4, 6], [0, 1, 1]], (a, b, c) => d3Array.tickStep(a, b, c)),
+  tickStep: fnSuiteTz('d3-array', [[0, 1, 10], [0, 10, 3], [1, 0, 10], [0, 1, 5], [0.5, 1.5, 7], [-1, 1, 4], [0, 100, 7], [1.2, 3.4, 6], [0, 1, 1],
+    // count 0 / negative / non-integer / non-finite, start == stop, non-finite and subnormal bounds
+    [0, 1, 0], [0, 1, -3], [0, 1, 2.5], [0, 1, NaN], [0, 1, Infinity], [0, 10, 0.5], [5, 5, 10], [5, 5, 0], [0, 0, 10],
+    [NaN, 1, 10], [0, NaN, 10], [0, Infinity, 10], [-Infinity, 0, 10], [-Infinity, Infinity, 10], [1, 0, 0], [-1, -2, 5],
+    [5e-324, 1e-323, 10], [0, 5e-324, 10], [-5e-324, 5e-324, 3], [1e-300, 1e300, 10], [1e307, 1.7976931348623157e308, 10],
+    [0, 1e-7, 5], [0, 1e21, 5]], (a, b, c) => d3Array.tickStep(a, b, c)),
 }
 
 // --- the vega-format facade (locale) ------------------------------------------
@@ -603,18 +731,24 @@ const localeSuites = {
       '%U', '%W', '%V', '%G', '%C', '%Z', '%%', '%x', '%X', '%c', '%e', '%-d',
       '%_m', '%0e', '%q', '%s', '%Q', '%L', '%f', '%y', '%g',
     ].flatMap((spec) => dstDates.map((d) => [spec, d]))
-      .concat([
-        // multi-format objects pick a specifier per tick interval
-        { year: '%Y', month: '%b', date: '%d' },
-        { seconds: ':%S', minutes: '%H:%M', hours: '%H %p' },
-        {},
-      ].flatMap((spec) => dstDates.map((d) => [spec, d])))),
+      .concat(
+        // multi-format objects pick a specifier per tick interval, so they are applied to the dates
+        // that sit on a boundary of each level as well as to dstDates (none of which is a local midnight)
+        multiFormatObjects.flatMap((spec) => distinctDates(dstDates, multiFormatLocalDates).map((d) => [spec, d])),
+      )),
   localeUtcFormat: tzSuite('apply1', 'vega-format', localeFns, 'localeUtcFormat', TZ_UTC,
-    ['%Y-%m-%dT%H:%M:%S', '%B %Y', '%H:%M', '%j', '%V', '%s'].flatMap((spec) => dstDates.map((d) => [spec, d]))),
+    ['%Y-%m-%dT%H:%M:%S', '%B %Y', '%H:%M', '%j', '%V', '%s'].flatMap((spec) => dstDates.map((d) => [spec, d]))
+      // multi-format objects, applied to the instants on each level's boundary (UTC midnights, ...) as well
+      .concat(multiFormatObjects.flatMap((spec) => distinctDates(dstDates, multiFormatUtcDates).map((d) => [spec, d])))),
   localeTimeParse: tzSuite('fn', 'vega-format', localeFns, 'localeTimeParse', TZ_DST, [
     ['%Y-%m-%d', '2024-03-10'], ['%m/%d/%Y', '03/10/2024'], ['%B %d, %Y', 'March 10, 2024'],
     ['%b %d, %Y', 'Mar 10, 2024'], ['%H:%M', '14:30'], ['%I %p', '2 PM'],
     ['%j', '070'], ['%U', '10'], ['%V', '11'], ['%G-W11-4', '2024-W11-4'],
+    // ISO week date: the case above takes `W11-4` as literal text; these resolve year + week + weekday
+    ['%G-W%V-%u', '2024-W11-4'], ['%G-W%V-%u', '2024-W01-1'], ['%G-W%V-%u', '2021-W53-7'], ['%u', '4'], ['%w', '4'],
+    // the skipped hour (02:30 on 2024-03-10 never happened) and the repeated hour (01:30 on 2024-11-03 happened twice)
+    ['%Y-%m-%dT%H:%M:%S', '2024-03-10T02:30:00'], ['%Y-%m-%dT%H:%M:%S', '2024-11-03T01:30:00'],
+    ['%Y-%m-%dT%H:%M:%S', '2024-03-10T03:00:00'], ['%Y-%m-%dT%H:%M:%S.%L', '2024-06-15T12:37:41.123'],
     ['%Y-%m-%dT%H:%M:%S', '2024-03-10T14:30:45'], ['%Y-%m-%dT%H:%M:%S%Z', '2024-03-10T14:30:45+0200'],
     ['%Y-%m-%dT%H:%M:%S%Z', '2024-03-10T14:30:45Z'], ['%s', '1710082245'], ['%Q', '1710082245000'],
     ['%A', 'Sunday'], ['%p', 'PM'], ['garbage', '2024-03-10'], ['%Y-%m-%d', 'not a date'],
@@ -623,6 +757,8 @@ const localeSuites = {
   localeUtcParse: tzSuite('fn', 'vega-format', localeFns, 'localeUtcParse', TZ_UTC, [
     ['%Y-%m-%dT%H:%M:%S', '2024-03-10T14:30:45'], ['%Y-%m-%d', '2024-03-10'],
     ['%H:%M', '14:30'], ['%s', '1710082245'], ['%Y-%m-%dT%H:%M:%S%Z', '2024-03-10T14:30:45+0200'],
+    ['%G-W%V-%u', '2024-W11-4'], ['%Y-%m-%dT%H:%M:%S.%L', '2024-06-15T12:37:41.123'],
+    ['%Y-%m-%dT%H:%M:%S', '2024-03-10T02:30:00'], ['%Y-%m-%dT%H:%M:%S', '2024-11-03T01:30:00'],
   ]),
 }
 
@@ -630,51 +766,85 @@ const localeSuites = {
 
 // named converter/filter variants the replay reconstructs
 
-const deltaArcs = [
-  [[0, 0], [1, 0], [0, 1]],   // arc 0: bottom of left square
-  [[1, 0], [0, 1]],           // arc 1: shared edge, bottom->top
-  [[1, 0], [0, 1], [-1, 0]],  // arc 2: bottom of right square
-  [[-1, 0], [0, -1], [1, 0]], // arc 3: top of right square (reversed use)
-  [[0, -1], [-1, 0], [1, 0]], // arc 4: top of left square
-]
-
-const quantized = {
-  type: 'Topology',
-  transform: { scale: [10, 10], translate: [0, 0] },
-  arcs: deltaArcs,
-  objects: {
-    squares: {
-      type: 'GeometryCollection',
-      geometries: [
-        { type: 'Polygon', arcs: [[0, 1, ~4]], properties: { name: 'left' }, id: 'L' },
-        { type: 'Polygon', arcs: [[~1, 2, 3]], properties: { name: 'right' } },
-      ],
-    },
-    border: { type: 'LineString', arcs: [1] },
-    point: { type: 'Point', coordinates: [2, 3] },
-  },
-}
-
+// A valid topology: a 2x1 grid of two squares sharing an edge (arc 1), a polygon with a hole, and a
+// MultiPolygon, in absolute coordinates; `quantized` is DERIVED from it (delta-encoded on a grid), and the
+// two are checked below to decode to the same features, and every ring to close, so a malformed fixture
+// fails the recording instead of being recorded.
+//   left square  (0,0)-(10,10)   ring: arc 0 (bottom-right -> bottom-left -> top-left -> top-right) + arc 1 (down the shared edge)
+//   right square (10,0)-(20,10)  ring: ~arc 1 (up the shared edge) + arc 2 (top-left -> top-right -> bottom-right -> bottom-left)
 const absolute = {
   type: 'Topology',
   arcs: [
-    [[0, 0], [10, 0], [10, 10]],
-    [[10, 0], [10, 10]],
-    [[10, 0], [20, 0], [20, 10]],
-    [[20, 10], [10, 10], [0, 10]],
-    [[0, 10], [0, 0], [10, 0]],
+    [[10, 0], [0, 0], [0, 10], [10, 10]],
+    [[10, 10], [10, 0]],
+    [[10, 10], [20, 10], [20, 0], [10, 0]],
+    [[0, 20], [30, 20], [30, 50], [0, 50], [0, 20]], // donut: outer ring
+    [[10, 30], [10, 40], [20, 40], [20, 30], [10, 30]], // donut: hole
   ],
   objects: {
     squares: {
       type: 'GeometryCollection',
       geometries: [
-        { type: 'Polygon', arcs: [[0, 1, ~4]], properties: { name: 'left' }, id: 'L' },
-        { type: 'Polygon', arcs: [[~1, 2, 3]], properties: { name: 'right' } },
+        { type: 'Polygon', arcs: [[0, 1]], properties: { name: 'left' }, id: 'L' },
+        { type: 'Polygon', arcs: [[~1, 2]], properties: { name: 'right' } },
       ],
     },
+    multi: { type: 'MultiPolygon', arcs: [[[0, 1]], [[~1, 2]]] },
+    donut: { type: 'Polygon', arcs: [[3], [4]] },
     border: { type: 'LineString', arcs: [1] },
     point: { type: 'Point', coordinates: [20, 30] },
+    points: { type: 'MultiPoint', coordinates: [[0, 0], [10, 10]] },
   },
+}
+
+const QUANT = { scale: [2.5, 5], translate: [-5, 10] }
+const quantize = (topology, { scale, translate }) => {
+  const q = ([x, y]) => [Math.round((x - translate[0]) / scale[0]), Math.round((y - translate[1]) / scale[1])]
+  const quantizeObject = (o) => {
+    const out = { ...o }
+    if (o.type === 'Point') out.coordinates = q(o.coordinates)
+    else if (o.type === 'MultiPoint') out.coordinates = o.coordinates.map(q)
+    else if (o.geometries) out.geometries = o.geometries.map(quantizeObject)
+    return out
+  }
+  return {
+    ...topology,
+    transform: { scale, translate },
+    arcs: topology.arcs.map((arc) => {
+      let px = 0
+      let py = 0
+      return arc.map((pt, i) => {
+        const [x, y] = q(pt)
+        const d = i === 0 ? [x, y] : [x - px, y - py]
+        px = x
+        py = y
+        return d
+      })
+    }),
+    objects: Object.fromEntries(Object.entries(topology.objects).map(([k, o]) => [k, quantizeObject(o)])),
+  }
+}
+const quantized = quantize(absolute, QUANT)
+
+{
+  // the fixtures describe what they say: every ring closes, and both topologies decode alike
+  for (const [name, t] of Object.entries({ quantized, absolute })) {
+    for (const obj of ['squares', 'multi', 'donut']) {
+      const feats = topojsonClient.feature(t, t.objects[obj])
+      for (const f of feats.type === 'FeatureCollection' ? feats.features : [feats]) {
+        const polys = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates
+        for (const rings of polys) for (const ring of rings) {
+          const [a, b] = [ring[0], ring[ring.length - 1]]
+          if (ring.length < 4 || a[0] !== b[0] || a[1] !== b[1]) throw new Error(`topology fixture ${name}.${obj}: ring does not close`)
+        }
+      }
+    }
+  }
+  for (const obj of Object.keys(absolute.objects)) {
+    const a = JSON.stringify(topojsonClient.feature(absolute, absolute.objects[obj]))
+    const b = JSON.stringify(topojsonClient.feature(quantized, quantized.objects[obj]))
+    if (a !== b) throw new Error(`topology fixtures disagree on ${obj}: ${a} vs ${b}`)
+  }
 }
 
 const dsvConverters = {
@@ -685,8 +855,11 @@ const dsvConverters = {
 
 const topologies = { quantized, absolute }
 
+// topojson-client calls filter(a, b) with the two geometries that share an arc; an arc on one geometry only has
+// a === b (the exterior of the shape), a shared arc has a !== b (the interior, the border between two shapes)
 const topoFilters = {
-  interior: (a, b) => a === b,
+  exterior: (a, b) => a === b,
+  interior: (a, b) => a !== b,
   any: undefined,
   byName: (a, b) => a.properties?.name === b.properties?.name,
 }
@@ -696,16 +869,16 @@ const topoSuites = {
     oracle: oracleOf('topojson-client'),
     kind: 'fn',
     tz: TZ_UTC,
-    cases: [quantized, absolute].map((t) => ({
-      args: [enc(t)].map(enc),
-      want: enc(call((t) => topojsonClient.feature(t, t.objects.squares), [t])),
-    })),
+    cases: [quantized, absolute].flatMap((t) => ['squares', 'multi', 'donut'].map((name) => ({
+      args: [t, name].map(enc),
+      want: enc(call((t, n) => topojsonClient.feature(t, t.objects[n]), [t, name])),
+    }))),
   },
   topoFeatureNamed: {
     oracle: oracleOf('topojson-client'),
     kind: 'fn',
     tz: TZ_UTC,
-    cases: [['squares', quantized], ['border', quantized], ['point', quantized]].map(([name, t]) => ({
+    cases: [quantized, absolute].flatMap((t) => ['squares', 'border', 'point', 'points', 'multi', 'donut'].map((name) => [name, t])).map(([name, t]) => ({
       args: [t, name].map(enc),
       want: enc(call((t, n) => topojsonClient.feature(t, n), [t, name])),
     })),
@@ -715,7 +888,7 @@ const topoSuites = {
     kind: 'fn',
     tz: TZ_UTC,
     cases: [quantized, absolute].map((t) => ({
-      args: [enc(t)].map(enc),
+      args: [t].map(enc),
       want: enc(call((t) => topojsonClient.mesh(t), [t])),
     })),
   },
@@ -725,20 +898,18 @@ const topoSuites = {
     kind: 'topomesh',
     tz: TZ_UTC,
     cases: [
+      ['quantized', 'squares', 'exterior'],
+      ['absolute', 'squares', 'exterior'],
       ['quantized', 'squares', 'interior'],
+      ['absolute', 'squares', 'interior'],
+      ['quantized', 'multi', 'interior'],
+      ['absolute', 'multi', 'exterior'],
+      ['quantized', 'multi', 'any'],
       ['quantized', 'border', 'any'],
       ['absolute', 'squares', 'byName'],
+      ['absolute', 'donut', 'exterior'],
+      ['quantized', 'donut', 'interior'],
     ].map(([t, name, variant]) => ({
-      args: [topologies[t], name].map(enc),
-      variant,
-      want: enc(call((t, n, v) => topojsonClient.mesh(t, t.objects[n], topoFilters[v]), [topologies[t], name, variant])),
-    })),
-  },
-  topoMeshOuter: {
-    oracle: oracleOf('topojson-client'),
-    kind: 'topomesh',
-    tz: TZ_UTC,
-    cases: [['quantized', 'squares', 'interior']].map(([t, name, variant]) => ({
       args: [topologies[t], name].map(enc),
       variant,
       want: enc(call((t, n, v) => topojsonClient.mesh(t, t.objects[n], topoFilters[v]), [topologies[t], name, variant])),
@@ -778,7 +949,9 @@ const dsvSuites = {
       }, [text])),
     })),
   },
-  dsvParseSemi: {
+  // parseRows with a non-comma delimiter (these two suites were called dsvParseSemi / dsvParseTab, which
+  // read as `parse`; they have always recorded arrays of arrays)
+  dsvParseRowsSemi: {
     oracle: oracleOf('d3-dsv'),
     kind: 'fn',
     tz: TZ_UTC,
@@ -787,13 +960,32 @@ const dsvSuites = {
       want: enc(call((t) => d3Dsv.dsvFormat(';').parseRows(t), [text])),
     })),
   },
-  dsvParseTab: {
+  dsvParseRowsTab: {
     oracle: oracleOf('d3-dsv'),
     kind: 'fn',
     tz: TZ_UTC,
     cases: [dsvTexts[11]].map((text) => ({
       args: [text].map(enc),
       want: enc(call((t) => d3Dsv.dsvFormat('\t').parseRows(t), [text])),
+    })),
+  },
+  // parse (to objects) with a non-comma delimiter, including a duplicate header
+  dsvParseSemi: {
+    oracle: oracleOf('d3-dsv'),
+    kind: 'fn',
+    tz: TZ_UTC,
+    cases: [dsvTexts[10], 'a;b;a\n1;2;3', 'a;b\n"x;y";2\n3;4'].map((text) => ({
+      args: [text].map(enc),
+      want: enc(call((t) => d3Dsv.dsvFormat(';').parse(t).map((r) => ({ ...r })), [text])),
+    })),
+  },
+  dsvParseTab: {
+    oracle: oracleOf('d3-dsv'),
+    kind: 'fn',
+    tz: TZ_UTC,
+    cases: [dsvTexts[11], 'a\tb\n1\t2\n3\t4', 'a\tb\n"x\ty"\t2'].map((text) => ({
+      args: [text].map(enc),
+      want: enc(call((t) => d3Dsv.dsvFormat('\t').parse(t).map((r) => ({ ...r })), [text])),
     })),
   },
   dsvParseRows: {
@@ -814,6 +1006,9 @@ const dsvSuites = {
       ['a,b\n1,2\n3,4', 'rowPlusIndex'],
       ['a,b\n1,2', 'pickA'],
       ['a,b\n1,2', 'dropOdd'],
+      // three or more rows, so the converter's null for an odd index actually drops a row
+      ['a,b\n1,2\n3,4\n5,6', 'dropOdd'],
+      ['a,b\n1,2\n3,4\n5,6\n7,8\n9,10', 'dropOdd'],
     ].map(([text, variant]) => ({
       args: [text].map(enc),
       variant,
@@ -834,21 +1029,23 @@ const dsvSuites = {
       want: enc(call((r) => d3Dsv.dsvFormat(',').format(r), [rows])),
     })),
   },
+  // formatRow takes ONE row (an array of cells): each case is a row, not a row wrapped in another array
+  // (the first recording wrapped them, so every row was a single array-valued cell). Dates are formatted as
+  // ISO text by d3-dsv, never by Date#toString (which follows the host locale).
   dsvFormatRow: {
     oracle: oracleOf('d3-dsv'),
     kind: 'fn',
     tz: TZ_UTC,
     cases: [
-      [[1, 'x,y']], [['say ""hi""', null]], [[new Date(Date.UTC(2024, 0, 1)), 'z']],
+      [1, 'x,y'], ['say "hi"', 'plain'], ['say ""hi""', null], [null, undefined, 0, false, NaN], ['multi\nline', '\r', ' lead'],
+      [new Date(Date.UTC(2024, 0, 1)), 'z'], [new Date(Date.UTC(2024, 5, 15, 12, 30, 45, 500)), new Date(Date.UTC(2024, 0, 1, 0, 0, 1))],
+      [new Date(NaN), 'x'], [], [''], ['a'], [1, 2, 3], [{ a: 1 }, [1, 2]],
     ].map((row) => ({
       args: [enc(row)],
       want: enc(call((r) => d3Dsv.dsvFormat(',').formatRow(r), [row])),
     })),
   },
 }
-
-// A small topology: a 2x1 grid of two squares sharing an edge (arc 1),
-// with quantized coordinates, plus the same geometry unquantized.
 
 
 const files = {
@@ -861,7 +1058,10 @@ const files = {
   'topojson-client.json': { suites: topoSuites },
 }
 
-const destDir = join(here, '..', '..', 'core', 'testdata', 'vectors')
+// `--out <dir>` records into another directory: the reproducibility test (src/vectors-reproducible.test.ts)
+// regenerates there and compares with the committed files.
+const outFlag = process.argv.indexOf('--out')
+const destDir = outFlag >= 0 ? resolve(process.argv[outFlag + 1]) : join(here, '..', '..', 'core', 'testdata', 'vectors')
 mkdirSync(destDir, { recursive: true })
 
 let n = 0

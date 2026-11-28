@@ -10,6 +10,7 @@
 import * as d3 from 'd3-array'
 import { describe, expect, it, vi } from 'vitest'
 import * as arr from '../../core/src/arr.ts'
+import { unboundedForParity } from '../../core/src/limits.ts'
 import { compareCases, makeRng, scaled, type Rng } from './differential-gen.mts'
 
 vi.setConfig({ testTimeout: 120_000 })
@@ -48,10 +49,13 @@ describe('arr.ts vs d3-array 3.2.4 (generated)', () => {
       return {
         label: lab([a, b, c]),
         oracle: () => [d3.ticks(a as number, b as number, c as number), d3.tickStep(a as number, b as number, c as number), d3.tickIncrement(a as number, b as number, c as number)],
-        aster: () => [arr.ticks(a as number, b as number, c as number), arr.tickStep(a as number, b as number, c as number), arr.tickIncrement(a as number, b as number, c as number)],
+        // (past the built-in ceiling `ticks` refuses a count d3 makes or fails on natively: the parity is with the ceiling off)
+        aster: () => unboundedForParity(() => [arr.ticks(a as number, b as number, c as number), arr.tickStep(a as number, b as number, c as number), arr.tickIncrement(a as number, b as number, c as number)]),
+        // (ticks that were listed: a non-empty list, not the empty one a NaN or a refused count gives)
+        informative: (v) => Array.isArray(v) && Array.isArray(v[0]) && v[0].length > 0,
       }
     })
-    expect(out.informative).toBeGreaterThan(10000)
+    expect(out.informative, 'cases that listed ticks').toBeGreaterThan(out.cases * 0.3)
   })
 
   it('ticks with a large count (the arrays a dense axis makes)', () => {
@@ -60,7 +64,7 @@ describe('arr.ts vs d3-array 3.2.4 (generated)', () => {
       const a = r.pick([0, -1e6, 3.7, 1e-3])
       const b = a + r.pick([1, 1e3, 1e6, 1e9])
       const c = r.pick([1000, 5000, 20000, 100000])
-      return { label: lab([a, b, c]), oracle: () => d3.ticks(a, b, c), aster: () => arr.ticks(a, b, c) }
+      return { label: lab([a, b, c]), oracle: () => d3.ticks(a, b, c), aster: () => unboundedForParity(() => arr.ticks(a, b, c)) }
     })
   })
 
@@ -137,9 +141,9 @@ describe('arr.ts vs d3-array 3.2.4 (generated)', () => {
         label: lab({ v, p }),
         oracle: () => [
           d3.quantile(v as number[], p as number),
-          d3.quantile(keyed, p as number, (e) => e.d as number),
+          d3.quantile(keyed, p as number, (e: { d: unknown }) => e.d as number),
           d3.quantileSorted(sorted, p as number),
-          d3.quantileSorted(keyed, p as number, (e) => +(e.d as number)),
+          d3.quantileSorted(keyed, p as number, (e: { d: unknown }) => +(e.d as number)),
         ],
         aster: () => [
           arr.quantile(v, p as number),

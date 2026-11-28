@@ -10,7 +10,9 @@
  * What is compared, strictly (no tolerance):
  *   - the output rows: values (NaN, -0, undefined-valued keys, Dates), the ORDER of each row's keys, the order of the rows;
  *   - that the input rows were not touched (the run repeats over deep-frozen inputs);
- *   - a thrown error: Aster must refuse when Vega does, with Vega's message;
+ *   - a thrown error: Aster must refuse when Vega does, with Vega's message (an error of the JavaScript engine itself, a TypeError such
+ *     as `Cannot read properties of undefined`, is worded by the engine and not compared; Aster must still not answer it with one of its
+ *     own, and the number of such cases is pinned per suite);
  *   - the random source: the number of draws the transform made and the next value of the stream, so a transform that draws
  *     (ci0/ci1, sample) draws the same count in the same order as Vega;
  *   - the `signal` a bin publishes (start, stop, step).
@@ -75,16 +77,21 @@ async function runVega(c: Case): Promise<Outcome> {
   const signals = Object.entries(c.signals ?? {}).map(([name, value]) => ({ name, value: structuredClone(value) }))
   const rng = countingLcg()
   const errors: string[] = []
+  const logged: unknown[] = []
   vega.setRandom(rng.random)
   try {
     const view = new vega.View(vega.parse({ signals, data } as vega.Spec), { renderer: 'none', logLevel: vega.None })
     view.logger({
       level() { return 1 },
-      error(...a: unknown[]) { errors.push(a.map((x) => (x as Error)?.message || String(x)).join(' ')); return this },
+      error(...a: unknown[]) { logged.push(a[0]); errors.push(a.map((x) => (x as Error)?.message || String(x)).join(' ')); return this },
       warn() { return this }, info() { return this }, debug() { return this },
     } as unknown as vega.LoggerInterface)
     await view.runAsync()
-    if (errors.length) return { error: new Error(errors[0]!.replace(/^Error: /, '')), draws: rng.draws(), next: 0 }
+    if (errors.length) {
+      // (the class of the logged error is kept: a TypeError is the engine's, not vega's own refusal)
+      const Class = logged[0] instanceof TypeError || logged[0] instanceof RangeError ? TypeError : Error
+      return { error: new Class(errors[0]!.replace(/^Error: /, '')), draws: rng.draws(), next: 0 }
+    }
     const published: Record<string, unknown> = {}
     for (const s of c.publish ?? []) published[s] = publishedValue(view.signal(s))
     return { out: view.data('src'), published, draws: rng.draws(), next: rng.random() }
@@ -163,9 +170,8 @@ function diff(a: unknown, b: unknown, path = '$', seen = new Map<unknown, Set<un
   return null
 }
 
-const INCIDENTAL = /Cannot read properties|is not a function|is not iterable|undefined|not defined/
 
-interface Tally { cases: number; compared: number; threw: number; crashed: number; draws: number }
+interface Tally { cases: number; compared: number; threw: number; crashed: number; crashedAlike: number; answered: number; refused: number; draws: number }
 
 /** Run one case through both sides; the mismatch description, or null. `crashed` counts Vega's incidental TypeErrors (not comparable). */
 async function check(c: Case, tally: Tally): Promise<string | null> {
@@ -173,15 +179,24 @@ async function check(c: Case, tally: Tally): Promise<string | null> {
   const want = await runVega(c)
   if (want.error) {
     const msg = String(want.error.message ?? want.error)
-    if (/Cannot read properties|is not iterable|is not a function/.test(msg) && !/^AggregateOps\[op\]/.test(msg)) {
+    // an error of the engine (a TypeError reading a property of undefined), not one vega words: its text is not part of any contract.
+    // (`AggregateOps[op] is not a function` is one too, but Aster quotes it in its own message for an unknown op: compared)
+    if (want.error instanceof TypeError && !/^AggregateOps\[op\]/.test(msg)) {
       tally.crashed++
       if (process.env.ASTER_GEN_DEBUG) console.log('CRASH', JSON.stringify(c.t).slice(0, 300), msg)
+      // Aster runs the case too, and is counted: it answers (the documented "oracle crashes are not reproduced"), refuses with a
+      // message of its own (`[aster] ...`: what a user can act on), or fails with the engine's own TypeError, as vega does -- the
+      // last is no outcome it may have, and none is pinned
+      const got = runAster(c, false)
+      if (!got.error) tally.answered++
+      else if (/^\[aster\] /.test(got.error.message)) tally.refused++
+      else tally.crashedAlike++
       return null
     }
     tally.threw++
     const got = runAster(c, false)
     if (!got.error) return `Aster did not refuse; vega: ${msg}`
-    if (!INCIDENTAL.test(msg) && !got.error.message.includes(msg)) return `error text: aster "${got.error.message}" vs vega "${msg}"`
+    if (!got.error.message.includes(msg)) return `error text: aster "${got.error.message}" vs vega "${msg}"`
     return null
   }
   tally.compared++
@@ -337,19 +352,13 @@ function genWindow(r: Rng): Case {
   if (sort) t.sort = sort
   if (r.chance(0.3)) t.ignorePeers = r.chance(0.8)
   if (r.chance(0.55)) t.groupby = r.pick([['g'], ['h'], ['g', 'h'], nested ? ['a.g'] : ['g']])
-  // vega adjusts a frame over peers (sort, no ignorePeers) by reading the rows at both of its ends, and crashes with a TypeError when an
-  // end lies outside the partition (a frame that starts after the current row, or ends before it); Aster does not (see the header
-  // of the window suite), so those frames are drawn only where the rows are not read: with ignorePeers or without a sort.
-  const ranged = !!t.sort && t.ignorePeers !== true
+  // a frame over peers (a sort, no ignorePeers) is adjusted by reading the rows at both of its ends, and vega crashes with an engine
+  // TypeError when an end lies outside the partition (a frame that starts after the current row, or ends before it), as it does for
+  // first_value / last_value of such a frame. Those frames are drawn like any other: such a case is counted (`crashes`, pinned) and Aster
+  // is run on it, which may answer or refuse but not with a TypeError of its own.
   const anywhere: unknown[] = [undefined, [null, 0], [null, 0], [-1, 1], [null, null], [-2, 0], [0, 2], [1, null], [0, 0], [-3, -1], [1, 3], [2, -1], [-1, null], [null, 1], [0, null], [-5, 5], [null]]
-  const inside: unknown[] = [undefined, [null, 0], [null, 0], [-1, 1], [null, null], [-2, 0], [0, 2], [0, 0], [-1, null], [null, 1], [0, null], [-5, 5]]
-  const frame = r.pick(ranged ? inside : anywhere) as [number | null, number | null] | undefined
+  const frame = r.pick(anywhere) as [number | null, number | null] | undefined
   if (frame) t.frame = frame
-  // first_value / last_value read the row at the end of the frame, which does not exist when the frame lies outside the partition
-  const exotic = !!frame && ((frame[0] ?? 0) > 0 || (frame[1] ?? 0) < 0)
-  if (exotic) {
-    for (let i = 0; i < ops.length; i++) if (ops[i] === 'first_value' || ops[i] === 'last_value') { ops[i] = 'nth_value'; params[i] = 1 }
-  }
   if (ops.some((o) => o.startsWith('exponential'))) t.aggregate_params = ops.map((o) => (o.startsWith('exponential') ? r.pick([0.5, 0.9, null]) : null))
   if (r.chance(0.3)) t.as = ops.map((o, i) => (r.chance(0.6) ? `w${i}_${o}` : null))
   const signals: Record<string, unknown> = {}
@@ -581,27 +590,36 @@ function genTimeunit(r: Rng): Case {
   return { t: [t], rows, publish: ['tu'] }
 }
 
-const SUITES: Array<{ name: string; seed: number; count: number; gen: (r: Rng) => Case; maxCrashShare: number }> = [
-  { name: 'aggregate', seed: 0xa601, count: 700, gen: (r) => genAggregateLike(r, 'aggregate'), maxCrashShare: 0.02 },
-  { name: 'joinaggregate', seed: 0xa602, count: 350, gen: (r) => genAggregateLike(r, 'joinaggregate'), maxCrashShare: 0.02 },
-  { name: 'window', seed: 0xa603, count: 900, gen: genWindow, maxCrashShare: 0.2 },
-  { name: 'window stores over several fields', seed: 0xa60b, count: 500, gen: genWindowStores, maxCrashShare: 0.02 },
-  { name: 'transform chains', seed: 0xa60c, count: 1500, gen: genChain, maxCrashShare: 0.2 },
-  { name: 'sort ties after a re-ordering', seed: 0xa60d, count: 1500, gen: genTieChain, maxCrashShare: 0.2 },
-  { name: 'pivot', seed: 0xa604, count: 300, gen: genPivot, maxCrashShare: 0.02 },
-  { name: 'bin', seed: 0xa605, count: 700, gen: genBin, maxCrashShare: 0.02 },
-  { name: 'stack', seed: 0xa606, count: 350, gen: genStack, maxCrashShare: 0.02 },
-  { name: 'impute', seed: 0xa607, count: 350, gen: genImpute, maxCrashShare: 0.02 },
-  { name: 'lookup', seed: 0xa608, count: 350, gen: genLookup, maxCrashShare: 0.02 },
-  { name: 'fold/flatten/project/identifier', seed: 0xa609, count: 300, gen: genReshape, maxCrashShare: 0.02 },
-  { name: 'timeunit', seed: 0xa60a, count: 250, gen: genTimeunit, maxCrashShare: 0.02 },
+/**
+ * The cases of each suite on which vega crashes with an engine TypeError (`crashes`, at the default case counts: measured, and pinned
+ * exactly, so one more or fewer is looked at; a run with `ASTER_DIFF_SCALE` draws more cases and may crash more, in proportion), and
+ * how many of those Aster ANSWERS (`answered`: the documented "oracle crashes are not reproduced", docs/ARCHITECTURE.md) and how many it
+ * REFUSES with a message of its own (`refused`: `[aster] ...`). None may fail with the engine's own TypeError (`crashedAlike` is 0
+ * for every suite). The answered ones are the window frames that end outside the partition (a frame over peers reads the rows at
+ * both of its ends; an empty one has no first or last value, `null`, as `nth_value` of a frame too short); the refused ones are a
+ * `flatten` of a field a row does not hold.
+ */
+const SUITES: Array<{ name: string; seed: number; count: number; gen: (r: Rng) => Case; crashes: number; answered: number; refused?: number }> = [
+  { name: 'aggregate', seed: 0xa601, count: 700, gen: (r) => genAggregateLike(r, 'aggregate'), crashes: 0, answered: 0 },
+  { name: 'joinaggregate', seed: 0xa602, count: 350, gen: (r) => genAggregateLike(r, 'joinaggregate'), crashes: 0, answered: 0 },
+  { name: 'window', seed: 0xa603, count: 900, gen: genWindow, crashes: 133, answered: 133 },
+  { name: 'window stores over several fields', seed: 0xa60b, count: 500, gen: genWindowStores, crashes: 0, answered: 0 },
+  { name: 'transform chains', seed: 0xa60c, count: 1500, gen: genChain, crashes: 0, answered: 0 },
+  { name: 'sort ties after a re-ordering', seed: 0xa60d, count: 1500, gen: genTieChain, crashes: 29, answered: 0, refused: 29 },
+  { name: 'pivot', seed: 0xa604, count: 300, gen: genPivot, crashes: 0, answered: 0 },
+  { name: 'bin', seed: 0xa605, count: 700, gen: genBin, crashes: 0, answered: 0 },
+  { name: 'stack', seed: 0xa606, count: 350, gen: genStack, crashes: 0, answered: 0 },
+  { name: 'impute', seed: 0xa607, count: 350, gen: genImpute, crashes: 0, answered: 0 },
+  { name: 'lookup', seed: 0xa608, count: 350, gen: genLookup, crashes: 0, answered: 0 },
+  { name: 'fold/flatten/project/identifier', seed: 0xa609, count: 300, gen: genReshape, crashes: 0, answered: 0 },
+  { name: 'timeunit', seed: 0xa60a, count: 250, gen: genTimeunit, crashes: 0, answered: 0 },
 ]
 
 describe('generated transform differential vs real Vega (live, same engine)', { timeout: 300_000 }, () => {
   for (const s of SUITES) {
     it(`${s.name}: ${scaled(s.count)} seeded cases`, async () => {
       const r = makeRng(s.seed)
-      const tally: Tally = { cases: 0, compared: 0, threw: 0, crashed: 0, draws: 0 }
+      const tally: Tally = { cases: 0, compared: 0, threw: 0, crashed: 0, crashedAlike: 0, answered: 0, refused: 0, draws: 0 }
       const bad: string[] = []
       let failures = 0
       const prevTz = process.env.TZ
@@ -638,7 +656,13 @@ describe('generated transform differential vs real Vega (live, same engine)', { 
       if (failures) throw new Error(`${s.name}: ${failures}/${tally.cases} cases differ from vega (seed 0x${s.seed.toString(16)})\n${bad.join('\n')}`)
       // the generator must exercise the transform, not mostly be refused or skipped
       expect(tally.compared, `${s.name} compared ${tally.compared} of ${tally.cases} (threw ${tally.threw}, vega crashed ${tally.crashed})`).toBeGreaterThan(tally.cases * 0.6)
-      expect(tally.crashed, `vega crashed on ${tally.crashed} of ${tally.cases}`).toBeLessThanOrEqual(Math.ceil(tally.cases * s.maxCrashShare))
+      if (scaled(1) === 1) {
+        expect(tally.crashed, `vega crashed on ${tally.crashed} of ${tally.cases}`).toBe(s.crashes)
+        expect(tally.answered, `Aster answered ${tally.answered} of the ${tally.crashed} cases on which vega crashed`).toBe(s.answered)
+        expect(tally.refused, `Aster refused ${tally.refused} of the ${tally.crashed} cases on which vega crashed, with a message of its own`).toBe(s.refused ?? 0)
+      } else expect(tally.crashed, `vega crashed on ${tally.crashed} of ${tally.cases}`).toBeLessThanOrEqual(Math.ceil(s.crashes * scaled(1) * 1.5))
+      // (at any scale) no case ends in the engine's own error: it answered, or said what is wrong
+      expect(tally.crashedAlike, `Aster failed with the engine's TypeError on ${tally.crashedAlike} of the ${tally.crashed} cases on which vega crashed`).toBe(0)
       if (s.name === 'aggregate' || s.name === 'joinaggregate') expect(tally.draws, 'ci0/ci1 must draw from the source').toBeGreaterThan(0)
     })
   }

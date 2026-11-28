@@ -113,7 +113,7 @@
       }
     ]
   },
-  "mark": "point",
+  "mark": "circle",
   "encoding": {
     "x": {
       "field": "x",

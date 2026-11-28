@@ -21,13 +21,13 @@ export interface ContourFeature {
 
 export interface GeoRegistry {
   /** Projection builder (see geo.ts); null until the addon is loaded. */
-  buildProjection: ((spec: unknown, width: number, height: number) => unknown) | null
-  /** GeoJSON -> SVG path through a projection; null until loaded. */
-  projectedPath: ((projection: unknown, geo: unknown, pointRadius?: unknown) => string) | null
-  /** A projected shape's path and the unrounded bounds [x1, y1, x2, y2] vega's bound pass sees, from one pass over the geometry; null until loaded. */
-  projectedShape: ((projection: unknown, geo: unknown, pointRadius?: unknown) => { path: string; bounds: [number, number, number, number] | null }) | null
-  /** The unrounded bounds [x1, y1, x2, y2] of a projected shape alone; null until loaded. */
-  projectedBounds: ((projection: unknown, geo: unknown, pointRadius?: unknown) => [number, number, number, number] | null) | null
+  buildProjection: ((spec: unknown) => unknown) | null
+  /**
+   * A shape's path and the unrounded bounds [x1, y1, x2, y2] vega's bound pass sees, from one pass over the geometry: through a
+   * projection, or with `null` through the default path (the coordinates as they are). The path is null for a shape that draws
+   * nothing. Null until loaded.
+   */
+  projectedShape: ((projection: unknown, geo: unknown, pointRadius?: unknown) => { path: string | null; bounds: [number, number, number, number] | null }) | null
   /** vega-projection's `defaultPath`: the path generator with no projection (a `geopath` that names none draws raw coordinates). */
   defaultPath: (() => unknown) | null
   /** Marching squares over a raster grid; null until loaded. */
@@ -36,25 +36,28 @@ export interface GeoRegistry {
 
 export const geoRegistry: GeoRegistry = {
   buildProjection: null,
-  projectedPath: null,
   projectedShape: null,
-  projectedBounds: null,
   defaultPath: null,
   contourRun: null,
 }
 
 /**
- * How to get the unrounded bounds [x1, y1, x2, y2] of the path a `geoshape` transform wrote on a row (see
- * `projectedBounds`). A thunk: a chart that never measures its marks (`autosize: none`) never pays for it.
+ * The unrounded bounds [x1, y1, x2, y2] of the shape a `geoshape` transform wrote on a row (null for one that draws nothing): made
+ * in the same pass over the geometry as its path (`projectedShape`), which costs less than a second pass for the charts that measure
+ * their marks (every chart that is not `autosize: none`).
  */
-export const SHAPE_BOUNDS = new WeakMap<object, () => [number, number, number, number] | null>()
+export const SHAPE_BOUNDS = new WeakMap<object, [number, number, number, number] | null>()
 
 export function requireGeo(): NonNullable<GeoRegistry['buildProjection']> {
   if (!geoRegistry.buildProjection) throw new Error('[aster] this spec uses a geo projection; load the addon first: await import("@aster-charts/core/geo")')
   return geoRegistry.buildProjection
 }
 
-/** eslint-disable-next-line @typescript-eslint/no-explicit-any -- registry avoids an import cycle with transform.ts */
+/**
+ * A transform's function: its rows, its parameters, the context the engine hands it and the name of its source dataset; the rows it
+ * makes. (Untyped here: the registry avoids an import cycle with transform.ts.)
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type TransformFn = (rows: any[], params: Record<string, unknown>, ctx: any, sourceName?: string) => any[]
 
 /**
@@ -81,6 +84,9 @@ export type DataFormatReader = (data: unknown, format: Record<string, unknown>) 
  * and URL fetching are registered by the `@aster-charts/core/load` addon.
  */
 export const dataFormatRegistry = new Map<string, DataFormatReader>()
+
+/** The data formats the `@aster-charts/core/load` add-on registers readers for (json is built in). */
+export const LOAD_ADDON_FORMATS: readonly string[] = Object.freeze(['csv', 'tsv', 'dsv', 'topojson'])
 
 /**
  * What the `label` transform needs of the item a label is placed at, which vega reads off the scenegraph item

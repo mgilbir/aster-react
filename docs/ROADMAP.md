@@ -37,17 +37,17 @@ from the pinned upstream package, implemented behind the same internal API, repl
 | `vega-expression`, `vega-interpreter`, the `vega-functions` surface | `src/expr-parser.ts`, `src/expr-interpreter.ts`, `src/expression.ts` |
 | `d3-dsv`, `topojson-client` | `src/dsv.ts`, `src/topojson.ts` |
 | `d3-shape`, `d3-path` | `src/shape.ts`, the arc/path code in `src/render.ts` |
-| `vega-scale`, `d3-scale`, `d3-array`, `d3-interpolate`, `internmap`, `d3-scale-chromatic` | `src/arr.ts`, `src/interp.ts`, `src/scale.ts`, `src/scale-continuous.ts`, `src/scale-discrete.ts`, `src/scale-d3.ts`, `src/scale-schemes.ts` |
+| `vega-scale`, `d3-scale`, `d3-array`, `d3-interpolate`, `internmap`, `d3-scale-chromatic` | `src/arr.ts`, `src/interp.ts`, `src/scale.ts`, `src/scale-continuous.ts`, `src/scale-warped.ts`, `src/scale-calendar.ts`, `src/scale-discrete.ts`, `src/scale-classes.ts`, `src/scale-d3.testlib.ts`, `src/scale-schemes.ts` |
 | `vega-parser` / `vega-encode` scale parsing | `src/scales.ts`, `src/scale-domain.ts` |
-| `d3-geo`, `d3-geo-projection`, `vega-projection` (behaviour matched bit for bit; own design: geometry event buffers, see ARCHITECTURE) | `src/geo-events.ts`, `src/geo-sphere.ts`, `src/geo-sphere-measures.ts`, `src/geo-clip.ts`, `src/geo-resample.ts`, `src/geo-path.ts`, `src/geo-raw.ts`, `src/geo-projections.ts`, `src/geo.ts` |
+| `d3-geo`, `vega-projection` and the `d3-geo-projection` types vega-projection registers (`mollweide`; behaviour matched bit for bit; own design: geometry event buffers, see ARCHITECTURE). The other `d3-geo-projection` types (`airy`, ...) are vega's `Unrecognized projection type` too: neither vega nor Aster registers them (the official Projections example logs it in both, C360) | `src/geo-events.ts`, `src/geo-sphere.ts`, `src/geo-sphere-measures.ts`, `src/geo-clip.ts`, `src/geo-resample.ts`, `src/geo-path.ts`, `src/geo-raw.ts`, `src/geo-projections.ts`, `src/geo.ts` |
 | `d3-contour` | `src/contour.ts` |
 | `vega-transforms`, `vega-statistics`, `vega-hierarchy`, `vega-geo`, `vega-regression`, `vega-label`, `delaunator`/`d3-delaunay` | `src/transform*.ts`, `src/delaunay.ts`, `src/voronoi.ts`, `src/orient.ts` |
-| `vega-scenegraph` bounds and SVG path machinery (behaviour matched; the bounds code is Aster's own structure, see ARCHITECTURE) | `src/bounds.ts`, `src/bounds-pen.ts`, `src/svg-path.ts`, `src/render.ts` |
+| `vega-scenegraph` bounds and SVG path machinery (behaviour matched; the bounds code is Aster's own structure, see ARCHITECTURE) | `src/bounds.ts`, `src/bounds-pen.ts`, `src/path-data.ts`, `src/render.ts` |
 | `vega-view` and `vega-view-transforms` layout, `vega-parser` guides (behaviour matched; own design: grid core over boxes, axes by frame), `vega-event-selector`, `vega-runtime` signal loop | `src/trellis.ts`, `src/guide-encode.ts`, `src/guide-axis.ts`, `src/guide-legend.ts`, `src/guide-title.ts`, `src/event-selector.ts`, `src/signals.ts`, `src/runtime.ts` |
 | `vega-dataflow`'s observable evaluation order for the event-driven signals (modelled, not ported) | `src/signal-propagation.ts` |
 | `vega-wordcloud`, `d3-cloud` | `src/wordcloud.ts` |
 
-Licences of everything ported: [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
+Licences of what was ported or derived from: [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 
 ### Vega-Lite: `@aster-charts/vl` compiles it, with an explicit refusal list
 
@@ -97,6 +97,33 @@ Each item is something the code or the gates show today; none is a plan that has
   offset of a canvas `arc()` by up to about 0.4 px past the true stroke (measured: 0.16 px out of a 52.7 px radius at width 1):
   one point of the signals gate's pointer phase (2 of 87,778 answers) falls there, counted under a ceiling that can only be
   lowered (`--max-canvas-as-svg`).
+- **The incremental oracle's `identifier` reference.** The oracle compares every update with a fresh evaluation, except for specs
+  with an `identifier` (every Vega-Lite point selection): their numbers are the running view's, so their reference is one chart
+  carried through the same states, which shares engine state with the path under test
+  ([ARCHITECTURE.md](ARCHITECTURE.md#incremental-evaluation)). A reference that shares nothing (a fresh compile per step with ids
+  compared modulo a renumbering, or real Vega as `identifier-order-vs-vega` does) is open.
+- **`limits` and partial reuse.** Under `limits` a scale and a top-level mark made whole are kept and charged what making them charged
+  ([LIMITS.md](LIMITS.md#kept-results-under-limits)); the results taken partly from the evaluation before (spliced items, a mark's
+  channels, a census advanced in place, a dataset build, a guide, the marks inside group items) are still made again under `limits`.
+  Charging those their part would keep that reuse too.
+- **Worker shells carry the whole engine.** `<ChartWorkerStream>`, `useChartWorkerStream` and `@aster-charts/react/worker` run the
+  synchronous engine in the worker and in their in-realm fallback, so they do not load parts on demand
+  ([ADR 0011](adr/0011-engine-parts-load-on-demand-in-browser-builds.md)); `<ChartStream>` does.
+- **Label placement over dashed round-cap strokes.** `raster-edges.ts` walks the edges of a curve from their bottom end where Skia
+  walks them from the top, and its curve subdivision was calibrated against that. Walking quads from their top end as Skia does cuts
+  the total coverage error of the 122-drawing raster ratchet by 14%, but 22 drawings get worse, so it is not in; doing it together
+  with a re-calibration of the curve subdivision is the work. It is what separates the one generated spec (`label-1006`) whose label
+  Chromium places and Aster drops ([ARCHITECTURE.md](ARCHITECTURE.md#deviations-from-vega), the dashed round-cap row).
+- **A group mark with a guide's role.** Refused, not drawn ([ERRORS.md](ERRORS.md#deliberate-differences-from-vega)): vega attaches the
+  marks of such a group mark to its container by position, over the marks that held the place, in a number that depends on the rows of
+  the group's data. Drawing it as vega does means reproducing the scenegraph's slot arithmetic for a chart no author means to draw;
+  the refusal is generated from the parser's own rule and pinned by `mark-role-config-vs-vega.test.ts`.
+- **Mark triggers on group marks and in nested scopes.** A named mark's `on` triggers write onto the items of leaf marks; a group
+  mark's own items take no write, and a trigger of a mark inside a group that declares no signals runs once, not per group item
+  (`mark-triggers-vs-vega.test.ts`). The `<mark>`-named data of an outer scope is visible to inner marks in Aster, where vega's
+  `data('<mark>')` of the view does not see a mark inside a group.
+- **Selection stores tested by an encode.** A store a handler writes has its Dates rewritten as the filters and formulas of datasets
+  test it (`selection-store-dates-vs-vega.test.ts`); a store only a mark's encode tests (`test: vlSelectionTest(...)`) keeps them.
 - **Probes.** `packages/conformance/probes` holds two probes; both pass today and can be promoted into `corpus/`.
 - **Streaming transport.** The host owns the network and decides when to flush.
 - **Transitions on canvas.** `transition` animates the SVG renderer only; the canvas renderer and batched dense marks
@@ -111,8 +138,8 @@ Each item is something the code or the gates show today; none is a plan that has
 Implement, compare, swap, ban. The comparison is recorded only where the result does not depend on the JavaScript engine,
 and live (real upstream and Aster in one process) everywhere else ([TESTING.md](TESTING.md#oracle-vectors)):
 
-1. **Implement** the replacement behind the same internal API, as a transcription of the upstream code (surprising
-   upstream behaviour is reproduced and pinned, not tidied).
+1. **Implement** the replacement behind the same internal API (surprising upstream behaviour that a chart can observe is
+   reproduced and pinned, not tidied; the structure of the code is Aster's own, [ADR 0001](adr/0001-own-the-engine.md)'s amendment).
 2. **Compare.** Libraries whose results are engine-independent (vega-util, d3-color, d3-format / vega-format, vega-time,
    d3-dsv, topojson-client) are replayed against vectors a `gen-*.mjs` script recorded from the pinned upstream
    (`packages/conformance/scripts`, output in `packages/core/testdata`), with exact equality, independent of the browser and
@@ -129,13 +156,14 @@ The SVG corpus, the scene differential, the sweeps and the fuzzer then check the
 1. The three packages have no runtime dependency on `vega-*`, `d3-*` or `topojson-*`; a gate enforces it. **Met.**
 2. They render Vega and Vega-Lite directly, matching upstream property for property and scene for scene. **Met for
    the gates' corpus and sweeps; the exceptions are the open items above.**
-3. Schema sweeps and recorded upstream vectors cover the language, not a fixture list. **Met** (four sweeps: Vega, Vega-Lite, signals and values; vectors per library).
-4. SVG and canvas render the same scene and pass the same differential; there is no PDF/PNG workstream. **Met.**
+3. Schema sweeps and upstream comparisons cover the language, not a fixture list. **Met** (four sweeps: Vega, Vega-Lite, signals and values; live same-process differentials where a result depends on the JavaScript engine, recorded vectors where it does not: [ADR 0009](adr/0009-live-differentials-over-recorded-vectors.md)).
+4. SVG and canvas render the same scene and pass the same differential; there is no PDF workstream, and PNG is one convenience (`getPng`, [ADR 0013](adr/0013-png-export-through-the-canvas-renderer.md)). **Met.**
 5. `<Chart>` is idiomatic React: either grammar, SSR/hydration, async data, declarative select/pan/zoom/tooltip and a
    positioned accessibility tree on both backends. **Met.**
-6. Untrusted specs are bounded in time and memory and fail with typed errors. **Met with the documented caveats**
+6. Untrusted specs are bounded in time and memory and fail with typed errors, where `limits` are best-effort budgets and a killable
+   worker is the guarantee ([ADR 0010](adr/0010-limits-best-effort-worker-is-the-guarantee.md)). **Met with the documented caveats**
    ([LIMITS.md](LIMITS.md): native regular-expression calls are not interruptible without a worker).
-7. Packages publish to npm with docs, changelog and licence. **Met** (0.1.0).
+7. Packages publish to npm with docs, changelog and licence. **Met** (0.4.2 is the version on npm).
 
 ## 5. Keeping this document honest
 

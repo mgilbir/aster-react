@@ -21,10 +21,8 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
-// Local-time parsing in the vectors was recorded with TZ=UTC; pin it here too
-// so `Jan 1, 2020`-style cases match on any machine. Must run before the
-// first Date parse in this file's worker.
-process.env.TZ = 'UTC'
+// Local-time parsing in the vectors was recorded with TZ=UTC (a suite that records another zone says so in `tz`): every suite pins
+// its zone when it runs (expectSuite), so `Jan 1, 2020`-style cases match on any machine, in any order, under any `-t` filter.
 
 import {
   accessor, accessorFields, accessorName, ascending, extent, field, isArray,
@@ -79,7 +77,7 @@ function dec(v: unknown): unknown {
     case 'inf': return Infinity
     case '-inf': return -Infinity
     case '-0': return -0
-    case 'date': return new Date((v as { ms: number }).ms)
+    case 'date': return new Date(dec((v as { ms: unknown }).ms) as number)
     case 're': return new RegExp((v as { src: string }).src, (v as { flags: string }).flags)
     case 'symbol': return Symbol((v as { desc: string }).desc)
     case 'int8array': return new Int8Array(1)
@@ -102,7 +100,7 @@ function enc(v: unknown): unknown {
     if (v === 0 && 1 / v < 0) return { $: '-0' }
     return v
   }
-  if (v instanceof Date) return { $: 'date', ms: v.getTime() }
+  if (v instanceof Date) return { $: 'date', ms: enc(v.getTime()) } // an invalid Date's NaN is tagged: JSON would write null, which decodes to the epoch
   if (v instanceof RegExp) return { $: 're', src: v.source, flags: v.flags }
   if (typeof v === 'function') return { $: 'fn' }
   if (Array.isArray(v)) return v.map(enc)
@@ -140,12 +138,14 @@ const fns: Record<string, (...args: any[]) => any> = {
     // positionally on both sides); the row objects are the contract
     return rows.map((r) => ({ ...r }))
   },
-  dsvParseSemi: (text: string) => dsvFormat(';').parseRows(text),
-  dsvParseTab: (text: string) => dsvFormat('\t').parseRows(text),
+  dsvParseRowsSemi: (text: string) => dsvFormat(';').parseRows(text),
+  dsvParseRowsTab: (text: string) => dsvFormat('\t').parseRows(text),
+  dsvParseSemi: (text: string) => dsvFormat(';').parse(text).map((r) => ({ ...r })),
+  dsvParseTab: (text: string) => dsvFormat('\t').parse(text).map((r) => ({ ...r })),
   dsvParseRows: (text: string) => dsvFormat(',').parseRows(text),
   dsvFormat: (rows: ArrayLike<Record<string, unknown>>) => dsvFormat(',').format(rows),
   dsvFormatRow: (row: readonly unknown[]) => dsvFormat(',').formatRow(row),
-  topoFeatureCollection: (topology: never) => topoFeature(topology, (topology as { objects: { squares: never } }).objects.squares),
+  topoFeatureCollection: (topology: never, name: string) => topoFeature(topology, (topology as { objects: Record<string, never> }).objects[name]!),
   topoFeatureNamed: (topology: never, name: string) => topoFeature(topology, name),
   topoMesh: (topology: never) => topoMesh(topology),
 }
@@ -255,16 +255,47 @@ function proj(c: unknown): unknown {
     darker: colorFields(o.darker()),
     clamp: o.clamp ? colorFields(o.clamp()) : null,
     rgb: colorFields(o.rgb()),
+    string: String(o),
+    brighterHalf: colorFields(o.brighter(0.5)),
+    darker2: colorFields(o.darker(2)),
+    copy: colorFields(o.copy({ opacity: 0.25 })),
   }
 }
+
+/** Runs `body` in the zone a suite records (UTC when it records none) and puts the zone the file was started in back after. */
+function inSuiteZone(tz: string | undefined, body: () => void): void {
+  const before = process.env.TZ
+  process.env.TZ = tz ?? 'UTC'
+  try {
+    body()
+  } finally {
+    if (before === undefined) delete process.env.TZ
+    else process.env.TZ = before
+  }
+}
+
+describe('the zone a suite runs in', () => {
+  it('is its own: a suite without one runs in UTC whatever the suite before it left, and nothing is left behind', () => {
+    const offset = () => new Date(2020, 0, 1).getTimezoneOffset()
+    const start = process.env.TZ
+    inSuiteZone('America/New_York', () => expect(offset()).toBe(300))
+    inSuiteZone(undefined, () => expect(offset()).toBe(0))
+    inSuiteZone('Asia/Kolkata', () => expect(offset()).toBe(-330))
+    inSuiteZone(undefined, () => expect(offset()).toBe(0))
+    expect(process.env.TZ).toBe(start)
+  })
+})
 
 function expectSuite(name: string, suite: Suite, run: (args: unknown[], want: unknown, extra?: { variant?: string }) => void): void {
   describe(name, () => {
     it(`matches ${suite.oracle} (${suite.cases.length} cases)`, () => {
       // The suite records the zone it was pinned to (local-time behaviour,
       // DST transitions); Node re-reads process.env.TZ per call.
-      if (suite.tz) process.env.TZ = suite.tz
-      for (const { args, want, variant } of suite.cases) run(args.map(dec), want, { variant })
+      // A suite without a zone runs in UTC, not in the zone the previous suite left behind (C576); the zone the file was started in
+      // is put back after.
+      inSuiteZone(suite.tz, () => {
+        for (const { args, want, variant } of suite.cases) run(args.map(dec), want, { variant })
+      })
     })
   })
 }
@@ -369,7 +400,8 @@ for (const file of files) {
       }
       if (suite.kind === 'topomesh') {
         const filters: Record<string, undefined | ((a: TopoObjectLike, b: TopoObjectLike) => boolean)> = {
-          interior: (a, b) => a === b,
+          exterior: (a, b) => a === b,
+          interior: (a, b) => a !== b,
           any: undefined,
           byName: (a, b) => (a as { properties?: { name?: string } }).properties?.name === (b as { properties?: { name?: string } }).properties?.name,
         }
@@ -413,7 +445,7 @@ describe('accessor helpers (not vector-representable)', () => {
   it('accessor defaults fields to [] and name to undefined', () => {
     const a = accessor((d: unknown) => d)
     expect(accessorFields(a)).toEqual([])
-    expect(accessorName(a)).toBeNull()
+    expect(accessorName(a)).toBeUndefined()
   })
 
   it('accessorName/Fields are null for non-accessors', () => {

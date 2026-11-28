@@ -12,7 +12,7 @@ the gates, and the results are in [Conformance results](#conformance-results).
 
 ## Install
 
-Consumers need Node 20 or newer (`engines` in each package).
+Consumers need Node 20 or newer (`engines` in each package). TypeScript needs `"moduleResolution": "bundler"`, `"node16"` or `"nodenext"`: the packages declare their types through `exports` only (no `typesVersions`), so the older `"node"` (node10) resolution cannot find a subpath such as `@aster-charts/react/vl` or `@aster-charts/core/dom`, and loses the types the root entry takes from them (`ChartSession`, `PngOptions`, `EnginePart` become `any`) without an error under `skipLibCheck`.
 
 ```bash
 npm i @aster-charts/react react react-dom   # React charts: <Chart>, useChart; react ^19 is a peer dependency
@@ -21,7 +21,7 @@ npm i @aster-charts/vl                      # only to compile Vega-Lite yourself
 ```
 
 `@aster-charts/react` depends on `@aster-charts/core` and `@aster-charts/vl` itself, so a React app needs only the first line. Install `@aster-charts/core`
-as well when the app imports it directly (for example `@aster-charts/core/dom` or `renderSpec`). Vega-Lite in a React app is opt-in with
+as well when the app imports it directly (for example `@aster-charts/core/dom` or `renderSpec`), at the exact version `@aster-charts/react` pins (the three packages release in lockstep; a second copy of core would register add-ons where `<Chart>` does not read them, see [docs/RELEASE.md](docs/RELEASE.md#why-the-three-versions-are-pinned-to-each-other-exactly-lockstep)). Vega-Lite in a React app is opt-in with
 `import '@aster-charts/react/vl'`. `react-dom` is not a declared peer of `@aster-charts/react`; a browser app mounts with it, and server
 rendering uses `react-dom/server`.
 
@@ -108,6 +108,10 @@ export function Headless() {
 }
 ```
 
+The chart is the size its spec makes it, as in Vega: `width: 400, height: 300` draws at 400 x 300 plus padding in any
+element. `width` / `height` props fix the size, and `width="container"` / `height="container"` fill the chart's element
+(Vega-Lite's `width: "container"` does so on its own).
+
 `limits` (and `renderSpec(spec, { limits })`) gives typed `AsterLimitError` budgets for untrusted specs, including
 a wall-clock deadline (`maxTimeMs`); see [docs/LIMITS.md](docs/LIMITS.md). A headless session is exported as
 `createChartSession` from `@aster-charts/core/dom`.
@@ -191,16 +195,16 @@ The Vega spec is the canonical intermediate representation. A Vega-Lite spec is 
 
 Everything below the spec language is owned: the expression parser and CSP-safe interpreter (no `new Function`), scales, ticks
 and colour schemes, number and time formatting, time zones, curves and symbols, geo projections, contours, DSV and TopoJSON
-readers, and the transforms. They are ports of the upstream algorithms, each checked against oracle vectors recorded from the
-pinned upstream packages ([docs/TESTING.md](docs/TESTING.md#oracle-vectors)); their licences are reproduced in
+readers, and the transforms. They are Aster's own implementations of the upstream algorithms, each checked against the pinned upstream packages, live in one process or
+against vectors recorded from them ([docs/TESTING.md](docs/TESTING.md#oracle-vectors)); their licences are reproduced in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Repo Layout
 
 | Path | Description |
 |---------|-------------|
-| `packages/core` (`@aster-charts/core`) | Compiler (spec to IR), runtime (IR to scene), SVG renderer, expression engine, limits. Entry points: `.`, `/addons` (which add-ons a spec needs, loaded on demand), `/dom` (incremental DOM, sessions), `/canvas`, `/hit` (hit testing), `/signals` (event loop), `/load` (URL datasets), `/geo`, `/transforms`. [README](packages/core/README.md). |
-| `packages/react` (`@aster-charts/react`) | `<Chart>` (SVG/canvas, incremental DOM patching, selection, pan/zoom, tooltips, accessibility tree), `useChart`, streaming and worker components and hooks, SSR helpers. Entry points: `.`, `/lite` (SVG-only `<SvgChart>`), `/interaction`, `/ssr`, `/worker`, `/worker-entry`, `/vl` (registers the Vega-Lite compiler). [README](packages/react/README.md). |
+| `packages/core` (`@aster-charts/core`) | Compiler (spec to IR), runtime (IR to scene), SVG renderer, expression engine, limits. Entry points: `.`, `/addons` (which add-ons a spec needs, loaded on demand), `/dom` (incremental DOM, sessions), `/canvas`, `/hit` (hit testing), `/signals` (event loop), `/load` (URL datasets), `/geo`, `/transforms`, `/transition` (interpolating two scenes), `/png` (a scene as a PNG); `/internal*` are internal plumbing of the React shells. [README](packages/core/README.md). |
+| `packages/react` (`@aster-charts/react`) | `<Chart>` (SVG/canvas, incremental DOM patching, selection, pan/zoom, tooltips, accessibility tree), `useChart`, streaming and worker components and hooks, SSR helpers. Entry points: `.`, `/lite` (SVG-only `<SvgChart>`), `/interaction`, `/png` (the `getPng` capability), `/ssr`, `/worker`, `/worker-entry`, `/vl` (registers the Vega-Lite compiler), `/all` (every part of the engine in the bundle). [README](packages/react/README.md). |
 | `packages/vl` (`@aster-charts/vl`) | The Vega-Lite to Vega compiler. Throws `VLCompileError` for what it does not support. [README](packages/vl/README.md). |
 | `packages/conformance` (`@aster-charts/conformance`, private) | The oracle harness: corpus, sweeps, vectors, browser gates, fuzzing, and the [official gallery runs](packages/conformance/gallery/README.md). |
 | `packages/benchmarks` (`@aster-charts/benchmarks`, private) | Runtime, memory, bundle and browser performance harness (`<Chart>` vs react-vega and vega-embed) and the bundle-size budgets: [packages/benchmarks/README.md](packages/benchmarks/README.md). |
@@ -225,22 +229,24 @@ The behaviour is checked against the real packages by the gates in
 produced it, are in [docs/TESTING.md](docs/TESTING.md#reference-results) and
 [docs/PERFORMANCE.md](docs/PERFORMANCE.md#reference-measurements); in short, as measured on this tree:
 
-- the SVG corpus (1063 specs: 391 Vega, 672 Vega-Lite) renders identically to real Vega under a strict
-  canonicalizer: `pnpm conformance` (1063/1063);
-- the same 672 Vega-Lite specs compiled by `@aster-charts/vl` render identically to vega-lite's output: `pnpm conformance-vl` (672/672);
+- the SVG corpus (1130 specs: 438 Vega, 692 Vega-Lite) renders identically to real Vega under a strict
+  canonicalizer: `pnpm conformance` (1130/1130);
+- the same 692 Vega-Lite specs compiled by `@aster-charts/vl` render identically to vega-lite's output: `pnpm conformance-vl` (692/692);
 - the schema sweeps (one chart per property/value of the schema) have no differences: Vega 7538 ok of 7549 (9 both-refused, 2 the oracle itself crashes on), Vega-Lite 27452 ok of 27513 (47 both-refused, 14 oracle crashes),
   signals 103 ok of 166 (60 `retained`, see [Known gaps](#known-gaps-and-differences-from-vega); 0 differ),
   values 500 ok of 500 (the same specification with awkward cells: `null`, `""`, words, lists, `Infinity` written out; 0 differ);
-- in real Chromium, the corpus matches Vega's string renderer (1063/1063), the canvas renderer matches Vega's canvas (1224/1224 pixel comparisons),
-  and signal event streams match Vega on its svg and on its canvas renderer (73/73 cases), each case run on both.
+- in real Chromium, the corpus matches Vega's string renderer (1130/1130), the canvas renderer matches Vega's canvas (1144 pixel comparisons with ink on both sides),
+  and signal event streams match Vega on its svg and on its canvas renderer (77/78 cases), each case run on both.
 
 ## Build from source
 
-For working on this repository (contributors need Node 22.13 or newer, which pnpm 11 requires; pnpm is pinned by
-`packageManager`). [CONTRIBUTING.md](CONTRIBUTING.md) has the rest.
+For working on this repository (contributors need Node `^22.22.2`, `^24.15` or `>=26`, the range the jsdom dev dependency supports; pnpm is pinned by
+`packageManager` and installed with `npm i -g pnpm@<that version>` where corepack is missing; Playwright Chromium is needed for the browser gates).
+[CONTRIBUTING.md](CONTRIBUTING.md) has the rest, including what `pnpm check` runs and how long it takes.
 
 ```bash
 pnpm install
+pnpm --filter @aster-charts/conformance exec playwright install --with-deps chromium
 pnpm build
 pnpm check          # every gate; `pnpm check -- --list` shows them, `-- --skip browser` skips the Chromium ones
 ```

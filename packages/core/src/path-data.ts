@@ -24,6 +24,8 @@
  * `@aster-charts/core/canvas` re-exports `parsePathData`, `tracePath`, `PathSeg` and `PathSink`, so its public surface is unchanged.
  */
 
+import { TextTable } from './util.js'
+
 /** A command as written: its letter (upper case absolute, lower case relative) and its numbers. */
 export type PathCommand = [string, ...number[]]
 
@@ -62,7 +64,7 @@ type OnError = 'throw' | 'stop'
  * parameter count"). A moveto's extra groups are linetos, any other command's are the command again. With `onError: 'stop'` the
  * reading ends at the first error, with every command read before it. `jsNumbers` reads `NaN` and `±Infinity` as NaN.
  */
-function readCommands(d: string, onError: OnError, jsNumbers: boolean): PathCommand[] {
+function readCommands(d: string, onError: OnError, jsNumbers: boolean, singles = false): PathCommand[] {
   const out: PathCommand[] = []
   const n = d.length
   let i = 0
@@ -73,7 +75,7 @@ function readCommands(d: string, onError: OnError, jsNumbers: boolean): PathComm
     while (end < n && !isCommandLetter(d[end]!)) end = skipWord(d, end, jsNumbers)
     const type = cmd.toLowerCase()
     const arity = ARITY[type]!
-    const read = readNumbers(type, arity, d.slice(i + 1, end).trim(), jsNumbers)
+    const read = readNumbers(type, arity, d.slice(i + 1, end).trim(), jsNumbers, singles)
     i = end
     const count = read.numbers.length
     if (read.failed || count < arity) {
@@ -106,7 +108,7 @@ function pushGroups(out: PathCommand[], cmd: string, type: string, arity: number
 }
 
 /** The numbers of one command's text, group by group; `failed` when something in it is not what goes there. */
-function readNumbers(type: string, arity: number, text: string, jsNumbers: boolean): { numbers: number[]; failed: boolean } {
+function readNumbers(type: string, arity: number, text: string, jsNumbers: boolean, singles = false): { numbers: number[]; failed: boolean } {
   const numbers: number[] = []
   for (let at = 0; arity && at < text.length;) {
     for (let k = 0; k < arity; ++k) {
@@ -116,6 +118,8 @@ function readNumbers(type: string, arity: number, text: string, jsNumbers: boole
       at += m[0].length
       // (in the engine's text a number that is not finite is NaN: see the module's note)
       const v = +m[0]
+      // (a browser reads a number into a float: one beyond single precision is no number there, as the word `NaN` is none)
+      if (singles && !(Math.abs(v) < SINGLE_OVERFLOW)) return { numbers, failed: true }
       numbers.push(jsNumbers && !Number.isFinite(v) ? NaN : v)
       const sep = SEPARATOR.exec(text.slice(at))
       if (sep !== null) at += sep[0].length
@@ -126,14 +130,16 @@ function readNumbers(type: string, arity: number, text: string, jsNumbers: boole
 
 // --- what reads it, cached --------------------------------------------------------------------------------------------------
 
-/** A bounded cache (cleared when full): many items share one path text (symbols, axes, legends). */
-function cached<T>(limit: number, make: (d: string) => T): (d: string) => T {
-  const cache = new Map<string, T>()
+/**
+ * A bounded cache: many items share one path text (symbols, axes, legends). Bounded by count and by the length of the texts, since
+ * what it keeps of a path grows with the path and the texts come from data.
+ */
+function cached<T>(name: string, limit: number, make: (d: string) => T): (d: string) => T {
+  const cache = new TextTable<T>(name, limit, 8_000_000)
   return (d) => {
     let v = cache.get(d)
     if (v === undefined) {
       v = make(d)
-      if (cache.size >= limit) cache.clear()
       cache.set(d, v)
     }
     return v
@@ -144,7 +150,7 @@ function cached<T>(limit: number, make: (d: string) => T): (d: string) => T {
  * A spec's path text as vega's parser reads it: its commands, or vega's error (not cached, thrown every time). Shared: never write
  * the commands.
  */
-const readSpecPath = cached(4096, (d) => readCommands(d, 'throw', false))
+const readSpecPath = cached('spec paths', 4096, (d) => readCommands(d, 'throw', false))
 export const svgPathCommands = (path: string): PathCommand[] => {
   // (vega reads the text with `path.match(...)`: a value that is no text -- a number, an object -- throws the TypeError the engine
   // gives that call)
@@ -154,10 +160,20 @@ export const svgPathCommands = (path: string): PathCommand[] => {
 const COMMAND_LETTERS = /[mlhvzcsqta]/gi
 
 /** A spec's path text as far as it reads (see the module's note): what a canvas, the hit index and `intersect()` draw. Shared. */
-export const drawnPathCommands: (d: string) => PathCommand[] = cached(4096, (d) => readCommands(d, 'stop', false))
+export const drawnPathCommands: (d: string) => PathCommand[] = cached('drawn path commands', 4096, (d) => readCommands(d, 'stop', false))
 
 /** Parse an SVG path `d` string (the engine's own text) into absolute segments. Shared: never write them. */
-export const parsePathData: (d: string) => PathSeg[] = cached(4096, (d) => segmentsOf(readCommands(d, 'stop', true)))
+export const parsePathData: (d: string) => PathSeg[] = cached('path segments', 4096, (d) => segmentsOf(readCommands(d, 'stop', true)))
+
+/** The least magnitude a double that a browser keeps in a float is not finite at (2^128 - 2^103). */
+const SINGLE_OVERFLOW = 3.4028235677973366e38
+
+/**
+ * Path text as a browser reads an SVG `d` (blink's path parser): the commands up to the first thing that is no number -- `NaN`, `Infinity`
+ * or a number beyond single precision included -- are drawn, and the rest is not. (`parsePathData` reads what the engine writes: its
+ * words for a number that is not finite are numbers there.)
+ */
+export const parseSvgPathData: (d: string) => PathSeg[] = cached('browser path segments', 4096, (d) => segmentsOf(readCommands(d, 'stop', false, true)))
 
 /** Commands as absolute segments: a relative command is offset by the current point (a close returns it to its subpath's start). */
 function segmentsOf(commands: readonly PathCommand[]): PathSeg[] {
@@ -398,11 +414,13 @@ export function tracePath(ctx: PathSink, segs: PathSeg[], tx = 0, ty = 0, arcs: 
   // Track the current point and the last cubic/quadratic control point for
   // S/T smoothing, mirroring the SVG path semantics.
   let cx = 0, cy = 0
+  // (where the current subpath began: a close returns the current point there, as SVG's and a canvas's `Z` do)
+  let sx = 0, sy = 0
   let lastC: { x: number; y: number } | null = null
   let lastQ: { x: number; y: number } | null = null
   for (const s of segs) {
     switch (s.cmd) {
-      case 'M': ctx.moveTo(s.x + tx, s.y + ty); cx = s.x; cy = s.y; lastC = lastQ = null; break
+      case 'M': ctx.moveTo(s.x + tx, s.y + ty); cx = sx = s.x; cy = sy = s.y; lastC = lastQ = null; break
       case 'L': ctx.lineTo(s.x + tx, s.y + ty); cx = s.x; cy = s.y; lastC = lastQ = null; break
       case 'H': ctx.lineTo(s.x + tx, cy + ty); cx = s.x; lastC = lastQ = null; break
       case 'V': ctx.lineTo(cx + tx, s.y + ty); cy = s.y; lastC = lastQ = null; break
@@ -454,7 +472,9 @@ export function tracePath(ctx: PathSink, segs: PathSeg[], tx = 0, ty = 0, arcs: 
           const x1p = cosP * dx + sinP * dy
           const y1p = -sinP * dx + cosP * dy
           const lambda = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry)
-          const scale = lambda > 1 ? Math.sqrt(lambda) : 1
+          // (radii too small for the chord grow to reach it, SVG's rule; a ratio over 1 by rounding alone -- an arc written at half its
+          // chord, a trail's cap -- keeps the radius written)
+          const scale = lambda > 1 + 1e-12 ? Math.sqrt(lambda) : 1
           const rxp = rx * scale, ryp = ry * scale
           const sign = s.large !== s.sweep ? 1 : -1
           const denom = rxp * rxp * y1p * y1p + ryp * ryp * x1p * x1p
@@ -484,26 +504,27 @@ export function tracePath(ctx: PathSink, segs: PathSeg[], tx = 0, ty = 0, arcs: 
           const start = theta1 + phi
           const end = start + dTheta
           if (Math.abs(rx - ry) < 1e-9) {
-            ctx.arc(ccx + tx, ccy + ty, rx, start, end, dTheta < 0)
+            // (the radius the arc is drawn at: grown to reach the end point when the one written is too small for the chord)
+            ctx.arc(ccx + tx, ccy + ty, rxp, start, end, dTheta < 0)
           } else {
-            // Elliptical arc: approximate with an ellipse transform via
-            // bezier segments (rare; our marks emit circular arcs).
-            traceEllipse(ctx, ccx + tx, ccy + ty, rxp, ryp, phi, start, end)
+            // an elliptical arc: sampled along the ellipse, from its start angle in the ellipse's own frame (the frame's turn is phi)
+            traceEllipse(ctx, ccx + tx, ccy + ty, rxp, ryp, phi, theta1, theta1 + dTheta)
           }
         }
         cx = x2; cy = y2
         lastC = lastQ = null
         break
       }
-      case 'Z': ctx.closePath(); break
+      case 'Z': ctx.closePath(); cx = sx; cy = sy; lastC = lastQ = null; break
     }
   }
 }
 
-/** Draw an elliptical arc segment as an ellipse-transformed arc. */
+/**
+ * An elliptical arc segment, sampled as short lines: the points at the angles from `start` to `end` of the ellipse of radii (rx, ry)
+ * about (cx, cy) turned by `phi`. It goes on from the current point (the arc's start), as the arc it stands for does.
+ */
 function traceEllipse(ctx: PathSink, cx: number, cy: number, rx: number, ry: number, phi: number, start: number, end: number): void {
-  // Sample the ellipse as small line segments (fallback path; not used by
-  // vega marks, which emit circular arcs).
   const steps = 64
   const span = end - start
   const n = Math.max(2, Math.ceil((Math.abs(span) / (2 * Math.PI)) * steps))
@@ -513,7 +534,6 @@ function traceEllipse(ctx: PathSink, cx: number, cy: number, rx: number, ry: num
     const ex = rx * Math.cos(a), ey = ry * Math.sin(a)
     const x = cx + ex * cosP - ey * sinP
     const y = cy + ex * sinP + ey * cosP
-    if (i === 0) ctx.moveTo(x, y)
-    else ctx.lineTo(x, y)
+    ctx.lineTo(x, y)
   }
 }

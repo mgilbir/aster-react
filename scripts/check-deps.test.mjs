@@ -3,8 +3,8 @@
  * a violation in a throw-away repo fixture and runs the real CLI against it; the
  * clean fixture and the negative controls prove the check is not simply failing.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { makeTempDir, removeTempDir } from './lib/temp-dir.mjs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -22,10 +22,10 @@ function put(root, rel, text) {
 
 /** A clean three-package repo with built output. `edit` plants the violation. */
 function fixture(edit = () => {}) {
-  const root = mkdtempSync(join(tmpdir(), 'aster-checkdeps-'))
+  const root = makeTempDir('aster-checkdeps-')
   made.push(root)
   for (const p of PKGS) {
-    put(root, `packages/${p}/package.json`, JSON.stringify({ name: `@aster-charts/${p}`, dependencies: {} }))
+    put(root, `packages/${p}/package.json`, JSON.stringify({ name: `@aster-charts/${p}`, dependencies: {}, files: ['dist'] }))
     put(root, `packages/${p}/dep-baseline.json`, JSON.stringify({ imports: {}, deps: [] }))
     put(root, `packages/${p}/src/index.ts`, `export const x = 1\n`)
     put(root, `packages/${p}/dist/index.js`, `export const x = 1\n`)
@@ -41,7 +41,7 @@ async function run(root, ...args) {
 }
 
 afterAll(() => {
-  for (const d of made) rmSync(d, { recursive: true, force: true })
+  for (const d of made) removeTempDir(d)
 })
 
 describe('check-deps', () => {
@@ -127,6 +127,105 @@ describe('check-deps', () => {
     })
   }
 
+  // C104: the holes the first audit left (each case passed with exit 0 before).
+  const holes = {
+    'createRequire through a namespace': { file: 'packages/core/src/h.ts', text: `import * as m from 'node:module'\nexport const v = m.createRequire(import.meta.url)('vega')\n`, out: /unanalyzable/ },
+    'process.getBuiltinModule': { file: 'packages/core/src/h.ts', text: `export const v = process.getBuiltinModule('module').createRequire(import.meta.url)('vega')\n`, out: /unanalyzable/ },
+    'globalThis[require]': { file: 'packages/core/src/h.ts', text: `export const v = (globalThis as any)['require']('d3')\n`, out: /imports "d3"/ },
+    'module[require]': { file: 'packages/react/src/h.ts', text: `declare const module: any\nexport const v = module['require']('d3')\n`, out: /imports "d3"/ },
+    'dynamic import of a CDN URL': { file: 'packages/core/src/h.ts', text: `export const v = () => import('https://esm.sh/vega@6')\n`, out: /outside the boundary.*"https:\/\/esm\.sh\/vega@6" is not a package/s },
+    'static import of a CDN URL': { file: 'packages/vl/src/h.ts', text: `import * as d3 from 'https://cdn.jsdelivr.net/npm/d3@7/+esm'\nexport { d3 }\n`, out: /outside the boundary/ },
+    'data: URL import': { file: 'packages/core/src/h.ts', text: 'export const v = () => import("data:text/javascript,import \'vega\'")\n', out: /outside the boundary/ },
+    'relative import into the oracle': { file: 'packages/core/src/h.ts', text: `import * as v from '../../conformance/node_modules/vega/build/vega.js'\nexport { v }\n`, out: /reaches into node_modules|leaves the package/ },
+    'new URL into the oracle': { file: 'packages/core/src/h.ts', text: `export const u = new URL('../../conformance/node_modules/vega/build/vega.js', import.meta.url)\n`, out: /outside the boundary/ },
+    'new URL of a CDN': { file: 'packages/core/src/h.ts', text: `export const u = new URL('https://esm.sh/vega', import.meta.url)\n`, out: /outside the boundary/ },
+    'triple-slash path reference': { file: 'packages/core/dist/h.d.ts', text: `/// <reference path="../../../conformance/node_modules/vega-typings/types/build/vega.d.ts" />\nexport declare const x: number\n`, out: /outside the boundary in shipped output/ },
+    'ambient declare module': { file: 'packages/react/dist/h.d.ts', text: `declare module 'vega' { export const x: number }\nexport declare const y: number\n`, out: /shipped output: packages\/react\/dist\/h\.d\.ts imports "vega"/ },
+    'eval': { file: 'packages/core/src/h.ts', text: `export const v = eval("import('vega')")\n`, out: /unanalyzable.*dynamic code evaluation/s },
+    'new Function': { file: 'packages/core/dist/h.js', text: `export const v = new Function("return import('vega')")\n`, out: /unanalyzable module specifier in shipped output/ },
+    'a read of module.require': { file: 'packages/core/src/h.ts', text: `declare const module: any\nexport const r = module.require\n`, out: /unanalyzable/ },
+  }
+  for (const [name, c] of Object.entries(holes)) {
+    it(`hole: ${name}`, async () => {
+      const r = await run(fixture((w) => w(c.file, c.text)))
+      expect(r.code, r.out).toBe(1)
+      expect(r.out).toMatch(c.out)
+    })
+  }
+
+  const manifestHoles = {
+    'npm alias of vega': { dependencies: { 'chart-rt': 'npm:vega@^6' } },
+    'npm alias of vega-lite as peer': { peerDependencies: { x: 'npm:vega-lite@6' } },
+    'github shorthand': { dependencies: { x: 'vega/vega' } },
+    'git url': { dependencies: { x: 'git+https://github.com/vega/vega.git#v6' } },
+    'tarball url': { optionalDependencies: { x: 'https://registry.npmjs.org/vega/-/vega-6.0.0.tgz' } },
+    'file range': { dependencies: { x: 'file:../conformance/node_modules/vega' } },
+    'link range': { dependencies: { x: 'link:../conformance/node_modules/d3' } },
+    'relative path range': { dependencies: { x: '../conformance/node_modules/vega' } },
+  }
+  for (const [name, patch] of Object.entries(manifestHoles)) {
+    it(`manifest hole: ${name}`, async () => {
+      const root = fixture((w) => w('packages/vl/package.json', JSON.stringify({ name: '@aster-charts/vl', ...patch })))
+      const r = await run(root)
+      expect(r.code, r.out).toBe(1)
+      expect(r.out).toMatch(/packages\/vl\/package\.json/)
+    })
+  }
+
+  describe('every shipped path is scanned, not only dist (the `files` field)', () => {
+    it('a bin/ directory listed in files', async () => {
+      const root = fixture((w) => {
+        w('packages/core/package.json', JSON.stringify({ name: '@aster-charts/core', files: ['dist', 'bin', 'README.md'] }))
+        w('packages/core/bin/cli.mjs', `import 'vega'\n`)
+      })
+      const r = await run(root)
+      expect(r.code, r.out).toBe(1)
+      expect(r.out).toMatch(/shipped output: packages\/core\/bin\/cli\.mjs imports "vega"/)
+    })
+    it('a single file listed in files', async () => {
+      const root = fixture((w) => {
+        w('packages/vl/package.json', JSON.stringify({ name: '@aster-charts/vl', files: ['dist', 'worker.js'] }))
+        w('packages/vl/worker.js', `importScripts('https://cdn/vega.js')\n`)
+      })
+      expect((await run(root)).code).toBe(1)
+    })
+    it('no `files` field means everything ships: a stray file at the package root is scanned', async () => {
+      const root = fixture((w) => {
+        w('packages/vl/package.json', JSON.stringify({ name: '@aster-charts/vl' }))
+        w('packages/vl/stray.mjs', `import 'd3'\n`)
+      })
+      const r = await run(root)
+      expect(r.code, r.out).toBe(1)
+      expect(r.out).toMatch(/shipped output: packages\/vl\/stray\.mjs imports "d3"/)
+    })
+    it('a pattern in files cannot be scanned, so it fails', async () => {
+      const root = fixture((w) => w('packages/vl/package.json', JSON.stringify({ name: '@aster-charts/vl', files: ['dist', 'lib/**/*.js'] })))
+      const r = await run(root)
+      expect(r.code, r.out).toBe(1)
+      expect(r.out).toMatch(/is a pattern/)
+    })
+    it('a clean extra path, a negation, and a missing optional path pass', async () => {
+      const root = fixture((w) => {
+        w('packages/core/package.json', JSON.stringify({ name: '@aster-charts/core', files: ['dist', '!dist/**/*.map', 'bin', 'README.md', 'LICENSE'] }))
+        w('packages/core/bin/cli.mjs', `import { x } from '../dist/index.js'\nconsole.log(x)\n`)
+      })
+      const r = await run(root)
+      expect(r.code, r.out).toBe(0)
+    })
+  })
+
+  describe('the baselines still work for what they are for', () => {
+    it('a baselined banned import in src is not reported as new', async () => {
+      const root = fixture((w) => {
+        w('packages/core/src/b.ts', `import 'vega'\n`)
+        w('packages/core/dist/b.js', `import 'vega'\n`)
+        w('packages/core/dep-baseline.json', JSON.stringify({ imports: { 'src/b.ts': ['vega'] }, deps: [] }))
+      })
+      const r = await run(root)
+      expect(r.out).not.toMatch(/banned import not in baseline/)
+    })
+  })
+
   describe('built dist', () => {
     it('flags a banned import in dist .js while src is clean', async () => {
       const r = await run(fixture((w) => w('packages/core/dist/leak.js', `import * as v from 'vega'\nexport { v }\n`)))
@@ -172,7 +271,9 @@ describe('check-deps', () => {
           `import 'my-vega'`,
           'export const dyn = (n: string) => import(`./locale/${n}.js`)',
           `export const m = { require: 1, createRequire: 2 }`,
-          `export const k = m.require`,
+          `export const k = m.requires`,
+          'export const w = () => new Worker(new URL("./worker.js", import.meta.url))',
+          `/// <reference path="./local.d.ts" />`,
           '',
         ].join('\n'))
       })

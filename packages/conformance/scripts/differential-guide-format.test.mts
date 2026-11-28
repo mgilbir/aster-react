@@ -29,6 +29,8 @@ const custom = (v: unknown, spec?: unknown): string => {
   return `<${String(spec ?? '')}:${String(v)}>`
 }
 const offs: Array<() => void> = []
+// (vega has no way to unregister an expression function: `asterCustomFormat` stays on the vega module for the life of this file's
+// worker, which vitest isolates per file; Aster's registration is undone in afterAll)
 beforeAll(() => {
   ;(vega as unknown as { expressionFunction: (n: string, f: unknown) => void }).expressionFunction('asterCustomFormat', custom)
   offs.push(registerExpressionFunction('asterCustomFormat', custom as never))

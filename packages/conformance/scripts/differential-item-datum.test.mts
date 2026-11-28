@@ -14,6 +14,7 @@ import * as vega from 'vega'
 import { compileChart } from '../../core/src/compiler.ts'
 import { evaluateChart } from '../../core/src/evaluate.ts'
 import { enc, quietLogger } from './differential-util.mts'
+import { scenegraphRoot } from '../src/scenegraph-root.ts'
 
 type Row = Record<string, unknown>
 type Spec = Record<string, unknown>
@@ -131,7 +132,7 @@ async function vegaRun(spec: Spec): Promise<Map<string, unknown[]>> {
   const view = new vega.View(vega.parse(structuredClone(spec)), { renderer: 'none', logger: quietLogger(errors) })
   await view.runAsync()
   expect(errors).toEqual([])
-  const out = vegaItems(view.scenegraph().root)
+  const out = vegaItems(scenegraphRoot(view))
   view.finalize()
   return out
 }
@@ -153,10 +154,12 @@ describe('item datum: marks without `from`, group items and guide parts (vs vega
     for (const [i, spec] of CASES.entries()) {
       const want = await vegaRun(spec)
       const got = asterItems(evaluateChart(compileChart(structuredClone(spec))) as never)
-      for (const [key, items] of want) {
-        compared += items.length
+      // every mark and guide part of EITHER scenegraph: a part only Aster has (a ghost mark, a guide part vega does not draw) is a difference
+      for (const key of new Set([...want.keys(), ...got.keys()])) {
+        const items = want.get(key)
+        compared += items?.length ?? 0
         const mine = got.get(key)
-        if (JSON.stringify(mine) !== JSON.stringify(items)) failures.push(`case ${i} ${key}: vega=${JSON.stringify(items).slice(0, 160)} aster=${JSON.stringify(mine)?.slice(0, 160)}`)
+        if (JSON.stringify(mine) !== JSON.stringify(items)) failures.push(`case ${i} ${key}: vega=${JSON.stringify(items)?.slice(0, 160)} aster=${JSON.stringify(mine)?.slice(0, 160)}`)
       }
     }
     // a comparison of nothing proves nothing

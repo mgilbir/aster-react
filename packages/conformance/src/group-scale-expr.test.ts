@@ -14,7 +14,7 @@ type Spec = Record<string, unknown>
 
 async function oracleSvg(spec: Spec): Promise<string> {
   const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(
-    vega.parse(spec as never),
+    vega.parse(structuredClone(spec) as never),
     { renderer: 'none' },
   )
   try {
@@ -56,6 +56,16 @@ const CASES: Array<[string, Spec]> = [
     scales: [{ name: 'cx', type: 'band', domain: ['z'], range: [0, 20] }],
     marks: [{ type: 'rect', encode: { update: { x: { value: 0 }, y: { value: 0 }, width: { signal: "bandwidth('cx')" }, height: { value: 4 }, fill: { value: 'navy' } } } }],
   }, rect({ x: { scale: 'cx', field: 'a' }, width: { signal: "bandwidth('cx')" } })])],
+  // gone outside the group: a mark of the root, and the content of another group, read a scale only the first group declares
+  ['a group scale read from the root', { ...grouped([cx], [], [rect({ x: { scale: 'cx', field: 'a' }, width: { signal: "bandwidth('cx')" } })]), marks: [
+    ...((grouped([cx], [], []).marks) as Spec[]).map((g) => ({ ...g, marks: [rect({ x: { scale: 'cx', field: 'a' }, width: { signal: "bandwidth('cx')" } })] })),
+    { type: 'rect', encode: { update: { x: { value: 0 }, y: { value: 50 }, width: { signal: "bandwidth('cx')" }, height: { value: 4 }, fill: { value: 'navy' } } } },
+  ] }],
+  ['a group scale read by a sibling group', { ...grouped([cx], [], []), marks: [
+    { ...((grouped([cx], [], []).marks) as Spec[])[0]!, marks: [rect({ x: { scale: 'cx', field: 'a' }, width: { signal: "bandwidth('cx')" } })] },
+    { type: 'group', encode: { update: { x: { value: 0 }, y: { value: 40 }, width: { value: 40 }, height: { value: 10 } } },
+      marks: [{ type: 'rect', encode: { update: { x: { value: 0 }, y: { value: 0 }, width: { signal: "bandwidth('cx')" }, height: { value: 4 }, fill: { value: 'navy' } } } }] },
+  ] }],
 ]
 
 describe('the scales of a group are visible to its expressions like in vega', () => {

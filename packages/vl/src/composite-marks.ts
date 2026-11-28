@@ -6,15 +6,61 @@
  * The three share their anatomy: one continuous axis the statistics are of, the other channels every part draws, the parts the mark
  * def and the config switch on and off, and the tooltip that lists the statistics. They differ in the statistics and in the parts.
  */
-import { VLCompileError, genName, splitAccessPath } from './names.js'
+import { VLCompileError, dict, genName, guardedPathRef, splitAccessPath } from './names.js'
 import { getTimeUnitParts } from './timeunit.js'
 import { normalizeTimeUnit } from './validate.js'
+import { derive, deriveWithout } from './consume.js'
 
 type Obj = Record<string, any>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
+/**
+ * The channel definitions whose `title` is made of the continuous field's name as the spec wrote it (`Max of a\\.b`), not of text the user
+ * wrote: the compiler writes such a title into an expression's literal as it does a field's default title (escapes kept, which the literal reads).
+ */
+export const NAMED_TITLES = new WeakSet<object>()
+const named = <T extends object>(def: T): T => (NAMED_TITLES.add(def), def)
 const titleCase = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1)
+/** The field a row has under `name` itself (a name this module made: a statistic), as source text of an expression. */
 const datumRef = (name: string): string => `datum[${JSON.stringify(name)}]`
-const quotedRef = (name: string): string => `datum['${name.replaceAll("'", "\\'")}']`
+/**
+ * The value of a field of the unit's own rows, as an operand of an expression: a one-piece path (`a`, `a\\.b`) is the row's key, a nested
+ * one (`o.v`) is read through each piece and guarded, as a flat copy would hold it (vega-lite names that copy `o.v` and reads it).
+ */
+const fieldRead = (f: string): string => {
+  const pieces = splitAccessPath(f)
+  return pieces.length === 1 ? datumRef(pieces[0]!) : quotedRef(pieces.join('.'))
+}
+/**
+ * The flat copy of a nested field the statistics read: vega-lite's parse step writes `o.v` (the path joined) for the field `o.v`, but only
+ * for a field some channel names, and the statistics are made from the field no channel names (an error mark's measure), so its aggregate
+ * reads nothing and makes nulls. The copy is made here, first, for every composite mark.
+ */
+function flatCopyOf(field: string): Obj[] {
+  const pieces = splitAccessPath(field)
+  return pieces.length > 1 ? [{ calculate: guardedPathRef(field), as: pieces.join('.') }] : []
+}
+
+/**
+ * The name of a statistic of `field`, `prefix_path` (vega-lite's: `lower_box_o.v` for the field `o.v`, written as the row's key, which a
+ * path of that name reads back). A name no path reads back as written (brackets, quotes) gets a safe stand-in.
+ */
+function statName(prefix: string, field: string): string {
+  const path = splitAccessPath(field).join('.')
+  const name = `${prefix}_${path}`
+  return splitAccessPath(name).join('.') === name ? name : genName(prefix, path)
+}
+/**
+ * The channel field that reads the statistic `statName` names: the same, but for a field written with escaped dots (`a\\.b`, one key that holds a dot),
+ * which keeps its escapes, `lower_box_a\\.b`, as vega-lite writes it, so that the texts that print the field (a default title, a test) read as its own do.
+ */
+function statField(prefix: string, field: string): string {
+  const pieces = splitAccessPath(field)
+  return pieces.length === 1 && field === pieces[0]!.replaceAll('.', '\\.') && field !== pieces[0] ? `${prefix}_${field}` : statName(prefix, field)
+}
+/** `datum['name']` as source text of an expression: the name is a string literal, so its backslashes and quotes are escaped. */
+export const quotedRef = (name: string): string => `datum['${name.replaceAll('\\', '\\\\').replaceAll("'", "\\'")}']`
+/** A field (as `statField` names it) read in a test: its escaped dots stay as written, which the literal reads as the dot (vega-lite's text). */
+const testRef = (name: string): string => (name.includes('\\') ? `datum['${name.replaceAll("'", "\\'")}']` : quotedRef(name))
 
 export type CompositeMark = 'boxplot' | 'errorbar' | 'errorband'
 type Orient = 'vertical' | 'horizontal'
@@ -34,7 +80,7 @@ const BOXPLOT_DEFAULTS: Obj = { size: 14, extent: 1.5, box: {}, median: { color:
 
 /** Objects merge key by key, anything else is replaced. */
 function mergeDeep(base: Obj, over: Obj | undefined): Obj {
-  const out: Obj = { ...base }
+  const out: Obj = Object.assign(dict(), base)
   for (const [k, v] of Object.entries(over ?? {})) out[k] = isObj(v) && isObj(out[k]) ? mergeDeep(out[k], v) : v
   return out
 }
@@ -52,15 +98,9 @@ function orientationOf(markDef: Obj, encoding: Obj, kind: CompositeMark): Orient
   const { x, y } = encoding
   const xs = isContinuous(x)
   const ys = isContinuous(y)
-  if (xs && ys) {
-    // (an axis that already carries the composite's name as its aggregate is the one the statistics are of)
-    const xAggregate = isObj(x) && x.aggregate
-    const yAggregate = isObj(y) && y.aggregate
-    if (!xAggregate && yAggregate === kind) return 'vertical'
-    if (!yAggregate && xAggregate === kind) return 'horizontal'
-    if (xAggregate === kind && yAggregate === kind) throw new VLCompileError(`${kind}: both x and y cannot have aggregate`)
-    return y.type === 'temporal' && x.type !== 'temporal' ? 'horizontal' : 'vertical'
-  }
+  // (vega-lite also takes an axis whose aggregate is the composite's own name as the one the statistics are of; the aggregate of a
+  // channel is one of the schema's operations, so no spec has one)
+  if (xs && ys) return y.type === 'temporal' && x.type !== 'temporal' ? 'horizontal' : 'vertical'
   if (xs) return 'horizontal'
   if (ys) return 'vertical'
   throw new VLCompileError(`${kind} needs a continuous x or y axis`)
@@ -188,16 +228,20 @@ interface PartSpec {
 }
 
 /** The continuous channel as a part draws it: at one statistic, with the title and the scale and axis the user gave it. */
-function axisDef(a: Anatomy, field: string): Obj {
+function axisDef(a: Anatomy, field: string, raw = false): Obj {
   const { scale, axis } = a.continuous
-  return { field, type: a.continuous.type, title: a.continuous.title ?? a.continuous.field, ...(scale !== undefined ? { scale } : {}), ...(axis !== undefined ? { axis } : {}) }
+  // (a part over a statistic is named by a title: the field's default one, whose escapes the literal of a description or tooltip reads
+  // (`a\\.b` is read `a.b`), while the axis shows the name as written; the outliers draw the raw field and keep its own default title)
+  const own = a.continuous.title
+  const title = own !== undefined ? own : raw ? undefined : a.continuous.field
+  const axisOut = own === undefined && !raw && axis !== null && !(isObj(axis) && axis.title !== undefined) ? { ...(isObj(axis) ? axis : {}), title: a.continuous.field } : axis
+  const def = { field, type: a.continuous.type, ...(title !== undefined ? { title } : {}), ...(scale !== undefined ? { scale } : {}), ...(axisOut !== undefined ? { axis: axisOut } : {}) }
+  return own === undefined && title !== undefined ? named(def) : def
 }
 
-/** The end of a ranged part: its field, titled by its plain name where a safe name stands in for one with a path in it. */
+/** The end of a ranged part: its field (the position channel carries the title, which names the axis). */
 function endDef(a: Anatomy, prefix: string): Obj {
-  const field = a.fieldName(prefix)
-  const plain = `${prefix}_${a.continuous.field}`
-  return field === plain ? { field } : { field, title: plain }
+  return { field: a.fieldName(prefix) }
 }
 
 /** A part of the composite mark as a unit spec, or nothing when the mark def or the config switches it off. */
@@ -218,7 +262,7 @@ function part(a: Anatomy, p: PartSpec): Obj[] {
       ...(isObj(own) ? own : {}),
     },
     encoding: {
-      [a.axis]: axisDef(a, p.field ?? a.fieldName(p.at!)),
+      [a.axis]: axisDef(a, p.field ?? a.fieldName(p.at!), p.name === 'outliers'),
       ...(p.to ? { [`${a.axis}2`]: endDef(a, p.to) } : {}),
       ...p.encoding,
     },
@@ -292,19 +336,19 @@ interface Statistics {
 
 function errorStatistics(a: Anatomy, input: Input, encoding: Obj, defaultCenter: string): Statistics {
   const f = a.continuous.field as string
-  const at = (prefix: string): string => genName(prefix, f)
+  const at = (prefix: string): string => statName(prefix, f)
   const titledCalc = (c: Obj): { field: string; title: string } => ({ field: c.as, title: String(c.calculate).replace(/datum\["|"\]/g, '') })
 
   if (input === 'aggregated-upper-lower') {
-    const calculate = [{ calculate: datumRef(encoding[`${a.axis}2`].field), as: at('upper') }, { calculate: datumRef(f), as: at('lower') }]
+    const calculate = [{ calculate: fieldRead(encoding[`${a.axis}2`].field), as: at('upper') }, { calculate: fieldRead(f), as: at('lower') }]
     return { aggregate: [], calculate, lines: calculate.map(titledCalc), named: false }
   }
   if (input === 'aggregated-error') {
     const error = encoding[`${a.axis}Error`]
     const error2 = encoding[`${a.axis}Error2`]
     const calculate = [
-      { calculate: `${datumRef(f)} + ${datumRef(error.field)}`, as: at('upper') },
-      { calculate: `${datumRef(f)} ${error2 ? '+' : '-'} ${datumRef((error2 ?? error).field)}`, as: at('lower') },
+      { calculate: `${fieldRead(f)} + ${fieldRead(error.field)}`, as: at('upper') },
+      { calculate: `${fieldRead(f)} ${error2 ? '+' : '-'} ${fieldRead((error2 ?? error).field)}`, as: at('lower') },
     ]
     return { aggregate: [], calculate, lines: [{ field: f, title: f }, ...calculate.map(titledCalc)], named: false }
   }
@@ -335,9 +379,25 @@ function errorStatistics(a: Anatomy, input: Input, encoding: Obj, defaultCenter:
   }
 }
 
+/**
+ * The unit's `outer` properties with the parameters it keeps: the variable ones (a value, a binding, an expression), which signals of the
+ * parts read (a filter, a title) and which vega-lite keeps. A selection of a composite mark is dropped by vega-lite with a warning, which
+ * here is a refusal (nothing is silently ignored); the ones a composition gave to every unit below it are handled by `compositeLayers`.
+ */
+function withVariableParams(outer: Obj, params: unknown, kind: CompositeMark): Obj {
+  if (!Array.isArray(params)) return outer
+  const kept: unknown[] = []
+  for (const p of params) {
+    if (!isObj(p) || p.select === undefined) kept.push(p)
+    else if (!isGiven(p)) throw new VLCompileError(`params: the selection parameter ${JSON.stringify(p.name)} on a ${kind}: a selection of a composite mark is not supported (vega-lite 6.4.3 drops it with a warning); put it on a unit of a layer`)
+  }
+  return kept.length > 0 ? { ...outer, params: kept } : outer
+}
+
 /** What errorbar and errorband read of the unit before they draw: the anatomy, the transforms and the tooltip. */
 function readErrorMark(unit: Obj, kind: 'errorbar' | 'errorband', config: Obj): { a: Anatomy; transform: Obj[]; tooltip: Obj; outer: Obj; orient: Orient } {
-  const { mark, encoding, params: _p, projection: _pr, ...outer } = unit
+  const { mark, encoding, params, projection: _pr, ...rest } = unit
+  const outer = withVariableParams(rest, params, kind)
   const markDef: Obj = isObj(mark) ? mark : { type: mark }
   const { orient, input } = inputOf(markDef, encoding, kind)
   const axis = orient === 'vertical' ? 'y' : 'x'
@@ -347,19 +407,27 @@ function readErrorMark(unit: Obj, kind: 'errorbar' | 'errorband', config: Obj): 
     return rest
   }
   const continuous = withoutAggregate(encoding[axis])!
+  // vega-lite makes the statistics of an error mark before the flat copy of a nested path exists, and reads a name with a dot in it as a
+  // path: its aggregates read nothing, and it draws no bar (an errorbar) or nulls (an errorband). Q9: refused, not drawn differently.
+  if (typeof continuous.field === 'string') {
+    const pieces = splitAccessPath(continuous.field)
+    if (pieces.length > 1 || pieces[0] !== continuous.field) {
+      throw new VLCompileError(`encoding.${axis}.field: the ${kind} measure ${JSON.stringify(continuous.field)} is a nested path or a name with a dot in it: vega-lite 6.4.3 cannot read it (its statistics are made before the field is flattened, so it draws no bar or nulls); name a plain column, made by a calculate`)
+    }
+  }
   const others: Obj = {}
   for (const [channel, def] of Object.entries(encoding)) {
     if (channel !== axis && channel !== `${axis}2` && channel !== `${axis}Error` && channel !== `${axis}Error2`) others[channel] = def
   }
   const lifted = liftTransforms(others, kind)
-  const a: Anatomy = { kind, markDef, config: config[kind], axis, continuous, shared: lifted.encoding, fieldName: (prefix) => genName(prefix, continuous.field) }
+  const a: Anatomy = { kind, markDef, config: config[kind], axis, continuous, shared: lifted.encoding, fieldName: (prefix) => statField(prefix, continuous.field) }
   const ends = { [`${axis}2`]: withoutAggregate(encoding[`${axis}2`]), [`${axis}Error`]: withoutAggregate(encoding[`${axis}Error`]), [`${axis}Error2`]: withoutAggregate(encoding[`${axis}Error2`]) }
   // (an errorband reads the errorbar config's centre, as an errorbar does)
   const stats = errorStatistics(a, input, ends, config.errorbar.center)
 
   const aggregate = [...lifted.aggregate, ...stats.aggregate]
-  const name = a.continuous.title ?? a.continuous.field
-  const tooltip = tooltipOf(stats.lines.map(({ field, title }) => ({ field, type: continuous.type, title: `${title}${stats.named ? ` of ${name}` : ''}` })), lifted.encoding)
+  const name = a.continuous.title !== undefined ? a.continuous.title : a.continuous.field
+  const tooltip = tooltipOf(stats.lines.map(({ field, title }) => { const def = { field, type: continuous.type, title: `${title}${stats.named ? ` of ${name}` : ''}` }; return a.continuous.title === undefined && stats.named ? named(def) : def }), lifted.encoding)
   return {
     a,
     outer,
@@ -414,7 +482,8 @@ function errorbandLayers(unit: Obj, config: Obj): Obj {
 
 function boxplotLayers(unit: Obj, userConfig: Obj | undefined): Obj {
   const config = mergeDeep(BOXPLOT_DEFAULTS, isObj(userConfig?.boxplot) ? (userConfig!.boxplot as Obj) : undefined)
-  const { mark, encoding, params: _p, projection: _pr, ...outer } = unit
+  const { mark, encoding, params, projection: _pr, ...unitRest } = unit
+  const outer = withVariableParams(unitRest, params, 'boxplot')
   const markDef: Obj = isObj(mark) ? mark : { type: mark }
   const extent: 'min-max' | number = markDef.extent ?? config.extent
   const minMax = extent === 'min-max'
@@ -431,11 +500,10 @@ function boxplotLayers(unit: Obj, userConfig: Obj | undefined): Obj {
   if (!isObj(continuousChannel) || continuousChannel.field === undefined) throw new VLCompileError(`boxplot: the ${axis} channel needs a field`)
   const { aggregate: _agg, ...continuous } = continuousChannel
   const f = continuous.field as string
-  const path = splitAccessPath(f).join('.')
   const { rest, raw: rawTooltip } = splitTooltip(others)
   const lifted = liftTransforms(rest, 'boxplot')
   const shared = lifted.encoding
-  const stat = (prefix: string): string => `${prefix}_${path}`
+  const stat = (prefix: string): string => statName(prefix, f)
 
   const quartiles = (): Obj[] => [{ op: 'q1', field: f, as: stat('lower_box') }, { op: 'q3', field: f, as: stat('upper_box') }]
   // the whiskers reach the extremes when the extent is min-max; otherwise they reach the last datum within the fences, computed below
@@ -448,10 +516,10 @@ function boxplotLayers(unit: Obj, userConfig: Obj | undefined): Obj {
   const transform: Obj[] = [...lifted.timeUnits, { aggregate: [...lifted.aggregate, ...aggregates], groupby: lifted.groupby }]
 
   const { color, size: sizeChannel, ...unsized } = shared
-  const a: Anatomy = { kind: 'boxplot', markDef, config, axis, continuous, shared, fieldName: (prefix) => `${prefix}_${f}` }
+  const a: Anatomy = { kind: 'boxplot', markDef, config, axis, continuous, shared, fieldName: (prefix) => statField(prefix, f) }
 
   const summary = (stats: Array<[prefix: string, label: string]>): Obj =>
-    tooltipOf(stats.map(([prefix, label]) => ({ field: prefix + continuous.field, type: continuous.type, title: `${label} of ${continuous.title ?? continuous.field}` })), shared)
+    tooltipOf(stats.map(([prefix, label]) => { const def = { field: statField(prefix.replace(/_$/, ''), continuous.field), type: continuous.type, title: `${label} of ${continuous.title !== undefined ? continuous.title : continuous.field}` }; return continuous.title === undefined ? named(def) : def }), shared)
   const fiveNumbers = summary([
     [minMax ? 'upper_whisker_' : 'max_', 'Max'], ['upper_box_', 'Q3'], ['mid_box_', 'Median'], ['lower_box_', 'Q1'], [minMax ? 'lower_whisker_' : 'min_', 'Min'],
   ])
@@ -488,20 +556,20 @@ function boxplotLayers(unit: Obj, userConfig: Obj | undefined): Obj {
       encoding: {
         ...unsized,
         ...(sizeChannel ? { size: sizeChannel } : {}),
-        color: { condition: { test: `${quotedRef(`lower_box_${f}`)} >= ${quotedRef(`upper_box_${f}`)}`, ...(color || { value: boxColor }) } },
+        color: { condition: { test: `${testRef(statField('lower_box', f))} >= ${testRef(statField('upper_box', f))}`, ...(color || { value: boxColor }) } },
         ...fiveNumbers,
       },
     }),
   ]
-  if (minMax) return { ...outer, transform: ((outer.transform as Obj[] | undefined) ?? []).concat(transform), layer: boxParts }
+  if (minMax) return { ...outer, transform: ((outer.transform as Obj[] | undefined) ?? []).concat(flatCopyOf(f), transform), layer: boxParts }
 
   // Tukey's box plot: the whiskers reach the furthest datum within `extent` interquartile ranges of the box; data beyond are outliers
-  const lower = quotedRef(`lower_box_${path}`)
-  const upper = quotedRef(`upper_box_${path}`)
+  const lower = quotedRef(stat('lower_box'))
+  const upper = quotedRef(stat('upper_box'))
   const range = `(${upper} - ${lower})`
   const lowerFence = `${lower} - ${extent} * ${range}`
   const upperFence = `${upper} + ${extent} * ${range}`
-  const value = quotedRef(f)
+  const value = fieldRead(f)
 
   const withinFences: Obj = {
     transform: [
@@ -510,8 +578,8 @@ function boxplotLayers(unit: Obj, userConfig: Obj | undefined): Obj {
         aggregate: [
           { op: 'min', field: f, as: stat('lower_whisker') },
           { op: 'max', field: f, as: stat('upper_whisker') },
-          { op: 'min', field: `lower_box_${f}`, as: stat('lower_box') },
-          { op: 'max', field: `upper_box_${f}`, as: stat('upper_box') },
+          { op: 'min', field: stat('lower_box'), as: stat('lower_box') },
+          { op: 'max', field: stat('upper_box'), as: stat('upper_box') },
           ...lifted.aggregate,
         ],
         groupby: lifted.groupby,
@@ -532,25 +600,30 @@ function boxplotLayers(unit: Obj, userConfig: Obj | undefined): Obj {
   let fenced: Obj
   if (outliers) fenced = { transform: quartilesOfGroup, layer: [outliers, withinFences] }
   else fenced = { ...withinFences, transform: [...quartilesOfGroup, ...withinFences.transform] }
-  return { ...outer, layer: [fenced, { transform, layer: boxParts }] }
+  const copy = flatCopyOf(f)
+  return { ...outer, ...(copy.length ? { transform: ((outer.transform as Obj[] | undefined) ?? []).concat(copy) } : {}), layer: [fenced, { transform, layer: boxParts }] }
 }
 
 // --- entry ---------------------------------------------------------------------------------------------------------------------
 
-/** A composite unit as the layer of simple marks that draws it. `unit.encoding` is complete and typed. */
 /**
  * The selection parameters a composition gave to a unit are told from the ones the unit declares (which a composite mark does not
  * take) by a flag on the parameter, which survives the copies a repeat makes of its spec.
  */
 const GIVEN = '$given'
 export function markGiven<T extends object>(param: T): T {
-  return { ...param, [GIVEN]: true }
+  return derive(param as Obj, { [GIVEN]: true }) as T
 }
 export const isGiven = (param: unknown): boolean => isObj(param) && param[GIVEN] === true
 
+/** Whether a rewritten spec draws no mark at all (every part the mark def and the config left on is off). */
+const drawsNothing = (node: Obj): boolean => node.mark === undefined && (!Array.isArray(node.layer) || node.layer.every((l: unknown) => isObj(l) && drawsNothing(l)))
+
+/** A composite unit as the layer of simple marks that draws it. `unit.encoding` is complete and typed. */
 export function compositeLayers(kind: CompositeMark, unit: Obj, userConfig: Obj | undefined): Obj {
   const made = layersOf(kind, unit, userConfig)
-  const given = Array.isArray(unit.params) ? unit.params.filter(isGiven).map(({ [GIVEN]: _g, ...param }: Obj) => param) : []
+  if (drawsNothing(made)) throw new VLCompileError(`mark: every part of the ${kind} is switched off, so it draws nothing (vega-lite 6.4.3 throws "Invalid specification" or draws an empty view)`)
+  const given = Array.isArray(unit.params) ? unit.params.filter(isGiven).map((param: Obj) => deriveWithout(param, [GIVEN])) : []
   if (given.length === 0) return made
   // a selection is declared by every unit the composition gave it to: a composite mark of one unit takes it, one of several declares its
   // signals twice in a Vega scope, which Vega rejects
@@ -559,7 +632,7 @@ export function compositeLayers(kind: CompositeMark, unit: Obj, userConfig: Obj 
     throw new VLCompileError(`params: a selection parameter given to every unit below a composition cannot be given to a ${kind}, which is ${leaves.length === 1 ? 'a layer' : `${leaves.length} units`} once vega-lite has normalized it: declare it on a unit instead`)
   }
   if (Array.isArray(made.layer)) return { ...made, layer: [{ ...leaves[0], params: given }] }
-  return { ...made, params: given }
+  return { ...made, params: [...(Array.isArray(made.params) ? made.params : []), ...given] }
 }
 
 function layersOf(kind: CompositeMark, unit: Obj, userConfig: Obj | undefined): Obj {

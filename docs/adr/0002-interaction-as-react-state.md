@@ -26,7 +26,7 @@ carries signal values. Those are the only two mutation points interaction needs.
    with `useSyncExternalStore`, so a signal event is one synchronous React state
    transition with a stable snapshot.
 4. **Hit testing is scene-based.** Clicks resolve through the uniform-grid hit index,
-   with guides excluded (`queryMark`), so SVG and canvas share semantics.
+   with guides excluded (the hit index's `pick` of a mark item), so SVG and canvas share semantics.
 
 ## Consequences
 
@@ -49,3 +49,18 @@ carries signal values. Those are the only two mutation points interaction needs.
 - Pan/zoom is derived by scale position (the first continuous scale per orientation, root scope), not by scale name;
   `pan` and `zoom` are separate switches. See [INTERACTION.md](../INTERACTION.md).
 - `<ChartStream>` supports the same interaction as `<Chart>` (pan/zoom, signals, selection, tooltips, a11y).
+
+*2026-11-23, to match the code (audit C363).*
+
+- The canvas renderer binds the same signal event loop as the SVG one (vega's canvas handler semantics: an event is about
+  the item the pointer last moved onto), so a spec's `signal.on` handlers and `setSignal` run on both renderers; the
+  amendment above that says canvas has no DOM event streams is superseded. Only `interactive={false}` and `<SvgChart>`
+  without `interaction` apply `setSignal` as an override.
+- The store holds only what events wrote; the `signals` prop is merged with it when read, controlled by content (the
+  latest writer wins, a removed key is released). See the identity rule in [ARCHITECTURE.md](../ARCHITECTURE.md).
+
+*2026-11-25, to match the code (audit C374).*
+
+- "A spec's `signal.on` handlers only fire on SVG" (above) no longer holds: the event loop is bound on the canvas renderer too, through
+  `createCanvasEvents` (vega's canvas handler; [ARCHITECTURE.md](../ARCHITECTURE.md), the render lifecycle). What canvas lacks is
+  DOM-level event targets other than the canvas element itself, which the spec language does not name.

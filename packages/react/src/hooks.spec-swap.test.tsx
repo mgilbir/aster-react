@@ -13,8 +13,9 @@ import { act } from 'react'
 import { describe, it, expect, afterEach } from 'vitest'
 import { useChart } from './useChart'
 import { useChartStream, type UseChartStreamResult } from './useChartStream'
-import { useChartWorker, handleChartWorkerRequest, handleChartWorkerStreamRequest, type ChartWorkerStreamRequest } from './worker'
+import { useChartWorker } from './worker-impl'
 import { useChartWorkerStream, type WorkerChartStreamResult } from './useChartWorkerStream'
+import { FakeWorker } from './testing/fake-worker'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -99,21 +100,6 @@ swapSuite('useChartStream', () => {
     unmount: h.unmount,
   }
 })
-
-/** A Worker that answers in-process, and keeps its open streams for inspection. */
-class FakeWorker {
-  listeners = new Set<(event: MessageEvent) => void>()
-  streams = new Map<number, never>()
-  addEventListener(type: string, fn: (event: MessageEvent) => void): void { if (type === 'message') this.listeners.add(fn) }
-  removeEventListener(_type: string, fn: (event: MessageEvent) => void): void { this.listeners.delete(fn) }
-  postMessage(request: { kind?: string; id: number; spec?: never }): void {
-    const response = request.kind === 'stream'
-      ? handleChartWorkerStreamRequest(request as unknown as ChartWorkerStreamRequest, this.streams as never)
-      : handleChartWorkerRequest(request as never)
-    queueMicrotask(() => { for (const fn of this.listeners) fn({ data: response } as MessageEvent) })
-  }
-  terminate(): void { /* nothing to stop */ }
-}
 
 for (const withWorker of [false, true]) {
   const label = withWorker ? 'with a Worker' : 'without a Worker (in-process fallback)'

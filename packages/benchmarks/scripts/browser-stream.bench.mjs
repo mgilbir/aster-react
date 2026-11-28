@@ -24,8 +24,9 @@ import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { summarize, table, fmt } from '../src/stats.js'
 import { ensureBuilt } from '../src/ensure-built.ts'
-import { checkStreamBench } from '../src/browser-floors.ts'
+import { checkStreamBench, streamCells } from '../src/browser-floors.ts'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { launchBrowser } from '../../../scripts/lib/launch-browser.mjs'
 
 cli({ url: import.meta.url, flags: { batch: 'eq', dense: 'eq', engines: 'eq', points: 'eq', policies: 'eq', renderers: 'eq', seconds: 'eq', 'vega-modes': 'eq' } })
 
@@ -67,7 +68,7 @@ writeFileSync(
   '<!doctype html><html><head><meta charset="utf-8"></head><body><script src="./bench.js"></script></body></html>',
 )
 
-const browser = await chromium.launch({
+const browser = await launchBrowser(chromium, {
   headless: true,
   args: ['--disable-dev-shm-usage', '--js-flags=--max-old-space-size=4096'],
 })
@@ -78,35 +79,31 @@ await page.goto(`file://${join(OUT_DIR, 'index.html')}`)
 await page.waitForFunction(() => '__streamBench' in window, null, { timeout: 30_000 })
 
 const out = []
-for (const points of POINTS) {
-  for (const engine of ENGINES) {
-    for (const renderer of RENDERERS) {
-      for (const policy of POLICIES[engine]) for (const dense of engine === 'aster' && renderer === 'svg' ? DENSE : ['0']) {
-        await page.evaluate(() => window.__streamBench.reset())
-        const r = await page.evaluate(
-          ([p, s, b, rr, pp, ee, dd]) => window.__streamBench.frames(p, s, b, rr, pp, ee, dd === '1'),
-          [points, SECONDS, BATCH, renderer, policy, engine, dense],
-        )
-        const ft = r.frameTimes
-        const long = ft.filter((t) => t > 21).length
-        const summary = summarize(ft)
-        const expectedRows = points + r.updates * BATCH
-        // Vega reports its final dataset length: a dropped change would look
-        // fast for doing less work, so surface it instead of silently ranking it.
-        if (r.rows != null && r.rows !== expectedRows) {
-          console.error(`  [warn] vega dataset has ${r.rows} rows, expected ${expectedRows}`)
-        }
-        out.push({
-          points, engine, renderer, policy, dense,
-          median: summary.median, p95: summary.p95,
-          longShare: ft.length ? long / ft.length : 0,
-          frames: ft.length, updates: r.updates, mutations: r.mutations, nodes: r.nodes,
-        })
-        await page.evaluate(() => window.__streamBench.reset())
-        console.log(`  ${engine}/${renderer}/${policy}${dense === '1' ? '/dense' : ''} @ ${points}: ${fmt(summary.median)} ms median, ${((long / Math.max(1, ft.length)) * 100).toFixed(1)}% long (${r.updates} appends, ${r.svgNodes} paths)`)
-      }
-    }
+const MATRIX = { points: POINTS, engines: ENGINES, renderers: RENDERERS, policies: POLICIES, dense: [...DENSE] }
+// The floors (src/browser-floors.ts) require every row of this matrix, so the loop and the check cannot disagree about what was measured.
+for (const { points, engine, renderer, policy, dense } of streamCells(MATRIX)) {
+  await page.evaluate(() => window.__streamBench.reset())
+  const r = await page.evaluate(
+    ([p, s, b, rr, pp, ee, dd]) => window.__streamBench.frames(p, s, b, rr, pp, ee, dd === '1'),
+    [points, SECONDS, BATCH, renderer, policy, engine, dense],
+  )
+  const ft = r.frameTimes
+  const long = ft.filter((t) => t > 21).length
+  const summary = summarize(ft)
+  const expectedRows = points + r.updates * BATCH
+  // Vega reports its final dataset length: a dropped change would look
+  // fast for doing less work, so surface it instead of silently ranking it.
+  if (r.rows != null && r.rows !== expectedRows) {
+    console.error(`  [warn] vega dataset has ${r.rows} rows, expected ${expectedRows}`)
   }
+  out.push({
+    points, engine, renderer, policy, dense,
+    median: summary.median, p95: summary.p95,
+    longShare: ft.length ? long / ft.length : 0,
+    frames: ft.length, updates: r.updates, mutations: r.mutations, nodes: r.nodes,
+  })
+  await page.evaluate(() => window.__streamBench.reset())
+  console.log(`  ${engine}/${renderer}/${policy}${dense === '1' ? '/dense' : ''} @ ${points}: ${fmt(summary.median)} ms median, ${((long / Math.max(1, ft.length)) * 100).toFixed(1)}% long (${r.updates} appends, ${r.svgNodes} paths)`)
 }
 
 await browser.close()
@@ -128,7 +125,7 @@ console.log(
 )
 
 // The floors (src/browser-floors.ts): a regression fails the run (and the nightly step), it does not just print a table.
-const failures = checkStreamBench(out, pageErrors)
+const failures = checkStreamBench(out, pageErrors, MATRIX)
 if (failures.length) {
   console.error(`\n[bench:browser-stream] FAIL: ${failures.length} floor(s) crossed`)
   for (const f of failures) console.error(`  - ${f}`)

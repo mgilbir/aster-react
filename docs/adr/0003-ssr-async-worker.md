@@ -13,15 +13,16 @@ provide Workers but not uniformly (SSR, older hosts, jsdom).
 ## Decision
 
 1. **SSR emits the complete SVG string.** `<Chart>` serializes the full SVG on its
-   first render, on both server and client, so text and geometry exist before
-   hydration. Subsequent updates patch the DOM in place.
+   first render on the server and, when the spec needs nothing it has not loaded, on the client, so text and geometry exist before
+   hydration (see the amendment: a browser build may show a `<Suspense>` fallback first). Subsequent updates patch the DOM in place.
 2. **Strict hydration uses the DOM patcher.** React hydration through
    `dangerouslySetInnerHTML` cannot guarantee the server `<svg>` node is preserved on
    every React version. Hosts that need that guarantee call
    `renderChartToStaticMarkup` + `hydrateChart`, which patches the existing node
    directly.
 3. **Async data uses Suspense/`use()`.** `useSpecData` returns a stable promise keyed
-   by the spec object and fetch implementation; the loader add-on is dynamically
+   by the spec's content, the data options' content and the identity of `fetch`/`allow`, or a host
+   `cacheKey` in their place (see docs/API.md); the loader add-on is dynamically
    imported so it stays out of the base bundle. A promise `spec` on `<Chart>` suspends
    to the host's boundary (no internal boundary, so the host fallback is used).
 4. **Workers are optional and symmetric.** `handleChartWorkerRequest` is a pure
@@ -32,7 +33,11 @@ provide Workers but not uniformly (SSR, older hosts, jsdom).
 ## Consequences
 
 - SSR HTML is larger (full geometry), but hydration has no layout flash and no
-  measurement pass.
+  measurement pass. (Amended 2026-11-23, C45: where the server's picture differs from the client's -- another time
+  zone, the server's headless text estimate against the browser's measurement -- hydration patches the adopted
+  `<svg>` to the client's scene once, a walk of the DOM; a chart that fills its element with
+  `width` / `height="container"` is drawn at the spec's size on the server and fills the element after its first
+  measurement.)
 - Data loading is explicit and cacheable; there is no hidden fetch in the renderer.
 - Worker mode returns a scene without event-loop handles, so interaction that depends
   on signals stays on the main thread unless the host forwards events.
@@ -50,3 +55,10 @@ provide Workers but not uniformly (SSR, older hosts, jsdom).
   cross the boundary. A malformed worker message is answered or dropped, never run. Errors come back as
   `{ name, message, code? }`; a limit error is rehydrated as `AsterLimitError`, every other class as a plain `Error`
   with its `name` and `code` ([ERRORS.md](../ERRORS.md)).
+
+*2026-11-25, to match the code (audit C84).*
+
+- Decision 1 holds on the server and, for a chart that needs no part of the engine nor add-on, on the client. In a browser build a
+  chart whose spec needs a part of the engine (a legend, a time scale, an aggregate...) suspends once for it, so the client's first
+  commit may be the `<Suspense>` fallback and the SVG follows ([ADR 0011](0011-engine-parts-load-on-demand-in-browser-builds.md)).
+  A server render is unaffected (every part is there), and a host that wants no wait imports `@aster-charts/react/all`.

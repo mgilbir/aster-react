@@ -6,17 +6,26 @@
  * ASTER_VERIFY_PUBLISH_ROOT and requires it to fail with that fault's message. The unmodified copy must pass, so a
  * failure cannot come from the harness. Needs `pnpm build` (the `build` gate runs first).
  */
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { spawnAsync } from './lib/spawn-async.mjs'
+import { makeTempDir, removeTempDir, sandboxEnv } from './lib/temp-dir.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PUBLIC = ['core', 'react', 'vl']
-const scratch = mkdtempSync(join(tmpdir(), 'aster-verify-publish-test-'))
-afterAll(() => rmSync(scratch, { recursive: true, force: true }))
+const scratch = makeTempDir('aster-verify-publish-test-')
+afterAll(() => removeTempDir(scratch))
+// The script runs with its OS temp dir (TMPDIR) pointed at a directory of ours, and leaves nothing in it: not after a pass, not after
+// a planted fault that ends the script with process.exit (a `finally` does not run then). A leaked tarball set is ~10 MB a run.
+const sandbox = join(scratch, 'os-tmp')
+mkdirSync(sandbox)
+afterEach(() => {
+  const left = readdirSync(sandbox)
+  for (const d of left) rmSync(join(sandbox, d), { recursive: true, force: true })
+  expect(left, 'verify-publish left temp directories behind').toEqual([])
+})
 
 let n = 0
 /** A scratch repository holding what `pnpm pack` and the script read: workspace files, legal files, manifests and dist. */
@@ -45,7 +54,7 @@ const editManifest = (dir, pkg, edit) => {
 }
 
 const verify = (dir, env = {}) => spawnAsync(process.execPath, [join(root, 'scripts', 'verify-publish.mjs')], {
-  encoding: 'utf8', env: { ...process.env, ASTER_VERIFY_PUBLISH_ROOT: dir, ...env }, timeout: 280_000,
+  encoding: 'utf8', env: { ...process.env, ASTER_VERIFY_PUBLISH_ROOT: dir, ...sandboxEnv(sandbox), ...env }, timeout: 280_000,
 })
 const out = (r) => r.stdout + r.stderr
 
@@ -66,6 +75,12 @@ describe('verify-publish', () => {
     }, {}, /@aster-charts\/core tarball ships source maps/],
     ['a JS file that references a source map that is not shipped', (d) => writeFileSync(join(d, 'packages', 'vl', 'dist', 'dangling.js'), 'export {}\n//# sourceMappingURL=dangling.js.map\n'), {}, /@aster-charts\/vl\/dist\/dangling\.js references a source map/],
     ['an exports entry whose target does not exist', (d) => editManifest(d, 'core', (m) => { m.exports['.'].default = './dist/does-not-exist.js' }), {}, /@aster-charts\/core tarball is missing dist\/does-not-exist\.js/],
+    ['a `browser` target that is not in the tarball (Node never resolves it, so no import reads it)', (d) => editManifest(d, 'core', (m) => { m.exports['./probe-browser'] = { types: './dist/index.d.ts', browser: './dist/missing-browser.js', default: './dist/index.js' } }), {}, /@aster-charts\/core tarball is missing dist\/missing-browser\.js/],
+    ['a `browser` condition that resolves somewhere else than it names (a condition order that lets `default` win)', (d) => {
+      writeFileSync(join(d, 'packages', 'core', 'dist', 'browser-only.js'), 'export const browserOnly = 1\n')
+      editManifest(d, 'core', (m) => { m.exports['./probe-browser'] = { types: './dist/index.d.ts', default: './dist/index.js', browser: './dist/browser-only.js' } })
+    }, {}, /@aster-charts\/core\/probe-browser: a bundle built with the browser condition does not read \.\/dist\/browser-only\.js/],
+    ['a nested condition whose file is missing', (d) => editManifest(d, 'vl', (m) => { m.exports['./probe'] = { types: './dist/index.d.ts', default: './dist/index.js', node: { import: './dist/index.js', require: './dist/missing.cjs' } } }), {}, /@aster-charts\/vl tarball is missing dist\/missing\.cjs/],
     ['an exports entry with no types condition', (d) => editManifest(d, 'vl', (m) => { delete m.exports['.'].types }), {}, /@aster-charts\/vl exports\["\."\] has no "types" condition/],
     ['a manifest with no sideEffects field', (d) => editManifest(d, 'vl', (m) => { delete m.sideEffects }), {}, /@aster-charts\/vl packed manifest declares no "sideEffects"/],
     ['a wrong licence', (d) => editManifest(d, 'react', (m) => { m.license = 'MIT' }), {}, /@aster-charts\/react has license MIT/],

@@ -97,3 +97,66 @@ describe('signal propagation', () => {
     expect(bad.errors).toHaveLength(1)
   })
 })
+
+describe('connect places nodes as vega-dataflow rerank does, in linear time (C144)', () => {
+  /** vega-dataflow's rerank, as written there: every path from the node, no visited set (exponential in a lattice). */
+  function vegaOrder(nodes: Array<{ id: number; rank: number; targets: number[] }>, edges: Array<[number, number]>): number[] {
+    let made = nodes.length
+    const byId = new Map(nodes.map((n) => [n.id, n]))
+    for (const [s, t] of edges) {
+      const src = byId.get(s)!, tgt = byId.get(t)!
+      if (!src.targets.includes(t)) src.targets.push(t)
+      if (src.rank > tgt.rank) {
+        const queue = [tgt]
+        while (queue.length) {
+          const cur = queue.pop()!
+          cur.rank = ++made
+          for (let i = cur.targets.length; --i >= 0;) {
+            const q = byId.get(cur.targets[i]!)!
+            if (q === tgt) throw new Error('Cycle detected in dataflow graph.')
+            queue.push(q)
+          }
+        }
+      }
+    }
+    return [...nodes].sort((a, b) => a.rank - b.rank).map((n) => n.id)
+  }
+
+  it('gives the order vega gives, on generated graphs built edge by edge (and refuses the same cycles)', () => {
+    let seed = 11
+    const rand = (n: number): number => { seed = (Math.imul(seed, 1103515245) + 12345) >>> 0; return seed % n }
+    for (let trial = 0; trial < 400; trial++) {
+      const count = 3 + rand(9)
+      const edges: Array<[number, number]> = []
+      for (let e = rand(count * 2); e > 0; e--) edges.push([rand(count), rand(count)])
+      const ref = Array.from({ length: count }, (_, id) => ({ id, rank: id + 1, targets: [] as number[] }))
+      let want: number[] | string
+      try { want = vegaOrder(ref, edges.filter(([a, b]) => a !== b)) } catch (e) { want = (e as Error).message }
+      const flow = new Propagation(() => {})
+      const ns = Array.from({ length: count }, (_, id) => flow.add(node(String(id))))
+      let got: number[] | string
+      try {
+        for (const [a, b] of edges) {
+          if (a === b) continue
+          follow(ns[a]!, ns[b]!)
+          flow.connect(ns[b]!, [ns[a]!])
+        }
+        got = [...ns].sort((x, y) => x.order - y.order).map((n) => Number(n.name))
+      } catch (e) { got = (e as Error).message }
+      expect(got, JSON.stringify(edges)).toEqual(want)
+    }
+  })
+
+  it('places a lattice of diamonds at once (vega walks every path of it)', () => {
+    const flow = new Propagation(() => {})
+    const layers = Array.from({ length: 30 }, (_, l) => Array.from({ length: 12 }, (_, i) => flow.add(node(`${l}_${i}`))))
+    const t0 = performance.now()
+    // each node reads every node of the layer declared after it, connected from the first layer down: every connect reorders all
+    // that already reads it (the paths through the layers above multiply: 12^l)
+    for (let l = 0; l + 1 < layers.length; l++) {
+      for (const n of layers[l]!) for (const m of layers[l + 1]!) { follow(m, n); flow.connect(n, [m]) }
+    }
+    expect(performance.now() - t0).toBeLessThan(2000)
+    for (let l = 0; l + 1 < layers.length; l++) for (const n of layers[l]!) for (const m of layers[l + 1]!) expect(m.order).toBeLessThan(n.order)
+  })
+})

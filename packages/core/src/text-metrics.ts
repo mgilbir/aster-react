@@ -10,8 +10,22 @@
  * environments (jsdom without the `canvas` package) keep the exact behaviour
  * the conformance harness pins.
  */
-const widthCache = new Map<string, number>()
+import type { HostCanvas } from './host-types.js'
+/**
+ * Measured widths, one cache per measurer (a provider, or the canvas when there is none): a scoped provider
+ * (`withTextMetricsProvider`, a per-call `textMetrics`) neither reads another's widths nor clears them. Each is bounded, and
+ * cleared whole when full. A key is the font's length, the font, then the text: no font and text can make another pair's key.
+ */
+const CANVAS_WIDTHS = new Map<string, number>()
+const PROVIDER_WIDTHS = new WeakMap<TextMetricsProvider, Map<string, number>>()
 const WIDTH_CACHE_MAX = 8000
+
+function widthsOf(provider: TextMetricsProvider | null): Map<string, number> {
+  if (provider === null) return CANVAS_WIDTHS
+  let widths = PROVIDER_WIDTHS.get(provider)
+  if (widths === undefined) PROVIDER_WIDTHS.set(provider, (widths = new Map()))
+  return widths
+}
 
 /**
  * Host-provided text measurement. A provider replaces the offscreen-canvas
@@ -24,30 +38,52 @@ export interface TextMetricsProvider {
 }
 
 let activeProvider: TextMetricsProvider | null = null
-let activeProviderId = 0
-let providerSeq = 0
 
+/**
+ * Set the measurer every chart uses from now on (null: the canvas, or the estimate where there is none). Setting one forgets
+ * the widths it measured before (a host sets it again once its fonts have loaded).
+ */
 export function setTextMetricsProvider(provider: TextMetricsProvider | null): void {
   activeProvider = provider
-  activeProviderId = provider ? ++providerSeq : 0
-  widthCache.clear()
+  widthsOf(provider).clear()
+}
+
+/**
+ * The errors a provider's `measure` threw while `fn` ran (an evaluation): the width falls back to the estimate for that call, which
+ * is not cached (the provider is asked again next time), and the evaluation reports the first error and is not kept as a base for
+ * the next one -- what it measured is not what the provider measures.
+ */
+let failures: unknown[] | null = null
+export function collectMeasureFailures<T>(fn: () => T): { value: T; failures: readonly unknown[] } {
+  const outer = failures
+  const mine: unknown[] = []
+  failures = mine
+  try {
+    return { value: fn(), failures: mine }
+  } finally {
+    failures = outer
+    if (outer !== null) for (const e of mine) outer.push(e)
+  }
 }
 
 export function getTextMetricsProvider(): TextMetricsProvider | null {
   return activeProvider
 }
 
-/** Run `fn` with a scoped provider (used by <Chart>/renderSpec). */
+/** Run `fn` with a scoped provider (used by <Chart>/renderSpec); none given keeps the one in force. */
 export function withTextMetricsProvider<T>(provider: TextMetricsProvider | null | undefined, fn: () => T): T {
-  if (!provider || provider === activeProvider) return fn()
+  return provider ? withExactTextMetricsProvider(provider, fn) : fn()
+}
+
+/** Run `fn` with exactly this measurer in force, null (the canvas, or the estimate) included: how a scene is drawn under its own. */
+export function withExactTextMetricsProvider<T>(provider: TextMetricsProvider | null, fn: () => T): T {
+  if (provider === activeProvider) return fn()
   const prev = activeProvider
-  const prevId = activeProviderId
-  setTextMetricsProvider(provider)
+  activeProvider = provider
   try {
     return fn()
   } finally {
     activeProvider = prev
-    activeProviderId = prevId
   }
 }
 
@@ -72,7 +108,7 @@ function canvasContext(): CanvasRenderingContext2D | null {
  * A new canvas element of the host (what vega-canvas's `canvas()` is in a browser), or null where the host has none to draw on
  * (Node, jsdom without a canvas package).
  */
-export function createHostCanvas(): HTMLCanvasElement | null {
+export function createHostCanvas(): HostCanvas | null {
   if (canvasContext() === null) return null
   try { return document.createElement('canvas') } catch { return null }
 }
@@ -84,8 +120,7 @@ export function usingCanvasTextMetrics(): boolean {
 
 export interface FontProps {
   fontSize?: unknown
-  fontFamily?: unknown
-  /** Scene items use `font`; host providers should see the same family. */
+  /** The font family (vega's `font` channel). */
   font?: unknown
   fontWeight?: unknown
   fontStyle?: unknown
@@ -97,28 +132,34 @@ export function fontFontSize(item: FontProps): number {
   return item.fontSize != null ? +item.fontSize || 0 : 11
 }
 
-/** vega-scenegraph `font(item)`: `[style ][variant ][weight ]{size}px {family}`. */
+/**
+ * vega-scenegraph `font(item)`: `[style ][variant ][weight ]{size}px {family}`, the size as `fontFontSize` reads it and the
+ * family the item's `font`, else `sans-serif`. The one font text is measured with and drawn with (canvas.ts, label-draw.ts).
+ */
 export function fontString(item: FontProps): string {
   return (
     (item.fontStyle ? item.fontStyle + ' ' : '') +
     (item.fontVariant ? item.fontVariant + ' ' : '') +
     (item.fontWeight ? item.fontWeight + ' ' : '') +
     fontFontSize(item) + 'px ' +
-    ((item.fontFamily as string | undefined) || (item.font as string | undefined) || 'sans-serif')
+    ((item.font as string | undefined) || 'sans-serif')
   )
 }
 
 /** vega-scenegraph `_measureWidth`: provider/canvas measurement, cached by font+text. */
 export function measureText(text: string, font: string, item?: FontProps): number {
-  const key = `${activeProviderId}|(${font}) ${text}`
-  let w = widthCache.get(key)
+  const widths = widthsOf(activeProvider)
+  const key = `${font.length}:${font}${text}`
+  let w = widths.get(key)
   if (w === undefined) {
     if (activeProvider) {
       try {
         const measured = activeProvider.measure(text, font, fontFontSize(item ?? {}), item)
         w = Number.isFinite(measured) && measured >= 0 ? measured : estimateTextWidth(text, fontFontSize(item ?? {}))
-      } catch {
-        w = estimateTextWidth(text, fontFontSize(item ?? {}))
+      } catch (e) {
+        // (a transient failure is not the provider's answer: estimated for this call, not cached, and reported -- see above)
+        failures?.push(e)
+        return estimateTextWidth(text, fontFontSize(item ?? {}))
       }
     } else {
       const ctx = canvasContext()
@@ -126,8 +167,8 @@ export function measureText(text: string, font: string, item?: FontProps): numbe
       ctx.font = font
       w = ctx.measureText(text).width
     }
-    if (widthCache.size >= WIDTH_CACHE_MAX) widthCache.clear()
-    widthCache.set(key, w)
+    if (widths.size >= WIDTH_CACHE_MAX) widths.clear()
+    widths.set(key, w)
   }
   return w
 }

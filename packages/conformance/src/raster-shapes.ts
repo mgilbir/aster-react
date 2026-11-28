@@ -15,7 +15,7 @@ const stroke = (w: number, cap: string, join: string, dash: number[] = []): Cmd[
 ]
 
 export const SHAPES: RasterShape[] = [
-  // a circle moved down by a sixteenth of a pixel at a time: its vertices move a quarter of a pixel at a time
+  // a circle moved down by an eighth of a pixel at a time (cy = 5, 5.125, ... 5.875): its vertices move a quarter of a pixel at a time
   ...Array.from({ length: 8 }, (_, i): RasterShape => ({ name: `circle r=2.5 cy=5.${(i * 125).toString().padStart(3, '0')}`, w: 11, h: 12, cmds: circle(5.5, 5 + i / 8, 2.5) })),
   { name: 'circle r=2.5 half transparent', w: 11, h: 11, cmds: circle(5.3, 5.7, 2.5, 0.5) },
   { name: 'circle r=1.5', w: 8, h: 8, cmds: circle(4.2, 3.9, 1.5, 0.5) },

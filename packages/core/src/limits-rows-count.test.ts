@@ -5,8 +5,7 @@ import { createChartSession } from './addon-dom.js'
 import type { RuntimeInput, VgSpec } from './types.js'
 
 // `maxRows` budgets the rows a chart is given, each counted once, wherever it comes from: a dataset's inline `values`, the host's
-// `data` under its name (which replaces the inline rows, it does not add to them), a nested group's inline rows, a host array under
-// another name, a stream's snapshot and appends. Every case below sits at exactly `maxRows` (renders) and at `maxRows + 1` (refused
+// `data` under its name (which replaces the inline rows, it does not add to them), a nested group's inline rows, a stream's snapshot and appends. Every case below sits at exactly `maxRows` (renders) and at `maxRows + 1` (refused
 // with `maxRows`), spread over several datasets so that it is the summed pre-flight that decides, not one dataset's own count.
 
 const MAX = 10
@@ -27,7 +26,6 @@ const CASES: Record<string, Case> = {
   },
   'host rows for a url dataset': (n) => { const [a, b] = half(n); return { spec: spec([{ name: 'a', url: 'x.json' }, { name: 'b', values: rows(b) }]), input: { data: { a: rows(a) } } } },
   'host rows for a dataset with no rows of its own': (n) => { const [a, b] = half(n); return { spec: spec([{ name: 'a' }, { name: 'b', values: rows(b) }]), input: { data: { a: rows(a) } } } },
-  'a host array under a name no dataset has': (n) => { const [a, b] = half(n); return { spec: spec([{ name: 'b', values: rows(b) }]), input: { data: { extra: rows(a) } } } },
   'a nested group\'s inline rows': (n) => {
     const [a, b] = half(n)
     return { spec: spec([{ name: 'a', values: rows(a) }], [rect('a'), { type: 'group', data: [{ name: 'g', values: rows(b) }], marks: [rect('g')] }]) }
@@ -61,6 +59,15 @@ describe('maxRows counts every row once, on every path', () => {
       })
     }
   }
+
+  it('a host array under a name no dataset has is refused, as Vega refuses it (C306); a budget still counts it first', () => {
+    const s = spec([{ name: 'b', values: rows(2) }])
+    const input = { data: { extra: rows(2) }, limits: { maxRows: MAX } }
+    expect(() => renderSpec(s, input)).toThrow(/dataset "extra", which the chart does not declare/)
+    expect(() => createChartSession().evaluate(s, input)).toThrow(/dataset "extra", which the chart does not declare/)
+    // (the pre-flight of the budget reads every row the host gives, so a huge array under a typo is a limit error before it is a usage error)
+    expect(refused(() => renderSpec(s, { data: { extra: rows(MAX + 1) }, limits: { maxRows: MAX } }))).toBe(true)
+  })
 
   it('a session: `dataChanges` over host rows count the rows as they are now', () => {
     const s = spec([{ name: 'a', values: rows(4) }, { name: 'b', values: rows(5) }])

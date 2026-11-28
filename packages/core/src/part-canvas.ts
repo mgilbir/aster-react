@@ -1,5 +1,5 @@
 /**
- * The canvas renderer as `<Chart renderer="canvas">` uses it, put in its slot (see engine-parts.ts). `@aster-charts/core/lean/canvas`:
+ * The canvas renderer as `<Chart renderer="canvas">` uses it, put in its slot (see engine-parts.ts). `@aster-charts/core/internal/canvas`:
  * outside a browser build `<Chart>` imports this module itself, so the canvas renderer is there from the first render, as it always
  * was; in a browser build it imports `canvas-deferred.ts`, which loads this module when a chart first asks for a canvas.
  */

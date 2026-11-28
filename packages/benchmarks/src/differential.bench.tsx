@@ -59,7 +59,7 @@ async function main(): Promise<void> {
         marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x2' }, y: { scale: 'y', field: 'y' }, size: { value: 40 } } } }],
       } as never,
       changed: few(points),
-      next: (p) => ({ t: pts(p).map((r, i) => (r.x % 2 === 0 ? { x: r.x + 1, y: r.y } : r)) }),
+      next: (p) => ({ t: pts(p).map((r) => (r.x % 2 === 0 ? { x: r.x + 1, y: r.y } : r)) }),
     },
     {
       name: 'aggregate (1000 groups)',

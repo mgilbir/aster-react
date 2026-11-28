@@ -12,7 +12,9 @@
  *   - TIME: a 100k scatter of each closed shape paints within `SCATTER_LIMIT_MS` (5 s), not tens of seconds.
  *
  * The plain way is reached by handing the renderer a stand-in that forwards to the real context but is not
- * an instance of it, so the renderer cannot take the Path2D route.
+ * an instance of it, so the renderer cannot take the Path2D route. Each case counts the `Path2D.addPath` calls of both
+ * paints: the plain one must make none, and the gate floors the cases whose real context took the Path2D route (a renderer
+ * that stopped taking it would compare the plain path with itself).
  *
  * Run standalone: npx tsx scripts/browser-canvas-symbols.mts [--browser=chromium]
  * It is also run by `pnpm conformance:canvas` (gate `canvas`).
@@ -22,18 +24,22 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { makeTempDir } from '../../../scripts/lib/temp-dir.mjs'
+import { GATE_FLAGS, runGate } from '../../../scripts/lib/run-gate.mjs'
+import { launchBrowser } from '../../../scripts/lib/launch-browser.mjs'
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)
 const CORE_SRC = join(CONF_DIR, '..', 'core', 'src')
 
-export interface SymbolRunResult { cases: number; withInk: number; failures: string[]; timings: Array<{ shape: string; ms: number }> }
+/** One case per shape x size x paint x count (and one per timed shape); how many had ink and took the Path2D route. */
+export interface SymbolRunResult { cases: Array<{ name: string; error?: string }>; withInk: number; path2d: number; timings: Array<{ shape: string; ms: number }> }
 
 /** The slowest a 100k scatter may take: tens of seconds before the fix, a few hundred milliseconds after. */
 const SCATTER_LIMIT_MS = 5000
 
-export async function runSymbolRunOracle(browserName: 'chromium' | 'firefox' | 'webkit' = 'chromium'): Promise<SymbolRunResult> {
-  const OUT_DIR = join(CONF_DIR, '.tmp-browser-canvas-symbols')
+export async function runSymbolRunOracle(browserName: 'chromium' | 'firefox' | 'webkit' = 'chromium', plant = false): Promise<SymbolRunResult> {
+  const OUT_DIR = makeTempDir('.tmp-browser-canvas-symbols-', CONF_DIR) // (one directory per run: concurrent runs do not clobber each other)
   rmSync(OUT_DIR, { recursive: true, force: true })
   mkdirSync(OUT_DIR, { recursive: true })
   const entry = `
@@ -61,17 +67,28 @@ function scatter(n, shape, size, paint, seed) {
   return items
 }
 
-window.__same = (shape, size, paint, n, seed) => {
+// (how many symbols were added to a run's path as a Path2D: the route the real context must take)
+let added = 0
+const addPath = Path2D.prototype.addPath
+Path2D.prototype.addPath = function (...a) { added++; return addPath.apply(this, a) }
+
+window.__same = (shape, size, paint, n, seed, plant) => {
   const items = scatter(n, shape, size, paint, seed)
   const a = document.createElement('canvas'), b = document.createElement('canvas')
   a.width = b.width = W; a.height = b.height = H
   const A = a.getContext('2d', { willReadFrequently: true }), B = b.getContext('2d', { willReadFrequently: true })
+  added = 0
   renderSceneToCanvas(sceneOf(items), A)
+  const realRoute = added
+  added = 0
   renderSceneToCanvas(sceneOf(items), plain(B))
+  const plainRoute = added
+  // (--plant-difference: a 3x3 black mark the plain path does not have)
+  if (plant) { A.fillStyle = '#000'; A.fillRect(1, 1, 3, 3) }
   const da = A.getImageData(0, 0, W, H).data, db = B.getImageData(0, 0, W, H).data
   let diff = 0, ink = 0
   for (let i = 0; i < da.length; i++) { if (da[i] !== db[i]) diff++; if (da[i + 3 - (i % 4)]) ink++ }
-  return { diff, ink }
+  return { diff, ink, realRoute, plainRoute }
 }
 
 window.__time = (shape, n) => {
@@ -94,9 +111,10 @@ window.__time = (shape, n) => {
   })
   writeFileSync(join(OUT_DIR, 'index.html'), '<!doctype html><html><body><script src="./page.js"></script></body></html>')
   const playwright = await import('playwright')
-  const browser = await playwright[browserName].launch({ headless: true, args: browserName === 'chromium' ? ['--disable-dev-shm-usage'] : [] })
+  const browser = await launchBrowser(playwright[browserName], { headless: true, args: browserName === 'chromium' ? ['--disable-dev-shm-usage'] : [] })
   const page = await browser.newPage({ deviceScaleFactor: 1 })
-  page.on('pageerror', (e) => console.error('[page]', e.message.slice(0, 200)))
+  const pageErrors: string[] = []
+  page.on('pageerror', (e) => pageErrors.push(e.message.slice(0, 200)))
   await page.goto(`file://${join(OUT_DIR, 'index.html')}`)
   await page.waitForFunction(() => '__same' in window, null, { timeout: 30_000 })
 
@@ -109,33 +127,59 @@ window.__time = (shape, n) => {
     { fill: null, stroke: '#e45756', strokeWidth: 3, strokeJoin: 'round', strokeCap: 'round', strokeDash: [4, 2], strokeDashOffset: 1, opacity: 1 },
     { fill: null, stroke: '#000', strokeWidth: 4, strokeJoin: 'miter', strokeMiterLimit: 10, opacity: 0.5 },
     { fill: '#0a0', stroke: null, opacity: 1, blend: 'multiply' },
+    // The paints a run is batched under (render.ts `batchablePaint`: opaque, unblended, a fill or a stroke but not both): paints
+    // 0, 2, 4 and 5 above are not, so only 1 and 3 take the Path2D route, and the gate's `path2d` floor needs six that do.
+    { fill: '#4c78a8', stroke: null, opacity: 1 },
+    { fill: '#e45756', stroke: null, opacity: 1, fillOpacity: 1, strokeOpacity: 1, strokeWidth: 3 },
+    { fill: null, stroke: '#222', strokeWidth: 4, strokeJoin: 'miter', strokeMiterLimit: 10, opacity: 1 },
+    { fill: null, stroke: '#4c78a8', strokeWidth: 1, strokeJoin: 'bevel', strokeCap: 'butt', opacity: 1, strokeOpacity: 1 },
   ]
-  const failures: string[] = []
-  let cases = 0
+  const cases: SymbolRunResult['cases'] = []
   let withInk = 0
-  for (const shape of shapes) for (const size of [30, 400, 2]) for (let p = 0; p < paints.length; p++) for (const n of [300, 3000]) {
-    cases++
-    const r = await page.evaluate(([sh, sz, pt, nn]) => (window as unknown as { __same: (...a: unknown[]) => { diff: number; ink: number } }).__same(sh, sz, pt, nn, 777), [shape, size, paints[p], n] as const)
-    if (r.ink) withInk++
-    if (r.diff) failures.push(`${shape} size=${size} paint#${p} n=${n}: ${r.diff} channel value(s) differ from the plain path`)
-  }
+  let path2d = 0
   const timings: Array<{ shape: string; ms: number }> = []
-  for (const shape of ['square', 'cross', 'diamond', 'triangle-up', 'arrow', 'wedge', 'M-1,-1L1,-1L1,1L-1,1Z', 'circle']) {
-    const ms = await page.evaluate(([sh]) => (window as unknown as { __time: (s: string, n: number) => number }).__time(sh as string, 100_000), [shape] as const)
-    timings.push({ shape, ms: Math.round(ms) })
-    if (ms > SCATTER_LIMIT_MS) failures.push(`${shape}: 100000 symbols took ${Math.round(ms)} ms (limit ${SCATTER_LIMIT_MS})`)
+  try {
+    for (const shape of shapes) for (const size of [30, 400, 2]) for (let p = 0; p < paints.length; p++) for (const n of [300, 3000]) {
+      const r = await page.evaluate(([sh, sz, pt, nn, pl]) => (window as unknown as { __same: (...a: unknown[]) => { diff: number; ink: number; realRoute: number; plainRoute: number } }).__same(sh, sz, pt, nn, 777, pl), [shape, size, paints[p], n, plant] as const)
+      if (r.ink) withInk++
+      if (r.realRoute > 0) path2d++
+      const errors = [
+        ...(r.diff ? [`${r.diff} channel value(s) differ from the plain path`] : []),
+        ...(r.plainRoute ? [`the plain paint took the Path2D route (${r.plainRoute} addPath calls): it compares the route with itself`] : []),
+        ...pageErrors.splice(0).map((m) => `page error: ${m}`),
+      ]
+      cases.push({ name: `${shape} size=${size} paint#${p} n=${n}`, ...(errors.length ? { error: errors.join('; ') } : {}) })
+    }
+    for (const shape of ['square', 'cross', 'diamond', 'triangle-up', 'arrow', 'wedge', 'M-1,-1L1,-1L1,1L-1,1Z', 'circle']) {
+      const ms = await page.evaluate(([sh]) => (window as unknown as { __time: (s: string, n: number) => number }).__time(sh as string, 100_000), [shape] as const)
+      timings.push({ shape, ms: Math.round(ms) })
+      cases.push({ name: `${shape} 100k scatter time`, ...(ms > SCATTER_LIMIT_MS ? { error: `100000 symbols took ${Math.round(ms)} ms (limit ${SCATTER_LIMIT_MS})` } : {}) })
+    }
+  } finally {
+    await browser.close()
+    rmSync(OUT_DIR, { recursive: true, force: true })
   }
-  await browser.close()
-  rmSync(OUT_DIR, { recursive: true, force: true })
-  return { cases, withInk, failures, timings }
+  return { cases, withInk, path2d, timings }
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  cli({ url: import.meta.url, flags: { browser: 'eq' } })
+  cli({ url: import.meta.url, flags: { browser: 'eq', ...GATE_FLAGS } })
   const argv = process.argv.slice(2)
   const arg = (n: string, d: string): string => argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1] ?? d
-  const res = await runSymbolRunOracle(arg('browser', 'chromium') as 'chromium')
-  console.log(`[browser-canvas-symbols] ${res.cases} cases (${res.withInk} with ink), ${res.failures.length} failing; 100k scatter ms: ${res.timings.map((t) => `${t.shape}=${t.ms}`).join(' ')}`)
-  for (const f of res.failures.slice(0, 20)) console.log('  ' + f)
-  process.exit(res.failures.length ? 1 : 0)
+  await runGate({
+    name: 'canvas-symbols',
+    counters: {
+      cases: { floor: 1, what: 'symbol-run cases compared with the plain path' },
+      'symbol-ink': { floor: 1, what: 'cases with ink' },
+      path2d: { floor: 1, what: 'cases the real context painted through Path2D' },
+    },
+    reads: [],
+    run: async (gate) => {
+      const res = await runSymbolRunOracle(arg('browser', 'chromium') as 'chromium', gate.plant)
+      for (const c of res.cases) if (c.error) gate.differ(c.name, c.error); else gate.agree(c.name)
+      gate.count('symbol-ink', res.withInk)
+      gate.count('path2d', res.path2d)
+      console.log(`[browser-canvas-symbols] ${res.cases.length} cases (${res.withInk} with ink, ${res.path2d} through Path2D); 100k scatter ms: ${res.timings.map((t) => `${t.shape}=${t.ms}`).join(' ')}`)
+    },
+  })
 }

@@ -14,15 +14,16 @@
 import { renderSceneToCanvas } from '@aster-charts/core/canvas'
 import {
   createChartSession, renderSceneToSvg, specNeeds, loadParts, partLoaded, withdrawParts, ENGINE_PARTS, type EnginePart,
-} from '@aster-charts/core/lean'
-import { buildHitIndex } from '@aster-charts/core/lean/hit'
+} from '@aster-charts/core/internal'
+import { buildHitIndex } from '@aster-charts/core/internal/hit'
 import { bindSceneSignals } from '@aster-charts/core/signals'
+import { loadSpecData, type LoadOptions } from '@aster-charts/core/load'
 import type { RuntimeInput, SceneRoot, VgSpec } from '@aster-charts/core'
 import { makeRecorder } from '../../core/src/canvas-record.testlib.js'
 
 /**
  * The parts a spec can make the engine read (the canvas renderer is asked for by `renderer="canvas"` and the signal loop by a chart
- * that binds it: `specNeeds(...).eventLoop`; this check draws with both, as `@aster-charts/core/canvas` and `/lean/signals` carry them).
+ * that binds it: `specNeeds(...).eventLoop`; this check draws with both, as `@aster-charts/core/canvas` and `/internal/signals` carry them).
  */
 export const SPEC_PARTS = ENGINE_PARTS.filter((p) => p !== 'canvas' && p !== 'signals')
 export const MISSING = /the "(\w+)" part of the engine is not loaded/
@@ -142,6 +143,8 @@ export interface PartsReport {
   wrong: string[]
   /** specs compared (drawn with every part, then from empty slots) */
   compared: number
+  /** the specs that do not draw at all with every part, with the error: said nothing about parts, and named so that nobody is dropped unseen */
+  dropped: string[]
   /** per part: the specs that read it, and the specs whose `specNeeds` names it */
   read: Record<EnginePart, number>
   named: Record<EnginePart, number>
@@ -156,11 +159,12 @@ export async function checkParts(specs: ReadonlyArray<{ name: string; spec: VgSp
   const read = Object.fromEntries(SPEC_PARTS.map((p) => [p, 0])) as Record<EnginePart, number>
   const named = { ...read }
   let compared = 0
+  const dropped: string[] = []
   for (const { name, spec } of specs) {
     // (a turn of the event loop per spec: a long check must not starve the test runner's own messages)
     await new Promise((resolve) => setImmediate(resolve))
     let all: string
-    try { all = around(() => drawn(spec, inputOf)) } catch { continue } // a spec that does not draw at all says nothing about parts
+    try { all = around(() => drawn(spec, inputOf)) } catch (e) { dropped.push(`${name}: ${String(e).slice(0, 160)}`); continue } // a spec that does not draw at all says nothing about parts: the caller holds the list
     const needs = new Set(specNeeds(spec, options).parts)
     const found = await discovered(spec, inputOf, around)
     if ('error' in found) { wrong.push(`${name}: draws with every part but not by loading them one at a time: ${found.error.slice(0, 160)}`); continue }
@@ -181,5 +185,32 @@ export async function checkParts(specs: ReadonlyArray<{ name: string; spec: VgSp
       await restoreAll()
     }
   }
-  return { wrong, compared, read, named }
+  return { wrong, compared, dropped, read, named }
+}
+
+/**
+ * The loader's own reads: `loadSpecData` runs before a shell's `specNeeds` is asked (its result is what `<Chart>` is given), so the
+ * parts it reads while parsing a dataset (a `date:` pattern reads the calendar) are its to load, whichever spec came before it in the
+ * page. For each raw spec, with every part out of its slot, the load must succeed and give the rows it gives with every part in.
+ */
+export async function checkLoad(specs: ReadonlyArray<{ name: string; spec: VgSpec }>, options: LoadOptions): Promise<{ wrong: string[]; loaded: number }> {
+  const wrong: string[] = []
+  let loaded = 0
+  const copy = (spec: VgSpec): never => JSON.parse(JSON.stringify(spec)) as never
+  for (const { name, spec } of specs) {
+    await new Promise((resolve) => setImmediate(resolve))
+    let all: string
+    try { all = text(await loadSpecData(copy(spec), options)) } catch { continue } // a spec whose data cannot load says nothing about parts
+    withdrawParts(SPEC_PARTS)
+    try {
+      const lean = text(await loadSpecData(copy(spec), options))
+      loaded++
+      if (lean !== all) wrong.push(`${name}: loadSpecData from empty slots gives other data than with every part`)
+    } catch (e) {
+      wrong.push(`${name}: loadSpecData from empty slots: ${String(e).slice(0, 160)}`)
+    } finally {
+      await restoreAll()
+    }
+  }
+  return { wrong, loaded }
 }

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "padding": 5,
+  "autosize": "none",
+  "width": 300,
+  "height": 200,
+  "data": {
+    "name": "table",
+    "values": [
+      {
+        "t": "2024-01-31T23:30:00Z"
+      },
+      {
+        "t": "2024-02-29T23:45:00Z"
+      },
+      {
+        "t": "2024-03-01T00:30:00Z"
+      },
+      {
+        "t": "2024-06-30T23:15:00Z"
+      },
+      {
+        "t": "2024-07-01T00:20:00Z"
+      },
+      {
+        "t": "2024-12-31T23:30:00Z"
+      },
+      {
+        "t": "2025-01-01T00:30:00Z"
+      },
+      {
+        "t": "2025-01-31T22:00:00Z"
+      }
+    ]
+  },
+  "mark": "bar",
+  "encoding": {
+    "x": {
+      "field": "t",
+      "type": "ordinal",
+      "timeUnit": "utcmonth"
+    },
+    "y": {
+      "aggregate": "count",
+      "type": "quantitative"
+    }
+  }
+}

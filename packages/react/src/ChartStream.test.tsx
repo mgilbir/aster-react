@@ -3,10 +3,11 @@ import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { ChartStream, ChartWorkerStream, type ChartStreamHandle } from './ChartStream'
-import { handleChartWorkerStreamRequest, type ChartWorkerStreamRequest } from './worker'
+import { ChartStream, type ChartStreamHandle } from './ChartStream'
+import { ChartWorkerStream, type ChartWorkerStreamHandle } from './ChartWorkerStream'
 import { compile } from '@aster-charts/vl'
 import { compileChart, evaluateChart, renderSceneToSvg, type SceneRoot } from '@aster-charts/core'
+import { FakeWorker } from './testing/fake-worker'
 
 const spec = {
   $schema: 'https://vega.github.io/schema/vega/v6.json',
@@ -20,19 +21,6 @@ const spec = {
     x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, size: { value: 20 },
   } } }],
 } as never
-
-class FakeWorker {
-  listeners = new Set<(event: MessageEvent) => void>()
-  streams = new Map<number, never>()
-  // Like a real Worker: only `message` listeners receive responses.
-  addEventListener(type: string, fn: (event: MessageEvent) => void): void { if (type === 'message') this.listeners.add(fn) }
-  removeEventListener(type: string, fn: (event: MessageEvent) => void): void { if (type === 'message') this.listeners.delete(fn) }
-  postMessage(request: ChartWorkerStreamRequest): void {
-    const response = handleChartWorkerStreamRequest(request, this.streams as never)
-    queueMicrotask(() => { for (const fn of this.listeners) fn({ data: response } as MessageEvent) })
-  }
-  terminate(): void { /* no-op */ }
-}
 
 const wait = (): Promise<void> => new Promise((r) => setTimeout(r, 20))
 
@@ -145,7 +133,7 @@ describe('streaming chart components', () => {
     act(() => root.unmount())
   })
 
-  it('renders a streamed scene on the canvas backend', async () => {
+  it('mounts a canvas for a streamed scene, and a pushed row reaches the scene it holds', async () => {
     const ref = React.createRef<ChartStreamHandle>()
     const host = document.createElement('div')
     document.body.appendChild(host)
@@ -166,7 +154,7 @@ describe('streaming chart components', () => {
   })
 
   it('uses the worker stream path when a Worker is supplied', async () => {
-    const ref = React.createRef<ChartStreamHandle>()
+    const ref = React.createRef<ChartWorkerStreamHandle>()
     const fake = new FakeWorker()
     const host = document.createElement('div')
     document.body.appendChild(host)
@@ -183,6 +171,11 @@ describe('streaming chart components', () => {
       await wait()
     })
     expect((ref.current!.scene()!.items[0] as { items: unknown[] }).items.length).toBe(before + 1)
+    // the worker streamed it (the in-process path would have posted nothing)
+    expect(fake.posted.map((p) => p.op)).toEqual(['init', 'flush'])
+    expect(fake.streams.size).toBe(1)
     act(() => root.unmount())
+    expect(fake.streams.size).toBe(0)
+    expect(fake.terminated).toBe(false)
   })
 })

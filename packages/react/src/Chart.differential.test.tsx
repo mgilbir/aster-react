@@ -6,7 +6,7 @@ import { forEachVariant } from './testing/variants'
 
 // The matrix runs every test below on <Chart>, <SvgChart> and <SvgChart interaction={interaction}>;
 // `Chart` is the variant's component (see testing/variants.tsx).
-forEachVariant(['svg'], (Chart, variant) => {
+forEachVariant(['svg'], (Chart) => {
   function makeSpec(): Record<string, unknown> {
     return {
       $schema: 'https://vega.github.io/schema/vega/v6.json',
@@ -42,7 +42,10 @@ forEachVariant(['svg'], (Chart, variant) => {
       act(() => { root.render(<Chart spec={spec} width={400} height={300} data={{ table: initial }} />) })
       let svg = container.querySelector('svg')
       expect(svg).not.toBeNull()
+      const svgBefore = svg
       const before = transforms(svg!).sort()
+      // 400 x 300 over 0..10 on both scales: the three rows are at (40,270), (80,240) and (120,210)
+      expect(before).toEqual(['translate(120,210)', 'translate(40,270)', 'translate(80,240)'])
 
       // index 1 moves y 2 -> 5 (same length/order, fixed scales -> differential reuse)
       const next = [{ x: 1, y: 1 }, { x: 2, y: 5 }, { x: 3, y: 3 }]
@@ -51,9 +54,10 @@ forEachVariant(['svg'], (Chart, variant) => {
       expect(svg).not.toBeNull()
       const after = transforms(svg!).sort()
 
-      // The svg is patched in place (same element) and reflects the updated datum.
-      expect(after).not.toEqual(before)
-      expect(after).toContain(after.find((t) => t.includes('40'))!) // y=5 -> translate(...,40) at 300h/10
+      // The svg is patched in place (the element from before) and shows the updated datum alone: y 2 -> 5 is 300 - 5 * 30 = 150,
+      // for the row at x = 2 (80 px); the other two stay where they were
+      expect(svg).toBe(svgBefore)
+      expect(after).toEqual(['translate(120,210)', 'translate(40,270)', 'translate(80,150)'])
     })
 
     afterEach(() => {

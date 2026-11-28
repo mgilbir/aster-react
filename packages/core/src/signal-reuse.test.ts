@@ -309,12 +309,18 @@ describe('what a kept mark reads besides its signals', () => {
     expectFresh(SPEC, b, input(2), 'untold')
   })
 
-  it('under limits, a signal change keeps nothing (a kept result is not counted against them again)', () => {
-    const s = createChartSession()
-    const input = (c: number): RuntimeInput => ({ data: { t: ROWS, other: [] }, signals: { ...BASE_SIGNALS, c }, limits: { maxItems: 1000 } })
-    const a = s.evaluate(SPEC, input(1))
-    const b = s.evaluate(SPEC, input(2))
-    expect(kept(a, b)).toEqual({ marks: [], scales: [] })
+  it('under limits, a signal change keeps what it keeps without them (a kept result is charged what making it charged: C277)', () => {
+    const run = (limits?: RuntimeInput['limits']): { kept: ReturnType<typeof kept>; b: SceneRoot; input: (c: number) => RuntimeInput } => {
+      const s = createChartSession()
+      const input = (c: number): RuntimeInput => ({ data: { t: ROWS, other: [] }, signals: { ...BASE_SIGNALS, c }, ...(limits ? { limits } : {}) })
+      const a = s.evaluate(SPEC, input(1))
+      const b = s.evaluate(SPEC, input(2))
+      return { kept: kept(a, b), b, input }
+    }
+    const limited = run({ maxItems: 1000 })
+    expect(limited.kept).toEqual(run().kept)
+    expect(limited.kept.marks.length).toBeGreaterThan(0)
+    expectFresh(SPEC, limited.b, limited.input(2), 'under limits')
   })
 })
 

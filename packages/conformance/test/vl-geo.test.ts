@@ -45,9 +45,12 @@ function usesOf(vg: any): string[] {
 }
 
 describe('emitted projections match vega-lite: the corpus', () => {
+  // (the corpus must be there and hold its 692 Vega-Lite specs, the floor of run-vl.ts; corpus-vega-only is optional, and holds none today)
+  const found: string[] = []
+  it('found the corpus', () => expect(found.length).toBeGreaterThanOrEqual(692))
   for (const dir of ['corpus', 'corpus-vega-only']) {
-    let files: string[] = []
-    try { files = readdirSync(join(ROOT, dir)).filter((x) => x.endsWith('.vl.json')).sort() } catch { /* no such dir */ }
+    const files = readdirSync(join(ROOT, dir), { withFileTypes: true }).filter((x) => x.isFile() && x.name.endsWith('.vl.json')).map((x) => x.name).sort()
+    found.push(...files)
     for (const f of files) {
       it(`${dir}/${f.replace('.vl.json', '')}`, () => {
         const doc = JSON.parse(readFileSync(join(ROOT, dir, f), 'utf8'))
@@ -55,7 +58,7 @@ describe('emitted projections match vega-lite: the corpus', () => {
         const expected = (vl as any).compile(spec).spec
         const ours = compile(spec as never)
         expect(projectionsOf(ours)).toEqual(projectionsOf(expected))
-        expect(usesOf(ours).sort()).toEqual(usesOf(expected).sort())
+        expect(usesOf(ours)).toEqual(usesOf(expected))
       })
     }
   }
@@ -70,7 +73,7 @@ describe('emitted projections match vega-lite: random layer trees', () => {
       const expected = (vl as any).compile(spec).spec
       const ours = compile(JSON.parse(JSON.stringify(spec)))
       expect(projectionsOf(ours)).toEqual(projectionsOf(expected))
-      expect(usesOf(ours).sort()).toEqual(usesOf(expected).sort())
+      expect(usesOf(ours)).toEqual(usesOf(expected))
     })
   }
 })

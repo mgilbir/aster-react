@@ -16,8 +16,8 @@
  * Deviations from Vega, both on purpose: the input rows are never written (the transforms that write onto their rows in Vega write
  * onto copies, or onto rows the pipeline owns), and group tables hold no inherited names, so a group called `constructor` is a group.
  */
-import { accessor, accessorFields, accessorName, array, ascending, error, sortData, type Accessor } from './util.js'
-import { meterTick } from './limits.js'
+import { accessor, accessorFields, accessorName, array, ascending, error, type Accessor } from './util.js'
+import { allotUpTo, copiedRows, meterTick, sortMetered } from './limits.js'
 import { recorded, recordingFor, type GroupsByproduct } from './step-byproduct.js'
 import { quantileSorted } from './arr.js'
 
@@ -45,6 +45,7 @@ export function bootstrapCI(
   const means = new Float64Array(samples)
   for (let s = 0; s < samples; ++s) {
     let total = 0
+    // bounded: the pool, for each of the 1000 resamples (fixed); the resample loop ticks with the pool's size
     for (let i = 0; i < n; ++i) total += pool[~~(random() * n)]!
     means[s] = total / n
     meterTick('bootstrap', n)
@@ -62,6 +63,7 @@ export function bootstrapCI(
 function extremeIndexes(items: ArrayLike<Row>, get: Get): [number, number] {
   const n = items.length
   let lowAt = 0
+  // bounded: one pass over the items, from the start
   while (lowAt < n) {
     const x = get(items[lowAt]) as number | null | undefined
     if (x != null && x >= x) break
@@ -128,13 +130,16 @@ export class RowBag {
     if (this.droppedCount === 0) return this.held
     const held = this.held
     meterTick('aggregate', held.length)
-    const kept = new Array<Row>(held.length - this.droppedCount)
+    // (a frame that ends outside its partition drops rows it never held: a row dropped that is not held is no row of the bag, so
+    // `held - dropped` is a lower bound of what is kept -- possibly below zero -- and the array grows past it as the rows are met)
+    const kept = new Array<Row>(Math.max(0, held.length - this.droppedCount))
     let at = 0
     for (let i = 0; i < held.length; ++i) {
       const row = held[i]!
       if (this.dropped.delete(row)) continue
       kept[at++] = row
     }
+    kept.length = at
     this.dropped = new Set()
     this.droppedCount = 0
     return (this.held = kept)
@@ -417,7 +422,8 @@ export function planMeasures(
   params: ReadonlyArray<unknown>,
 ): MeasureSet {
   const counts: string[] = []
-  const byField = new Map<string | null, { get: Accessor | null | undefined; measures: Measure[] }>()
+  // (keyed by the field's name, as vega keys its measures: two fields with no name -- two `{expr}`s -- are the first one)
+  const byField = new Map<string | null | undefined, { get: Accessor | null | undefined; measures: Measure[] }>()
   for (let i = 0; i < ops.length; i++) {
     const op = ops[i]!
     const get = fields[i]
@@ -496,6 +502,7 @@ export class MeasureGroup {
     for (const name of this.set.counts) target[name] = this.size
     for (const acc of this.accs) {
       const get = acc.plan.get
+      // bounded: the measures the spec asks for
       for (const reader of acc.plan.readers) target[reader.out] = reader.read(acc, this.rows, get)
     }
   }
@@ -588,6 +595,7 @@ function crossFill(g: Grouping): void {
   const domains = dims.map(() => Object.create(null) as Record<string, unknown>)
   for (const key in g.cells) {
     const tuple = g.cells[key]!.tuple
+    // bounded: the spec's groupby dimensions
     dims.forEach((name, i) => { domains[i]![tuple[name] as string] = tuple[name] })
   }
   const visit = (prefix: string, tuple: Row, depth: number): void => {
@@ -600,6 +608,15 @@ function crossFill(g: Grouping): void {
       else if (!g.cells[key]) cellAt(g, key, tuple)
     }
   }
+  // (every dimension's distinct values multiply: the full product is bounded before a cell of it is made)
+  let product = 1
+  for (const domain of domains) {
+    let size = 0
+    // bounded: a dimension's distinct values: one pass over the cells' values in all
+    for (const _ in domain) size++
+    product *= size
+  }
+  allotUpTo('rows', product, 'aggregate cross', g.order.length)
   visit('', {}, 0)
 }
 
@@ -666,7 +683,7 @@ export function aggregateGroups(rows: readonly Row[], p: AggregateParams, random
  * `values`, `argmin` and `argmax` return), or the rows themselves when the pipeline owns them.
  */
 export function joinAggregateRows(rows: readonly Row[], p: AggregateParams, random: () => number = lcg(SEED), owned = false): Row[] {
-  const out = owned ? rows.slice() : rows.map((r) => ({ ...r }))
+  const out = owned ? rows.slice() : copiedRows(rows, 'joinaggregate', true)
   // Vega's JoinAggregate declares no `aggregate_params`, `drop` or `cross`: they are not read (an exponential gets no ratio)
   const g = groupingFor({ groupby: p.groupby, fields: p.fields, ops: p.ops, as: p.as, key: p.key }, random)
   const record = recordingFor(rows)
@@ -684,6 +701,7 @@ export function joinAggregateRows(rows: readonly Row[], p: AggregateParams, rand
   for (const row of out) {
     const cell = g.cells[g.keyOf(row)]!
     const tuple = cell.tuple
+    // bounded: the groupby fields and measures of one cell (the spec's)
     for (const name in tuple) row[name] = tuple[name]
   }
   return out
@@ -711,12 +729,13 @@ export function pivotRows(rows: readonly Row[], p: PivotParams, random: () => nu
   const op = ((p.op === 'count' ? '__count__' : p.op) as string) || 'sum'
   const seen = new Set<string>()
   const spellings: unknown[] = []
-  for (const row of rows) {
-    const spelling = pivotOf(row)
+  for (let i = 0; i < rows.length; i++) {
+    const spelling = pivotOf(rows[i])
     const text = String(spelling)
     if (!seen.has(text)) { seen.add(text); spellings.push(spelling) }
+    if ((i & 1023) === 1023) meterTick('pivot', 1024)
   }
-  sortData(spellings, ascending)
+  sortMetered(spellings, ascending, 'pivot')
   const limit = (p.limit as number) || 0
   const columns = limit ? spellings.slice(0, limit) : spellings
   meterTick('pivot', columns.length)
@@ -737,10 +756,14 @@ export function pivotRows(rows: readonly Row[], p: PivotParams, random: () => nu
   })
 
   const g = newGrouping(p.groupby, p.key, set, random)
+  let groups = 0
   for (const row of rows) {
     const at = columnOf.get(pivotOf(row))
     cellAt(g, g.keyOf(row), row).group.addAt(row, at ?? -1, at === undefined ? undefined : valueOf(row))
     meterTick('pivot', columns.length)
+    // every group holds one measure per column: groups x columns is what pivot amplifies, bounded as the groups appear
+    // (the rows given are not amplification: only the cells beyond them are under the ceiling)
+    if (g.order.length !== groups) allotUpTo('rows', (groups = g.order.length) * columns.length, 'pivot cells', rows.length)
   }
   return g.order.map(finishCell)
 }

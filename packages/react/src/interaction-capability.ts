@@ -1,6 +1,6 @@
-import { buildHitIndex } from '@aster-charts/core/lean/hit'
-import { createCursorTracker, part, sceneHasCursor } from '@aster-charts/core/lean'
-import { loadSignalsPart } from '@aster-charts/core/lean/signals'
+import { buildHitIndex } from '@aster-charts/core/internal/hit'
+import { createCursorTracker, part, sceneHasCursor } from '@aster-charts/core/internal'
+import { loadSignalsPart } from '@aster-charts/core/internal/signals'
 import type { InteractionCapability } from './capabilities.js'
 import { tooltipContent } from './tooltip-content.js'
 
@@ -15,7 +15,7 @@ export type { InteractionCapability } from './capabilities.js'
  *   <SvgChart spec={spec} interaction={interaction} tooltip />
  *
  * A plain value, not a registration: nothing happens on import, so bundlers drop it when unused. The event loop is a part of the
- * engine (`@aster-charts/core/lean`) that a chart which binds it loads before its first render (`loadSignals`; ChartCore's
+ * engine (`@aster-charts/core/internal`) that a chart which binds it loads before its first render (`loadSignals`; ChartCore's
  * `useAddons` suspends meanwhile): a chart with no signal, and no host listening to signals, never fetches it in a browser build.
  */
 export const interaction: InteractionCapability = /* @__PURE__ */ Object.freeze({

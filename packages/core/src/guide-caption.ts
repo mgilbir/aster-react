@@ -3,18 +3,15 @@
  * legendCaption, titleCaption) and the accessible tree (a11y.ts) shows for the same guide: ONE implementation, so the
  * SVG and the tree can not say different things about an axis. `a11y-parity` checks it against vega.
  */
-import { currentLocale } from './locale.js'
+import { chartLocale, type Locale, type LocaleDefinition } from './locale.js'
 import { isDiscretizing, isTemporal, labelFormat, labelValues, tickFormat } from './scale.js'
 import { installGuideCaptions } from './render.js'
 
-export type ScaleSnapshots = Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; bandwidth?: number; labelValues?: unknown[] }>
+export type ScaleSnapshots = Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; rangeError?: string; bandwidth?: number; labelValues?: unknown[] }>
 
 const DISCRETE = new Set(['band', 'point', 'ordinal', 'bin-ordinal'])
-// read per call, not snapshotted at import
-const loc = (): ReturnType<typeof currentLocale> => currentLocale()
-
 /** vega-scale caption.js `format`: the labels the caption quotes are formatted as a legend would, with the temporal defaults of a screen reader. */
-function captionFormat(locale: ReturnType<typeof currentLocale>, scale: Rec, specifier: unknown, formatType: string | undefined): (v: unknown) => string {
+function captionFormat(locale: Locale, scale: Rec, specifier: unknown, formatType: string | undefined): (v: unknown) => string {
   const type = formatType || (scale.type as string)
   // replace abbreviated time specifiers to improve screen reader experience
   if (typeof specifier === 'string' && isTemporal(type)) specifier = specifier.replace(/%a/g, '%A').replace(/%b/g, '%B')
@@ -31,6 +28,7 @@ export function scaleCaption(
   name: string | undefined,
   format?: unknown,
   formatType?: unknown,
+  locale?: LocaleDefinition,
 ): string {
   if (!name) return ''
   const s = scales.get(name) as Rec & { domain?: () => unknown[]; type?: string } | undefined
@@ -40,7 +38,8 @@ export function scaleCaption(
   if (!domain.length && !isDiscretizing(type)) {
     return DISCRETE.has(type) ? '0 values: ' : 'values from NaN to NaN'
   }
-  const print = captionFormat(loc(), s, format, formatType as string | undefined)
+  // (the chart's locale: vega's `ctx.dataflow.locale()`; read per call, so the default one is the current default)
+  const print = captionFormat(chartLocale(locale), s, format, formatType as string | undefined)
   // if scale breaks domain into bins, describe boundaries
   if (isDiscretizing(type)) {
     const v = labelValues(s as never, undefined).slice(1).map(print)
@@ -65,16 +64,21 @@ export function scaleCaption(
  * Pseudo scales for the captions, from the snapshots the scene carries: just what vega-scale's caption reads of a scale
  * (its type, domain and range, the breakpoints of a discretizing scale, a tick formatter where d3's scale has one).
  */
-export function scalesFromSnapshots(snaps: Array<{ name: string; type: string; domain: unknown[]; range: unknown[]; bandwidth?: number; labelValues?: unknown[] }>): Map<string, unknown> {
+export function scalesFromSnapshots(snaps: ScaleSnapshots, locale?: LocaleDefinition): Map<string, unknown> {
   const out = new Map<string, unknown>()
   for (const s of snaps) {
     const domain = s.domain.slice()
     const range = s.range.slice()
     const values = s.labelValues?.slice()
+    const { rangeError } = s
     const obj: Record<string, unknown> = {
       type: s.type,
       domain: () => domain,
-      range: () => range,
+      // (a range the scale could not give throws when it is read, as the scale's own getter did)
+      range: () => {
+        if (rangeError !== undefined) throw new TypeError(rangeError)
+        return range
+      },
       ...(values != null ? { labelValues: values } : {}),
       ...(s.bandwidth != null ? { bandwidth: () => s.bandwidth } : {}),
     }
@@ -85,7 +89,7 @@ export function scalesFromSnapshots(snaps: Array<{ name: string; type: string; d
     // d3's continuous scales (and quantize, which is built on one, and vega's bin-ordinal) have a tickFormat; the others do not
     if ((!DISCRETE.has(s.type) || s.type === 'bin-ordinal') && s.type !== 'quantile' && s.type !== 'threshold') {
       obj.tickFormat = (count?: unknown, specifier?: unknown) =>
-        tickFormat(loc(), obj as never, count, specifier, undefined, true)
+        tickFormat(chartLocale(locale), obj as never, count, specifier, undefined, true)
     }
     out.set(s.name, obj)
   }
@@ -100,25 +104,26 @@ export function scalesFromSnapshots(snaps: Array<{ name: string; type: string; d
 export function axisLabel(
   g: { orient?: string; title?: string; scale?: string; format?: unknown; formatType?: unknown },
   scales: Map<string, unknown>,
+  locale?: LocaleDefinition,
 ): string | undefined {
   try {
-    return axisCaption(g, scales)
+    return axisCaption(g, scales, locale)
   } catch {
     return undefined
   }
 }
 
-function axisCaption(g: { orient?: string; title?: string; scale?: string; format?: unknown; formatType?: unknown }, scales: Map<string, unknown>): string {
+function axisCaption(g: { orient?: string; title?: string; scale?: string; format?: unknown; formatType?: unknown }, scales: Map<string, unknown>, locale: LocaleDefinition | undefined): string {
   const type = (scales.get(g.scale ?? '') as { type?: string } | undefined)?.type ?? 'linear'
   const discrete = DISCRETE.has(type)
   const xy = g.orient === 'left' || g.orient === 'right' ? 'Y' : 'X'
-  return `${xy}-axis${g.title ? ` titled '${g.title}'` : ''} for a ${discrete ? 'discrete' : type} scale with ${scaleCaption(scales, g.scale, g.format, g.formatType)}`
+  return `${xy}-axis${g.title ? ` titled '${g.title}'` : ''} for a ${discrete ? 'discrete' : type} scale with ${scaleCaption(scales, g.scale, g.format, g.formatType, locale)}`
 }
 
 /** `Symbol legend titled 'K' for fill color with 2 values: a, b` (vega-scenegraph legendCaption), or undefined as for an axis. */
-export function legendLabel(g: LegendCaptionOf, scales: Map<string, unknown>, fallbackType = 'symbol'): string | undefined {
+export function legendLabel(g: LegendCaptionOf, scales: Map<string, unknown>, fallbackType = 'symbol', locale?: LocaleDefinition): string | undefined {
   try {
-    return legendCaption(g, scales, fallbackType)
+    return legendCaption(g, scales, fallbackType, locale)
   } catch {
     return undefined
   }
@@ -126,12 +131,12 @@ export function legendLabel(g: LegendCaptionOf, scales: Map<string, unknown>, fa
 
 type LegendCaptionOf = { title?: string; legendType?: string; legendChannels?: string[]; legendScale?: string; legendFormat?: unknown; legendFormatType?: unknown }
 
-function legendCaption(g: LegendCaptionOf, scales: Map<string, unknown>, fallbackType: string): string {
+function legendCaption(g: LegendCaptionOf, scales: Map<string, unknown>, fallbackType: string, locale: LocaleDefinition | undefined): string {
   const chan = typeof g.legendType === 'string' ? g.legendType : fallbackType
   const channels = g.legendChannels?.length ? g.legendChannels : ['fill']
   const channel = channels.map((p) => p + (p === 'fill' || p === 'stroke' ? ' color' : ''))
     .reduce((a, b, i) => i === 0 ? b : i === channels.length - 1 ? `${a} and ${b}` : `${a}, ${b}`, '')
-  return `${chan[0]!.toUpperCase()}${chan.slice(1)} legend${g.title ? ` titled '${g.title}'` : ''} for ${channel} with ${scaleCaption(scales, g.legendScale, g.legendFormat, g.legendFormatType)}`
+  return `${chan[0]!.toUpperCase()}${chan.slice(1)} legend${g.title ? ` titled '${g.title}'` : ''} for ${channel} with ${scaleCaption(scales, g.legendScale, g.legendFormat, g.legendFormatType, locale)}`
 }
 
 /**
@@ -155,7 +160,8 @@ export function guideTitleText(group: { title?: string; items?: unknown[]; parts
   const walk = (items: unknown[] | undefined): string | undefined => {
     for (const it of items ?? []) {
       const n = it as { _part?: string; text?: unknown; items?: unknown[] }
-      if (n._part === 'title' && n.text != null) return Array.isArray(n.text) ? n.text.join(' ') : String(n.text)
+      // (vega-scenegraph extractTitle: `array(text).join(' ')`, so a title leaf whose text is null quotes nothing)
+      if (n._part === 'title') return n.text == null ? '' : Array.isArray(n.text) ? n.text.join(' ') : String(n.text)
       if (Array.isArray(n.items)) {
         const inner = walk(n.items)
         if (inner !== undefined) return inner
@@ -167,8 +173,8 @@ export function guideTitleText(group: { title?: string; items?: unknown[]; parts
 }
 
 installGuideCaptions({
-  axis: (g, scales) => axisLabel(g, scales),
-  legend: (g, scales) => legendLabel(g, scales),
+  axis: (g, scales, locale) => axisLabel(g, scales, locale),
+  legend: (g, scales, locale) => legendLabel(g, scales, 'symbol', locale),
   titleText: (g) => guideTitleText(g),
-  scales: (snaps) => scalesFromSnapshots(snaps),
+  scales: (snaps, locale) => scalesFromSnapshots(snaps, locale),
 })

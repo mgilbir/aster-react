@@ -1,4 +1,5 @@
 import type * as React from 'react'
+import type { EventSourcePolicy } from '@aster-charts/core/signals'
 import type {
   A11yOptions,
   ChartInfo,
@@ -11,6 +12,7 @@ import type {
   TextMetricsProvider,
   VgSpec,
 } from '@aster-charts/core'
+import type { LoadOptions } from '@aster-charts/core/load'
 import type { EasingName } from '@aster-charts/core/transition'
 import type { PngOptions } from '@aster-charts/core/png'
 import type { SelectValue, SelectionInterval, ViewDomain } from './interaction.js'
@@ -83,18 +85,18 @@ export interface ChartProps {
    */
   dataChanges?: Record<string, number[]>
   /**
-   * Chart width in px. Without it the chart uses its container's measured
-   * width (and the spec's own width until the first measurement, e.g. on the
-   * server). Independent of `height`: giving one of them fixes only that one.
-   * A fixed size is the view's size for a container-sized spec too (Vega-Lite's
-   * `width: 'container'`): its `width` / `height` signals, including a
-   * `window:resize` handler's, do not move it. The measured container (no prop)
-   * only sizes a spec that has no such signal; one that drives them keeps
-   * doing so, and reads the container through `containerSize()`.
+   * The view's width: a number of pixels fixes it; `'container'` fills the width of the chart's element (measured, and
+   * followed as it resizes); without it the chart is as wide as its spec makes it, as in Vega (a literal `width` draws at that
+   * width in any element; Vega-Lite's `width: "container"` fills the element through `containerSize()`). A fixed size is the
+   * view's size for a container-sized spec too: its `width` / `height` signals, including a `window:resize` handler's, do not
+   * move it. `'container'` sizes a spec that does not drive its own `width` / `height` signals, with the whole chart (padding
+   * and guides included) inside the element; one that drives them keeps doing so, and reads the element through
+   * `containerSize()`. Independent of `height`. On the server and before the first measurement a `'container'` dimension is
+   * the spec's own.
    */
-  width?: number
-  /** Chart height in px; see `width`. */
-  height?: number
+  width?: number | 'container'
+  /** The view's height; see `width`. */
+  height?: number | 'container'
   ariaLabel?: string
   /**
    * Incremental DOM updates: instead of re-serializing and re-parsing the whole
@@ -127,7 +129,8 @@ export interface ChartProps {
    * which keeps large SVG scenes inside the frame budget. Tooltips, point
    * selection and a11y resolve through the scene, so they keep working;
    * spec `signal.on` mark events, which resolve their item the same way, do too.
-   * Ignored for canvas (already batched). Server rendering always emits the
+   * Ignored for canvas (already batched) and with `incremental={false}` (each scene is
+   * one string of per-item markup). Server rendering always emits the
    * per-item markup so hydration matches; a client-only mount batches directly.
    */
   denseMarks?: boolean | 'auto'
@@ -145,7 +148,13 @@ export interface ChartProps {
    * when a transition starts: a new options object does not restart one.
    */
   transition?: boolean | TransitionOptions
+  /** The class of the chart's element (kept in the error state too). */
   className?: string
+  /**
+   * The style of the chart's element, applied last: it wins over the chart's own `width: 100%`, `height: 100%`, `position:
+   * relative` and `touch-action`, whatever is enabled. Keep the element positioned (any `position` but `static`) when the chart
+   * draws overlays (the accessible tree, a brush). Kept in the error state too.
+   */
   style?: React.CSSProperties
   /**
    * Signal values for the spec's signals. Event- and input-driven values take
@@ -160,7 +169,10 @@ export interface ChartProps {
    * identically on the SVG and canvas backends.
    */
   onPointSelect?: (datum: Record<string, unknown> | null) => void
-  /** Persisted interval rectangle to draw (the legacy controlled form of `selection`). */
+  /**
+   * Persisted interval rectangle to draw (the legacy controlled form of `selection`); `null` draws none, whatever was
+   * dragged. Clipped to the plot. An axis that is not two finite, different numbers is reported through `onError` and not drawn.
+   */
   brush?: SelectionInterval | null
   /**
    * Unified declarative selection: either an interval or a point value.
@@ -190,10 +202,18 @@ export interface ChartProps {
   pan?: boolean
   /** Enable zooming only: wheel, pinch and the `+`/`-` keys. See `pan`. */
   zoom?: boolean
-  /** Controlled visible domain (`x`/`y` = the horizontal/vertical positional scale). Omit for uncontrolled pan/zoom. */
+  /**
+   * Controlled visible domain (`x`/`y` = the horizontal/vertical positional scale). Omit for uncontrolled pan/zoom. Compared by
+   * content. An axis that is not two finite, different numbers is reported through `onError` (once per value) and that axis is
+   * drawn unzoomed.
+   */
   view?: ViewDomain | null
   onViewChange?: (view: ViewDomain | null) => void
-  /** Maximum zoom-in factor relative to the initial domain. Default 1000. */
+  /**
+   * Maximum zoom-in factor of the wheel and pinch, relative to the unzoomed domain (the visible span, measured in the scale's own
+   * space, never drops below the base span divided by it). Default 1000. The `+` / `-` keys step by a fixed factor and are not
+   * bounded by it.
+   */
   maxZoom?: number
   /**
    * Event-driven signals (vega-react's `signalListeners` convention): handlers
@@ -220,7 +240,10 @@ export interface ChartProps {
    * not covered by semver and may change or go away in any release.
    */
   onStreamInput?: (input: ChartStreamInput) => void
-  /** Disable the spec-driven event loop (defaults to on when the spec has signal.on streams). */
+  /**
+   * The spec-driven event loop (default `true`): bound when the spec has signals or the host listens to them. `false` binds
+   * none; `setSignal` and bound inputs then apply their values as signal overrides.
+   */
   interactive?: boolean
   /**
    * Show a tooltip on hover over a mark: the hovered item's `tooltip` value,
@@ -249,7 +272,8 @@ export interface ChartProps {
    * detached overlay: the portal keeps it in the tree, so context reaches it).
    * It goes in the same placed box as the default content (see `tooltip`).
    * Providing this enables tooltips without `tooltip`. It is
-   * called for every hovered item that has a datum or a `tooltip` value, with
+   * called for the hovered item when it has a `tooltip` value or is an item of a mark that reads a dataset (its datum is the row;
+   * an item whose only datum is vega's generated `{}` gets a call only with a `tooltip` value), with
    * the datum (`{}` when the item has none) and `info`: the item's `tooltip`
    * value and the scene item itself. Return `null` to show nothing.
    */
@@ -294,6 +318,19 @@ export interface ChartProps {
    */
   urlData?: UrlDataMode
   /**
+   * Load the spec's `url` datasets in the chart itself, as vega does (a view fetches its own urls), and again whenever a signal a
+   * `{signal}` url reads changes inside the chart (a bound input, an event handler, `setSignal`) or in the `signals` prop. The
+   * options are the loader's (`LoadOptions` of `@aster-charts/core/load`) and the loader's URL policy is required: a network url
+   * needs `allow` (`allowOrigins([...])`) or a `baseURL` it is on, else the load fails with an `AsterUrlError` through `onError`.
+   * `limits` and `signals` are the chart's own; `signal` is not taken (the chart cancels a load a newer url supersedes, and one
+   * still running when it unmounts). The chart draws the dataset empty until its first load arrives, keeps the previous rows while a
+   * newer url loads, and shows the error state if a load fails. Without this prop nothing is fetched: a url dataset that is not
+   * loaded is an error that points at `loadSpecData` / `useSpecData` (or give its rows through `data`). Values by content, the
+   * functions (`fetch`, `allow`) through a latest-ref. Not applied with `urlData="refuse"` (which refuses the dataset first),
+   * nor on the server (the server draws the empty datasets).
+   */
+  urlLoad?: Omit<LoadOptions, 'signal' | 'signals' | 'limits'>
+  /**
    * The source of random numbers of this chart (`RuntimeInput.random`, the per-chart counterpart of vega's `setRandom`): expression
    * `random()`, `sampleNormal` / `sampleLogNormal` / `sampleUniform`, the `sample` transform and the bootstrap `ci0` / `ci1` draw from
    * it, in vega's order and count. Pass one seeded generator for the life of the chart (memoize it) and the chart is a function of its
@@ -314,6 +351,15 @@ export interface ChartProps {
    * prevents all but `wheel`). A stream marked `consume` always prevents.
    */
   preventDefault?: boolean
+  /**
+   * Which `window` and CSS-selector event sources a spec's `signal.on` streams may listen to (core's `SignalBindOptions.eventSources`;
+   * DECISIONS Q1, the host decides what reaches beyond the chart). `true` allows every type of that kind of source, `false` none,
+   * a list those types. Default: `window` for the pointer moves, ends and cancels and `resize` (what Vega-Lite's drags and
+   * `width: "container"` listen to), and no selector source, so a spec cannot read the page's keystrokes or listen to elements
+   * outside the chart. A host that renders trusted specs only may widen it: `eventSources={{ window: true, selector: true }}`.
+   * A spec's own `config.events` can only narrow it. Compared by content, so an inline literal is safe to write.
+   */
+  eventSources?: EventSourcePolicy
   /** Host text measurement for custom fonts / non-browser engines. */
   textMetrics?: TextMetricsProvider
   /** Accessible scene tree. Enabled by default; pass `false` to opt out. */
@@ -326,7 +372,7 @@ export interface ChartProps {
   onError?: (error: Error) => void
 }
 
-/** What a stream-fed chart asks its stream to apply (see `ChartProps.onStreamInput`). */
+/** What a stream-fed chart asks its stream to apply (see `ChartProps.onStreamInput`). Plumbing between the components, on no entry (not public API). */
 export interface ChartStreamInput {
   /** Scale-name -> domain overrides for the current pan/zoom view (absent = no view). */
   domainRaw?: Record<string, unknown[]>
@@ -334,8 +380,8 @@ export interface ChartStreamInput {
   signals: Record<string, unknown>
   /** The container the spec is sized to (`containerSize()`): the size props where given, the measured element for the rest. */
   containerSize?: { width: number; height: number }
-  /** The element the chart measured, when a size prop is missing (`RuntimeInput.measuredSize`). */
-  measuredSize?: { width: number; height: number }
+  /** The measured element, in the dimensions the chart fills (`'container'` size props; `RuntimeInput.measuredSize`). */
+  measuredSize?: { width?: number; height?: number }
 }
 
 /** Imperative handle exposed by `<Chart ref={…}>`. */

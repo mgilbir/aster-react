@@ -42,6 +42,9 @@ async function onVega(spec: Spec, dataset?: string): Promise<{ svg: string; rows
   }
 }
 
+/** The message of a logged or thrown error (vega's logger writes `Error: <message>`). */
+const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e)).replace(/^(?:\w*Error): /, '')
+
 function onAster(spec: Spec, dataset?: string): { svg: string; rows?: unknown[]; errors: unknown[] } {
   const errors: unknown[] = []
   const logger = { error: (...a: unknown[]) => { errors.push(a[0]) }, warn: () => {} }
@@ -94,7 +97,7 @@ function rowOf(r: Rng, i: number): Record<string, unknown> {
 // the transform sweep
 // ---------------------------------------------------------------------------
 
-type Pick = { pick: <T>(items: readonly T[]) => T; keys: (n: number) => string[]; key: () => string; num: () => string; arr: () => string; any: () => string }
+type Pick = { pick: <T>(items: readonly T[]) => T; keys: (n: number) => string[]; key: () => string; num: () => string; arr: () => string }
 
 /** `n` different paths (a group-by that names one field twice is a different question). */
 function distinct(r: Rng, n: number): string[] {
@@ -141,7 +144,7 @@ const TEMPLATES: Array<[string, (p: Pick) => Spec[]]> = [
   ['pie sorted', (p) => [{ type: 'pie', field: p.num(), sort: true }]],
   ['countpattern', (p) => [{ type: 'countpattern', field: p.key(), pattern: '[a-d]' }]],
   ['dotbin', (p) => [{ type: 'dotbin', field: p.num(), step: 3 }]],
-  ['timeunit', (p) => [{ type: 'timeunit', field: 't', units: ['year', 'month'] }]],
+  ['timeunit', () => [{ type: 'timeunit', field: 't', units: ['year', 'month'] }]],
   ['geojson', (p) => [{ type: 'geojson', fields: [p.num(), p.num()] }]],
   ['voronoi', (p) => [{ type: 'voronoi', x: p.num(), y: p.num(), size: [50, 50] }]],
   ['cross filter chain', (p) => [{ type: 'aggregate', groupby: [p.key()], fields: [p.num()], ops: ['sum'], as: ['s'] }, { type: 'collect', sort: { field: 's' } }]],
@@ -154,7 +157,7 @@ const TEMPLATES: Array<[string, (p: Pick) => Spec[]]> = [
   ['stratify and partition', (p) => [{ type: 'stratify', key: 'id', parentKey: 'pid' }, { type: 'partition', field: p.num(), size: [100, 50], sort: { field: 'value' } }]],
   ['stratify and a tree', (p) => [{ type: 'stratify', key: 'id', parentKey: 'pid' }, { type: 'tree', field: p.num(), method: 'tidy', size: [100, 50] }]],
   ['label-free crossfilter', (p) => [{ type: 'crossfilter', fields: [p.num(), p.num()], query: [[0, 20], [5, 30]] }]],
-  ['sample-free filter and formula', (p) => [{ type: 'filter', expr: 'datum.n > 0' }, { type: 'formula', expr: `datum["n"] * 2`, as: 'twice' }]],
+  ['sample-free filter and formula', () => [{ type: 'filter', expr: 'datum.n > 0' }, { type: 'formula', expr: `datum["n"] * 2`, as: 'twice' }]],
 ]
 
 function rowsAreEqual(a: unknown, b: unknown): boolean {
@@ -184,7 +187,6 @@ describe('transforms read field paths as vega does', () => {
         key: () => (r.chance(0.07) ? r.pick(ABSENT) : r.pick(KEYS)),
         num: () => (r.chance(0.07) ? r.pick(ABSENT) : r.pick(NUMS)),
         arr: () => r.pick(ARRS),
-        any: () => r.pick([...KEYS, ...NUMS]),
         keys: (n) => distinct(r, n),
         pick: (items) => r.pick(items),
       }
@@ -204,13 +206,15 @@ describe('transforms read field paths as vega does', () => {
       try {
         got = onAster(spec, 'out')
       } catch (e) {
-        if (want.errors.length) { refused++; continue }
-        bad.push(`${label}: aster threw ${(e as Error).message}`)
+        // a refusal agrees only with vega's refusal of the same message (any throw used to count as agreement)
+        if (want.errors.length && messageOf(e) === messageOf(want.errors[0])) { refused++; continue }
+        bad.push(`${label}: aster threw "${messageOf(e)}"${want.errors.length ? `, vega logged "${messageOf(want.errors[0])}"` : ''}`)
         continue
       }
       if (want.errors.length) {
         refused++
         if (!got.errors.length) bad.push(`${label}: vega logged "${want.errors[0]}" and aster logged nothing`)
+        else if (messageOf(got.errors[0]) !== messageOf(want.errors[0])) bad.push(`${label}: vega logged "${messageOf(want.errors[0])}", aster "${messageOf(got.errors[0])}"`)
         continue
       }
       compared++
@@ -221,7 +225,8 @@ describe('transforms read field paths as vega does', () => {
     // not vacuous: most cases ran to a result on both sides, and every path style was drawn
     expect(compared).toBeGreaterThan(scaled(600) * 0.6)
     expect(refused).toBeLessThan(scaled(600) * 0.4)
-    for (const k of [...KEYS, ...NUMS]) expect(used.has(k)).toBe(true)
+    // every path style was drawn: the keys, the numeric paths, the list paths and the absent ones
+    for (const k of [...KEYS, ...NUMS, ...ARRS, ...ABSENT]) expect(used.has(k), `the path ${k} was never drawn`).toBe(true)
   })
 })
 
@@ -305,7 +310,6 @@ describe('specs read field paths as vega does', () => {
         key: () => (r.chance(0.05) ? r.pick(ABSENT) : r.pick(KEYS)),
         num: () => (r.chance(0.05) ? r.pick(ABSENT) : r.pick(NUMS)),
         arr: () => r.pick(ARRS),
-        any: () => r.pick([...KEYS, ...NUMS]),
         keys: (n) => distinct(r, n),
         pick: (items) => r.pick(items),
       }
@@ -338,7 +342,8 @@ describe('specs read field paths as vega does', () => {
     expect(bad.slice(0, 5)).toEqual([])
     expect(compared).toBeGreaterThan(scaled(400) * 0.9)
     expect(logged).toBeLessThan(scaled(400) * 0.3)
-    for (const k of [...KEYS, ...NUMS]) expect(used.has(k)).toBe(true)
+    // every path style was drawn: the keys, the numeric paths, the list paths and the absent ones
+    for (const k of [...KEYS, ...NUMS, ...ARRS, ...ABSENT]) expect(used.has(k), `the path ${k} was never drawn`).toBe(true)
   })
 })
 
@@ -363,6 +368,10 @@ describe('data formats read field paths as vega does', () => {
     const r = makeRng(99)
     const bad: string[] = []
     const kinds: string[] = ['number', 'string', 'boolean', 'date']
+    let compared = 0
+    let refused = 0
+    /** An error as its words, without the `Error: ` and `[aster] ` tags of either side. */
+    const words = (e: unknown): string => String((e as Error)?.message ?? e).replace(/^Error: /, '').replace(/^\[aster\] /, '')
     const wrappers: Array<[string, (rows: unknown[]) => unknown]> = [
       ['rows', (rows) => rows],
       ['w.rows', (rows) => ({ w: { rows } })],
@@ -382,13 +391,26 @@ describe('data formats read field paths as vega does', () => {
       const want = await onVega(spec, 'out')
       let got: ReturnType<typeof onAster>
       try { got = onAster(spec, 'out') } catch (e) {
+        // an Aster throw is a refusal, and counts as one only if vega refused, with vega's words
         if (!want.errors.length) bad.push(`${label}: aster threw ${(e as Error).message}`)
+        else if (words(e) !== words(want.errors[0])) bad.push(`${label}: vega logged "${words(want.errors[0])}", aster threw "${words(e)}"`)
+        else refused++
         continue
       }
-      if (want.errors.length) { if (!got.errors.length) bad.push(`${label}: vega logged "${want.errors[0]}", aster nothing`); continue }
+      if (want.errors.length) {
+        if (!got.errors.length) bad.push(`${label}: vega logged "${want.errors[0]}", aster nothing`)
+        else if (words(got.errors[0]) !== words(want.errors[0])) bad.push(`${label}: vega logged "${words(want.errors[0])}", aster logged "${words(got.errors[0])}"`)
+        else refused++
+        continue
+      }
       if (got.errors.length) bad.push(`${label}: aster logged ${String(got.errors[0])}`)
       else if (!rowsAreEqual(got.rows, want.rows)) bad.push(`${label}: rows differ`)
+      else compared++
     }
     expect(bad.slice(0, 5)).toEqual([])
+    // every case is compared, whichever way: rows read equal, or a refusal in vega's words (none is skipped: the draw makes none that
+    // vega refuses today, so `refused` is 0 and the refusal branches above are the guard if one starts to)
+    expect(compared + refused, 'formats compared').toBe(scaled(150))
+    expect(compared, 'formats that read to equal rows').toBeGreaterThan(scaled(150) * 0.9)
   })
 })

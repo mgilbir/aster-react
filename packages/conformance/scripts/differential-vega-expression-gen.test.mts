@@ -11,12 +11,13 @@
  *   - precedence: every pair of binary operators, chained and mixed with `?:` and unary operators.
  *
  * The interpreter's counterpart is `differential-vega-interpreter-gen.test.mts`.
- * Seeds are fixed; set `ASTER_EXPR_FUZZ_SEED` / `ASTER_EXPR_FUZZ_N` to hunt with fresh ones.
+ * Seeds are fixed; set `ASTER_EXPR_FUZZ_SEED` / `ASTER_EXPR_FUZZ_N` to hunt with fresh ones (`ASTER_DIFF_SCALE` scales the default count like every generated suite; `ASTER_EXPR_FUZZ_N` names it outright).
  */
 import { describe, expect, it } from 'vitest'
 import * as ve from 'vega-expression'
 import { parseExpression } from '../../core/src/expr-parser.ts'
 import { enc } from './differential-util.mts'
+import { scaled } from './differential-gen.mts'
 import { canon, mkCleanSource, mkSource, OPS, rng } from './expression-gen.mts'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -62,7 +63,7 @@ function same(a: unknown, b: unknown): boolean {
 const show = (o: Outcome): string => JSON.stringify('ok' in o ? { ok: enc(o.ok) } : o)
 
 const SEED = process.env.ASTER_EXPR_FUZZ_SEED ? Number(process.env.ASTER_EXPR_FUZZ_SEED) : 0xA57E12
-const N = process.env.ASTER_EXPR_FUZZ_N ? Number(process.env.ASTER_EXPR_FUZZ_N) : 30000
+const N = process.env.ASTER_EXPR_FUZZ_N ? Number(process.env.ASTER_EXPR_FUZZ_N) : scaled(30000)
 /** Sources per test: ~0.3 s of work alone, so a loaded machine has to be 15x slower before vitest's 5 s default bites. */
 const CHUNK = 2500
 

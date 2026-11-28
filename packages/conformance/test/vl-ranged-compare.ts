@@ -16,6 +16,8 @@ import * as vega from 'vega'
 import * as vl from 'vega-lite'
 import { compile } from '@aster-charts/vl'
 import { silent } from './vl-time-helpers.js'
+import { scenegraphRoot } from '../src/scenegraph-root.js'
+import { turn } from '../../../scripts/lib/turn.mjs'
 
 type Obj = Record<string, unknown>
 
@@ -94,7 +96,7 @@ async function run(vg: Obj): Promise<Run> {
     }
     for (const sub of node.marks ?? []) walk(sub, sub.role ?? role)
   }
-  walk(view.scenegraph().root, 'root')
+  walk(scenegraphRoot(view), 'root')
   // (layers may share one data set and add to it what each needs: the rows of one view are compared, those of a layered one are not)
   const reading = [...marksOf(vg.marks as any[] | undefined)].filter((m) => typeof m.from?.data === 'string')
   const first = reading.length === 1 ? reading[0] : undefined
@@ -111,6 +113,16 @@ async function run(vg: Obj): Promise<Run> {
 export interface Outcome {
   why: string
   compared: boolean
+  /** When nothing was compared: which side stopped the comparison, and with what (the case is not silently dropped: the caller says which kinds it expects). */
+  skipped?: Skipped
+}
+export interface Skipped {
+  /** `vega-lite`: vega-lite refused the spec; `vega`: vega could not run vega-lite's output (after Aster refused or compiled it). */
+  by: 'vega-lite' | 'vega'
+  /** What Aster did with the spec: the message of its refusal, or `compiled`. */
+  aster: string
+  /** What stopped the side: its message. */
+  message: string
 }
 
 /** The first thing that differs between vega-lite's compile of `spec` and Aster's, or '' when nothing does. */
@@ -120,20 +132,21 @@ export async function differences(spec: Obj): Promise<Outcome> {
   let theirs: Obj | undefined
   let ours: Obj | undefined
   let refusal = ''
-  try { theirs = (vl as any).compile(JSON.parse(JSON.stringify(spec)), { logger: silent }).spec } catch { theirs = undefined }
+  let theirRefusal = ''
+  try { theirs = (vl as any).compile(JSON.parse(JSON.stringify(spec)), { logger: silent }).spec } catch (e) { theirs = undefined; theirRefusal = String(e).slice(0, 160) }
   try { ours = compile(JSON.parse(JSON.stringify(spec)) as never) as Obj } catch (e) { ours = undefined; refusal = String(e).slice(0, 160) }
   const no = (why: string): Outcome => ({ why, compared: true })
-  if (theirs === undefined) return { why: '', compared: false }
+  if (theirs === undefined) return { why: '', compared: false, skipped: { by: 'vega-lite', aster: ours === undefined ? refusal : 'compiled', message: theirRefusal } }
   if (ours === undefined) {
     // (a refusal of what vega-lite writes and vega itself cannot run refuses nothing there is to match)
-    try { await run(theirs) } catch { return { why: '', compared: false } }
+    try { await run(theirs) } catch (e) { return { why: '', compared: false, skipped: { by: 'vega', aster: refusal, message: String(e).slice(0, 160) } } }
     return no(`refused by aster only: ${refusal}`)
   }
   if (scalesOf(ours) !== scalesOf(theirs)) return no(`compiled scales: expected ${scalesOf(theirs)} got ${scalesOf(ours)}`)
   if (guidesOf(ours) !== guidesOf(theirs)) return no(`compiled guides: expected ${guidesOf(theirs)} got ${guidesOf(ours)}`)
   let a: Run
   let b: Run
-  try { a = await run(theirs) } catch { return { why: '', compared: false } } // (vega-lite wrote a spec vega itself cannot run: nothing to compare)
+  try { a = await run(theirs) } catch (e) { return { why: '', compared: false, skipped: { by: 'vega', aster: 'compiled', message: String(e).slice(0, 160) } } } // (vega-lite wrote a spec vega itself cannot run: nothing to compare)
   try { b = await run(ours) } catch (e) { return no(`aster's spec does not run: ${String(e).slice(0, 160)}`) }
   for (const k of ['scales', 'axes', 'rows', 'svg'] as const) {
     if (a[k] !== b[k]) {
@@ -147,19 +160,28 @@ export async function differences(spec: Obj): Promise<Outcome> {
 }
 
 /**
- * Run `differences` over named specs and collect the ones that differ. A space of which vega-lite compiles and runs less than
- * `minShare` compares nothing worth the name: that is a difference too.
+ * Run `differences` over named specs and collect the ones that differ, and the ones nothing was compared of (with which side stopped
+ * them and why). A space of which vega-lite compiles and runs less than `minShare` compares nothing worth the name: that is a
+ * difference too.
  */
-export async function collect(cases: Iterable<[string, Obj]>, minShare = 0.5): Promise<string[]> {
+export async function collectAll(cases: Iterable<[string, Obj]>, minShare = 0.5): Promise<{ bad: string[]; skipped: Array<[name: string, skipped: Skipped]>; total: number }> {
   const bad: string[] = []
+  const skipped: Array<[string, Skipped]> = []
   let total = 0
   let compared = 0
   for (const [name, spec] of cases) {
+    await turn()
     const out = await differences(spec)
     total++
     if (out.compared) compared++
+    else if (out.skipped) skipped.push([name, out.skipped])
     if (out.why) bad.push(`${name}: ${out.why}`)
   }
   if (compared < total * minShare) bad.unshift(`only ${compared} of ${total} cases were compiled and run by vega-lite: the space compares nothing`)
-  return bad
+  return { bad, skipped, total }
+}
+
+/** `collectAll`'s differences alone: for the spaces whose uncompared cases are not asked about. */
+export async function collect(cases: Iterable<[string, Obj]>, minShare = 0.5): Promise<string[]> {
+  return (await collectAll(cases, minShare)).bad
 }

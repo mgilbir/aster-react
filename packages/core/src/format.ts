@@ -18,7 +18,7 @@
  * - the pad is built with `new Array(n + 1).join(fill)` so an absurd width fails with the same RangeError;
  * - locale fields are read as array-likes (`Array.prototype.map.call`), so `grouping: '3'` works.
  */
-import { meterBytes } from './limits.js'
+import { allot } from './limits.js'
 
 export { tickStep } from './arr.js'
 
@@ -390,7 +390,7 @@ function compile(spec: FormatSpecifier, symbols: Symbols, affixes?: Affixes): Fo
     const used = lead.length + body.length + tail.length
     let padding = ''
     if (used < (width as number)) {
-      meterBytes((width as number) - used, 'number format width')
+      allot('bytes', (width as number) - used, 'number format width')
       padding = new Array((width as number) - used + 1).join(fill)
     }
     if (grouped && zero) {
@@ -429,7 +429,11 @@ export function formatLocale(definition: FormatLocaleDefinition): FormatLocale {
 
 // --- the default locale -------------------------------------------------------------------
 
-let defaultLocale: FormatLocale = /* @__PURE__ */ formatLocale({ thousands: ',', grouping: [3], currency: ['$', ''] })
+/**
+ * The module-level locale (d3-format's default: en-US): what a scale's `tickFormat` reads. It has no setter, as vega never sets
+ * d3-format's: the default locale a host sets is `defaultLocale` of locale.ts, which the expression `format` and the guides read.
+ */
+const defaultLocale: FormatLocale = /* @__PURE__ */ formatLocale({ thousands: ',', grouping: [3], currency: ['$', ''] })
 
 /** The default locale's `format`. */
 export function format(specifier: unknown): FormatFunction {
@@ -439,9 +443,4 @@ export function format(specifier: unknown): FormatFunction {
 /** The default locale's `formatPrefix`. */
 export function formatPrefix(specifier: unknown, value: number): FormatFunction {
   return defaultLocale.formatPrefix(specifier, value)
-}
-
-/** Replace the default locale. */
-export function formatDefaultLocale(definition: FormatLocaleDefinition): FormatLocale {
-  return (defaultLocale = formatLocale(definition))
 }

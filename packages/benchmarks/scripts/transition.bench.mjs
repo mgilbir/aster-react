@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { ensureBuilt } from '../src/ensure-built.ts'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { launchBrowser } from '../../../scripts/lib/launch-browser.mjs'
 
 cli({ url: import.meta.url, flags: { sizes: 'eq', runs: 'eq' } })
 
@@ -74,7 +75,7 @@ window.run = (n, kind) => new Promise((resolve) => {
 const bundle = await build({ stdin: { contents: entry, resolveDir: ROOT, loader: 'js' }, bundle: true, write: false, format: 'iife', platform: 'browser', minify: true, logLevel: 'error' })
 const median = (a) => { const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)] }
 const ms = (x) => `${x.toFixed(1)} ms`
-const browser = await chromium.launch()
+const browser = await launchBrowser(chromium)
 try {
   for (const kind of ['symbol', 'rect']) {
     for (const n of SIZES) {

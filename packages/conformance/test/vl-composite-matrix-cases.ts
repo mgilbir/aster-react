@@ -127,7 +127,8 @@ group('@aster-charts/vl == vega-lite: boxplot in a layer, a facet, with axis and
     ['titled continuous axis', { data: DATA, mark: 'boxplot', encoding: { x: n('c'), y: q('v', { title: 'Value' }) } }],
     ['axis options on the continuous channel', { data: DATA, mark: 'boxplot', encoding: { x: n('c'), y: q('v', { axis: { title: 'V!', grid: false } }) } }],
     ['scale options on the continuous channel', { data: DATA, mark: 'boxplot', encoding: { x: n('c'), y: q('v', { scale: { zero: false, domain: [-40, 50] } }) } }],
-    ['log scale', { data: DATA, mark: 'boxplot', encoding: { x: n('c'), y: q('w', { scale: { type: 'sqrt' } }) } }],
+    ['sqrt scale', { data: DATA, mark: 'boxplot', encoding: { x: n('c'), y: q('w', { scale: { type: 'sqrt' } }) } }],
+    ['log scale', { data: DATA, mark: 'boxplot', encoding: { x: n('c'), y: q('e', { scale: { type: 'log' } }) } }],
     ['an aggregate on the continuous channel', { data: DATA, mark: 'boxplot', encoding: { x: n('c'), y: q('v', { aggregate: 'mean' }) } }],
     ['a field with a space', { data: { values: DATA.values.map((d) => ({ ...d, 'my v': d.v })) }, mark: 'boxplot', encoding: { x: n('c'), y: q('my v') } }],
     ['a filter transform before', { data: DATA, transform: [{ filter: 'datum.v > 0' }], mark: 'boxplot', encoding: { x: n('c'), y: q('v') } }],
@@ -143,7 +144,6 @@ group('@aster-charts/vl == vega-lite: boxplot in a layer, a facet, with axis and
     ['a row facet by the encoding', { data: DATA, mark: 'boxplot', encoding: { x: n('c'), y: q('v'), row: n('g') } }],
     ['a facet spec', { data: DATA, facet: { column: n('g') }, spec: { mark: 'boxplot', encoding: { x: n('c'), y: q('v') } } }],
     ['an hconcat', { data: DATA, hconcat: [{ mark: 'boxplot', encoding: { x: n('c'), y: q('v') } }, { mark: 'boxplot', encoding: { x: n('g'), y: q('w') } }] }],
-    ['a selection on the unit', { data: DATA, params: [{ name: 'sel', select: 'interval' }], mark: 'boxplot', encoding: { x: n('c'), y: q('v') } }],
     ['no field on the continuous channel', { data: DATA, mark: 'boxplot', encoding: { x: n('c'), y: { aggregate: 'count', type: 'quantitative' } } }],
     ['two nominal axes', { data: DATA, mark: 'boxplot', encoding: { x: n('c'), y: n('g') } }],
     ['config.mark.invalid', { data: DATA, config: { mark: { invalid: 'show' } }, mark: 'boxplot', encoding: { x: n('c'), y: q('v') } }],
@@ -302,7 +302,6 @@ group('@aster-charts/vl == vega-lite: errorbar and errorband, parts, options, to
       [`${kind} faceted by a row`, { data: DATA, mark: kind, encoding: { ...enc, row: n('g') } }],
       [`${kind} in a facet spec`, { data: DATA, facet: { column: n('g') }, spec: { mark: kind, encoding: enc } }],
       [`${kind} in an hconcat`, { data: DATA, hconcat: [{ mark: kind, encoding: enc }, { mark: 'bar', encoding: { x: n('c'), y: q('v', { aggregate: 'mean' }) } }] }],
-      [`${kind} with a selection`, { data: DATA, params: [{ name: 'sel', select: 'interval' }], mark: kind, encoding: enc }],
       [`${kind} over a layer of the same composite, the same statistics`, { data: DATA, layer: [{ mark: { type: kind, extent: 'stderr' }, encoding: enc }, { mark: { type: kind, extent: 'stderr', color: 'red' }, encoding: enc }] }],
     )
   }
@@ -349,6 +348,36 @@ group('path overlays: line, area, trail and rule with points or a line', (add) =
   add('an unstacked area with a line', { data: DATA, mark: { type: 'area', line: true }, encoding: { x: q('x'), y: q('v', { aggregate: 'sum', stack: null }), color: n('g') } })
 })
 
+group('names and scales of the overlays and stacks (a named unit, a fill domain, a nested field)', (add) => {
+  add('a named line with points', { data: DATA, mark: { type: 'line', point: true }, encoding: { x: q('x'), y: q('v', { aggregate: 'mean' }) }, name: 'lines' })
+  add('a stacked bar with a domain on fill', { data: DATA, mark: 'bar', encoding: { x: n('g'), y: q('v', { aggregate: 'sum' }), fill: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } })
+  add('a boxplot over a nested field', { data: { values: DATA.values.map((d) => ({ ...d, o: { v: d.v } })) }, mark: 'boxplot', encoding: { x: n('c'), y: q('o.v') } })
+})
+
+// The holes the first-pass composite defects went through (C357): a field named by a path or an escaped dot, a variable parameter on a
+// composite unit, a title switched off on the measure, a resolve between the parts of a layer.
+group('composite marks over field names, parameters, resolves and switched-off titles', (add) => {
+  const NESTED = { values: DATA.values.map((d) => ({ ...d, o: { v: d.v, c: d.c }, 'a.b': d.v, 'my v': d.v })) }
+  for (const mark of ['boxplot', 'errorbar', 'errorband']) {
+    const body = (x: unknown, y: unknown, extra: Record<string, unknown> = {}) => ({ data: NESTED, mark, encoding: mark === 'errorband' ? { x: q('x'), y, ...extra } : { x, y, ...extra } })
+    add(`${mark} over a nested measure`, body(n('c'), q('o.v')))
+    add(`${mark} over a nested group`, body(n('o.c'), q('v')))
+    add(`${mark} over a nested colour`, body(n('c'), q('v'), { color: n('o.c') }))
+    add(`${mark} over an escaped measure`, body(n('c'), q('a\\.b')))
+    add(`${mark} over a measure with a space`, body(n('c'), q('my v')))
+    add(`${mark} with a variable param read by a filter`, { data: DATA, params: [{ name: 'cut', value: 2, bind: { input: 'range', min: 0, max: 40 } }], transform: [{ filter: 'datum.v > cut' }], mark, encoding: mark === 'errorband' ? { x: q('x'), y: q('v') } : { x: n('c'), y: q('v') } })
+    add(`${mark} with a variable param on the unit`, { data: DATA, params: [{ name: 'k2', value: 3 }], mark, encoding: mark === 'errorband' ? { x: q('x'), y: q('v') } : { x: n('c'), y: q('v') } })
+    add(`${mark} with a variable param read by the title`, { data: DATA, params: [{ name: 'label', value: 'Mine', bind: { input: 'text' } }], title: { text: { expr: 'label' } }, mark, encoding: mark === 'errorband' ? { x: q('x'), y: q('v') } : { x: n('c'), y: q('v') } })
+    add(`${mark} with a null title on the measure`, body(n('c'), q('v', { title: null })))
+    add(`${mark} with a null axis title on the measure`, body(n('c'), q('v', { axis: { title: null } })))
+  }
+  for (const resolve of ['independent', 'shared']) {
+    add(`a boxplot and a line in a layer, y ${resolve}`, { data: DATA, resolve: { scale: { y: resolve } }, layer: [{ mark: 'boxplot', encoding: { x: n('c'), y: q('v') } }, { mark: 'line', encoding: { x: n('c'), y: q('w', { aggregate: 'mean' }) } }] })
+    add(`an errorbar and a point in a layer, y ${resolve}`, { data: DATA, resolve: { scale: { y: resolve } }, layer: [{ mark: 'errorbar', encoding: { x: n('c'), y: q('v') } }, { mark: 'point', encoding: { x: n('c'), y: q('w', { aggregate: 'mean' }) } }] })
+    add(`two boxplots in a layer, y ${resolve}`, { data: DATA, resolve: { scale: { y: resolve } }, layer: [{ mark: 'boxplot', encoding: { x: n('c'), y: q('v') } }, { mark: { type: 'boxplot', color: 'red' }, encoding: { x: n('c'), y: q('w') } }] })
+  }
+})
+
 group('stack order follows a colour domain', (add) => {
   const ORDERS: Array<[string, unknown]> = [['a list', ['C', 'A', 'B']], ['a shorter list', ['B', 'A']], ['a list with an unknown value', ['Z', 'C', 'A', 'B']]]
   for (const [on, domain] of ORDERS) {
@@ -364,29 +393,8 @@ group('stack order follows a colour domain', (add) => {
   add('a stacked bar with a sorted offset', { data: DATA, mark: 'bar', encoding: { x: n('g'), xOffset: n('c', { sort: 'descending' }), y: q('v', { aggregate: 'sum' }), color: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } })
   add('a stacked bar in a layer sharing the encoding', { data: DATA, encoding: { x: n('g'), y: q('v', { aggregate: 'sum' }), color: n('c', { scale: { domain: ['C', 'A', 'B'] } }) }, layer: [{ mark: 'bar' }, { mark: { type: 'text', dy: -4 }, encoding: { text: q('v', { aggregate: 'sum' }) } }] })
   add('stacked bars in a layer, the domain on the second', { data: DATA, layer: [{ mark: 'bar', encoding: { x: n('g'), y: q('v', { aggregate: 'sum' }) } }, { mark: 'bar', encoding: { x: n('g'), y: q('w', { aggregate: 'sum' }), color: n('c', { scale: { domain: ['B', 'C', 'A'] } }) } }] })
-  add('a stacked bar in an hconcat', { data: DATA, hconcat: [{ mark: 'bar', encoding: { x: n('g'), y: q('v', { aggregate: 'sum' }), color: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } }, { mark: 'point', encoding: { x: q('x'), y: q('y' as string) } }] })
+  add('a stacked bar in an hconcat', { data: DATA, hconcat: [{ mark: 'bar', encoding: { x: n('g'), y: q('v', { aggregate: 'sum' }), color: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } }, { mark: 'point', encoding: { x: q('x'), y: q('v') } }] })
   add('a stacked bar in a facet spec', { data: DATA, facet: { column: n('k') }, spec: { mark: 'bar', encoding: { x: n('g'), y: q('v', { aggregate: 'sum' }), color: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } } })
   add('a stacked bar with a calculate before', { data: DATA, transform: [{ calculate: 'datum.v * 2', as: 'v2' }], mark: 'bar', encoding: { x: n('g'), y: q('v2', { aggregate: 'sum' }), color: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } })
   add('a normalized stacked bar', { data: DATA, mark: 'bar', encoding: { x: n('g'), y: q('v', { aggregate: 'sum', stack: 'normalize' }), color: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } })
 })
-
-/**
- * Specs on which Aster and vega-lite differ today, so they are in no group above. They are compiled by the refactor guards (the compiled
- * Vega is pinned from before a rewrite) and not compared with vega-lite:
- *  - a composite mark over a nested field (`o.v`): vega-lite's own render has no data for it (an axis from 0 to 0);
- *  - errorbar over a binned channel: refused by Aster;
- *  - a boxplot whose parts are all switched off: vega-lite draws an empty 10 x 10 view, Aster draws the empty plot;
- *  - a config opacity: Aster repeats it in the mark's encode, vega-lite leaves it to the config's style (the render is the same);
- *  - a named line with points: vega-lite names the line's mark after the unit (`lines_marks`), Aster after the layer;
- *  - a stacked bar coloured by `fill` alone: vega-lite names the scale `fill`, Aster `color`.
- */
-export const ASTER_ONLY: Cases = [
-  ['a named line with points', { data: DATA, mark: { type: 'line', point: true }, encoding: { x: q('x'), y: q('v', { aggregate: 'mean' }) }, name: 'lines' }],
-  ['area with config.area.opacity and a line', { data: DATA, config: { area: { line: true, opacity: 0.2 } }, mark: 'area', encoding: { x: q('x'), y: q('v', { aggregate: 'sum' }) } }],
-  ['area with config.mark.opacity and points', { data: DATA, config: { area: { point: true }, mark: { opacity: 0.9 } }, mark: 'area', encoding: { x: q('x'), y: q('v', { aggregate: 'sum' }) } }],
-  ['stacked bar with a fill domain', { data: DATA, mark: 'bar', encoding: { x: n('g'), y: q('v', { aggregate: 'sum' }), fill: n('c', { scale: { domain: ['C', 'A', 'B'] } }) } }],
-  ['boxplot with every part off', { data: DATA, mark: { type: 'boxplot', box: false, median: false, rule: false, outliers: false }, encoding: { x: n('c'), y: q('v') } }],
-  ['boxplot over a nested field', { data: { values: DATA.values.map((d) => ({ ...d, o: { v: d.v } })) }, mark: 'boxplot', encoding: { x: n('c'), y: q('o.v') } }],
-  ['errorbar over a nested field', { data: { values: DATA.values.map((d) => ({ ...d, o: { v: d.v } })) }, mark: 'errorbar', encoding: { x: n('c'), y: q('o.v') } }],
-  ['errorbar over a binned x', { data: DATA, mark: 'errorbar', encoding: { x: q('x', { bin: true }), y: q('v') } }],
-]

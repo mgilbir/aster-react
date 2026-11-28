@@ -14,15 +14,16 @@
  * Nothing here is imported by `@aster-charts/core`'s main entry: an app that does not use this module does not pay for it.
  *
  * The same walk names the parts of the engine a spec may read (`specNeeds`, `partsNeeded`; see engine-parts.ts), which the public
- * entries carry and the React shells, on `@aster-charts/core/lean`, load on demand (`loadParts`).
+ * entries carry and the React shells, on `@aster-charts/core/internal`, load on demand (`loadParts`).
  */
-import { dataFormatRegistry, geoRegistry, transformRegistry } from './registry.js'
+import { dataFormatRegistry, geoRegistry, LOAD_ADDON_FORMATS, transformRegistry } from './registry.js'
 import { HARD_MAX_SPEC_DEPTH } from './limits.js'
 import { ADDON_FUNCTIONS } from './addon-functions.js'
 import { parseExpression } from './expr-parser.js'
 import { parseEventSelectorString } from './event-selector.js'
-import { registeredExpressionFunctionNames, withdrawExpressionFunctions } from './expression.js'
+import { registeredExpressionFunctionNames } from './expression.js'
 import { checkUrlData, validateUrlDataMode, type UrlDataMode } from './url-data.js'
+import { parsesDates } from './data-format.js'
 import { dataWithoutRows, valuesSignal } from './spec-structure.js'
 import { mayDrawRandom } from './random-tape.js'
 import { ENGINE_PARTS, installPart, partLoaded, type EnginePart } from './engine-parts.js'
@@ -43,6 +44,7 @@ export interface AddonOptions {
 }
 
 /** Every transform the `@aster-charts/core/transforms` add-on registers (and `requireTransform` asks it for). */
+export type { EnginePart }
 export const TRANSFORMS_ADDON_TYPES: readonly string[] = [
   'kde', 'density', 'quantile', 'regression', 'loess', 'pack', 'partition', 'treemap', 'wordcloud', 'voronoi',
   'pie', 'cross', 'countpattern', 'dotbin', 'geopoint', 'geojson', 'linkpath',
@@ -52,10 +54,8 @@ export const TRANSFORMS_ADDON_TYPES: readonly string[] = [
 export { ADDON_FUNCTIONS }
 /** Every expression function currently registered beyond the built-ins (the add-ons', and the host's own): for tests of the tables. */
 export const registeredFunctionNames = registeredExpressionFunctionNames
-/** Take expression functions out of the registry and get a function that restores them (a test seam). */
-export const withdrawFunctions = withdrawExpressionFunctions
 /** The data formats the `@aster-charts/core/load` add-on registers readers for. */
-export const LOAD_ADDON_FORMATS: readonly string[] = ['csv', 'tsv', 'dsv', 'topojson']
+export { LOAD_ADDON_FORMATS }
 
 const TRANSFORM_TYPES = new Set(TRANSFORMS_ADDON_TYPES)
 const FORMAT_TYPES = new Set(LOAD_ADDON_FORMATS)
@@ -69,8 +69,6 @@ const NONE: readonly AddonName[] = Object.freeze([])
 const EXPRESSION_KEYS = new Set([
   'signal', 'expr', 'update', 'init', 'test', 'trigger', 'insert', 'remove', 'toggle', 'modify', 'filter',
 ])
-/** Keys whose value is data, never expressions: a dataset's rows, a signal's or a literal's value. */
-const DATA_KEYS = new Set(['values', 'value'])
 
 /**
  * The expression functions that need a part of the engine (engine-parts.ts) the React shells load on demand, whatever their
@@ -200,13 +198,6 @@ function namesCurve(v: unknown): boolean {
   return v != null
 }
 
-/** Whether a dataset's `parse` may read a column with a date pattern (anything but `'auto'` or a table of plain types). */
-function parsesDates(parse: unknown): boolean {
-  if (parse == null || parse === 'auto') return false
-  if (!isObj(parse) || Array.isArray(parse)) return true
-  return Object.values(parse).some((t) => typeof t !== 'string' || /^\s*(date|utc)\s*:/i.test(t))
-}
-
 /** Whether a `shape` / `symbolType` value can name anything but a built-in symbol: a field, a signal, a scale, a rule, a custom path. */
 function customShape(v: unknown): boolean {
   if (v == null) return false
@@ -215,16 +206,39 @@ function customShape(v: unknown): boolean {
   return true
 }
 
+/** Ceiling on the nodes {@link mentions} looks at (an event stream is a few objects; a larger one is taken to mention anything). */
+const MENTION_NODES = 10_000
+
+/** Whether `text` occurs in a key or a string value anywhere in `node` (iterative, bounded, safe on a cyclic object). */
+function mentions(node: unknown, text: string): boolean {
+  const seen = new WeakSet<object>()
+  const stack: unknown[] = [node]
+  for (let visited = 0; stack.length; ) {
+    const n = stack.pop()
+    if (typeof n === 'string') { if (n.includes(text)) return true; continue }
+    if (!isObj(n) || seen.has(n)) continue
+    if (++visited > MENTION_NODES) return true
+    seen.add(n)
+    for (const k of Object.keys(n)) {
+      if (k.includes(text)) return true
+      stack.push((n as Json)[k])
+    }
+  }
+  return false
+}
+
 /**
  * One walk of `spec`, with a stack (specs nest to any depth), bounded like the rest of the engine's spec walks, and safe on a cyclic
- * object: what `addonsNeeded` and `partsNeeded` report.
+ * object: what `addonsNeeded` and `partsNeeded` report. A node is read once for each key it is reached under (an object a spec shares
+ * between a transform list and `usermeta` is a transform under the one, whichever is met first), so the answer does not depend on the
+ * order of the keys; on a cyclic spec each (node, key) pair is read once.
  */
 function walkSpec(spec: Json, refuseUrls: boolean, hostSignals?: Readonly<Record<string, unknown>>): Found {
   const found: Found = { addons: new Set(), parts: new Set(), eventLoop: false, scales: [], signals: new Map() }
   // (a scope's lists are read as the compiler reads them, vega-util `array()`: a single object is a one-element list)
   if (spec.projections != null && (!Array.isArray(spec.projections) || spec.projections.length > 0)) found.addons.add('geo')
   if (spec.layout != null) found.parts.add('layout')
-  const seen = new WeakSet<object>()
+  const seen = new WeakMap<object, Set<string>>()
   const stack: Array<[unknown, number, string]> = [[spec, 0, '']]
   while (stack.length) {
     const [node, depth, key] = stack.pop()!
@@ -236,27 +250,33 @@ function walkSpec(spec: Json, refuseUrls: boolean, hostSignals?: Readonly<Record
       }
       continue
     }
-    if (!isObj(node) || depth > HARD_MAX_SPEC_DEPTH || seen.has(node)) continue
-    seen.add(node)
+    if (!isObj(node) || depth > HARD_MAX_SPEC_DEPTH) continue
+    const keys = seen.get(node)
+    if (keys === undefined) seen.set(node, new Set([key]))
+    else if (keys.has(key)) continue
+    else keys.add(key)
     // the projections of a group mark are built in its scope (the view's are checked above)
     if (key === 'projections' && (!Array.isArray(node) || node.length > 0)) found.addons.add('geo')
     if (key === 'legends' && (!Array.isArray(node) || node.length > 0)) found.parts.add('legend')
     // (a scope that declares signals: the view's, a group mark's)
     if (key === 'signals' && (!Array.isArray(node) || node.length > 0)) found.eventLoop = true
     // (an object-form event stream: `{type: 'timer', ...}`, or one that merges or windows another)
-    if (key === 'events' && JSON.stringify(node).includes('timer')) found.parts.add('timer')
+    if (key === 'events' && mentions(node, 'timer')) found.parts.add('timer')
     if (Array.isArray(node)) {
       for (const x of node) stack.push([x, depth + 1, key])
       continue
     }
     if (key === 'marks') {
       if (node.type === 'group' && node.layout != null) found.parts.add('layout')
+      // (a mark with a `hover` set reacts to the pointer: vega's view.hover() runs in the signal loop)
+      if (isObj(node.encode) && node.encode.hover != null) found.eventLoop = true
       // (a path mark's path string is read for its bounds and its outline)
       if (node.type === 'path') found.parts.add('svgpath')
     }
     if ((Object.hasOwn(node, 'shape') && customShape(node.shape)) || (Object.hasOwn(node, 'symbolType') && customShape(node.symbolType))) found.parts.add('svgpath')
     if (key === 'transform' && typeof node.type === 'string') {
-      if (node.type === 'contour') found.addons.add('geo')
+      // (a geoshape draws through the geo add-on with or without a projection: with none, through its default path)
+      if (node.type === 'contour' || node.type === 'geoshape') found.addons.add('geo')
       else if (TRANSFORM_TYPES.has(node.type)) {
         found.addons.add('transforms')
         // isocontour runs the geo add-on's contour engine; a geopath with no projection draws with its default path
@@ -286,14 +306,28 @@ function walkSpec(spec: Json, refuseUrls: boolean, hostSignals?: Readonly<Record
     if (key === 'format' && parsesDates(node.parse)) found.parts.add('time')
     // (a dataset definition is an element of a `data` array; a refused url dataset is never read)
     const refusedUrl = refuseUrls && key === 'data' && !!node.url && !node.values
+    // a dataset's triggers (`on: [{trigger, insert | remove | toggle | modify}]`) edit it as `modify()` does, in the event loop
+    // (and a named mark's, which edit its items the same way)
+    if ((key === 'data' || key === 'marks') && Array.isArray(node.on) && node.on.length > 0) found.parts.add('modify')
     for (const k of Object.keys(node)) {
-      // (`values` is read only when it is a `{signal}`: rows and GeoJSON are data, whatever their fields are named)
+      // (`values` is read only when it is an expression: a `{signal}`, or the text of a data trigger's `values`, which the compiler
+      // builds into the trigger's `modify(...)` call; rows and GeoJSON are data, whatever their fields are named)
       if (k === 'values') {
-        const signal = valuesSignal(node[k])
+        const signal = key === 'on' && typeof node[k] === 'string' ? (node[k] as string) : valuesSignal(node[k])
         if (signal !== undefined) stack.push([signal, depth + 1, 'signal'])
+        // (an axis's or a legend's `values` list is one expression, vega's objectProperty: every `{signal}` in it is evaluated)
+        else if ((key === 'axes' || key === 'legends') && Array.isArray(node[k])) {
+          const visit = (v: unknown, d: number): void => {
+            if (!isObj(v) || d > 32) return
+            if (typeof v.signal === 'string') { stack.push([v.signal, depth + 1, 'signal']); return }
+            for (const x of Array.isArray(v) ? v : Object.values(v)) visit(x, d + 1)
+          }
+          visit(node[k], 0)
+        }
         continue
       }
-      if (DATA_KEYS.has(k)) continue
+      // (a `value` is walked too, which finds more than the engine reads: an encode entry's value is the object it holds, a
+      // `{signal}` in it included, C397 -- naming an add-on the chart never asks for only loads it early)
       if (refusedUrl && k === 'format') continue
       stack.push([node[k], depth + 1, k])
     }
@@ -442,8 +476,8 @@ export interface SpecNeeds {
   parts: readonly EnginePart[]
   /**
    * Whether an interactive host binds the signal event loop for it (the `signals` part, which no evaluation reads): the view or a
-   * group mark declares signals (`on` streams, a selection's, or values a host may set). A host that listens to signals binds it
-   * whatever the spec says.
+   * group mark declares signals (`on` streams, a selection's, or values a host may set), or a mark has a `hover` encode set (vega's
+   * view hover runs in the loop). A host that listens to signals binds it whatever the spec says.
    */
   eventLoop: boolean
 }
@@ -508,7 +542,7 @@ function collectData(spec: Json): unknown[] {
  * path (svgpath), an expression that calls vega-selections' functions, `intersect()`, `modify()` / `setdata()`, a `timer` event stream;
  * under `limits` anything that can hand a regular expression to the screen (regex); with a random source, datasets that may draw from
  * it (pulse). The pulse path is otherwise loaded when a chart's data first changes. Every public entry of `@aster-charts/core` carries
- * the parts its functions can use: this is for the React shells, which use `@aster-charts/core/lean`.
+ * the parts its functions can use: this is for the React shells, which use `@aster-charts/core/internal`.
  */
 export function partsNeeded(spec: VgSpec, options?: PartOptions): readonly EnginePart[] {
   return specNeeds(spec, options).parts
@@ -559,8 +593,18 @@ function loadAddon(name: AddonName): Promise<void> {
   return p
 }
 
-/** Import the named add-ons (concurrently, each at most once). Rejects, naming the add-on, when an import fails. */
+const ADDON_NAMES: readonly AddonName[] = Object.freeze(Object.keys(importers) as AddonName[])
+
+/**
+ * Import the named add-ons (concurrently, each at most once). Rejects, naming the add-on, when an import fails, and with a
+ * TypeError, before anything is imported, when a name is not an add-on.
+ */
 export function loadAddons(names: readonly AddonName[]): Promise<void> {
+  if (!Array.isArray(names)) return Promise.reject(new TypeError(`[aster] loadAddons takes an array of add-on names (${ADDON_NAMES.join(', ')})`))
+  const refused = names.filter((n) => typeof n !== 'string' || !Object.hasOwn(importers, n))
+  if (refused.length) {
+    return Promise.reject(new TypeError(`[aster] not an add-on: ${refused.map((n) => JSON.stringify(n) ?? String(n)).join(', ')} (they are ${ADDON_NAMES.join(', ')})`))
+  }
   return names.length === 1 ? loadAddon(names[0]!) : Promise.all(names.map(loadAddon)).then(() => undefined)
 }
 
@@ -588,8 +632,8 @@ export function partsNotLoaded(needed: readonly EnginePart[]): readonly EnginePa
 
 type PartModule = { part: unknown }
 /**
- * (the canvas part is loaded by `<Chart>`'s canvas capability, through `@aster-charts/core/lean/canvas`, and the signal loop by the
- * interaction capability, through `@aster-charts/core/lean/signals`: no evaluation reads either)
+ * (the canvas part is loaded by `<Chart>`'s canvas capability, through `@aster-charts/core/internal/canvas`, and the signal loop by the
+ * interaction capability, through `@aster-charts/core/internal/signals`: no evaluation reads either)
  */
 const partImporters: Record<Exclude<EnginePart, 'canvas' | 'signals'>, () => Promise<PartModule>> = {
   aggregate: () => import('./part-aggregate.js'),
@@ -613,8 +657,8 @@ const partsLoading = new Map<EnginePart, Promise<void>>()
 
 function loadPart(name: EnginePart): Promise<void> {
   if (partLoaded(name)) return Promise.resolve()
-  if (name === 'canvas') return Promise.reject(new Error('[aster] the canvas part is loaded by the canvas capability (@aster-charts/core/lean/canvas)'))
-  if (name === 'signals') return Promise.reject(new Error('[aster] the signals part is loaded by the interaction capability (@aster-charts/core/lean/signals)'))
+  if (name === 'canvas') return Promise.reject(new Error('[aster] the canvas part is loaded by the canvas capability (@aster-charts/core/internal/canvas)'))
+  if (name === 'signals') return Promise.reject(new Error('[aster] the signals part is loaded by the interaction capability (@aster-charts/core/internal/signals)'))
   let p = partsLoading.get(name)
   if (!p) {
     p = partImporters[name]().then(
@@ -641,7 +685,7 @@ export function loadParts(names: readonly EnginePart[]): Promise<void> {
 
 /**
  * Import whatever `spec` needs and does not have yet, add-ons and parts of the engine alike: `loadAddonsFor` for a host of
- * `@aster-charts/core/lean` (the React shells). Resolves at once when nothing is missing.
+ * `@aster-charts/core/internal` (the React shells). Resolves at once when nothing is missing.
  */
 export function loadPartsFor(spec: VgSpec, options?: PartOptions): Promise<void> {
   let needs: SpecNeeds
@@ -662,7 +706,7 @@ const SPEC_PARTS: readonly EnginePart[] = ENGINE_PARTS.filter((p) => p !== 'canv
 
 /**
  * Load parts of the engine ahead of time (every part a spec can name when no names are given): for an app on
- * `@aster-charts/core/lean` (the React shells in a browser build) that knows which families its charts use and would rather fetch them
+ * `@aster-charts/core/internal` (the React shells in a browser build) that knows which families its charts use and would rather fetch them
  * before the first chart than when it renders. Resolves once they are all loaded; rejects, naming the part, when an import fails, and
  * with a TypeError for a name that is not such a part (`'canvas'` and `'signals'` are the React capabilities' to load: `preloadParts`
  * of `@aster-charts/react` takes them too). A part already loaded is not fetched again. (`import '@aster-charts/react/all'` instead puts

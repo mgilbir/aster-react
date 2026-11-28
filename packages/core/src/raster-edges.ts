@@ -58,6 +58,7 @@ function edgeBetween(ax: number, ay: number, bx: number, by: number, placed: boo
 export function polygonEdges(rings: Pt[][]): Edge[] {
   const out: Edge[] = []
   for (const ring of rings) {
+    // bounded: the points of the polygons the stroker made (it ticks as it makes them)
     for (let i = 0; i < ring.length; i++) {
       const [ax, ay] = ring[i]!
       const [bx, by] = ring[(i + 1) % ring.length]!
@@ -78,7 +79,9 @@ export function pathEdges(s: Sub, out: Edge[]): void {
   }
   for (const o of s.ops) {
     if (o.k === 'L') push(px, py, o.x, o.y, false)
+    // bounded: splitQuad cuts a curve at its turning point: at most 2 pieces
     else if (o.k === 'Q') for (const q of splitQuad([px, py], [o.cx, o.cy], [o.x, o.y])) quadEdges(q, push)
+    // bounded: splitCubic cuts a curve at its turning points: at most 3 pieces
     else for (const c of splitCubic([px, py], [o.c1x, o.c1y], [o.c2x, o.c2y], [o.x, o.y])) cubicEdges(c, push)
     px = o.x
     py = o.y
@@ -129,6 +132,7 @@ function quadEdges(q: [Pt, Pt, Pt], push: PushLine): void {
   const top = quarterRow(p0[1])
   let ax = p0[0]
   let ay = top
+  // bounded: n is at most 1 << MAX_SHIFT (64)
   for (let i = 1; i <= n; i++) {
     const t = i / n
     const u = 1 - t
@@ -150,6 +154,7 @@ function cubicEdges(c: [Pt, Pt, Pt, Pt], push: PushLine): void {
   const top = quarterRow(p0[1])
   let ax = p0[0]
   let ay = top
+  // bounded: n is at most 1 << MAX_SHIFT (64)
   for (let i = 1; i <= n; i++) {
     const t = i / n
     const u = 1 - t
@@ -245,6 +250,7 @@ export function arcConics(from: Pt, to: Pt, dir: 1 | -1, full: boolean): Conic[]
   }
   const ring: Pt[] = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]]
   const conics: Conic[] = []
+  // bounded: at most 4 quadrants
   for (let i = 0; i < quadrants; i++) conics.push({ p0: ring[i * 2]!, p1: ring[i * 2 + 1]!, p2: ring[(i * 2 + 2) % 8]!, w: Math.SQRT1_2 })
   if (!full) {
     const edge = ring[quadrants * 2]!

@@ -17,6 +17,7 @@ export type {
   SceneRoot,
   ScaleDomain,
   ScaleSnapshot,
+  ScaleType,
   ScaleRange,
   SizeSpec,
   SortSpec,
@@ -68,7 +69,8 @@ export type { FormatLocaleDefinition } from './format.js'
 export type { TimeLocaleDefinition } from './time-format.js'
 export { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 export { buildScale, type Scale } from './scales.js'
-export { applyTransforms, sortRows, type Row } from './transform.js'
+export type { ScaleContext } from './scale-domain.js'
+export { applyTransforms, sortRows, type Row, type TransformContext } from './transform.js'
 export {
   AsterLimitError, checkSpecLimits, checkSceneLimits, checkSvgLength, createLimitClock, withLimits, HARD_MAX_SPEC_DEPTH, HARD_CAPS,
   type LimitClock, type LimitMeter, type SpecLimits,
@@ -82,10 +84,9 @@ export {
 } from './text-metrics.js'
 export { buildA11yTree, type A11yKind, type A11yNode, type A11yOptions, type A11yTree } from './a11y.js'
 export {
-  buildPulseGraph, diffRows, propagatePulse, rowsEqual, transformNeedsFullRederive, isGroupedTransform,
-  type DataPulse, type DatasetPulse, type PulseGraph, type PulseNode, type PulsePropagation, type RowDiff,
+  diffRows, rowsEqual, isGroupedTransform,
+  type DataPulse, type DatasetPulse, type RowDiff,
 } from './pulse.js'
-export { geoRegistry, transformRegistry, dataFormatRegistry, requireTransform, type GeoRegistry, type ContourFeature, type TransformFn, type DataFormatReader } from './registry.js'
 // The event-driven signal loop (`@aster-charts/core/signals`: bindSceneSignals etc.)
 // ships as an opt-in addon like the DOM patcher; hosts using signal.on streams
 // import it explicitly.
@@ -122,9 +123,6 @@ export function renderSpec(spec: VgSpec, input: RuntimeInput = {}): string {
     return svg
   })
 }
-
-/** @internal Development builds: the watch for rows changed in place between renders (see row-watch.ts), for the React shells. */
-export { checkChartRows, shareRowWatch } from './row-watch.js'
 
 // (every part of the engine an evaluation can use, so that the functions here work for every spec: engine-parts.ts)
 import './parts-evaluate.js'

@@ -6,11 +6,12 @@
  * ones (geopoint, geopath, geojson, linkpath). Loaded by the `@aster-charts/core/transforms` addon; the core bundle keeps only
  * the transforms a plain chart uses. Shared internals come from transform.ts.
  */
-import { error, ownGet, sortData } from './util.js'
+import { error, extent as vegaExtent, ownGet, copyTupleWith } from './util.js'
+import { orderOf } from './tuple-order.js'
 import { fieldOf } from './transform-agg.js'
-import { checkRowCount, meterTick } from './limits.js'
+import { allot, allotUpTo, copiedRows, meterTick, sortMetered } from './limits.js'
 import type { HierNode, Row, TransformContext } from './transform.js'
-import { compileExprTransform, geoPointRadius, getField, resolveSizeParam } from './transform.js'
+import { geoPointRadius } from './transform.js'
 import type { GeoProjection } from './geo-projections.js'
 import type { GeoPath, PointRadius } from './geo-path.js'
 import { geoRegistry, requireGeo, transformRegistry } from './registry.js'
@@ -47,8 +48,10 @@ function treelinksRows(rows: Row[], _t: Record<string, unknown>, ctx: TransformC
 function breadthFirst(root: HierNode, callback: (node: HierNode) => void): void {
   const queue: HierNode[] = [root]
   for (let i = 0; i < queue.length; ++i) {
+    meterTick('tree')
     const node = queue[i]!
     callback(node)
+    // bounded: the node's children; every node of the tree is queued once
     for (const c of node.children) queue.push(c)
   }
 }
@@ -72,6 +75,7 @@ const treeOfDataset = (runtime: ExpressionRuntime, name: unknown): { lookup: Map
 }
 const pathBetween = (s: HierNode, e: HierNode): HierNode[] => {
   // d3 `node.path(end)`: up from s to the least common ancestor, then down to e
+  // bounded: up the tree to its root: at most its depth
   const up = (n: HierNode): HierNode[] => { const a: HierNode[] = [n]; for (let p = n.parent; p; p = p.parent) a.push(p); return a }
   const sa = up(s)
   const ea = up(e)
@@ -92,22 +96,18 @@ registerRuntimeExpressionFunction('treeAncestors', (runtime) => (name?: unknown,
   const n = tree?.lookup.get(String(node))
   if (!tree || !n) return undefined
   const out: Row[] = []
+  // bounded: up the tree to its root: at most its depth
   for (let p: HierNode | null = n; p; p = p.parent) out.push(tree.rowOf(p) ?? p.data)
   return out
 })
 
 
-/** A vega `field` parameter: a field name, `{field}`, or an `{expr}` evaluated per row (vega-lite's voronoi reads `datum.datum.x || 0`). */
-function fieldParam(param: unknown, ctx: TransformContext, what: string): (r: Row) => unknown {
-  if (typeof param === 'string') return (r) => getField(r, param)
-  if (param !== null && typeof param === 'object') {
-    const p = param as { field?: unknown; expr?: unknown }
-    if (typeof p.field === 'string') return (r) => getField(r, p.field as string)
-    if (typeof p.expr === 'string') {
-      const f = ctx.runtime.expr(p.expr)
-      return (r) => f(r, ctx.signals)
-    }
-  }
+/**
+ * A vega `field` parameter: a field name, or the accessor a `{field}` or an `{expr}` was made (param-resolve.ts; vega-lite's voronoi
+ * reads `datum.datum.x || 0`). Anything else is no accessor, and vega's voronoi fails calling it.
+ */
+function fieldParam(param: unknown, what: string): (r: Row) => unknown {
+  if (typeof param === 'string' || typeof param === 'function') return fieldOf(param)
   throw new Error(`voronoi: the ${what} parameter must be a field name, {field} or {expr}`)
 }
 
@@ -118,12 +118,19 @@ function fieldParam(param: unknown, ctx: TransformContext, what: string): (r: Ro
  */
 function voronoiRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
   const as = (t.as as string | undefined) ?? 'path'
-  const xOf = fieldParam(t.x, ctx, 'x')
-  const yOf = fieldParam(t.y, ctx, 'y')
-  const size = resolveSizeParam(t.size, ctx)
+  const xOf = fieldParam(t.x, 'x')
+  const yOf = fieldParam(t.y, 'y')
+  // a `size` that is given is the extent, whatever it holds (vega's: a size that is no pair of numbers makes bounds that are no
+  // numbers, which the diagram refuses, `invalid bounds`, as vega's does), and it comes before `extent`
+  const size = t.size
   let bounds: Rect
   if (size) {
-    bounds = { xmin: 0, ymin: 0, xmax: size[0], ymax: size[1] }
+    const at = (i: number): number => {
+      const v: unknown = (size as unknown[])[i]
+      const value: unknown = v !== null && typeof v === 'object' && 'signal' in v ? ctx.signals[(v as { signal: string }).signal] : v
+      return +(value as number)
+    }
+    bounds = { xmin: 0, ymin: 0, xmax: at(0), ymax: at(1) }
   } else if (Array.isArray(t.extent) && t.extent.length === 2) {
     const e = t.extent as [[number, number], [number, number]]
     bounds = { xmin: e[0][0], ymin: e[0][1], xmax: e[1][0], ymax: e[1][1] }
@@ -140,7 +147,7 @@ function voronoiRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCont
   const diagram = voronoi(points, bounds)
   return rows.map((row, i) => {
     meterTick('voronoi')
-    return { ...row, [as]: diagram.path(i) }
+    return copyTupleWith(row, { [as]: diagram.path(i) })
   })
 }
 
@@ -158,6 +165,7 @@ function bisectLeftValues(a: readonly unknown[], x: unknown): number {
   let hi = a.length
   if (lo < hi) {
     if (ascendingValues(x, x) !== 0) return hi
+    // bounded: binary search: log2 of the list
     do {
       const mid = (lo + hi) >>> 1
       if (ascendingValues(a[mid], x) < 0) lo = mid + 1
@@ -180,6 +188,7 @@ function markOutsideSorted(data: Row[], f: (r: Row) => unknown, from: unknown, t
   const sorted = Array.from(index, (k) => values[k])
   const lo = bisectLeftValues(sorted, from)
   const hi = bisectLeftValues(sorted, to)
+  // bounded: one pass over the sorted index
   for (let i = 0; i < lo; i++) curr[index[i]!]! |= bit
   for (let i = hi; i < n; i++) curr[index[i]!]! |= bit
 }
@@ -218,7 +227,10 @@ function crossfilterRows(rows: Row[], t: Record<string, unknown>, ctx: Transform
   const query = ([] as unknown[]).concat(t.query ?? []) as Array<[unknown, unknown]>
   if (!fields.length) error('[aster] crossfilter requires "fields"')
   const m = query.length
-  const data = rows.map((r, i) => ({ ...r, _index: i }))
+  const data = rows.map((r, i) => {
+    if ((i & 1023) === 1023) meterTick('crossfilter', 1024)
+    return { ...r, _index: i }
+  })
   const n = data.length
   const curr = new Uint32Array(n)
   for (let d = 0; d < m; d++) {
@@ -279,18 +291,19 @@ function pieRows(rows: Row[], t: Record<string, unknown>): Row[] {
   const as = (t.as as [string, string]) ?? ['startAngle', 'endAngle']
   const startAngleField = as[0]!
   const endAngleField = as[1]!
-  const field = (t.field as string | undefined) ?? null
-  const start = (t.startAngle as number | undefined) ?? 0
+  const field = t.field ? fieldOf(t.field) : null
+  // (vega-encode Pie: `_.startAngle || 0`, `_.endAngle != null ? _.endAngle : 2π`)
+  const start = (t.startAngle as number | undefined) || 0
   const stop = (t.endAngle as number | undefined) != null ? (t.endAngle as number) : 2 * Math.PI
-  const values = rows.map((r) => (field ? (getField(r, field) as number) : 1))
+  const values = rows.map((r) => (field ? (field(r) as number) : 1))
   const n = values.length
   let a = start
   const k = (stop - start) / values.reduce((acc, v) => acc + (+v || 0), 0)
   const index = Array.from({ length: n }, (_, i) => i)
   if (t.sort) {
-    sortData(index, (x, y) => values[x]! - values[y]!)
+    sortMetered(index, (x, y) => values[x]! - values[y]!, 'pie')
   }
-  const out = rows.map((r) => ({ ...r }))
+  const out = copiedRows(rows, 'pie', true)
   for (let i = 0; i < n; ++i) {
     const v = values[index[i]!]!
     out[index[i]!]![startAngleField] = a
@@ -312,13 +325,16 @@ function crossRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContex
   const test = filter && ctx.runtime.expr(filter)
   const out: Row[] = []
   const n = rows.length
-  // Without a filter the output is exactly n*n rows: refuse it up front. With a
-  // filter the n*n candidates are still evaluated, so the wall clock is sampled
-  // inside the inner loop.
-  if (!test) checkRowCount(n * n, 'cross')
+  // Without a filter the output is exactly n*n rows: bounded up front (the n rows it is given are not amplification, the rest
+  // are). With a filter the n*n candidates are still made and tested (bounded as work, the clock sampled per row), and the rows
+  // kept are bounded as they grow.
+  if (!test) allotUpTo('rows', n * n, 'cross', n)
+  else allot('work', n * n, 'cross candidates')
   for (let i = 0; i < n; ++i) {
     const left = rows[i]!
     meterTick('cross', n)
+    if (test) allotUpTo('rows', out.length, 'cross', n)
+    // bounded: the row loop ticks with n as its cost; n x n was allotted above (as rows, or as work with a filter)
     for (let j = 0; j < n; ++j) {
       const cand: Row = { [a]: left, [b]: rows[j]! }
       if (!test || test(cand, ctx.signals)) {
@@ -334,18 +350,22 @@ function crossRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContex
 // vega's util/dotbin.js including the variance-smoothing pass.
 // ---------------------------------------------------------------------------
 
-function dotbinValues(array: number[], step: number, smooth: boolean): Float64Array {
-  const n = array.length
+/** Wilkinson's dot-density stacks over values in ascending order: each value's stack centre, smoothed between adjacent stacks. */
+function dotbinValues(values: readonly unknown[], step: number, smooth: boolean): Float64Array {
+  const n = values.length
   const v = new Float64Array(n)
+  // (vega's arithmetic over the values as they are: a null counts as 0, anything that is no number poisons what it touches)
+  const at = (k: number): number => values[k] as number
   let i = 0
   let j = 1
-  let a = array[0]!
+  let a = at(0)
   let b = a
   let w = a + step
   for (; j < n; ++j) {
-    const x = array[j]!
+    const x = at(j)
     if (x >= w) {
       b = (a + b) / 2
+      // bounded: `i` only moves forward to `j`: one pass over the values in all
       for (; i < j; ++i) v[i] = b
       w = x + step
       a = x
@@ -353,21 +373,27 @@ function dotbinValues(array: number[], step: number, smooth: boolean): Float64Ar
     b = x
   }
   b = (a + b) / 2
+  // bounded: `i` only moves forward to `n`: one pass over the values in all
   for (; i < j; ++i) v[i] = b
   if (smooth) {
     // smoothing: swap points between adjacent stacks (within step*1.25)
     const thresh = step + step / 4
     let sa = 0
     let sb = 1
+    // bounded: `sb` only moves forward: one pass over the stacks in all
     while (sb < n && v[sb] === v[sa]) ++sb
+    // bounded: `sb` moves on to the next stack every pass: one pass over the stacks in all
     while (sb < n) {
       let sc = sb + 1
+      // bounded: `sc` only moves forward over one stack
       while (sc < n && v[sb] === v[sc]) ++sc
       if (v[sb]! - v[sb - 1]! < thresh) {
         const d = sb + ((sa + sc - sb - sb) >> 1)
         let dd = d
+        // bounded: within one pair of adjacent stacks: each value is moved at most once per pair, the pairs follow each other
         while (dd < sb) v[dd++] = v[sb]!
         dd = d
+        // bounded: within one pair of adjacent stacks: each value is moved at most once per pair, the pairs follow each other
         while (dd > sb) v[dd--] = v[sa]!
       }
       sa = sb
@@ -377,45 +403,56 @@ function dotbinValues(array: number[], step: number, smooth: boolean): Float64Ar
   return v
 }
 
+/** vega-util `span`: the last of a pair less the first, 0 when that is no number. */
+const span = (pair: readonly unknown[]): number => ((pair[pair.length - 1] as number) - (pair[0] as number)) || 0
+
+/**
+ * The vega `dotbin` transform: each row's dot-density stack (Wilkinson 1999) within its group, written as `as` (default `bin`); the
+ * transform's `signal` is `{start, stop, step}`, the smallest and largest stack and the step used.
+ *
+ * What vega does, which fixes the observable output: the step is the given one when truthy, else the span of the field's extent
+ * (vega-util `extent`: null and NaN skipped) over 30; `smooth` is any truthy value; the groups are keyed by the String of the list
+ * of their groupby values, in the order they appear; a group is sorted by `field(a) - field(b)` with ties (a NaN difference
+ * included) broken by the order the rows were made in.
+ */
 function dotbinRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
-  const field = t.field as string
-  const as = (t.as as string | undefined) ?? 'bin'
-  const groupby = (t.groupby as string[] | undefined) ?? []
-  const values = rows.map((r) => getField(r, field) as number)
-  const extent = values.reduce<[number, number]>(([lo, hi], v) => [Math.min(lo, v), Math.max(hi, v)], [Infinity, -Infinity])
-  const step = (t.step as number | undefined) ?? (extent[1] - extent[0]) / 30
-  const smooth = t.smooth === true
-  // stable sort by field value within groups (vega stableCompare)
-  const groups = new Map<string, number[]>()
-  if (groupby.length) {
+  const field = fieldOf(t.field)
+  const as = (t.as as string | undefined) || 'bin'
+  const groupby = t.groupby == null ? null : ([] as unknown[]).concat(t.groupby).map(fieldOf)
+  const smooth = !!t.smooth
+  const step = (t.step as number) || span(vegaExtent(rows, field)) / 30
+  const values = rows.map((r) => field(r))
+  const made = orderOf(rows)
+  // (vega-transforms `partition`: one group per distinct String of the key list, in the order the keys first appear)
+  const groups: number[][] = []
+  if (groupby == null) groups.push(rows.map((_, i) => i))
+  else {
+    const byKey = new Map<string, number[]>()
     for (let i = 0; i < rows.length; ++i) {
-      const key = groupby.map((f) => String(getField(rows[i]!, f))).join('|')
-      let g = groups.get(key)
-      if (!g) { g = []; groups.set(key, g) }
+      // bounded: the spec's groupby fields
+      const key = String(groupby.map((get) => get(rows[i])))
+      let g = byKey.get(key)
+      if (!g) byKey.set(key, (g = [])), groups.push(g)
       g.push(i)
     }
-  } else {
-    groups.set('', rows.map((_, i) => i))
   }
-  const sorted = rows.map((r, i) => ({ r, i }))
-  sortData(sorted, (p, q) => (values[p.i] as number) - (values[q.i] as number))
-  // compute bins per group over the sorted indices
-  const out = rows.map((r) => ({ ...r }))
-  const groupIndices = new Map<string, number[]>()
-  for (const { i } of sorted) {
-    const key = groupby.map((f) => String(getField(rows[i]!, f))).join('|')
-    let g = groupIndices.get(key)
-    if (!g) { g = []; groupIndices.set(key, g) }
-    g.push(i)
-  }
-  for (const g of groupIndices.values()) {
-    const gvals = g.map((i) => values[i] as number)
-    const bins = dotbinValues(gvals, step, smooth)
+  const out = copiedRows(rows, 'dotbin', true)
+  let min = Infinity
+  let max = -Infinity
+  for (const g of groups) {
+    meterTick('dotbin', g.length)
+    sortMetered(g, (p, q) => ((values[p] as number) - (values[q] as number)) || (made ? made[p]! - made[q]! : 0) || p - q, 'dotbin')
+    // bounded: a group's rows: the groups partition the rows, so one pass over them in all
+    const bins = dotbinValues(g.map((i) => values[i]), step, smooth)
+    // bounded: a group's rows: the groups partition the rows, so one pass over them in all
     for (let k = 0; k < g.length; ++k) {
-      out[g[k]!]![as] = bins[k]
+      const v = bins[k]!
+      if (v < min) min = v
+      if (v > max) max = v
+      out[g[k]!]![as] = v
     }
   }
-  void ctx
+  if (typeof t.signal === 'string') ctx.signals[t.signal] = { start: min, stop: max, step }
   return out
 }
 
@@ -424,27 +461,23 @@ function dotbinRows(rows: Row[], t: Record<string, unknown>, ctx: TransformConte
 // ---------------------------------------------------------------------------
 
 /**
- * A vega `field` parameter on a geo transform: a field name (an access path), or `{expr}` -- an
- * expression evaluated per datum (vega-lite writes a `datum` / `value` position this way).
+ * A vega `field` parameter on a geo transform: a field name (an access path), or the accessor an `{expr}` or a `{field}` was made
+ * (vega-lite writes a `datum` / `value` position as an `{expr}`).
  */
-function geoAccessor(f: unknown, ctx: TransformContext): (r: Row) => unknown {
-  if (f !== null && typeof f === 'object' && typeof (f as { expr?: unknown }).expr === 'string') {
-    return compileExprTransform((f as { expr: string }).expr, ctx)
-  }
-  return (r) => getField(r, f as string)
-}
+const geoAccessor = (f: unknown): ((r: Row) => unknown) => fieldOf(f)
 
 function geopointRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
   const projName = String(t.projection)
   const projection = ctx.projections?.get(projName) as GeoProjection | undefined
-  if (!projection) throw new Error(`[aster] geopoint: unknown projection "${projName}"`)
+  if (!projection) throw new Error(`Unrecognized scale name: ${JSON.stringify(projName)}`)
   const fields = (t.fields as [unknown, unknown]) ?? ['lon', 'lat']
-  const lon = geoAccessor(fields[0], ctx)
-  const lat = geoAccessor(fields[1], ctx)
+  const lon = geoAccessor(fields[0])
+  const lat = geoAccessor(fields[1])
   const as = (t.as as [string, string]) ?? ['x', 'y']
-  return rows.map((r) => {
+  return rows.map((r, i) => {
+    if ((i & 1023) === 1023) meterTick('geopoint', 1024)
     const xy = projection.project(lon(r) as number, lat(r) as number)
-    return xy ? { ...r, [as[0]!]: xy[0], [as[1]!]: xy[1] } : { ...r, [as[0]!]: undefined, [as[1]!]: undefined }
+    return copyTupleWith(r, xy ? { [as[0]!]: xy[0], [as[1]!]: xy[1] } : { [as[0]!]: undefined, [as[1]!]: undefined })
   })
 }
 
@@ -461,13 +494,16 @@ function geopathRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCont
   } else {
     const projName = String(t.projection)
     path = (ctx.projections?.get(projName) as GeoProjection | undefined)?.path
-    if (!path) throw new Error(`[aster] geopath: unknown projection "${projName}"`)
+    if (!path) throw new Error(`Unrecognized scale name: ${JSON.stringify(projName)}`)
   }
   // (no field: the row itself is the GeoJSON feature)
-  const field = t.field == null ? (r: Row): unknown => r : geoAccessor(t.field, ctx)
+  const field = t.field == null ? (r: Row): unknown => r : geoAccessor(t.field)
   const as = (t.as as string | undefined) || 'path'
-  const radius = t.pointRadius != null ? (geoPointRadius(t.pointRadius, ctx) as PointRadius) : undefined
-  return rows.map((r) => ({ ...r, [as]: path.draw(field(r), radius) }))
+  const radius = t.pointRadius != null ? (geoPointRadius(t.pointRadius) as PointRadius) : undefined
+  return rows.map((r, i) => {
+    if ((i & 1023) === 1023) meterTick('geopath', 1024)
+    return copyTupleWith(r, { [as]: path.draw(field(r), radius) })
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -477,10 +513,10 @@ function geopathRows(rows: Row[], t: Record<string, unknown>, ctx: TransformCont
 
 function geojsonRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
   const fields = t.fields as [unknown, unknown] | undefined
-  const lon = fields ? geoAccessor(fields[0], ctx) : undefined
-  const lat = fields ? geoAccessor(fields[1], ctx) : undefined
+  const lon = fields ? geoAccessor(fields[0]) : undefined
+  const lat = fields ? geoAccessor(fields[1]) : undefined
   // vega-geo: `geojson || (!fields && identity)` -- with neither, each row is itself a feature
-  const geojson: ((r: Row) => unknown) | undefined = t.geojson != null ? geoAccessor(t.geojson, ctx) : fields ? undefined : (r) => r
+  const geojson: ((r: Row) => unknown) | undefined = t.geojson != null ? geoAccessor(t.geojson) : fields ? undefined : (r) => r
   let features: unknown[] = []
   const points: [number, number][] = []
   if (geojson) for (const r of rows) features.push(geojson(r))
@@ -564,18 +600,21 @@ const LINK_PATHS: Record<string, (sx: number, sy: number, tx: number, ty: number
   'diagonal-radial': linkDiagonalR,
 }
 
-function linkpathRows(rows: Row[], t: Record<string, unknown>, ctx: TransformContext): Row[] {
+function linkpathRows(rows: Row[], t: Record<string, unknown>): Row[] {
   // (each endpoint is a field or an `{expr}`, like any vega `field` parameter)
-  const sx = geoAccessor(t.sourceX ?? 'source.x', ctx)
-  const sy = geoAccessor(t.sourceY ?? 'source.y', ctx)
-  const tx = geoAccessor(t.targetX ?? 'target.x', ctx)
-  const ty = geoAccessor(t.targetY ?? 'target.y', ctx)
+  const sx = geoAccessor(t.sourceX ?? 'source.x')
+  const sy = geoAccessor(t.sourceY ?? 'source.y')
+  const tx = geoAccessor(t.targetX ?? 'target.x')
+  const ty = geoAccessor(t.targetY ?? 'target.y')
   const as = (t.as as string | undefined) ?? 'path'
   const orient = (t.orient as string | undefined) ?? 'vertical'
   const shape = (t.shape as string | undefined) ?? 'line'
   const path = ownGet(LINK_PATHS, shape + '-' + orient) ?? ownGet(LINK_PATHS, shape)
   if (!path) throw new Error(`[aster] linkpath unsupported type: ${shape}${t.orient ? '-' + orient : ''}`)
-  return rows.map((r) => ({ ...r, [as]: path(sx(r) as number, sy(r) as number, tx(r) as number, ty(r) as number) }))
+  return rows.map((r, i) => {
+    if ((i & 1023) === 1023) meterTick('linkpath', 1024)
+    return copyTupleWith(r, { [as]: path(sx(r) as number, sy(r) as number, tx(r) as number, ty(r) as number) })
+  })
 }
 
 // -- addon registration ------------------------------------------------------

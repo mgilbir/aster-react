@@ -9,26 +9,32 @@
  * fully repainted from a scene evaluated afresh -- at device pixel ratios 1 and 2, and compares every pixel after every step.
  *
  * Run standalone: npx tsx scripts/browser-canvas-dirty.mts [--seeds=80] [--steps=14]
- * It is also run by `pnpm conformance:canvas` (gate `canvas`).
+ * It is also run by `pnpm conformance:canvas` (gate `canvas`, which floors the frames <Chart> painted nothing for: if
+ * `paintsSameAs` never held, every frame would be a full repaint compared with a full repaint). It reads the core sources.
  */
 import { writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { makeTempDir } from '../../../scripts/lib/temp-dir.mjs'
+import { GATE_FLAGS, intOption, runGate } from '../../../scripts/lib/run-gate.mjs'
+import { launchBrowser } from '../../../scripts/lib/launch-browser.mjs'
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)
 const CORE_SRC = join(CONF_DIR, '..', 'core', 'src')
 
-export interface DirtyOracleResult { runs: number; untouched: number; repainted: number; failures: string[] }
+/** One case per scenario (`error` when a step differs from a full repaint), and how its frames were painted. */
+export interface DirtyOracleResult { cases: Array<{ name: string; error?: string }>; untouched: number; repainted: number }
 
 export async function runDirtyPixelOracle(
   browserName: 'chromium' | 'firefox' | 'webkit' = 'chromium',
   seeds = 80,
   steps = 14,
+  plant = false,
 ): Promise<DirtyOracleResult> {
-  const OUT_DIR = join(CONF_DIR, '.tmp-browser-canvas-dirty')
+  const OUT_DIR = makeTempDir('.tmp-browser-canvas-dirty-', CONF_DIR) // (one directory per run: concurrent runs do not clobber each other)
   rmSync(OUT_DIR, { recursive: true, force: true })
   mkdirSync(OUT_DIR, { recursive: true })
   const entry = `
@@ -51,7 +57,7 @@ function fullPaint(canvas, scene, dpr) {
   renderSceneToCanvas(scene, ctx, { dpr })
 }
 
-window.__runDirty = (seed, steps, dpr) => {
+window.__runDirty = (seed, steps, dpr, plant) => {
   let live = null, snap = null, untouched = 0, repainted = 0
   for (const st of canvasDirtyScenario(seed, steps)) {
     if (live == null || live.width !== Math.round(st.scene.width * dpr) || live.height !== Math.round(st.scene.height * dpr)) { live = mk(st.scene, dpr); snap = null }
@@ -61,6 +67,8 @@ window.__runDirty = (seed, steps, dpr) => {
     else if (snap != null && paintsSameAs(snap, st.scene)) { how = 'nothing painted'; untouched++ }
     else { if (snap != null) repainted++; fullPaint(live, st.scene, dpr) }
     snap = snapshotCanvasScene(st.scene)
+    // (--plant-difference: a 3x3 black mark the full repaint does not have)
+    if (plant) { ctx.fillStyle = '#000'; ctx.fillRect(1, 1, 3, 3) }
     const ref = mk(st.scene, dpr)
     fullPaint(ref, st.fresh(), dpr)
     if (ref.width !== live.width || ref.height !== live.height) return { untouched, repainted, error: 'step ' + st.step + ': canvas size differs from the fresh scene' }
@@ -89,38 +97,50 @@ window.__runDirty = (seed, steps, dpr) => {
   })
   writeFileSync(join(OUT_DIR, 'index.html'), '<!doctype html><html><body><script src="./page.js"></script></body></html>')
   const playwright = await import('playwright')
-  const browser = await playwright[browserName].launch({ headless: true, args: browserName === 'chromium' ? ['--disable-dev-shm-usage'] : [] })
+  const browser = await launchBrowser(playwright[browserName], { headless: true, args: browserName === 'chromium' ? ['--disable-dev-shm-usage'] : [] })
   const page = await browser.newPage({ deviceScaleFactor: 1 })
-  page.on('pageerror', (e) => console.error('[page]', e.message.slice(0, 200)))
+  const pageErrors: string[] = []
+  page.on('pageerror', (e) => pageErrors.push(e.message.slice(0, 200)))
   await page.goto(`file://${join(OUT_DIR, 'index.html')}`)
   await page.waitForFunction(() => '__runDirty' in window, null, { timeout: 30_000 })
-  const failures: string[] = []
-  let runs = 0
+  const cases: DirtyOracleResult['cases'] = []
   let untouched = 0
   let repainted = 0
-  for (const dpr of [1, 2]) {
-    for (let seed = 1; seed <= seeds; seed++) {
-      runs++
-      const r = await page.evaluate(
-        ([s, n, d]) => (window as unknown as { __runDirty: (s: number, n: number, d: number) => { untouched: number; repainted: number; error?: string } }).__runDirty(s as number, n as number, d as number),
-        [seed, steps, dpr] as const,
-      )
-      untouched += r.untouched
-      repainted += r.repainted
-      if (r.error) failures.push(`seed=${seed}: ${r.error}`)
+  try {
+    for (const dpr of [1, 2]) {
+      for (let seed = 1; seed <= seeds; seed++) {
+        const r = await page.evaluate(
+          ([s, n, d, p]) => (window as unknown as { __runDirty: (s: number, n: number, d: number, p: boolean) => { untouched: number; repainted: number; error?: string } }).__runDirty(s as number, n as number, d as number, p as boolean),
+          [seed, steps, dpr, plant] as const,
+        )
+        untouched += r.untouched
+        repainted += r.repainted
+        const errors = [...(r.error ? [r.error] : []), ...pageErrors.splice(0).map((m) => `page error: ${m}`)]
+        cases.push({ name: `dpr=${dpr} seed=${seed}`, ...(errors.length ? { error: errors.join('; ') } : {}) })
+      }
     }
+  } finally {
+    await browser.close()
+    rmSync(OUT_DIR, { recursive: true, force: true })
   }
-  await browser.close()
-  rmSync(OUT_DIR, { recursive: true, force: true })
-  return { runs, untouched, repainted, failures }
+  return { cases, untouched, repainted }
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  cli({ url: import.meta.url, flags: { browser: 'eq', seeds: 'eq', steps: 'eq' } })
+  cli({ url: import.meta.url, flags: { browser: 'eq', seeds: 'eq', steps: 'eq', ...GATE_FLAGS } })
   const argv = process.argv.slice(2)
-  const arg = (n: string, d: string): string => argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1] ?? d
-  const res = await runDirtyPixelOracle(arg('browser', 'chromium') as 'chromium', Number(arg('seeds', '80')), Number(arg('steps', '14')))
-  console.log(`[browser-canvas-dirty] ${res.runs} scenarios, ${res.untouched} frames that painted nothing, ${res.repainted} full repaints, ${res.failures.length} failing`)
-  for (const f of res.failures.slice(0, 20)) console.log('  ' + f)
-  process.exit(res.failures.length ? 1 : 0)
+  const raw = (n: string): string | undefined => argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1]
+  const seeds = intOption(raw('seeds'), '--seeds', 80, { min: 1 })
+  const steps = intOption(raw('steps'), '--steps', 14, { min: 1 })
+  await runGate({
+    name: 'canvas-dirty',
+    counters: { scenarios: { floor: 2 * seeds, what: 'scenarios run' }, 'untouched-frames': { floor: 1, what: 'frames <Chart> painted nothing for' } },
+    reads: [],
+    run: async (gate) => {
+      const res = await runDirtyPixelOracle((raw('browser') ?? 'chromium') as 'chromium', seeds, steps, gate.plant)
+      for (const c of res.cases) if (c.error) gate.differ(c.name, c.error); else gate.agree(c.name)
+      gate.count('untouched-frames', res.untouched)
+      console.log(`[browser-canvas-dirty] ${res.cases.length} scenarios, ${res.untouched} frames that painted nothing, ${res.repainted} full repaints`)
+    },
+  })
 }

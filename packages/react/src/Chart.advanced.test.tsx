@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { ChartHandle } from './Chart'
 import type { SelectValue, ViewDomain } from './interaction'
 import { forEachVariant } from './testing/variants'
+import { stubPointerCapture, type PointerCaptureStub } from './testing/pointer-capture'
 
 // The matrix runs every test below on <Chart>, <SvgChart> and <SvgChart interaction={interaction}>;
 // `Chart` is the variant's component (see testing/variants.tsx).
@@ -38,11 +39,11 @@ forEachVariant(['svg'], (Chart, variant) => {
     return { container, root }
   }
 
+  let pointerCapture: PointerCaptureStub
   beforeEach(() => {
-    ;(Element.prototype as unknown as Record<string, unknown>).setPointerCapture = vi.fn()
-    ;(Element.prototype as unknown as Record<string, unknown>).releasePointerCapture = vi.fn()
+    pointerCapture = stubPointerCapture()
   })
-  afterEach(() => { document.body.innerHTML = '' })
+  afterEach(() => { pointerCapture.restore(); document.body.innerHTML = '' })
 
   describe('pan/zoom', () => {
     it('zooms on wheel through domainRaw and resets on double click', () => {

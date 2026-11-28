@@ -5,8 +5,8 @@
  * vega-scenegraph writes an item's `description`, `aria`, `ariaRole` and `ariaRoleDescription` (the `ariaItemAttributes`
  * of util/aria.js) on the element of EVERY item, a group mark's item `<g transform>` included -- the mark's own container
  * carries the mark-level `description` / `aria`, which are a different thing and stay as they were. Each case runs
- * through real vega, the string renderer, the DOM renderer and the accessible tree: the strict canonicalizer judges the
- * documents (structure includes `role`, `aria-*`), and the tree must name exactly the group items vega describes.
+ * through real vega, the string renderer and the DOM renderer: the strict canonicalizer judges the documents (structure includes
+ * `role`, `aria-*`). The accessible tree must name exactly the group items vega describes in the last three tests of the file only.
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
@@ -19,7 +19,7 @@ type Spec = Record<string, unknown>
 
 async function oracleSvg(spec: Spec): Promise<string> {
   const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(
-    vega.parse(spec as never), { renderer: 'none' })
+    vega.parse(structuredClone(spec) as never), { renderer: 'none' })
   try { await view.runAsync(); return await view.toSVG() } finally { view.finalize() }
 }
 const domSvg = (spec: Spec): string => new XMLSerializer().serializeToString(renderSceneToDomElement(evaluateChart(compileChart(spec as never)), document) as unknown as Node)

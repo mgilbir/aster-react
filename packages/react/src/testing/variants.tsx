@@ -15,7 +15,7 @@
  *   canvas       <Chart> only
  *   interaction  hit testing + signal event loop: <Chart> and <SvgChart interaction={interaction}>
  *   signals      the `signal.on` event loop (ships with interaction)
- *   png          `getPng` on the ref: <Chart> only (<SvgChart> takes it as `png={png}`, which no matrix variant passes)
+ *   png          `getPng` on the ref: <Chart>, and <SvgChart> given `png={png}` (the SvgChart+interaction variant)
  * A variant that LACKS a declared capability does not skip: it asserts the documented failure mode
  * (FAILURE_MODES below) in place of the test, so a variant that quietly started to work, or to fail
  * differently, turns the suite red.
@@ -30,6 +30,7 @@ import { describe, it, expect } from 'vitest'
 import { Chart } from '../Chart.js'
 import { SvgChart } from '../SvgChart.js'
 import { interaction } from '../interaction-capability.js'
+import { png } from '../png-capability.js'
 import type { ChartHandle, ChartProps } from '../chart-types.js'
 import { SVG_CHART_INTERACTION_PROPS } from '../svg-chart-types.js'
 import { PNG_NEEDS_CAPABILITY } from '../ChartCore.js'
@@ -58,7 +59,7 @@ const PlainSvgChart = SvgChart as unknown as ChartComponent
 const SvgChartWithInteraction: ChartComponent = React.forwardRef<ChartHandle, ChartProps>(function SvgChartWithInteraction(props, ref) {
   const { renderer, ...rest } = props
   if (renderer === 'canvas') throw new Error('the SvgChart+interaction variant has no canvas: declare the `canvas` capability')
-  return <SvgChart {...rest} interaction={interaction} ref={ref} />
+  return <SvgChart {...rest} interaction={interaction} png={png} ref={ref} />
 })
 
 // The plain variant refuses what only the interaction variant has, so a test that uses it must declare
@@ -103,7 +104,8 @@ export const VARIANTS: readonly VariantSpec[] = [
   { component: PlainSvgChartChecked, variant: makeVariant('SvgChart', ['svg'], (p) => React.createElement(SvgChart as never, p)) },
   {
     component: SvgChartWithInteraction,
-    variant: makeVariant('SvgChart+interaction', ['svg', 'interaction', 'signals'], (p) => React.createElement(SvgChart as never, { ...p, interaction })),
+    // (and the PNG export, so `<SvgChart png={png}>` runs the png tests: the light shell with every capability it can take)
+    variant: makeVariant('SvgChart+interaction', ['svg', 'interaction', 'signals', 'png'], (p) => React.createElement(SvgChart as never, { ...p, interaction, png })),
   },
 ]
 
@@ -140,7 +142,6 @@ interface Mounted { container: HTMLElement; errors: Error[]; unmount(): void }
 
 function mount(variant: Variant, props: Record<string, unknown>): Mounted {
   if (typeof document === 'undefined') throw new Error('the variant matrix needs a DOM: add `// @vitest-environment jsdom` to this test file')
-  ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   const errors: Error[] = []
   const container = document.createElement('div')
   document.body.appendChild(container)

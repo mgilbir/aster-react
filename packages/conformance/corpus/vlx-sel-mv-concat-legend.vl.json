@@ -75,7 +75,12 @@
        "c"
       ]
      },
-     "bind": "legend"
+     "bind": "legend",
+     "value": [
+      {
+       "c": "x"
+      }
+     ]
     }
    ]
   },

@@ -53,7 +53,7 @@ incremental evaluation that draws fresh random numbers cannot equal a fresh one
 
 - `packages/core/src/types.ts` (`RuntimeInput.random`), `packages/core/src/random-tape.ts`
   (the tapes and `mayDrawRandom`).
-- `packages/core/src/transform-agg.ts` (`SEED`, `lcg`), `packages/core/src/transform-basic.ts`
+- `packages/core/src/row-keys.ts` (`SEED`, `lcg`), `packages/core/src/transform-basic.ts`
   (`sampleRows`), `packages/core/src/layout-random.ts` (`layoutRandom`).
 - `packages/core/src/random-sites.test.ts`: `mayDrawRandom` names every drawing expression
   function and transform, and the engine fingerprints exactly those sites.

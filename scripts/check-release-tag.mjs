@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { cli } from './lib/cli.mjs'
+import { versionOfTag } from './lib/release.mjs'
 
 cli({ url: import.meta.url, flags: { root: 'value' }, args: '<tag>' })
 
@@ -26,9 +27,8 @@ function fail(message) {
 }
 
 if (!tag) fail('usage: check-release-tag.mjs <tag>')
-const m = /^v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/.exec(tag)
-if (!m) fail(`tag "${tag}" is not a version tag (v<major>.<minor>.<patch>[-prerelease])`)
-const want = m[1]
+const want = versionOfTag(tag)
+if (!want) fail(`tag "${tag}" is not a version tag (v<major>.<minor>.<patch>[-prerelease])`)
 for (const pkg of PUBLIC) {
   const manifest = JSON.parse(readFileSync(join(root, 'packages', pkg, 'package.json'), 'utf8'))
   if (manifest.private) fail(`@aster-charts/${pkg} is private`)

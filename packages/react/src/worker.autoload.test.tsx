@@ -14,7 +14,7 @@ import { renderSpec, type ChartStream, type VgSpec } from '@aster-charts/core'
 import { isAddonLoaded } from '@aster-charts/core/addons'
 import {
   createWorkerDispatcher, handleChartWorkerRequest, handleWorkerMessage, handleWorkerMessageWithAddons, prepareWorkerMessage,   type ChartWorkerResponse, type ChartWorkerStreamResponse,
-} from './worker'
+} from './worker-impl'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 

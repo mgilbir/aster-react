@@ -14,7 +14,8 @@
  * spec can't reach the input. test/data-independence.test.ts counts every read of a row and deep-freezes the input.
  */
 
-import { VLCompileError } from './names.js'
+import type { SpecArming } from './consume.js'
+import { VLCompileError, dict } from './names.js'
 
 /** The build's environment, as bundlers write it in (`process.env.NODE_ENV`); `process` may not exist at all (an unbundled import). */
 declare const process: { env: { NODE_ENV?: string } }
@@ -23,6 +24,12 @@ type Obj = Record<string, unknown>
 
 /** The user's row payloads a copy carries by reference. */
 export type RowPayloads = Set<object>
+
+/**
+ * How deep a spec may nest (objects and arrays, the rows aside): what compile walks is bounded, so a spec nested past it is a
+ * VLCompileError, never a stack overflow (docs/LIMITS.md; core's pre-flight ceiling, HARD_MAX_SPEC_DEPTH, is the same).
+ */
+export const MAX_SPEC_DEPTH = 1000
 
 /** Rows: the `values` of a `data` object (a view's `data`, a lookup's `from.data`) and every entry of `datasets`. */
 const isPayload = (parentKey: string, key: string): boolean => (parentKey === 'data' && key === 'values') || parentKey === 'datasets'
@@ -34,22 +41,49 @@ const isPlain = (v: object): boolean => {
 }
 
 /**
- * Copy `input` the way structuredClone does (shared and cyclic objects stay shared and cyclic, holes stay holes, a
- * `__proto__` key stays an own key, a value structuredClone refuses throws the same message), except for row payloads.
+ * Copy `input` the way structuredClone does (shared objects stay shared, holes stay holes, a `__proto__` key stays an own key, a
+ * value structuredClone refuses throws the same message), except for row payloads, and into `dict`s (objects that inherit no named
+ * property). A cyclic spec, or one nested deeper than MAX_SPEC_DEPTH, is a VLCompileError.
+ *
+ * `arming` (consume.ts ARMING) makes each copied object, so that a compile's copy is armed for the consumption check while it is made;
+ * the root's properties named in `plainAtRoot` (the config) are copied as plain data.
  */
-export function cloneSpecStructure(input: unknown, payloads: RowPayloads): Obj {
+export function cloneSpecStructure(input: unknown, payloads: RowPayloads, arming?: SpecArming, plainAtRoot?: ReadonlySet<string>): Obj {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new VLCompileError('a Vega-Lite spec must be a JSON object')
-  const memo = new Map<object, unknown>()
+  // (what is copied as plain data is remembered apart: one object of the input is never both armed and plain in the copy)
+  const memoArmed = new Map<object, unknown>()
+  const memoPlain = new Map<object, unknown>()
+  // (the objects being copied, from the root down to here: one met again among them is a cycle)
+  const open = new Set<object>()
+  let depth = 0
+  // (inside a property copied as plain data)
+  let plain = false
   const copy = (v: unknown, parentKey: string, key: string): unknown => {
     if (v !== null && typeof v === 'object' && isPayload(parentKey, key)) {
       payloads.add(v)
       return v
     }
+    if (v !== null && typeof v === 'object') {
+      if (open.has(v)) throw new VLCompileError('a Vega-Lite spec cannot contain itself (it holds a cycle)')
+      if (depth >= MAX_SPEC_DEPTH) throw new VLCompileError(`a Vega-Lite spec nested deeper than ${MAX_SPEC_DEPTH} is not supported`)
+    }
+    if (v === null || typeof v !== 'object' || (plain ? memoPlain : memoArmed).has(v)) return copyValue(v, key)
+    open.add(v)
+    depth++
+    try {
+      return copyValue(v, key)
+    } finally {
+      depth--
+      open.delete(v)
+    }
+  }
+  const copyValue = (v: unknown, key: string): unknown => {
     if (v === null || typeof v !== 'object') {
       // (structuredClone refuses functions and symbols wherever they are)
       if (typeof v === 'function' || typeof v === 'symbol') return structured(v)
       return v
     }
+    const memo = plain ? memoPlain : memoArmed
     const seen = memo.get(v)
     if (seen !== undefined) return seen
     if (!isPlain(v)) {
@@ -57,22 +91,39 @@ export function cloneSpecStructure(input: unknown, payloads: RowPayloads): Obj {
       memo.set(v, out)
       return out
     }
+    const arms = arming !== undefined && !plain
     if (Array.isArray(v)) {
       const out: unknown[] = new Array(v.length)
-      memo.set(v, out)
       for (let i = 0; i < v.length; i++) if (i in v) out[i] = copy(v[i], key, '')
+      // (a cycle is refused before it is met again, so an object is remembered once it is made)
+      memo.set(v, out)
+      if (arms) arming.array(out)
       return out
     }
-    const out: Obj = {}
-    memo.set(v, out)
-    for (const k of Object.keys(v)) {
-      const value = copy((v as Obj)[k], key, k)
-      if (k === '__proto__') Object.defineProperty(out, k, { value, writable: true, enumerable: true, configurable: true })
-      else out[k] = value
+    // (the copy is a `dict`: a key the spec names is an own key whatever it is - `__proto__`, `constructor` - and a read of a
+    // key the spec does not have is `undefined`, never something Object.prototype holds; compile.ts makes the output ordinary again)
+    const out: Obj = dict()
+    const keys = Object.keys(v)
+    const values = new Array<unknown>(keys.length)
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i]!
+      // (the root's plain properties: their whole value is copied as data)
+      const enter = plainAtRoot !== undefined && depth === 1 && plainAtRoot.has(k) && !plain
+      if (enter) plain = true
+      try {
+        values[i] = copy((v as Obj)[k], key, k)
+      } finally {
+        if (enter) plain = false
+      }
     }
+    if (arms) arming.object(out, keys, values)
+    else for (let i = 0; i < keys.length; i++) out[keys[i]!] = values[i]
+    memo.set(v, out)
     return out
   }
-  return copy(input, '', '') as Obj
+  const root = copy(input, '', '') as Obj
+  if (arming !== undefined) arming.root(root)
+  return root
 }
 
 function structured(v: unknown): unknown {

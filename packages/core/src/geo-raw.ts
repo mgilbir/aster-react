@@ -256,6 +256,7 @@ export const naturalEarth1Raw: RawProjection = {
     let delta: number
     let phi2: number
     let phi4: number
+    // bounded: at most 25 Newton steps (the counter)
     do {
       phi2 = phi * phi
       phi4 = phi2 * phi2
@@ -273,6 +274,7 @@ function mollweideTheta(cp: number, phi: number): number {
   const cpsinPhi = cp * sin(phi)
   let i = 30
   let delta: number
+  // bounded: at most 30 Newton steps (the counter)
   do phi -= delta = (phi + sin(phi) - cpsinPhi) / (1 + cos(phi))
   while (abs(delta) > EPSILON && --i > 0)
   return phi / 2

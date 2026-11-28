@@ -10,6 +10,7 @@
  *
  * An opt-in entry: it imports the canvas renderer, which a chart that never exports does not need.
  */
+import type { HostBlob } from './host-types.js'
 import { renderSceneToCanvas, type CanvasLike } from './canvas.js'
 import { IMAGE_CONCURRENCY, loadImages, sceneImageUrls, withSceneImages } from './image-load.js'
 import type { SceneRoot } from './types.js'
@@ -59,7 +60,7 @@ interface PngCanvas {
  * cannot be encoded (a browser may refuse a canvas far below those caps, and an image drawn into it from another origin without
  * CORS makes it unreadable).
  */
-export async function renderSceneToPng(scene: SceneRoot, options: PngOptions = {}): Promise<Blob> {
+export async function renderSceneToPng(scene: SceneRoot, options: PngOptions = {}): Promise<HostBlob> {
   const scale = options.scale ?? 1
   if (typeof scale !== 'number' || !Number.isFinite(scale) || scale <= 0) {
     throw new RangeError(`[aster] renderSceneToPng: scale must be a finite number above 0, got ${String(scale)}`)

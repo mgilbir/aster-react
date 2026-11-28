@@ -92,7 +92,7 @@ function finishWire(unit: SelUnit, sel: Selection, wire: Wire, declared: (name: 
 function wirePoint(unit: SelUnit, sel: Selection, all: Selections): Wire {
   const tupleName = sel.name + TUPLE
   if (isTimerSelection(sel)) {
-    const signals = [...animationSignals(sel.name, unit.scaleName('time')), animationTupleSignal(sel.name, unitNameExpr(unit))] as Signal[]
+    const signals = [...animationSignals(sel.name, unit.scaleName('time')), animationTupleSignal(sel.name, unitNameExpr(unit), sel.fields.byRowId, VORONOI_DATUM)] as Signal[]
     return { signals, early: [], tuple: signals[signals.length - 1]!, brushes: [] }
   }
 

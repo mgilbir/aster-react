@@ -76,6 +76,19 @@ The exit codes of these scripts are: 0 for success (and for `--help` and `--list
 The shared code is `scripts/lib/cli.mjs` (`cli()`); `scripts/cli-usage.test.mjs` runs every script's `--help` and an unknown option
 and fails when a script named in a `package.json` does not call `cli()`, so a new script must call it.
 
+### Temporary directories
+
+A test, gate or script that makes a temporary directory removes it: on success, on a failure, on a thrown assertion and when it is
+killed. Make one with `makeTempDir` / `withTempDir` from `scripts/lib/temp-dir.mjs` (never `mkdtemp`), and launch a Playwright
+browser with `launchBrowser` from `scripts/lib/launch-browser.mjs` (never `.launch(`): the directory goes when the callback ends or
+`removeTempDir` is called, and whatever is still alive goes when the process exits or receives SIGINT, SIGTERM or SIGHUP (a `finally`
+does not run after `process.exit`). A child process that writes into a directory leaves it to its parent, which owns and removes it
+(a SIGKILLed child cannot clean up after itself).
+
+`pnpm check` runs every gate with `TMPDIR` pointed at a fresh directory and fails a gate that leaves anything in it
+(`FAIL <gate> (left temp dirs)`, naming the entries; the one exception is tsx's own per-user `tsx-<uid>` directory, a single fixed-name directory reused by every run; keep `TMPDIR` short, since tsx listens on a unix socket under it); `scripts/temp-dir-leaks.test.mjs` plants each kind of leak and watches it fail, and
+fails on a `mkdtemp` or `.launch(` call outside the two helpers. Four weeks of gate runs without this left 394 GB of `aster-*` directories.
+
 ## Writing a new test
 
 - **Core**: a focused Vitest file beside the module (`packages/core/src/*.test.ts`);
@@ -85,7 +98,22 @@ and fails when a script named in a `package.json` does not call `cli()`, so a ne
   `renderToString` and (for the strict no-replacement guarantee) `hydrateChart`.
 - **Conformance**: add a minimal spec to `packages/conformance/corpus/*.vg.json` or
   `*.vl.json`. Most entries set explicit numeric `width`/`height` and `autosize: 'none'` so layout is deterministic, but nothing
-  requires it; a case that needs another autosize or a container size may set it.
+  requires it; a case that needs another autosize or a container size may set it. A composite (concat, facet, repeat) has no root size
+  of its own: under `autosize: 'none'` it draws into a 10 px root, so composites keep the default (`pad`) and size themselves by their cells.
+- **The corpus is a set of distinct checks.** A spec's name says what it tests, and the spec contains it: delete the property the name
+  gives and the oracle's SVG changes (a property that is the default, written out, says so in its `description`). Two entries whose real-Vega
+  renders are the same compare the same thing twice, so `pnpm conformance` refuses a new such pair (`packages/conformance/src/corpus-distinct.ts`),
+  and refuses a spec whose own marks draw no item unless it is listed with its reason. The two tables that hold the exceptions,
+  `packages/conformance/corpus-identical.json` (groups still to be made distinct: none today) and `corpus-no-items.json` (specs whose own marks draw nothing, by
+  design, each with its reason), are exact in both directions: an entry that is fixed has to be removed, so they only shrink. `pnpm conformance-vl` prints, under an entry,
+  the data warnings real vega raises on vega-lite's own output (an `Infinite extent` is a scale built from no value). Where a spec is the default
+  written out (a stack offset `zero`, an align `0.5`), it is kept for that, next to specs where the property bites.
+- **What the corpus cannot see.** The SVG carries no tooltip, so `pnpm conformance-vl` compares the tooltip of every item of real Vega's
+  scenegraph on the Vega that `@aster-charts/vl` emits against the one it gets from vega-lite's. It compares the first frame of an
+  animation (the timer's selection is empty and `filter: {param}` keeps every row), so the `vlx-anim-*` specs pin the compile; the
+  stepped clock is `pnpm conformance:signals` (the `anim-*` cases). A Vega-Lite `line` ignores the animation filter (it facets the
+  unfiltered data). A `"container"` size takes the Node fallback in `pnpm conformance-vl`; `pnpm conformance:browser` renders those specs in
+  a host of a given size. A bound input (`bind`) leaves no trace in a static render; the selection and signal gates drive it.
 
 ## Reproducers
 
@@ -120,9 +148,14 @@ Chromium with live text metrics. `pnpm conformance:batch` rasterizes the normal 
 `denseMarks` SVG DOMs of the same scene and diffs the pixels, so the batched path
 (which intentionally stops mirroring Vega's per-item DOM) cannot drift. `pnpm a11y-parity` checks every corpus guide caption
 against Vega's own `aria-label`; `pnpm transform-matrix` covers bin/window/stack/
-joinaggregate/impute/sequence/identifier/fold/flatten/pivot/lookup combinations. The scene differential compares the resolved scenes
-before serialization: scale domains/ranges/bandwidth per scope (including nested scopes),
-group/item multisets, and paint order wherever painted extents overlap.
+joinaggregate/impute/sequence/identifier/fold/flatten/pivot/lookup combinations. The scene differential (`pnpm scene-diff`)
+compares the resolved scenes before serialization, as one tree on each side, at every depth (inside group marks and facets):
+the root's and every group item's scales by name (a scale only one side has is a difference), each scope's marks as a sequence
+in paint order (vega's `zindex` applied to the oracle's list), each mark's items as a multiset of records holding every encode
+channel of the pinned Vega schema's `encodeEntry` that either side carries (a shape-drawn item's path through vega's own shape
+generator), paint order wherever painted extents overlap, and group items one by one. Axes, legends and titles are left to the
+SVG gates and the guide differentials. A spec whose oracle drew items of which none was compared fails; items, channel values,
+marks, group items and scales compared each have a floor.
 
 ## Differential fuzzing
 
@@ -136,16 +169,18 @@ pnpm fuzz -- --seeds 3000 --start 200
 A failing seed is written as a standalone spec under
 `packages/conformance/fuzz-repro/`; replay it, fix the engine, then promote it into
 `corpus/` and delete the reproducer. The nightly workflow runs the conformance corpus,
-both schema sweeps, 3000 fuzz seeds and the reproducer replay, plus Firefox and WebKit canvas parity.
+the Vega, Vega-Lite and value sweeps, 3000 fuzz seeds and the reproducer replay, plus Firefox and WebKit canvas parity.
 
 ## Time zones
 
-The repo's default run pins `TZ=UTC`, which hides zone bugs (a UTC scale formatted in local
-time passes there). The `tz-matrix` gate (`pnpm test:tz`) re-runs the zone-aware unit tests
+The repo's default run pins `TZ=UTC` (`vitest.config.mjs`, unless `TZ` is set: a zone given
+there is kept), which hides zone bugs (a UTC scale formatted in local time passes there). The `tz-matrix` gate (`pnpm test:tz`) re-runs the zone-aware unit tests
 (`*.tz.test.ts`), the live scale-spec differential (every case also runs in each zone inside the test) and
 `packages/conformance/corpus-tz` (raw Vega specs rendered by vega and Aster in the same zone)
-under `America/New_York`, `Asia/Kolkata` and `Australia/Lord_Howe` (a half-hour daylight-saving offset the other two cannot catch; `ZONES` in `scripts/test-tz.mjs`; the corpus also runs in UTC). Add a case to `corpus-tz` when a fix depends on
-the zone.
+under `America/New_York`, `Asia/Kolkata` and `Australia/Lord_Howe` (a half-hour daylight-saving offset the other two cannot catch; `ZONES` in `scripts/lib/tz-zones.mjs`; `calendar.tz.test.ts` holds what vega draws in each, recorded by `packages/conformance/scripts/gen-tz-hours.mjs`; the corpus also runs in UTC). Add a case to `corpus-tz` when a fix depends on
+the zone. The main corpus runs under UTC only, where a `utc*` time unit and its local twin are the same, so the `timeunit-*-boundaries` cases of `corpus-tz` (timestamps within an hour of a month and a year boundary) are where `utcmonth`, `utcyearmonth` and `{unit, utc: true}` differ from `month` and `yearmonth`.
+
+Three corpus specs are off the Vega-Lite schema on purpose, and say so in their name or here: `vlx-tr-aggregate-default-as` and `vlx-tr-stack-default-as` leave out `as` (the schema requires it; vega-lite names the outputs `max_v`, `min_y`, `v_start`, `v_end`), and the `*-offschema-signal-element` geo specs put a `{signal}` where the schema allows a number (the schema-valid forms are the `*-expr` specs).
 
 ## Reference results
 
@@ -155,33 +190,44 @@ other results are the last measurement. Every
 row is the command in the second column run from the repository root after `pnpm build`; the
 result is the summary line it prints. They change with the code: re-run before quoting them.
 
+Every conformance gate prints its verdict last, as `[<gate>] PASS: <counter> <n>/<floor>, ...` or `FAIL`: the verdict is
+`scripts/lib/run-gate.mjs`'s (`runGate`), which owns the exit code, fails a run that compared nothing (a `--filter` typo
+included) and holds each counter of what was COMPARED to its floor; the known differences a gate tolerates live in one table,
+`scripts/lib/expected-differences.mjs`, whose entries must still differ. `scripts/gate-self-test.test.mjs` runs every
+such gate narrowed, with `--plant-difference` and narrowed to nothing ([scripts/gates.mjs](../scripts/gates.mjs), `verdict`).
+The vitest differentials (`packages/conformance/scripts/differential-*.test.mts`) use the same table through the gate `test`: a difference they
+cannot make agree is an entry `differential-<file>: <case>`, compared on every run through `known-differences.mts`, which fails when
+the case agrees (`FIXED-GAP`) or is no longer compared (`STALE-GAP`). Their counts are floors too (`Case.informative`, `compareWithFloors`),
+and what vega itself dies on (a tick count of 2^32, a bin step of 1e-9) is held as Aster's refusal by `ceiling-inputs.test.mts`, in a child process.
+
 | What | Command | Result |
 |---|---|---|
-| Corpus size | `ls packages/conformance/corpus \| wc -l`; `... \| grep -c '\.vg\.json$'`; `... \| grep -c '\.vl\.json$'` | 1063 specs: 391 raw Vega, 672 Vega-Lite |
+| Corpus size | `ls packages/conformance/corpus \| wc -l`; `... \| grep -c '\.vg\.json$'`; `... \| grep -c '\.vl\.json$'` | 1130 specs: 438 raw Vega, 692 Vega-Lite |
 | Unit, React, script and vector tests | `pnpm test` | 319 files, 33665 tests passed |
 | Time-zone matrix | `pnpm test:tz` | `[tz] all zones passed` (zone-sensitive vitest suites under America/New_York, Asia/Kolkata and Australia/Lord_Howe; `corpus-tz` under UTC and those three) |
-| SVG corpus vs real Vega | `pnpm conformance` | 1063/1063 passed |
-| Vega-Lite corpus through `@aster-charts/vl` | `pnpm conformance-vl` | 672 passed, 0 failed, 0 errored / 672 |
-| Scene differential | `pnpm scene-diff` | 1063/1063 scenes match |
+| SVG corpus vs real Vega | `pnpm conformance` | 1130/1130 passed |
+| Vega-Lite corpus through `@aster-charts/vl` | `pnpm conformance-vl` | 692 passed, 0 failed, 0 errored / 692 |
+| Scene differential | `pnpm scene-diff` | 1130/1130 scenes match |
 | Incremental vs fresh evaluation (no oracle) | `pnpm conformance:diff` | 0 differential mismatches, 0 skipped |
-| Guide captions vs Vega `aria-label` | `pnpm a11y-parity` | 1063/1063 caption sets match |
-| Transform option combinations | `pnpm transform-matrix` | 75/76 match (1 browser-only case skipped here, run by `conformance:browser`) |
+| Guide captions vs Vega `aria-label` | `pnpm a11y-parity` | 1130/1130 caption sets match |
+| Transform option combinations | `pnpm transform-matrix` | 77/78 match (1 browser-only case skipped here, run by `conformance:browser`) |
 | Vega schema sweep | `pnpm sweep-vega -- --floor 7549 --min-ok 7538 --max-node-error 3` | 7538 ok, 9 both-refused, 2 node-error (the oracle crashes), 0 engine-error, 0 differ / 7549 |
-| Vega-Lite schema sweep | `pnpm sweep-vl -- --floor 27513 --min-ok 27452 --max-node-error 17 --vega-check` | 27452 ok, 47 both-refused, 14 node-error, 0 engine-error, 0 differ, 0 vega-differ / 27513 |
+| Vega-Lite schema sweep | `pnpm sweep-vl -- --floor 33043 --min-ok 32630 --max-node-error 1 --vega-check` | 32630 ok, 412 both-refused, 1 node-error, 0 engine-error, 0 differ, 0 vega-differ / 33043 |
 | Value sweep | `pnpm sweep-values -- --floor 500 --min-ok 500 --max-node-error 0` | 500 ok, 0 both-refused, 0 node-error, 0 engine-error, 0 differ / 500 |
 | Signals sweep | `pnpm sweep-signals -- --floor 166 --min-ok 103 --max-node-error 2 --max-retained 60` | 103 ok, 60 retained, 1 both-refused, 2 node-error, 0 differ / 166 |
-| Gap probes (a probe that passes keeps passing; a failing one documents a gap) | `pnpm probe -- --min-pass 2` | 2/2 pass (floor 2) |
+| Gap probes (a failing probe documents a gap only when listed in `scripts/lib/expected-differences.mjs`, which requires it to still fail) | `pnpm probe -- --min-pass 2` | 2/2 pass (floor 2) |
 | Fuzz reproducers | `pnpm fuzz:replay` | 2/2 pass |
-| Corpus in Chromium, live text metrics | `pnpm conformance:browser` | 1063/1063 passed |
-| Canvas pixels vs Vega's canvas | `pnpm conformance:canvas` | chromium 1224/1224 passed; append painting vs full repaint: 120 scenarios, 309 append frames, 0 failing |
+| Corpus in Chromium, live text metrics | `pnpm conformance:browser` | 1130/1130 passed |
+| Canvas pixels vs Vega's canvas | `pnpm conformance:canvas` | chromium: 1144 entries compared with ink on both sides (8 blank on both, named), 150 gradients call by call, 46 gradient refusals; append painting: 120 scenarios, 309 append frames; signal moves: 160 scenarios, 414 frames painted nothing for; symbol runs: 548 cases, 144 through Path2D |
 | Batched (dense) SVG vs per-item SVG pixels | `pnpm conformance:batch` | 61/61 passed |
-| Signal event streams vs real Vega, on its svg and its canvas renderer | `pnpm conformance:signals` | 73/73 cases agree on each renderer (group scopes among them); the pointer phase's answers of Aster's canvas that are vega's svg renderer's where its canvas renderer differs: 2 (Chromium's stroker bulging a canvas arc's stroke), ceiling 2 |
+| Signal event streams vs real Vega, on its svg and its canvas renderer | `pnpm conformance:signals` | 77/78 cases agree on each renderer (group scopes among them; the one that does not, `anim-time-unit-year`, is an engine difference found by stepping the clock: vega's selection test rewrites the dates a timer selection stores as numbers in place, and Aster keeps the dates); the pointer phase's answers of Aster's canvas that are vega's svg renderer's where its canvas renderer differs: 2 (Chromium's stroker bulging a canvas arc's stroke), ceiling 2 |
 | Vega-Lite selections vs real Vega (same native input, signals/stores/SVG -- or canvas pixels -- compared per step, on vega's svg and canvas renderers against `<Chart renderer>`) | `pnpm conformance:selections` | 54/54 cases agree on each renderer (concat, facet and repeat views, geographic interval selections and the chart-bench survival tooltip among them; steps counted as `retained` ([INTERACTION.md](INTERACTION.md#signals)): 13 on svg, ceiling 13; 10 on canvas, ceiling 10) |
+| Url data that follows a signal changed inside the chart (a bound select / radio / range, an event handler, a derived signal, a group dataset, a url changed while the first still loads) vs real Vega: the SVG and the requests compared after every step | `pnpm conformance:url-reload` | 8/8 cases agree |
 | `intersect()` (vega-lite's geo interval selections) over every mark type, seeded boxes, by mark name / type, vs real vega in Chromium | `pnpm conformance:intersect` | every (box, scope) pair agrees (2771), on each renderer, directly and through the event loop |
 | `<Chart>` interaction in Chromium | `pnpm --filter @aster-charts/react run test:browser` | all checks passed |
 | Incremental gate | `pnpm bench:incremental -- --points=10000 --reps=30` | append 15.8x–18.3x (floor 8x), whole-array replace 12.7x–17.1x (floor 8x), DOM patch 3.3x–5.4x (floor 1.6x), dense 100k-symbol append patch vs mount 249x–254x (floor 200x) over three runs (2026-11-05, docs/PERFORMANCE.md) |
 | Bundle shaking | `pnpm check:bundle` | every documented import pattern still works after tree-shaking (`--blanket-false` must fail) |
-| Bundle budgets | `pnpm --filter @aster-charts/benchmarks run budget` | all 13 import-pattern rows pass (sizes in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)) |
+| Bundle budgets | `pnpm --filter @aster-charts/benchmarks run budget` | all 19 import-pattern rows pass (sizes in [PERFORMANCE.md](PERFORMANCE.md#bundle-sizes)) |
 
 ## React component tests: the variant matrix
 
@@ -194,11 +240,18 @@ runtime report `<SvgChart>` gives, see [API.md](API.md#svgchart-and-the-interact
 plain `SvgChart` variant refuses interaction props and the missing-event-loop report, so a test that uses them must declare
 `interaction`/`signals`. `variant.it(needs, name, fn)` declares needs for a single test.
 
-Guards, all in `pnpm test`: `Chart.matrix.test.ts` (no test renders `<Chart>` outside the matrix without a listed reason),
-`Chart.shells.test.ts` (the shells stay thin; `@aster-charts/react/lite` never reaches canvas/hit/signals), `Chart.types.test.ts` (type fixtures that
-must compile and must fail on exact lines, the props/handle parity assertions, and the documented examples) and
-`Chart.corpus-parity.test.tsx` (the DOM of `<Chart>`, `<SvgChart>` and `<SvgChart interaction>` equal over every corpus
-spec: server markup, client mount, hydration).
+Guards, all in `pnpm test`: `Chart.matrix.test.ts` (no test renders `<Chart>` or `<ChartCore>` outside the matrix without a listed reason: it
+follows the file's own bindings, so a renamed or dynamic import, a destructured `Chart` and a local component that shadows the variant are found),
+`Chart.shells.test.ts` (each shell is exactly one `<ChartCore {...props} [its capabilities] ref={ref}>`; `@aster-charts/react/lite` never reaches
+canvas/hit/signals by any import form), `Chart.types.test.ts` (type fixtures that must compile and must fail on exact lines, the props/handle parity
+assertions compiled from `parity.assert.ts` itself, and the documented examples) and `Chart.corpus-parity.test.tsx` (the DOM of `<Chart>`,
+`<SvgChart>` and `<SvgChart interaction>` equal over every corpus spec: server markup, client mount, hydration, which must leave the client mount's
+DOM and log nothing to `console.error`; every spec is a drawn chart, never the error state). The guards that read source use the TypeScript API, not
+patterns of text.
+
+Every test file runs in React's act environment (`scripts/vitest-react-act.setup.mjs` sets `IS_REACT_ACT_ENVIRONMENT` before any file runs) and a test
+during which React reports an update "not wrapped in act(...)" fails: wrap the update, or the wait for it, in `act`. Worker hooks are tested against
+`testing/fake-worker.ts`, which clones requests and answers like a real worker, answers on a later turn, and can be held, silent, reordered or failed.
 
 ## Oracle vectors
 
@@ -208,6 +261,14 @@ them (`packages/core/src/oracle-vectors.test.ts`). Recordings only hold for resu
 depend on the V8 version (see "Why live" below), so only those suites stay recorded: vega-util,
 d3-color (compared with a 1e-6 tolerance, because of its cbrt/pow round-trips), d3-format and
 vega-format, vega-time, d3-dsv and topojson-client.
+
+A recording has to be able to fail, and to be repeatable. `pnpm vectors` writes the same bytes every time (no clock, no
+randomness; `--out <dir>` records elsewhere), `packages/conformance/src/vectors-reproducible.test.ts` regenerates twice and
+compares with the committed files (the colour file within the replay's tolerance, the one recording that is not byte-stable
+across V8 builds), and `vectors-coverage.test.ts` states the dimensions each suite must vary (no case recorded twice, floors on
+instants with seconds and milliseconds, fractional steps, every interval with `count` / `range` / `every`, every multi-format
+level, ...). A vector is changed only by editing `scripts/gen-vectors.mjs` and regenerating. Two recorded strings (type `d` on
+|x| >= 1e21 and on infinities) are ICU output of `toLocaleString('en')`, as in d3-format; every supported Node ships full ICU.
 
 The four suites that went through `Math.pow/exp/log`, the trig functions or `sqrt` are LIVE
 differentials, with their inputs in importable case modules beside the tests (the old recordings

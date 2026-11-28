@@ -20,6 +20,9 @@ const GRADIENT = { gradient: 'linear', x1: 0, y1: 0, x2: 1, y2: 1, stops: [{ off
 /** Only finite numbers (set by `randomScene`). */
 let tame = false
 
+/** A number below zero made its magnitude; everything else (NaN, -0, text, undefined) as it is. */
+const nonNegative = (v: unknown): unknown => (typeof v === 'number' && v < 0 ? -v : v)
+
 function wild(r: Rnd, scale: number): unknown {
   const p = tame ? 0.2 + 0.8 * r() : r()
   if (p < 0.025) return NaN
@@ -69,7 +72,9 @@ function randomItems(r: Rnd, type: string, n: number): SceneItem[] {
         Object.assign(it, i === 0 ? shared : {})
         it.x = i * 9 + r() * 4
         it.y = wild(r, 200)
-        it.size = r() < 0.8 ? r() * 12 : wild(r, 20)
+        // (a trail's size is a radius: a negative one throws `negative radius` in every renderer, as vega's does. It is one dedicated test
+        // (geometry-differential.test.ts), not a tenth of the scenes: those would compare the message and nothing else)
+        it.size = r() < 0.8 ? r() * 12 : nonNegative(wild(r, 20))
         if (r() < 0.1) it.defined = false
         break
       case 'arc':
@@ -119,7 +124,11 @@ function randomItems(r: Rnd, type: string, n: number): SceneItem[] {
 
 const TYPES = ['line', 'area', 'trail', 'arc', 'rect', 'symbol', 'path', 'shape', 'rule', 'text']
 
-/** A random scene; `finite` keeps every number finite (`sceneIntersect` is only fed those: a non-finite arc can stall it). */
+/**
+ * A random scene; `finite` keeps every number finite. The differential feeds the legacy `intersect()` only those: its copy walks
+ * a non-finite arc without end (seed 112, box 1). The current `sceneIntersect` on the non-finite scenes is pinned on its own
+ * (geometry-differential.test.ts, 'sceneIntersect on non-finite scenes').
+ */
 export function randomScene(r: Rnd, finite = false): SceneRoot {
   tame = finite
   const marks: SceneGroup[] = []

@@ -1,4 +1,6 @@
 import type { ChartInfo, VgSpec } from '@aster-charts/core'
+import { panIn, scaleSpace, zoomIn, type ScaleSpace } from '@aster-charts/core/internal'
+import { describeValue } from './spec.js'
 
 export interface SelectionInterval {
   x?: [number, number]
@@ -75,6 +77,8 @@ function scaleNameOf(ref: unknown, out: string[]): void {
  * scene exposes).
  */
 export function positionalScales(spec: VgSpec): PositionalScales {
+  // (a value that is not a spec object -- a chart in its error state -- has no positional scales)
+  if (spec == null || typeof spec !== 'object') return {}
   const defs = new Map<string, string>()
   const rootScales = (spec as { scales?: unknown }).scales
   if (Array.isArray(rootScales)) {
@@ -132,7 +136,8 @@ export function positionalScales(spec: VgSpec): PositionalScales {
 /**
  * Convert a container-local pixel drag (start/end) into a data-space interval
  * using the positional scales and the scene padding. An axis whose scale has no
- * numeric inverse (band/point) is omitted from the result.
+ * numeric inverse (band/point) is omitted from the result. A time or utc scale's
+ * inverse (a `Date`) is its number of milliseconds.
  */
 export function dragToDataInterval(
   start: PixelPoint,
@@ -140,23 +145,21 @@ export function dragToDataInterval(
   info: ChartInfo,
   names: PositionalScales = DEFAULT_POSITIONAL_SCALES,
 ): SelectionInterval {
-  const xScale = names.x != null ? info.scales.get(names.x) : undefined
-  const yScale = names.y != null ? info.scales.get(names.y) : undefined
   const out: SelectionInterval = {}
-  const xInv = (xScale as { invert?: (v: number) => number } | undefined)?.invert
-  const yInv = (yScale as { invert?: (v: number) => number } | undefined)?.invert
-
-  if (xInv) {
-    const a = xInv(start.x - info.padding.left)
-    const b = xInv(end.x - info.padding.left)
-    if (isFiniteNumber(a) && isFiniteNumber(b)) out.x = [Math.min(a, b), Math.max(a, b)]
-  }
-  if (yInv) {
-    const a = yInv(start.y - info.padding.top)
-    const b = yInv(end.y - info.padding.top)
-    if (isFiniteNumber(a) && isFiniteNumber(b)) out.y = [Math.min(a, b), Math.max(a, b)]
-  }
+  const x = invertSpan(names.x != null ? info.scales.get(names.x) : undefined, start.x - info.padding.left, end.x - info.padding.left)
+  const y = invertSpan(names.y != null ? info.scales.get(names.y) : undefined, start.y - info.padding.top, end.y - info.padding.top)
+  if (x) out.x = x
+  if (y) out.y = y
   return out
+}
+
+/** The data values two pixels invert to, as an ascending pair of numbers; null when the scale cannot invert them. */
+function invertSpan(scale: unknown, p0: number, p1: number): [number, number] | null {
+  const invert = (scale as { invert?: (v: number) => unknown } | undefined)?.invert
+  if (typeof invert !== 'function') return null
+  const a = Number(invert(p0))
+  const b = Number(invert(p1))
+  return Number.isFinite(a) && Number.isFinite(b) ? [Math.min(a, b), Math.max(a, b)] : null
 }
 
 function isFiniteNumber(v: unknown): v is number {
@@ -221,50 +224,78 @@ export function domainOf(scale: unknown): [number, number] | null {
   return Number.isFinite(a) && Number.isFinite(b) ? [a, b] : null
 }
 
-/** Scale a domain around an anchor value; factor > 1 zooms in. */
+// ---------------------------------------------------------------------------
+// Pan and zoom in a scale's own space
+// ---------------------------------------------------------------------------
+
+/**
+ * The space a scale pans and zooms in, as Vega-Lite's `bind: "scales"` does it (core's `scaleSpace`: vega's `panLog` /
+ * `zoomPow` / `panSymlog`, else linear): a log scale in its logarithm (a negative domain mirrored), a pow scale in its power,
+ * a symlog scale in `sign(x) * log1p(|x| / constant)`, and every other one (`linear`, `sqrt`, `time`, `utc`) linearly in its
+ * numbers. An absent scale is linear.
+ */
+function spaceOf(scale: unknown, domain: readonly number[]): ScaleSpace {
+  const s = scale as { type?: unknown; exponent?: () => unknown; constant?: () => unknown } | undefined
+  return scaleSpace(s?.type, domain[0]!, numberOr(s?.exponent?.(), 1), numberOr(s?.constant?.(), 1))
+}
+
+const numberOr = (v: unknown, fallback: number): number => (typeof v === 'number' && Number.isFinite(v) && v !== 0 ? v : fallback)
+
+/** The domain's length in its scale's space (see `ScaleSpace`). */
+function spanIn(space: ScaleSpace, domain: readonly [number, number]): number {
+  return Math.abs(space.lift(domain[1]) - space.lift(domain[0]))
+}
+
+const finitePair = (d: readonly [number, number]): boolean => Number.isFinite(d[0]) && Number.isFinite(d[1]) && d[0] !== d[1]
+
+/**
+ * Scale a domain around an anchor value; factor > 1 zooms in. The domain is stretched in `scale`'s own space (a log scale's
+ * logarithm, a power scale's power: see `ScaleSpace`; linear without a scale), so the anchor stays where it is drawn, and it
+ * keeps its orientation. `minSpan` is the narrowest the domain may become, measured in that space (data units for a linear,
+ * time or utc scale). A result that is not a finite, non-empty domain leaves the domain as it was.
+ */
 export function zoomDomain(
   domain: [number, number],
   anchor: number,
   factor: number,
   minSpan?: number,
+  scale?: unknown,
 ): [number, number] {
-  const [d0, d1] = domain
   if (!Number.isFinite(anchor) || !Number.isFinite(factor) || factor <= 0) return domain
-  let span = Math.abs(d1 - d0)
-  if (span === 0) return domain
-  let nextSpan = span / factor
-  if (minSpan != null && nextSpan < minSpan) nextSpan = minSpan
-  const ratio = nextSpan / span
-  let a = anchor - (anchor - d0) * ratio
-  let b = anchor + (d1 - anchor) * ratio
-  // Keep the domain orientation (y scales commonly run top→bottom).
-  if ((d1 - d0) < 0 && b < a) [a, b] = [b, a]
-  if (!Number.isFinite(a) || !Number.isFinite(b) || a === b) return domain
-  return [a, b]
+  const space = spaceOf(scale, domain)
+  const span = spanIn(space, domain)
+  if (!(span > 0)) return domain
+  let k = 1 / factor
+  if (minSpan != null && span * k < minSpan) k = minSpan / span
+  const next = zoomIn(space, domain, anchor, k)
+  return finitePair(next) ? next : domain
 }
 
 /**
- * Translate a domain by a fraction of its span. A positive fraction moves the
- * visible window toward HIGHER values, so the data appears to move the other
- * way (left on an ascending x scale).
+ * Translate a domain by a fraction of its span, in `scale`'s own space (see `zoomDomain`). A positive fraction moves the
+ * visible window toward HIGHER values, so the data appears to move the other way (left on an ascending x scale).
  */
-export function panDomain(domain: [number, number], fraction: number): [number, number] {
-  const span = domain[1] - domain[0]
-  const shift = span * fraction
-  return [domain[0] + shift, domain[1] + shift]
+export function panDomain(domain: [number, number], fraction: number, scale?: unknown): [number, number] {
+  const next = panIn(spaceOf(scale, domain), domain, -fraction)
+  return finitePair(next) ? next : domain
 }
 
 /** Normalize a controlled view against the chart's base domains. */
 export function normalizeView(view: ViewDomain | null | undefined, base: ViewDomain): ViewDomain | null {
   if (view == null) return null
   const out: ViewDomain = {}
-  if (view.x && isFiniteNumber(view.x[0]) && isFiniteNumber(view.x[1]) && view.x[0] !== view.x[1]) out.x = view.x
-  if (view.y && isFiniteNumber(view.y[0]) && isFiniteNumber(view.y[1]) && view.y[0] !== view.y[1]) out.y = view.y
+  if (isDomainPair(view.x)) out.x = view.x
+  if (isDomainPair(view.y)) out.y = view.y
   if (out.x == null && out.y == null) return null
   // A view equal to the base domain is the "not zoomed" state.
   if (out.x && base.x && out.x[0] === base.x[0] && out.x[1] === base.x[1]) delete out.x
   if (out.y && base.y && out.y[0] === base.y[0] && out.y[1] === base.y[1]) delete out.y
   return out.x || out.y ? out : null
+}
+
+/** A domain a view or an interval can hold: two finite, different numbers. */
+export function isDomainPair(v: unknown): v is [number, number] {
+  return Array.isArray(v) && v.length === 2 && isFiniteNumber(v[0]) && isFiniteNumber(v[1]) && v[0] !== v[1]
 }
 
 /**
@@ -284,18 +315,21 @@ export function viewToDomainRaw(
 
 const KEY_PAN = 0.08
 const KEY_PAN_FAST = 0.25
+const KEY_ZOOM = 1.5
 
 /**
  * Pure keyboard contract shared by the chart container and the accessible
  * axis sliders: arrows pan, +/- zoom, 0/Home resets. (Escape clearing the
  * selection is handled by `<Chart>` itself.) Returns a new view (or `null` for
- * reset) plus whether the key was handled.
+ * reset) plus whether the key was handled. `scales` are the live positional scales
+ * (`ChartInfo.scales` under the `positionalScales` names): each axis pans and zooms in its
+ * scale's own space (see `zoomDomain`); without them, linearly.
  */
 export function keyboardView(
   key: string,
   current: ViewDomain | null,
   base: ViewDomain,
-  opts: { fast?: boolean; axis?: 'x' | 'y'; anchor?: number; pan?: boolean; zoom?: boolean } = {},
+  opts: { fast?: boolean; axis?: 'x' | 'y'; anchor?: number; pan?: boolean; zoom?: boolean; scales?: { x?: unknown; y?: unknown } } = {},
 ): { handled: boolean; view?: ViewDomain | null } {
   // `pan: false` disables the arrow keys, `zoom: false` the +/- keys; reset
   // (0/Home) is always available. Both default to enabled.
@@ -314,51 +348,34 @@ export function keyboardView(
     else delete out[a]
     return out
   }
+  const pan = (a: 'x' | 'y', fraction: number): { handled: boolean; view?: ViewDomain | null } => {
+    if (axis != null && axis !== a) return { handled: false }
+    const d = get(a)
+    return d ? { handled: true, view: set(a, panDomain(d, fraction, opts.scales?.[a])) } : { handled: false }
+  }
+  const zoom = (factor: number): { handled: boolean; view: ViewDomain } => {
+    const axes: Array<'x' | 'y'> = axis ? [axis] : ['x', 'y']
+    let next: ViewDomain = { ...(current ?? {}) }
+    for (const a of axes) {
+      const d = get(a)
+      if (!d || !base[a]) continue
+      const scale = opts.scales?.[a]
+      // (the anchor given, else the middle of the domain in its scale's own space)
+      const anchor = opts.anchor != null && Number.isFinite(opts.anchor) ? opts.anchor : null
+      const zoomed = anchor != null ? zoomDomain(d, anchor, factor, undefined, scale) : zoomIn(spaceOf(scale, d), d, null, 1 / factor)
+      next = { ...next, [a]: finitePair(zoomed) ? zoomed : d }
+    }
+    return { handled: true, view: next }
+  }
   switch (key) {
-    case 'ArrowLeft': {
-      if (axis === 'y') return { handled: false }
-      const d = get('x')
-      return d ? { handled: true, view: set('x', panDomain(d, -step)) } : { handled: false }
-    }
-    case 'ArrowRight': {
-      if (axis === 'y') return { handled: false }
-      const d = get('x')
-      return d ? { handled: true, view: set('x', panDomain(d, step)) } : { handled: false }
-    }
-    case 'ArrowUp': {
-      if (axis === 'x') return { handled: false }
-      const d = get('y')
-      return d ? { handled: true, view: set('y', panDomain(d, -step)) } : { handled: false }
-    }
-    case 'ArrowDown': {
-      if (axis === 'x') return { handled: false }
-      const d = get('y')
-      return d ? { handled: true, view: set('y', panDomain(d, step)) } : { handled: false }
-    }
+    case 'ArrowLeft': return pan('x', -step)
+    case 'ArrowRight': return pan('x', step)
+    case 'ArrowUp': return pan('y', -step)
+    case 'ArrowDown': return pan('y', step)
     case '+':
-    case '=': {
-      const axes: Array<'x' | 'y'> = axis ? [axis] : ['x', 'y']
-      let next: ViewDomain = { ...(current ?? {}) }
-      for (const a of axes) {
-        const d = get(a)
-        if (!d) continue
-        const anchor = opts.anchor != null && Number.isFinite(opts.anchor) ? opts.anchor : (d[0] + d[1]) / 2
-        next = setFor(next, base, a, zoomDomain(d, anchor, 1.5))
-      }
-      return { handled: true, view: next }
-    }
+    case '=': return zoom(KEY_ZOOM)
     case '-':
-    case '_': {
-      const axes: Array<'x' | 'y'> = axis ? [axis] : ['x', 'y']
-      let next: ViewDomain = { ...(current ?? {}) }
-      for (const a of axes) {
-        const d = get(a)
-        if (!d) continue
-        const anchor = opts.anchor != null && Number.isFinite(opts.anchor) ? opts.anchor : (d[0] + d[1]) / 2
-        next = setFor(next, base, a, zoomDomain(d, anchor, 1 / 1.5))
-      }
-      return { handled: true, view: next }
-    }
+    case '_': return zoom(1 / KEY_ZOOM)
     case '0':
     case 'Home':
       return { handled: true, view: null }
@@ -367,15 +384,10 @@ export function keyboardView(
   }
 }
 
-function setFor(view: ViewDomain, base: ViewDomain, axis: 'x' | 'y', d: [number, number]): ViewDomain {
-  const out: ViewDomain = { ...view }
-  if (base[axis]) out[axis] = d
-  return out
-}
-
 /**
- * Zoom around a cursor value. Zooming in stops at 1/1000 of the base span, and
- * zooming out never exceeds the base domain (the base domain itself is returned).
+ * Zoom one axis of a view around a cursor value, by `factor` (> 1 zooms in), in `scale`'s own space (see `zoomDomain`).
+ * Zooming in stops at `1 / maxZoom` of the base span (default 1000), and zooming out past the base domain returns the base
+ * domain. This is the zoom `<Chart>`'s wheel and pinch apply.
  */
 export function cursorZoom(
   current: ViewDomain | null,
@@ -383,16 +395,56 @@ export function cursorZoom(
   axis: 'x' | 'y',
   anchorValue: number,
   factor: number,
+  scale?: unknown,
+  maxZoom = 1000,
+): ViewDomain {
+  return zoomAxisBy(current, base, axis, anchorValue, 1 / factor, scale, maxZoom)
+}
+
+/**
+ * `cursorZoom` with the zoom given as vega's stretch `k` (< 1 zooms in: Vega-Lite's wheel stretch is `1.001 ^ deltaY`), so a
+ * gesture computes exactly what vega computes for it. The bounds are measured in the scale's own space.
+ * @internal
+ */
+export function zoomAxisBy(
+  current: ViewDomain | null,
+  base: ViewDomain,
+  axis: 'x' | 'y',
+  anchorValue: number,
+  k: number,
+  scale: unknown,
+  maxZoom: number,
 ): ViewDomain {
   const d = (current?.[axis] ?? base[axis]) as [number, number] | undefined
   const out: ViewDomain = { ...(current ?? {}) }
-  if (!d) return out
-  // Never zoom out past the original extent.
-  const baseSpan = Math.abs(base[axis]![1] - base[axis]![0])
-  const next = zoomDomain(d, anchorValue, factor, baseSpan / 1000)
-  const span = Math.abs(next[1] - next[0])
-  out[axis] = span > baseSpan ? base[axis] : next
+  const b = base[axis]
+  if (!d || !b || !Number.isFinite(anchorValue) || !Number.isFinite(k) || k <= 0) return out
+  const space = spaceOf(scale, d)
+  const span = spanIn(space, d)
+  const baseSpan = spanIn(space, b)
+  if (!(span > 0)) return out
+  // never narrower than the base span over maxZoom, never wider than the base domain
+  const minSpan = baseSpan / Math.max(1, maxZoom)
+  const stretch = span * k < minSpan ? minSpan / span : k
+  if (span * stretch > baseSpan) {
+    out[axis] = b
+    return out
+  }
+  const next = zoomIn(space, d, anchorValue, stretch)
+  if (finitePair(next)) out[axis] = next
   return out
+}
+
+/**
+ * Pan one axis of a drag: the domain it started at, moved so that the data that was under `fromPx` is under `toPx`, in its
+ * scale's own space (vega-lite `bind: "scales"`: `panLog(extent, delta / width)` and its siblings). `pixelSpan` is the signed
+ * pixel length of `domain` when the drag started (`pixelSpanOf`).
+ * @internal
+ */
+export function dragPan(domain: [number, number], fromPx: number, toPx: number, pixelSpan: number, scale: unknown): [number, number] {
+  if (!(Math.abs(pixelSpan) > 0)) return domain
+  const next = panIn(spaceOf(scale, domain), domain, (toPx - fromPx) / pixelSpan)
+  return finitePair(next) ? next : domain
 }
 
 /** The axis whose scale supports pan/zoom, in priority order. */
@@ -474,4 +526,56 @@ export function pixelSpanOf(scale: unknown, domain: [number, number]): number | 
   const a = Number(f(domain[0]))
   const b = Number(f(domain[1]))
   return Number.isFinite(a) && Number.isFinite(b) && a !== b ? b - a : null
+}
+
+/**
+ * A controlled `view` / `brush` / interval, checked at the boundary: each axis given must be a pair of finite, different
+ * numbers. An axis that is not is left out (the chart draws that axis unzoomed, or no rectangle) and described in `problems`,
+ * which the chart reports through `onError`; a value with no valid axis left is `null`. `undefined` (not given) stays
+ * `undefined`.
+ * @internal
+ */
+export function checkAxes<T extends { x?: [number, number]; y?: [number, number] }>(
+  prop: string,
+  value: T | null | undefined,
+): { value: T | null | undefined; problems: string[] } {
+  if (value == null) return { value, problems: [] }
+  if (typeof value !== 'object') return { value: null, problems: [`${prop} must be an object with x and/or y; got ${describeValue(value)}`] }
+  const problems: string[] = []
+  const out = {} as T
+  for (const axis of ['x', 'y'] as const) {
+    const d = (value as Record<string, unknown>)[axis]
+    if (d === undefined || d === null) continue
+    if (isDomainPair(d)) out[axis] = d
+    else problems.push(`${prop}.${axis} must be two finite, different numbers; got ${describeValue(d)}`)
+  }
+  if (problems.length === 0) return { value, problems }
+  return { value: out.x != null || out.y != null ? out : null, problems }
+}
+
+
+/** `checkAxes` for a controlled `selection` / `select` value: its interval's axes are checked; a point value passes as it is. @internal */
+export function checkSelectValue(prop: string, value: SelectValue | null | undefined): { value: SelectValue | null | undefined; problems: string[] } {
+  if (value == null || value.type !== 'interval') return { value, problems: [] }
+  const checked = checkAxes(prop, value.interval)
+  if (checked.problems.length === 0) return { value, problems: [] }
+  return { value: checked.value ? { type: 'interval', interval: checked.value } : null, problems: checked.problems }
+}
+
+/**
+ * The persisted selection rectangle, clipped to the plot: an interval that reaches past the visible domain is drawn up to the
+ * plot's edge, and one entirely outside it is not drawn (`null`). @internal
+ */
+export function clippedSelectionRect(
+  selection: SelectionInterval,
+  info: ChartInfo,
+  names: PositionalScales,
+): { x: number; y: number; width: number; height: number } | null {
+  const r = selectionToPixels(selection, info, names)
+  const left = Math.max(r.x, info.padding.left)
+  const top = Math.max(r.y, info.padding.top)
+  const right = Math.min(r.x + r.width, info.padding.left + info.width)
+  const bottom = Math.min(r.y + r.height, info.padding.top + info.height)
+  if (![left, top, right, bottom].every(Number.isFinite) || right <= left || bottom <= top) return null
+  return { x: left, y: top, width: right - left, height: bottom - top }
 }

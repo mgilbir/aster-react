@@ -1,7 +1,7 @@
 {
   "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
   "padding": 5,
-  "autosize": "none",
+  "autosize": "pad",
   "data": {
     "name": "table",
     "values": [
@@ -113,7 +113,7 @@
   },
   "spacing": 60,
   "bounds": "flush",
-  "hconcat": [
+  "concat": [
     {
       "mark": "point",
       "width": 120,
@@ -144,5 +144,7 @@
         }
       }
     }
-  ]
+  ],
+  "columns": 2,
+  "align": "all"
 }

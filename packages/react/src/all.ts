@@ -14,4 +14,4 @@
  * add-ons (`@aster-charts/core/geo`, `/transforms`, `/load`) are not parts: an app that wants no wait for those imports them too.
  * To load some families ahead of time without bundling them up front, see `preloadParts`.
  */
-import '@aster-charts/core/lean/all'
+import '@aster-charts/core/internal/all'

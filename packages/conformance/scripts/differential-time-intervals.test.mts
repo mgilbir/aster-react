@@ -9,14 +9,25 @@
  * utcFloor over generated unit lists and steps, timeInterval / timeOffset / timeSequence (and utc), dayofyear / week,
  * and timeBin (which lives in `transform-timeunit.ts`).
  */
+import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import * as d3 from 'd3-time'
 import * as vt from 'vega-time'
 import { describe, expect, it, vi } from 'vitest'
 import * as aster from '../../core/src/time.ts'
+import { AsterLimitError } from '../../core/src/limits.ts'
 import { timeBin as asterTimeBin } from '../../core/src/transform-timeunit.ts'
-import { compareCases, makeRng, scaled, type Rng } from './differential-gen.mts'
+import { compareWithFloors, makeRng, scaled, type Rng } from './differential-gen.mts'
 import { withTz } from './differential-util.mts'
 import { ZONES, genInstant, offsetChanges } from './differential-zones.mts'
+
+/** What each generated suite of this file must hold (measured: intervals 92% informative, every 72%, filter and floor all, offset 90%, dayofyear 91%, timeUnits 8% refused). */
+const compareCases = compareWithFloors({
+  intervals: { informative: 0.8 }, every: { informative: 0.6 }, filter: { informative: 0.9 }, floor: { informative: 0.9 },
+  'offset/sequence': { informative: 0.8 }, 'dayofyear/week': { informative: 0.8 }, timeUnits: { informative: 0.85, refused: 0.12 },
+  timeBin: { informative: 0.9 },
+})
 
 vi.setConfig({ testTimeout: 120_000 })
 
@@ -63,13 +74,16 @@ const PAIRS: Pair[] = [
   { name: 'utcYear', oracle: d3.utcYear as never, aster: aster.utcYear as never, unit: 365 * DAY, test: (d) => d.getUTCFullYear() % 4 === 0 },
 ]
 
+/** What Aster's filtered interval gives for a search past its built-in ceiling (see `filter(test)` below). */
+const REFUSED = 'refused: a search past the ceiling'
+
 const STEPS: unknown[] = [undefined, null, 0, 1, -1, 2, 3, 5, -7, 12, 1.7, -1.2, 0.5, NaN, Infinity, -Infinity, 100, '3', '', true, [2]]
 const EVERY: unknown[] = [undefined, null, 0, 1, 2, 3, 4, 5, 6, 7, 10, 12, 15, 20, 24, 30, 60, 100, -1, 1.5, 2.9, NaN, Infinity, '2', '7', []]
 
 /**
- * An instant a filtered interval can step back from. `filter` searches backwards one millisecond at a time until the
- * test holds, and an invalid date never satisfies a test, so near the ends of the Date range the search does not end
- * (in d3-time as well); those instants are left out of the filter and every(k) cases.
+ * An instant d3's every(k) can step back from: its filter searches until the test holds, and an invalid date never satisfies
+ * a test, so near the ends of the Date range d3's search does not end (Aster's ends with an Invalid Date, see the filter
+ * cases, which run up to the ends with a test that marks where d3 would not finish; every(k)'s test is d3's own).
  */
 function genWalkableInstant(r: Rng, changes: readonly number[]): number {
   for (;;) {
@@ -83,9 +97,6 @@ function asInput(r: Rng, t: number, bounded: boolean): unknown {
   // null and true read as the epoch: fine for one date, but a range from there to now is millions of entries
   return r.chance(0.7) ? new Date(t) : r.chance(0.9) ? t : r.pick<unknown>(bounded ? [String(t), undefined, [t]] : [String(t), null, undefined, true, [t]])
 }
-
-const instants = (iv: AnyInterval, ...ts: unknown[]) => ts.map((t) => (t == null ? t : iv.floor(t)))
-void instants
 
 function runDerived(iv: AnyInterval, ts: number[], extra: unknown): unknown {
   const [t0, t1] = ts as [number, number]
@@ -161,22 +172,63 @@ describe('d3-time intervals vs d3-time (generated, live)', () => {
         })
       })
 
-      it('filter(test), and the intervals it returns', async () => {
+      it('filter(test), and the intervals it returns, up to the ends of the Date range (C132)', async () => {
         await withTz(tz, () => {
           const changes = offsetChanges(tz)
           const r = makeRng(0x1a03)
+          let endless = 0
           compareCases(`filter ${tz}`, scaled(5000), () => {
             const p = r.pick(PAIRS)
-            const t = genWalkableInstant(r, changes)
+            // any instant, the ends of the Date range included (a fifth of the cases sit right at an end)
+            const t = r.chance(0.2) ? r.pick([8.64e15, -8.64e15]) - Math.sign(r.pick([1, -1])) * r.int(40) * p.unit : genInstant(r, changes)
             const t2 = t + p.unit * r.between(0, 40)
             const step = r.pick([undefined, 1, 2, -1, -3, 0, 1.7, NaN, 4])
-            const run = (iv: AnyInterval): unknown => {
+            // Each operation on its own. d3-time searches for ever once a step leaves the Date range (an Invalid Date passes no
+            // test), and also where the local calendar makes a step of one day go round in circles (Pacific/Apia skipped
+            // 2011-12-30). The oracle's test throws in both, at the first invalid date or once it has been asked more times than
+            // a search may take (the built-in ceiling on one search), which marks the operation as one d3 never finishes. Aster's
+            // must end: with an Invalid Date (a range: valid dates before it), or with the typed refusal of a search past the
+            // ceiling. Every other operation must equal d3's.
+            const ops: Array<[string, (f: AnyInterval) => unknown]> = [
+              ['floor', (f) => f.floor(new Date(t))], ['ceil', (f) => f.ceil(new Date(t))], ['round', (f) => f.round(new Date(t))],
+              ['offset', (f) => f.offset(new Date(t), step)], ['range', (f) => f.range(new Date(t), new Date(t2))],
+            ]
+            const run = (iv: AnyInterval, oracle: boolean): unknown => {
+              const out: unknown[] = []
+              for (const [name, op] of ops) {
+                let asked = 0
+                const test = oracle ? (d: Date) => { if (!(+d === +d) || ++asked > 100_000) throw new RangeError('d3 searches for ever'); return p.test(d) } : p.test
+                try {
+                  out.push(op(iv.filter(test)))
+                } catch (e) {
+                  if (!oracle && e instanceof AsterLimitError) { out.push(REFUSED); continue }
+                  if (!(e instanceof RangeError && e.message === 'd3 searches for ever')) throw e
+                  endless++
+                  out.push(name === 'range' ? 'valid dates, then the end' : { endless: name })
+                }
+              }
               const f = iv.filter(p.test)
-              return [f.floor(new Date(t)), f.ceil(new Date(t)), f.round(new Date(t)), f.offset(new Date(t), step), f.range(new Date(t), new Date(t2)),
-                typeof f.count, typeof f.every, Object.keys(f).sort()]
+              return [...out, typeof f.count, typeof f.every, Object.keys(f).sort()]
             }
-            return { label: `${p.name} filter ${t} -> ${t2} step=${String(step)}`, oracle: () => run(p.oracle), aster: () => run(p.aster) }
+            // Aster's answer where d3's never comes: an Invalid Date, or a range of valid increasing dates within [t, t2)
+            const asterRun = (): unknown => {
+              const want = run(p.oracle, true) as unknown[]
+              const got = run(p.aster, false) as unknown[]
+              return got.map((v, i) => {
+                const w = want[i] as { endless?: string } | string
+                if (w === 'valid dates, then the end') {
+                  const dates = v as Date[]
+                  const ok = dates.every((d, j) => +d === +d && +d >= +new Date(t) - p.unit && +d < t2 && (j === 0 || +d > +dates[j - 1]!))
+                  return ok ? w : v
+                }
+                if (w && typeof w === 'object' && 'endless' in w) return (v instanceof Date && !(+v === +v)) || v === REFUSED ? w : v
+                return v
+              })
+            }
+            return { label: `${p.name} filter ${t} -> ${t2} step=${String(step)}`, oracle: () => run(p.oracle, true), aster: asterRun }
           })
+          // the ends of the range are reached, or the test says nothing about them
+          expect(endless, tz).toBeGreaterThan(scaled(5000) * 0.02)
         })
       })
     })
@@ -198,9 +250,13 @@ describe('d3-time intervals vs d3-time (generated, live)', () => {
     }
   })
 
-  it('interval durations', () => {
-    expect([aster.durationSecond, aster.durationMinute, aster.durationHour, aster.durationDay, aster.durationWeek, aster.durationMonth, aster.durationYear])
-      .toEqual([d3.timeSecond.every(1) && 1000, 60_000, 3_600_000, 86_400_000, 604_800_000, 2_592_000_000, 31_536_000_000])
+  it('interval durations are the constants d3-time itself uses', async () => {
+    // (d3-time's duration.js is not part of its exports: read as the file next to its entry, so the constants are the oracle's own)
+    const entry = createRequire(import.meta.url).resolve('d3-time')
+    const d3Durations = (await import(pathToFileURL(join(dirname(entry), 'duration.js')).href)) as Record<string, number>
+    expect(Object.keys(d3Durations).sort(), 'the constants d3-time defines').toEqual(['durationDay', 'durationHour', 'durationMinute', 'durationMonth', 'durationSecond', 'durationWeek', 'durationYear'])
+    const mine = aster as unknown as Record<string, number>
+    for (const [name, value] of Object.entries(d3Durations)) expect(mine[name], name).toBe(value)
   })
 })
 
@@ -242,7 +298,7 @@ describe('vega-time vs the pinned vega-time (generated, live)', () => {
       return {
         label: `${JSON.stringify(units)} ${JSON.stringify(specs)}`,
         oracle: () => [vt.timeUnits(units), vt.timeUnitSpecifier(units as never, specs as never)],
-        aster: () => [aster.timeUnits(units), aster.timeUnitSpecifier(units, specs)],
+        aster: () => [aster.timeUnits(units), aster.timeUnitSpecifier(units, specs as Record<string, string> | undefined)],
       }
     })
     expect(aster.TIME_UNITS).toEqual(vt.TIME_UNITS)

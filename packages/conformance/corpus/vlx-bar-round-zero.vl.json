@@ -130,5 +130,6 @@
       "field": "g",
       "type": "nominal"
     }
-  }
+  },
+  "description": "cornerRadius 0 is the default, written out"
 }

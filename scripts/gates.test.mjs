@@ -3,11 +3,15 @@
  * The list is only a source of truth if nothing else keeps its own copy.
  */
 import { readdirSync, readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { existsSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { describe, expect, it } from 'vitest'
 import { parseDocument } from 'yaml'
-import { GATES } from './gates.mjs'
+import { DEFAULT_TIMEOUT_MS, GATES, runGate, runGates, selectGates, timeoutOf } from './gates.mjs'
+import { makeTempDir, removeTempDir } from './lib/temp-dir.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const read = (rel) => readFileSync(join(root, rel), 'utf8')
@@ -86,7 +90,7 @@ describe('nothing keeps a second copy of the list', () => {
   // (pnpm 11 cannot itself run on Node 20). It adds no gate: it is `pnpm test` on other engines.
   const allowedUnit = [
     /^pnpm build$/,
-    /^node node_modules\/vitest\/vitest\.mjs run( scripts\/differential- oracle-vectors\.test)?$/,
+    /^node node_modules\/vitest\/vitest\.mjs run( scripts\/differential- oracle-vectors\.test dist-node-smoke\.test)?$/,
   ]
 
   it('ci.yml only sets up the toolchain, runs `pnpm check`, and the unit-test Node matrix', () => {
@@ -232,5 +236,230 @@ describe('nightly.yml: one failing check does not hide the others', () => {
 
   it('has no step that could stop the later ones: continue-on-error is not used to hide a failure', () => {
     expect(read('.github/workflows/nightly.yml')).not.toMatch(/continue-on-error/)
+  })
+})
+
+describe('every gate has a deadline and can fail on it (C251)', () => {
+  const sleeper = (extra = {}) => ({ name: 'hang', command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], why: 't', ...extra })
+  const quiet = { stdio: 'ignore' }
+
+  it('every gate resolves to a finite, positive deadline', () => {
+    for (const g of GATES) {
+      expect(Number.isFinite(timeoutOf(g)) && timeoutOf(g) > 0, g.name).toBe(true)
+      expect(timeoutOf(g), g.name).toBeLessThanOrEqual(2 * 60 * 60_000)
+    }
+    expect(DEFAULT_TIMEOUT_MS).toBeGreaterThan(0)
+  })
+
+  it('a gate that never exits is killed at its deadline and reported as a timeout', async () => {
+    const t0 = Date.now()
+    const r = await runGate(sleeper({ timeoutMs: 400 }), quiet)
+    expect(r).toMatchObject({ ok: false, timedOut: true })
+    expect(Date.now() - t0).toBeLessThan(10_000)
+  }, 20_000)
+
+  it('the whole process tree dies with it (a browser the gate started must not outlive the deadline)', async () => {
+    const dir = makeTempDir('aster-gates-')
+    try {
+      const pidFile = join(dir, 'grandchild.pid')
+      const code = `const { spawn } = require('node:child_process'); const c = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }); require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(c.pid)); setInterval(() => {}, 1000)`
+      const r = await runGate({ name: 'tree', command: process.execPath, args: ['-e', code], timeoutMs: 1500, why: 't' }, quiet)
+      expect(r.timedOut).toBe(true)
+      const pid = Number(readFileSync(pidFile, 'utf8'))
+      let alive = true
+      for (let i = 0; i < 50 && alive; i++) {
+        try { process.kill(pid, 0); await new Promise((res) => setTimeout(res, 100)) } catch { alive = false }
+      }
+      expect(alive, `grandchild ${pid} survived the deadline`).toBe(false)
+    } finally { removeTempDir(dir) }
+  }, 30_000)
+
+  it('a gate that exits 0 passes and one that exits 1 fails, without a timeout', async () => {
+    expect(await runGate({ name: 'ok', command: process.execPath, args: ['-e', ''], why: 't' }, quiet)).toMatchObject({ ok: true, timedOut: false })
+    expect(await runGate({ name: 'bad', command: process.execPath, args: ['-e', 'process.exit(1)'], why: 't' }, quiet)).toMatchObject({ ok: false, timedOut: false })
+  })
+
+  it('runGates names the timed-out gate, exits 1, and still runs the gates after it', async () => {
+    const lines = []
+    const log = console.log
+    const err = console.error
+    console.log = (...a) => { lines.push(a.join(' ')) }
+    console.error = (...a) => { lines.push(a.join(' ')) }
+    let code
+    try {
+      const gates = [sleeper({ timeoutMs: 300 }), { name: 'after', command: process.execPath, args: ['-e', ''], why: 't' }]
+      code = await runGates(gates, { run: (g) => runGate(g, quiet) })
+    } finally { console.log = log; console.error = err }
+    const out = lines.join('\n')
+    expect(code).toBe(1)
+    expect(out).toMatch(/FAIL {2}hang\s+\d+s \(timeout\)/)
+    expect(out).toMatch(/PASS {2}after/)
+    expect(out).toMatch(/blocking gate\(s\) failed: hang \(timeout\)/)
+  }, 20_000)
+
+  it('the workflows bound every job in time', () => {
+    for (const f of readdirSync(join(root, '.github', 'workflows')).filter((n) => /\.ya?ml$/.test(n))) {
+      const wf = parseDocument(read(`.github/workflows/${f}`)).toJS()
+      for (const [name, job] of Object.entries(wf.jobs)) {
+        expect(Number.isInteger(job['timeout-minutes']) && job['timeout-minutes'] > 0 && job['timeout-minutes'] <= 180, `${f} job ${name} needs a timeout-minutes`).toBe(true)
+      }
+    }
+  })
+})
+
+describe('--only and --skip take names and tags alike (C642)', () => {
+  it('--only browser selects exactly the gates tagged browser; --skip browser selects the rest', () => {
+    const tagged = GATES.filter((g) => (g.tags ?? []).includes('browser'))
+    expect(tagged.length).toBeGreaterThan(3)
+    expect(selectGates(GATES, ['browser']).map((g) => g.name)).toEqual(tagged.map((g) => g.name))
+    expect(selectGates(GATES, null, ['browser']).map((g) => g.name)).toEqual(GATES.filter((g) => !tagged.includes(g)).map((g) => g.name))
+    expect(selectGates(GATES, ['build', 'canvas']).map((g) => g.name)).toEqual(['build', 'canvas'])
+    expect(selectGates(GATES, ['browser'], ['canvas']).map((g) => g.name)).not.toContain('canvas')
+  })
+  it('an unknown name or tag exits 2 and runs nothing', async () => {
+    const { spawnAsync } = await import('./lib/spawn-async.mjs')
+    for (const flag of ['--only', '--skip']) {
+      const r = await spawnAsync(process.execPath, [join(root, 'scripts/gates.mjs'), flag, 'broswer'], { timeout: 30_000 })
+      expect(r.status, flag).toBe(2)
+      expect(r.stderr).toMatch(/unknown gate or tag "broswer"/)
+    }
+  })
+})
+
+describe('ci.yml: CI runs on main only (C305)', () => {
+  const wf = parseDocument(read('.github/workflows/ci.yml')).toJS()
+  it('triggers on pushes to main and on nothing else: no pull_request, no schedule, no dispatch', () => {
+    expect(wf.on).toEqual({ push: { branches: ['main'] } })
+  })
+  it('CONTRIBUTING names the Node matrix job that a local `pnpm check` does not reproduce', () => {
+    const doc = read('CONTRIBUTING.md')
+    expect(doc).toMatch(/unit.{0,40}job|Node matrix|Node 20/)
+    expect(doc).toMatch(/main/)
+  })
+})
+
+describe('the contributor Node range is the one the toolchain supports (C369)', () => {
+  const jsdomEngines = JSON.parse(read('node_modules/jsdom/package.json')).engines.node
+
+  it('the root engines equal the jsdom dev dependency\'s, and both docs state that range', () => {
+    expect(rootPkg.engines.node).toBe(jsdomEngines)
+    const norm = (r) => r.split('||').map((x) => x.trim())
+    for (const doc of ['CONTRIBUTING.md', 'README.md']) {
+      const text = read(doc)
+      for (const range of norm(rootPkg.engines.node)) {
+        const shown = range.replace(/(\.0)+$/, '') // `^24.15.0` is written `^24.15`, `>=26.0.0` is written `>=26`
+        expect(text.includes(shown), `${doc} must state ${shown}`).toBe(true)
+      }
+      expect(text, doc).not.toMatch(/Node 22\.13 or newer/)
+    }
+  })
+
+  it('.nvmrc names a Node that satisfies the root engines', () => {
+    const v = read('.nvmrc').trim()
+    const [major, minor = '0', patch = '0'] = v.split('.').map(Number)
+    const ok = (major === 22 && (minor > 22 || (minor === 22 && patch >= 2))) || (major === 24 && minor >= 15) || major >= 26
+    expect(ok, `.nvmrc ${v}`).toBe(true)
+  })
+
+  it('CONTRIBUTING states the real number of gates and how to get pnpm without corepack', () => {
+    const doc = read('CONTRIBUTING.md')
+    expect(doc).toContain(`runs ${GATES.length} gates`)
+    expect(doc).toMatch(/corepack/)
+    expect(doc).toMatch(/pnpm build/)
+    expect(doc).toMatch(/--with-deps chromium/)
+    expect(read('README.md')).toMatch(/playwright install --with-deps chromium[\s\S]{0,40}pnpm build/)
+  })
+})
+
+describe('the typecheck gate covers every TypeScript file (C303)', () => {
+  // Every workspace that has a tsconfig.json is typechecked by `pnpm typecheck` (`pnpm -r typecheck`); the tests and runner scripts must be
+  // inside one of their `include`s, or vitest/tsx (which strip types) are the only things that ever read them.
+  const ts = createRequire(import.meta.url)('typescript')
+  const tracked = () => execFileSync('git', ['ls-files', '-z', 'packages', 'apps'], { cwd: root, encoding: 'utf8' }).split('\0').filter((f) => /\.(ts|mts|cts|tsx)$/.test(f))
+  const projects = () => ['packages', 'apps'].flatMap((d) => readdirSync(join(root, d)).map((n) => `${d}/${n}`)).filter((p) => existsSync(join(root, p, 'tsconfig.json')))
+  /** Files each project's typecheck reads, from its real tsconfig. */
+  const covered = (dirs = projects()) => {
+    const set = new Set()
+    for (const dir of dirs) {
+      const cfg = ts.readConfigFile(join(root, dir, 'tsconfig.json'), ts.sys.readFile)
+      for (const f of ts.parseJsonConfigFileContent(cfg.config, ts.sys, join(root, dir)).fileNames) set.add(resolve(f))
+    }
+    return set
+  }
+  // Type fixtures include files that must NOT compile (`*rejects*`): packages/react/src/Chart.types.test.ts compiles them with the TS API and
+  // asserts each expected error, so they are checked by a test that can fail, not by the project typecheck.
+  const exempt = (f) => f.startsWith('packages/react/type-fixtures/')
+
+  it('every tracked .ts/.mts/.cts/.tsx under packages/ and apps/ is in a project\'s typecheck, except the type fixtures', () => {
+    const set = covered()
+    const missing = tracked().filter((f) => !exempt(f) && !set.has(resolve(root, f)))
+    expect(missing, `${missing.length} TypeScript files no \`pnpm typecheck\` reads`).toEqual([])
+  })
+
+  it('the type fixtures are exempt only because Chart.types.test.ts compiles every one of them', () => {
+    const test = read('packages/react/src/Chart.types.test.ts')
+    const fixtures = tracked().filter((f) => f.startsWith('packages/react/type-fixtures/')).map((f) => f.replace('packages/react/type-fixtures/', ''))
+    expect(fixtures.length).toBeGreaterThan(3)
+    // each fixture is named in the test, or is a module another fixture imports (`shared.ts`)
+    for (const f of fixtures) {
+      const imported = fixtures.some((g) => g !== f && read(`packages/react/type-fixtures/${g}`).includes(`./${f.replace(/\.tsx?$/, '')}`))
+      expect(test.includes(f) || imported, `${f} must be compiled by Chart.types.test.ts`).toBe(true)
+    }
+  })
+
+  it('has bite: a project whose include drops a directory leaves its files uncovered', () => {
+    const real = covered()
+    const missingFor = (set) => tracked().filter((f) => !exempt(f) && !set.has(resolve(root, f)))
+    expect(missingFor(real)).toEqual([])
+    const narrow = new Set([...real].filter((f) => !f.includes('/packages/conformance/scripts/')))
+    expect(missingFor(narrow).length).toBeGreaterThan(50)
+  })
+
+  it('every package.json typecheck script runs the project tsconfig.json that the coverage above reads', () => {
+    for (const dir of projects()) {
+      const pkg = JSON.parse(read(`${dir}/package.json`))
+      expect(pkg.scripts?.typecheck, dir).toMatch(/tsc (--noEmit )?-p tsconfig\.json( --noEmit)?$/)
+    }
+  })
+})
+
+describe('`pnpm build` builds each package once, in dependency order (C495)', () => {
+  it('no workspace build script rebuilds another workspace (pnpm -r orders them; a second build races the first on dist)', () => {
+    for (const dir of ['packages', 'apps'].flatMap((d) => readdirSync(join(root, d)).map((n) => `${d}/${n}`))) {
+      if (!existsSync(join(root, dir, 'package.json'))) continue
+      const build = JSON.parse(read(`${dir}/package.json`)).scripts?.build
+      if (build) expect(build, dir).not.toMatch(/\bpnpm\b|\bnpm run\b|\byarn\b/)
+    }
+  })
+})
+
+describe('knip covers everything it can and explains nothing away silently (C568)', () => {
+  const knip = JSON.parse(read('knip.json'))
+  const tracked = () => execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean)
+
+  it('analyses every workspace: none is ignored (the benchmarks and the demo hold dead code like any other)', () => {
+    expect(knip.ignoreWorkspaces ?? []).toEqual([])
+    for (const ws of ['packages/core', 'packages/vl', 'packages/react', 'packages/conformance', 'packages/benchmarks', 'apps/demo']) expect(knip.workspaces, ws).toHaveProperty([ws])
+  })
+
+  it('lists no entry for a file that is not a source of its workspace (a barrel only tests import ships in dist: it is a *.testlib.ts)', () => {
+    for (const entry of knip.workspaces['packages/core'].entry) {
+      const rel = `packages/core/${entry}`
+      if (!/[*{]/.test(entry)) expect(tracked(), `${entry} is listed as an entry but no longer exists`).toContain(rel)
+    }
+    const built = tracked().filter((f) => /^packages\/core\/src\/[^/]+\.ts$/.test(f) && !/\.(test|testlib|testkit)\.ts$/.test(f))
+    expect(built.some((f) => f.endsWith('/scale-d3.ts')), 'scale-d3 is test-only: it must not be built into dist').toBe(false)
+  })
+
+  it('every ignored dependency is really named in a tracked source file (the ignore is for a use knip cannot see, e.g. an esbuild entry written in a template string)', () => {
+    const sources = tracked().filter((f) => /\.(ts|tsx|mts|mjs)$/.test(f) && !f.startsWith('docs/audits/')).map((f) => read(f))
+    for (const dep of knip.ignoreDependencies ?? []) {
+      expect(sources.some((t) => t.includes(`'${dep}`) || t.includes(`"${dep}`) || t.includes(`\`${dep}`)), `${dep} is ignored by knip and named by no source file`).toBe(true)
+    }
+    expect(knip.ignoreDependencies ?? []).not.toContain('a') // the placeholder of a comment that knip read as an import
+  })
+
+  it('no unusable root tsconfig (it referenced projects that are not composite, so `tsc -b` could not work and nothing used it)', () => {
+    expect(existsSync(join(root, 'tsconfig.json'))).toBe(false)
   })
 })

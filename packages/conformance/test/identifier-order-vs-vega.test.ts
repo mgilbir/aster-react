@@ -48,7 +48,7 @@ type Step = { what: string; t?: Row[]; b?: Row[]; u?: number; cut?: number; stor
 async function compare(s: Spec, steps: Step[]): Promise<void> {
   const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => View }).View(vega.parse(structuredClone(s) as never), { renderer: 'none' })
   const session = createChartSession()
-  let state = { t: T, b: B, u: 0, cut: 3, store: [] as Row[] }
+  let state: { t: Row[]; b: Row[]; u: number; cut: number; store: Row[] } = { t: T, b: B, u: 0, cut: 3, store: [] }
   const input = (): RuntimeInput => ({ data: { t: state.t, b: state.b, store: state.store }, signals: { u: state.u, cut: state.cut } })
   // (each row with its number, in the order of the rows' fields: vega lists a row a filter lets through again after the rows it kept,
   // where the engine keeps the source's order -- the numbers are compared, not that order)

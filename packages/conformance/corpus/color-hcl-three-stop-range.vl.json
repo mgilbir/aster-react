@@ -50,5 +50,6 @@
     "interpolate": "hcl"
    }
   }
- }
+ },
+ "description": "interpolate \"hcl\" is the default for a colour range, written out"
 }

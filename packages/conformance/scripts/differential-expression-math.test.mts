@@ -11,7 +11,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import * as vega from 'vega'
 import { compileExpr, type ExpressionRuntime } from '../../core/src/expression.ts'
-import { exact, quietLogger } from './differential-util.mts'
+import { exact, loggedThrow, quietLogger } from './differential-util.mts'
+import { expectSameOutcome } from './differential-outcome.mts'
 
 vi.setConfig({ testTimeout: 60_000 })
 
@@ -31,15 +32,15 @@ async function viaVega(code: string, args: unknown[]): Promise<unknown> {
   const view = new vega.View(vega.parse(spec(code)), { logger: quietLogger(errors) as never })
   args.forEach((v, i) => view.signal(NAMES[i]!, v))
   await view.runAsync()
-  if (errors.length) return { $: 'throw' }
+  if (errors.length) return loggedThrow(errors[0]![0])
   return exact(() => view.signal('out'))
 }
 function viaAster(code: string, args: unknown[]): unknown {
   const params: Record<string, unknown> = {}
   args.forEach((v, i) => { params[NAMES[i]!] = v })
   const got = exact(() => compileExpr(code, runtime)(undefined, params)) as { $?: string } | null
-  // the dataflow logs an operator error and keeps going; only that a call threw is compared
-  return got?.$ === 'throw' ? { $: 'throw' } : got
+  // the dataflow logs an operator error and keeps going: that a call threw, and vega's own words when it has them, are compared
+  return got
 }
 const call = (fn: string, n: number) => `${fn}(${NAMES.slice(0, n).join(', ')})`
 
@@ -59,14 +60,14 @@ describe('plain built-ins vs real vega (live)', () => {
   for (const fn of UNARY) {
     it(`${fn}(x)`, async () => {
       for (const v of VALUES) {
-        expect(viaAster(call(fn, 1), [v]), `${fn}(${String(typeof v === 'object' ? JSON.stringify(v) : v)})`).toEqual(await viaVega(call(fn, 1), [v]))
+        expectSameOutcome(viaAster(call(fn, 1), [v]), await viaVega(call(fn, 1), [v]), `${fn}(${String(typeof v === 'object' ? JSON.stringify(v) : v)})`)
       }
     })
   }
   for (const fn of [...BINARY, ...SPREAD]) {
     it(`${fn}(x, y)`, async () => {
       for (const x of VALUES) for (const y of VALUES.filter((_, i) => i % 3 === 0)) {
-        expect(viaAster(call(fn, 2), [x, y]), `${fn}(${String(x)}, ${String(y)})`).toEqual(await viaVega(call(fn, 2), [x, y]))
+        expectSameOutcome(viaAster(call(fn, 2), [x, y]), await viaVega(call(fn, 2), [x, y]), `${fn}(${String(x)}, ${String(y)})`)
       }
     })
   }
@@ -74,7 +75,7 @@ describe('plain built-ins vs real vega (live)', () => {
     it(`${fn}(...) with no, one and several arguments`, async () => {
       for (const args of [[], [3], [3, 1, 2], [1, NaN, 2], [null, 1], ['4', 2, '10'], [-0, 0], [0, -0], [1, 2, 3, 4, 5]]) {
         const code = call(fn, args.length)
-        expect(viaAster(code, args), `${code} ${JSON.stringify(args)}`).toEqual(await viaVega(code, args))
+        expectSameOutcome(viaAster(code, args), await viaVega(code, args), `${code} ${JSON.stringify(args)}`)
       }
     })
   }

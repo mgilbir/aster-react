@@ -1,9 +1,13 @@
 // @vitest-environment jsdom
 /**
  * Every shell that measures its container sizes the spec the same way: `<Chart>`, `<SvgChart>` (with and without the interaction
- * capability) and the streaming components (`<ChartStream>`, and `<ChartWorkerStream>` on the main thread), mounted without size
- * props in a measured container, draw exactly what the core draws for that spec given the measured container
- * (`measuredSize`, and `containerSize` for `containerSize()`). What the core does with the container is judged against vega in
+ * capability) and the streaming components (`<ChartStream>`, and `<ChartWorkerStream>` on the main thread), mounted in a
+ * measured container, draw exactly what the core draws for that spec.
+ *
+ * Without size props the view is the spec's own, as in Vega (DECISIONS Q11): the measured element is only what
+ * `containerSize()` reads (`containerSize`), so a literal size draws at that size in any container and only Vega-Lite's
+ * `"container"` follows it. With `width="container" height="container"` the view fills the element (`measuredSize` too, each
+ * dimension its own). What the core does with the container is judged against vega in
  * `packages/conformance/src/view-size-vs-vega.test.ts`: a spec whose autosize is `none` keeps its own size, a numeric size with
  * any other autosize fills the container, a size signal or no size is the spec's own, Vega-Lite's `"container"` reads it.
  */
@@ -11,9 +15,14 @@ import * as React from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { describe, expect, it, afterEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { runInNewContext } from 'node:vm'
 import { renderSpec } from '@aster-charts/core'
 import { compile } from '@aster-charts/vl'
-import { ChartStream, ChartWorkerStream, type ChartStreamHandle } from './ChartStream'
+import { ChartStream, type ChartStreamHandle } from './ChartStream'
+import { ChartWorkerStream, type ChartWorkerStreamHandle } from './ChartWorkerStream'
 import type { ChartHandle } from './chart-types'
 import { forEachVariant } from './testing/variants'
 
@@ -53,8 +62,17 @@ const SPECS: Array<[string, Record<string, unknown>]> = [
   ['Vega-Lite width/height "container"', compile({ width: 'container', height: 'container', data: { values: rows }, mark: 'point', encoding: { x: { field: 'x', type: 'quantitative' }, y: { field: 'y', type: 'quantitative' } } } as never) as unknown as Record<string, unknown>],
 ]
 
-/** What the core draws for the spec in the measured container. */
-const expected = (spec: Record<string, unknown>): string => renderSpec(spec as never, { measuredSize: BOX, containerSize: BOX })
+/** What the core draws for the spec in the measured container: filling it in the dimensions given, else reading it only. */
+const expected = (spec: Record<string, unknown>, fill: { width?: number; height?: number } | undefined): string =>
+  renderSpec(spec as never, { ...(fill ? { measuredSize: fill } : {}), containerSize: BOX })
+
+/** The size props of each case, and the part of the box the view fills with them. */
+const FILLS: Array<[string, Record<string, unknown>, { width?: number; height?: number } | undefined]> = [
+  ['no size props (the spec\'s own size)', {}, undefined],
+  ['width and height "container"', { width: 'container', height: 'container' }, BOX],
+  ['width "container"', { width: 'container' }, { width: BOX.width }],
+  ['height "container"', { height: 'container' }, { height: BOX.height }],
+]
 
 let restore: (() => void) | null = null
 let cleanup: Array<() => void> = []
@@ -77,35 +95,74 @@ const host = (): HTMLElement => {
 // (Vega-Lite's "container" re-reads the container on `window:resize`: an event stream, which needs the event loop)
 const needs = (name: string): Array<'svg' | 'signals'> => (name.startsWith('Vega-Lite') ? ['svg', 'signals'] : ['svg'])
 forEachVariant(['svg'], (Chart, variant) => {
-  describe('without size props, the measured container sizes the spec as the core does', () => {
-    for (const [name, spec] of SPECS) {
-      variant.it(needs(name), name, () => {
-        const el = host()
-        const root = createRoot(el)
-        cleanup.push(() => root.unmount())
-        const ref = React.createRef<ChartHandle>()
-        act(() => { root.render(<Chart ref={ref} spec={spec as never} a11y={false} />) })
-        expect(ref.current!.getSvg()).toBe(expected(spec))
-      })
-    }
+  for (const [fillName, props, fill] of FILLS) {
+    describe(`${fillName}: the measured container sizes the spec as the core does`, () => {
+      for (const [name, spec] of SPECS) {
+        variant.it(needs(name), name, () => {
+          const el = host()
+          const root = createRoot(el)
+          cleanup.push(() => root.unmount())
+          const ref = React.createRef<ChartHandle>()
+          act(() => { root.render(<Chart ref={ref} spec={spec as never} a11y={false} {...props} />) })
+          expect(ref.current!.getSvg()).toBe(expected(spec, fill))
+        })
+      }
+    })
+  }
+
+  describe('a literal size draws at that size in any container (Q11)', () => {
+    variant.it(['svg'], 'the README spec', () => {
+      const el = host()
+      const root = createRoot(el)
+      cleanup.push(() => root.unmount())
+      const ref = React.createRef<ChartHandle>()
+      act(() => { root.render(<Chart ref={ref} spec={{ ...body, width: 400, height: 300 } as never} a11y={false} />) })
+      const svg = el.querySelector('svg')!
+      // 400 x 300 plus the axes' share of the padding, as Vega draws it: not the 900 x 600 box
+      expect(Number(svg.getAttribute('width'))).toBeLessThan(500)
+      expect(Number(svg.getAttribute('height'))).toBeLessThan(400)
+      expect(ref.current!.getSvg()).toBe(renderSpec({ ...body, width: 400, height: 300 } as never, {}))
+    })
+
+    // The README's first chart, read from the README itself (C274: it said nothing of size, and a reader who knows vega-embed expects
+    // 400 x 300 plus padding): in a 900 x 600 element it draws at its own size, as the README now says.
+    variant.it(['svg'], 'the spec of the README\'s first chart, as the README is written today', async () => {
+      const readme = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'README.md'), 'utf8')
+      const literal = /const spec = (\{[\s\S]*?\n\})\n/.exec(readme)?.[1]
+      expect(literal, 'the first code block of README.md declares `const spec = { ... }`').toBeDefined()
+      // (the literal is evaluated in a context of its own: its objects are copied into this realm, where the chart checks them)
+      const spec = JSON.parse(JSON.stringify(runInNewContext(`(${literal})`))) as Record<string, unknown>
+      expect(spec.width).toBe(400)
+      expect(spec.height).toBe(300)
+      expect(readme).toMatch(/`width: 400, height: 300` draws at 400 x 300 plus padding in any\s+element/)
+      const el = host()
+      const root = createRoot(el)
+      cleanup.push(() => root.unmount())
+      const ref = React.createRef<ChartHandle>()
+      // (a band scale and axes may need parts of the engine a browser build loads on demand: wait for them)
+      await act(async () => { root.render(<Chart ref={ref} spec={spec as never} a11y={false} />) })
+      for (let i = 0; i < 20 && !el.querySelector('svg'); i++) await act(async () => { await new Promise((r) => setTimeout(r, 10)) })
+      expect(ref.current!.getSvg()).toBe(renderSpec(spec as never, {}))
+      expect(Number(el.querySelector('svg')!.getAttribute('width'))).toBeLessThan(500)
+    })
   })
 })
 
 describe('the streaming components size the stream to the container they measure, as <Chart> does', () => {
   for (const [label, Stream] of [['ChartStream', ChartStream], ['ChartWorkerStream (main thread)', ChartWorkerStream]] as const) {
-    for (const [name, spec] of SPECS) {
-      it(`${label}: ${name}`, async () => {
+    for (const [fillName, props, fill] of FILLS) for (const [name, spec] of SPECS) {
+      it(`${label}, ${fillName}: ${name}`, async () => {
         const el = host()
         const root = createRoot(el)
         cleanup.push(() => root.unmount())
-        const ref = React.createRef<ChartStreamHandle>()
-        await act(async () => { root.render(<Stream ref={ref} spec={spec as never} a11y={false} streamOptions={{ autoFlush: true }} />) })
+        const ref = React.createRef<ChartStreamHandle & ChartWorkerStreamHandle>()
+        await act(async () => { root.render(<Stream ref={ref} spec={spec as never} a11y={false} streamOptions={{ autoFlush: true }} {...props} />) })
         // the stream flushes what the inner chart measured
         for (let i = 0; i < 5; i++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
         expect(el.querySelector('svg')?.outerHTML.length ?? 0).toBeGreaterThan(0)
         const scene = ref.current!.scene()
         const { renderSceneToSvg } = await import('@aster-charts/core')
-        expect(renderSceneToSvg(scene!)).toBe(expected(spec))
+        expect(renderSceneToSvg(scene!)).toBe(expected(spec, fill))
       })
     }
   }

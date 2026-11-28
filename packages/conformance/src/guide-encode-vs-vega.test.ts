@@ -16,13 +16,14 @@ import * as vega from 'vega'
 import { compileChart, evaluateChart, renderSpec } from '@aster-charts/core'
 import { renderSceneToDomElement } from '@aster-charts/core/dom'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
+import { expectKnownDifference } from './known-differences.js'
 
 type Spec = Record<string, unknown>
 
 async function oracleSvg(spec: Spec): Promise<string> {
   const log = console.error
   console.error = () => {}
-  const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(vega.parse(spec as never), { renderer: 'none' })
+  const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(vega.parse(structuredClone(spec) as never), { renderer: 'none' })
   try {
     await view.runAsync()
     return await view.toSVG()
@@ -35,10 +36,18 @@ const domSvg = (spec: Spec): string => new XMLSerializer().serializeToString(ren
   .replace(/ xmlns:ns\d+="http:\/\/www\.w3\.org\/1999\/xlink"/g, '').replace(/ ns\d+:href=/g, ' xlink:href=')
 
 /**
- * What the oracle itself refuses (`vega.parse` throws): there is nothing to agree with. Counted, like the sweeps' node
- * errors, and held to a ceiling at the end.
+ * The one class of spec `vega.parse` refuses here: `encode.group.style` or `encode.subtitle.style` given as a LIST on a title
+ * (vega-parser concatenates the list into an expression: `Unrecognized signal name: "nullnull"`). A case of the expected-differences
+ * table, held on its own probe below: Aster is run on the spec and must render it. Every refusal is judged where it happens, so a
+ * refusal of another spec, or with another message, fails the walk that met it, and `metRefusals` counts them for the walks to compare
+ * with the number of specs of the class they built.
  */
-const refused: string[] = []
+const REFUSAL = 'Unrecognized signal name: "nullnull"'
+const refusedClass = (spec: Spec): boolean => {
+  const encode = (spec.title as { encode?: Record<string, { style?: unknown }> } | undefined)?.encode
+  return ['group', 'subtitle'].some((part) => Array.isArray(encode?.[part]?.style) && (encode![part]!.style as unknown[]).length > 1)
+}
+const metRefusals = { n: 0 }
 
 /** Every difference between vega and the string renderer (and the DOM renderer) for `spec`; [] when they agree. */
 async function differences(spec: Spec, dom = true): Promise<string[]> {
@@ -46,7 +55,14 @@ async function differences(spec: Spec, dom = true): Promise<string[]> {
   try {
     svg = await oracleSvg(spec)
   } catch (e) {
-    refused.push((e as Error).message.split('\n')[0]!)
+    const message = (e as Error).message.split('\n')[0]!
+    if (!refusedClass(spec) || message !== REFUSAL) return [`vega refused an unexpected spec: ${message}`]
+    // (vega refuses: Aster is run on the same spec, both renderers, and must draw a document)
+    try {
+      canonicalizeSvg(renderSpec(structuredClone(spec) as never))
+      canonicalizeSvg(domSvg(structuredClone(spec)))
+    } catch (err) { return [`vega refuses, Aster failed: ${(err as Error).message}`] }
+    metRefusals.n++
     return []
   }
   const want = canonicalizeSvg(svg)
@@ -118,11 +134,16 @@ function extras(label: string, parts: string[], make: (part: string, block: Spec
         ['all three, and a channel of its own', { name: 'n', interactive: true, style: 'my-style', update: { opacity: { value: 0.9 } } }],
       ]
       const bad: string[] = []
+      const before = metRefusals.n
+      let classOfRefused = 0
       for (const [what, block] of blocks) {
-        const d = await differences({ ...make(part, block), config: cfg })
+        const spec = { ...make(part, block), config: cfg }
+        classOfRefused += +refusedClass(spec)
+        const d = await differences(spec)
         if (d.length) bad.push(`${what}: ${d[0]}`)
       }
       expect(bad).toEqual([])
+      expect(metRefusals.n - before, 'the specs of the refused class are the ones vega refused').toBe(classOfRefused)
     }, 300_000)
   }
 }
@@ -197,9 +218,15 @@ describe('the matrix is not vacuous', () => {
     expect(renderSpec(encoded as never)).not.toEqual(renderSpec(plain as never))
     expect(Object.keys(CHANNELS).length).toBeGreaterThan(35)
   })
-  it('what vega itself refuses is one thing: a list of styles on a title group or subtitle (vega-parser writes `nullnull` into an expression)', () => {
-    // (runs last, in file order)
-    expect(refused.filter((r) => r !== 'Unrecognized signal name: "nullnull"')).toEqual([])
-    expect(refused.length).toBeLessThanOrEqual(4)
+  it('a list of styles on a title group or subtitle: vega.parse throws, Aster renders (expected-differences table)', async () => {
+    const cfg = { style: { 'my-style': { fill: 'seagreen' }, 'other-style': { fill: 'crimson' } } }
+    for (const part of ['group', 'subtitle']) {
+      const spec = frame({ title: { text: 'Title', subtitle: 'Sub', encode: { [part]: { style: ['my-style', 'other-style'] } } }, config: cfg })
+      expect(refusedClass(spec)).toBe(true)
+      let vegaOutcome: unknown
+      try { vegaOutcome = { svg: await oracleSvg(spec) } } catch (e) { vegaOutcome = { refused: (e as Error).message.split('\n')[0] } }
+      expect(vegaOutcome, `encode.${part}.style as a list`).toEqual({ refused: REFUSAL })
+      expectKnownDifference('guide-encode-vs-vega', 'a list of styles on a title group or subtitle', vegaOutcome, { svg: renderSpec(structuredClone(spec) as never) })
+    }
   })
 })

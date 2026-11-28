@@ -39,8 +39,13 @@ vega-lite 6.4.3, or throws a `VLCompileError` naming the unsupported feature
 (with the path in the spec, e.g. `encoding.x.scale.domain: ...`). It never
 compiles a wrong chart silently, and it never mutates its input. The spec's
 structure is copied; its rows (an inline `data.values`, the entries of `datasets`)
-are not: compiling reads none of them, so it costs the same for 3 rows as for
-6,000. The compiled spec carries the caller's row objects, in arrays of its own,
+are not, and compiling one view over them reads none of them: it costs the same for 3 rows as for 6,000. Three
+things do read rows, to share a dataset as vega-lite does: two views whose `data.values` are *distinct but equal*
+arrays have their rows compared (passing the same array costs nothing), a `lookup` from anonymous inline rows reads
+them, and an inline CSV / JSON text is compared as text; a large `params[].value` or `usermeta` is copied. (At
+400,000 rows, measured on 2026-11-23: one unit 2.9 ms, two layers over equal distinct arrays 58 ms, four such
+concat views 123 ms, a lookup from inline rows 100 ms, a 3.9 MB CSV text 20 ms, a 400,000-element parameter value
+40 ms.) The compiled spec carries the caller's row objects, in arrays of its own,
 as vega-lite does; nothing in Aster writes to them. Treat them as immutable too: to
 change the data, pass new arrays (a chart that gets the same array again assumes
 the same rows, so an in-place edit is seen only by what happens to re-evaluate; in
@@ -62,8 +67,12 @@ an expression or a generated dataset/signal/scale name.
   takes the `url` channel (field or value).
 - Composition: layer, hconcat, vconcat, concat, facet (row/column/wrap), repeat, with every nesting the
   Vega-Lite schema allows except those listed under "Throws"; `resolve` for scales, axes and legends; shared scales and legends.
+  In a facet, an independent scale or legend of any channel is drawn in each cell (`child_color`, over the cell's rows).
+  `{"repeat": ...}` references are replaced where vega-lite replaces them: a channel's field, datum and sort, and a
+  condition's field.
 - Sizing: numbers, `{"step": n}`, and `"container"` on a top-level unit or layer (vega-lite's
-  containerSize signals and an autosize fit / fit-x / fit-y over the padding).
+  containerSize signals and an autosize fit / fit-x / fit-y over the padding) or on a facet's spec (each cell takes
+  the container's size, `child_width` / `child_height`).
 - Transforms: filter, calculate, bin, timeUnit, aggregate, joinaggregate, window, stack, fold,
   flatten, pivot, impute, lookup, sample, density, loess, regression, quantile, extent.
 - Channels: x, y, x2, y2, xOffset, yOffset, xError(2), yError(2), theta, theta2, radius, radius2, color, fill,
@@ -77,7 +86,9 @@ an expression or a generated dataset/signal/scale name.
   offset-band padding, `pointPadding`, `continuousPadding`, `round`, `clamp`, `zero`, `xReverse`,
   `useUnaggregatedDomain`, `minSize`/`maxSize`, `minBandSize`/`maxBandSize`, `minFontSize`/
   `maxFontSize`, `minStrokeWidth`/`maxStrokeWidth`, `minOpacity`/`maxOpacity`, `quantileCount`,
-  `quantizeCount` and `invalid`. `scale.domain: "unaggregated"`, `scale.rangeMin` / `rangeMax`.
+  `quantizeCount` and `invalid`. `scale.domain: "unaggregated"`, `scale.rangeMin` / `rangeMax` (on the scale types vega-lite gives them
+  to - continuous, point, band - and dropped on the others, as vega-lite drops them). An `order` that is a list is accepted and orders
+  nothing, as in vega-lite 6.4.3.
 - `mark.invalid` (`filter`, `show`, `break-paths-filter-domains`, `break-paths-show-domains`,
   `break-paths-show-path-domains`, `null`) and `config.scale.invalid`.
 - Custom format types (`formatType`, `config.customFormatTypes`, `numberFormatType`,
@@ -131,8 +142,26 @@ an expression or a generated dataset/signal/scale name.
 ## Throws (not supported)
 
 Everything below throws a `VLCompileError` naming the feature and its path; nothing is silently
-ignored. (The list is what `compile` refuses today, checked one spec per line against the build; a feature that
-vega-lite supports and is not here compiles to the same Vega.)
+ignored. Three refusals are general, and name what they refuse by path rather than by feature:
+
+- **A value the Vega-Lite schema does not allow where it stands** (a wrong type, `null` where vega-lite reads "unset",
+  a name that is not one of the schema's, a missing required property, an unknown property in the `config`): it is
+  refused as `<path>: must be ... (Vega-Lite 6.4.3 schema)`, checked against a table generated from vega-lite 6.4.3's
+  JSON schema at build time. vega-lite reads such a spec in ways its schema does not describe, so there is no contract to
+  match. The few forms vega-lite reads beyond its schema that Aster draws as vega-lite does (a facet over a repeat or a
+  concat, `stack: "wiggle"`, a Vega `{"signal"}` in a scale domain ...) are listed, each with the test that pins it, in
+  `scripts/schema-table.mjs` (`EXTENSIONS`). An `{"expr"}` object is an expression only where the schema takes an
+  ExprRef; anywhere else (a lookup `default`, an impute `value`, a parameter `value`) it is the literal object it is.
+- **A property the compiler does not read.** Every property of the spec has to be read by the compile, or be one
+  vega-lite itself ignores (each such rule is pinned against vega-lite by a test); any other is refused at the end of
+  the compile as `<path>: is valid Vega-Lite but @aster-charts/vl does not implement it here, so it would be ignored`.
+  So a feature the list below does not name is either compiled to what vega-lite draws, or refused by this message.
+- **Names that collide in the compiled Vega**: a parameter named as a name the compiler makes (`unit` beside a
+  selection, `x_step`), one selection name in two layers, two views of one `name`. Vega refuses the output (as it
+  refuses vega-lite's), so the compile does, naming the duplicate.
+
+The list below is the features refused by name, each checked by `test/readme-refusals.test.ts` against the build
+(the spec is refused, and for that reason).
 
 - Params and selections that vega-lite itself compiles to a Vega spec that Vega rejects or that has no well-defined meaning:
   on a layer spec itself, or on a concat / facet / repeat that has a layer or a composite mark (boxplot, errorbar,
@@ -141,6 +170,17 @@ vega-lite supports and is not here compiles to the same Vega.)
   parameters with the inherited ones), and with `views` (restricting a composition's selection to some of its views).
   Also: `bin.extent` as anything but a `[min, max]` pair or a `{param}` reference; a lookup from a selection of the same
   unit or of a later layer; `scale.domain.unionWith` in a layered spec; a parameter's `push`.
+- A variable parameter inside a view of a composition (a layer, a concat, a facet's `spec`): vega-lite declares the signal of a variable
+  parameter at the top of the spec only, so its chart reads a signal it never declares and Vega refuses it ("Unrecognized signal
+  name"); declare the parameter in the top-level `params`.
+- A datum given as an expression (`{"datum": {"expr": "p"}}`) on a channel a scale reads (a position, a colour, a size, an
+  opacity ...), on a tooltip, a href, a description or a text: vega-lite 6.4.3 refuses it without a `type` ("Invalid field type
+  undefined"), writes the expression object into the scale's domain with one (Vega: "Unsupported object"), and prints its object literal
+  in a text; a secondary position, a detail or an order draws, and compiles. Which marks vega-lite builds a scale of a channel for is its
+  own, measured in `vl-datum-expression.test.ts` (conformance). (A scale given its `domain`, or `null`, or one that another view
+  of the spec gives a field, is not made of the datum: those draw.)
+- A tick whose `baseline` is not top, middle or bottom (`alphabetic`, `line-top`, `line-bottom`): vega-lite 6.4.3 writes the tick's
+  position under a channel named `undefined`, so the mark is placed by nothing.
 - Maps: a geoshape without a GeoJSON `shape` field inside a facet (vega-lite 6.4.3 fits the projection to
   `data("child_main")`, a dataset it never defines, so there is no output to match). Longitude / latitude
   positions on marks other than point, circle, square, text, line, trail and rule. What vega cannot run of vega-lite
@@ -148,16 +188,16 @@ vega-lite supports and is not here compiles to the same Vega.)
   longitude / latitude that is a count of records (`aggregate: "count"` with no field), both of which vega-lite
   projects with a geopoint transform that reads no field; a longitude / latitude datum that is not a number, which
   vega-lite writes into the geopoint transform as an expression vega cannot parse.
-- Animation outside the one shape vega-lite 6.4.3 compiles to working output: a `time` channel needs a single
-  top-level unit with exactly one timer selection and the `{filter: {param}}` transform (without them vega-lite
-  emits marks that read a dataset it never defines); layers, concats, facets, composite marks
-  (boxplot / errorbar / errorband) and point / line overlays are refused, as are `bind` / `value` on the timer
-  selection.
-- Bins and time units: `timeUnit.maxbins`, errorbar / errorband over a binned channel, and the
-  `timeUnitBandPosition` / `timeUnitBandSize` mark keys.
+- Animation outside the shapes vega-lite 6.4.3 compiles to working output: a `time` channel needs a unit at the root, or in the
+  layers of the root, with a timer selection and the `{filter: {param}}` transform (without them vega-lite emits marks that
+  read a dataset it never defines); concats, facets, repeats, composite marks (boxplot / errorbar / errorband) and point / line
+  overlays are refused, and so are a timer selection with neither `fields` nor `encodings` and a `nearest` selection in a unit that has a time channel.
+- Composite marks: an errorbar or errorband whose measure is a nested path (`o.v`) or a name with a dot in it (`a\.b`): vega-lite
+  6.4.3 makes the statistics before the field is flattened, so it draws no bar (or nulls); name a plain column, made by a calculate.
+- Bins and time units: `timeUnit.maxbins` and errorbar / errorband over a binned channel. (The `timeUnitBandPosition` /
+  `timeUnitBandSize` mark keys are accepted and ignored: vega-lite 6.4.3 reads them from `config` only.)
 - Channel definitions vega-lite 6.4.3 compiles that are not implemented yet: a `datum`
-  condition on fillOpacity, strokeOpacity, angle, text or tooltip; a field condition that reads a field other than the
-  channel's own; an array of conditions that holds a field condition; `impute` or
+  condition on fillOpacity, strokeOpacity, angle, text or tooltip; an array of conditions that holds a field condition; `impute` or
   pre-binned data (`binned`) on a channel other than x and y (and longitude / latitude, where vega-lite ignores
   them); the `geojson` type on a channel other than shape, and
   a GeoJSON shape on any other mark.
@@ -166,14 +206,37 @@ vega-lite supports and is not here compiles to the same Vega.)
   vega-lite 6.4.3 makes a scale, an axis and a stack group of the condition's field while it places the mark by the
   value, so there is no coherent output to match. (A condition with a value is read as its value, as vega-lite
   reads it; on a channel the mark does not draw the condition is dropped with the channel.)
-- Scales and encodings: channel-level `band` (except on longitude / latitude, where vega-lite ignores it); the positional mark-def constants `x` / `x2` / `y` / `y2`, except
-  `x` / `y` on point, circle, square and text.
-- Layout: `width` / `height: "container"` on a composition (only a top-level unit or layer), `data: null`, config keys
+- Scales and encodings: channel-level `band` (except on longitude / latitude, where vega-lite ignores it); `order` given as a
+  list (vega-lite 6.4.3 reads none of its entries and draws the chart unordered).
+- Layout: `width` / `height: "container"` on a composition (only a top-level unit or layer, or a facet's spec), a
+  `{"repeat": ...}` reference in a transform (vega-lite 6.4.3 leaves it in its output as a field that reads nothing), a
+  repeat's `row` / `column` given as a string (vega-lite reads it as the list of its characters), `data: null`, config keys
   outside the supported list, a wrapped facet (a single `facet` field) around or inside another facet, a selection or
-  a map inside a facet inside a facet, independent x / y scales in a facet that holds another facet, a concat in a
+  a map inside a facet inside a facet, independent scales or legends in a facet that holds another facet, a concat in a
   layer (the Vega-Lite schema forbids it), layer repeats combined with row / column, layers whose scales are
-  incompatible or conflict, a facet of layers over different data, `argmax` / `argmin` as an op of a `window`
+  incompatible or conflict, a facet of layers over different data, independent x / y scales sized by steps in a
+  wrapped facet, `argmax` / `argmin` as an op of a `window`
   transform, sort arrays of DateTime objects.
+- Layer resolution where vega-lite 6.4.3's output is broken: independent x / y scales over layers sized
+  differently (by steps, or by different widths / heights: vega-lite gives the view no size and draws nothing, or,
+  in a nested layer, draws the layer past the view); `axis: null` on a layer after one that draws the axis
+  (vega-lite crashes); a layer in a facet that keeps its own x / y scales unless the facet resolves them
+  independent too (vega-lite reads a scale it never defines).
+- Names that are members of Object.prototype (`constructor`, `toString`, `valueOf`, `hasOwnProperty`, `__proto__` ...) as
+  a field, a dataset, a transform's output or a parameter. Vega keeps names in plain objects and mistakes these for the
+  prototype's members, so vega-lite 6.4.3's chart of them fails in Vega or draws without them (an aggregate of nothing, a
+  time unit of nothing, a legend or description that leaves the field out). They are refused by name, except where
+  vega-lite's chart is the chart of any other name: a field only a fold, a bin transform, a stack transform, a pivot, a
+  density or a quantile reads, a binned x / y / colour, `x2`, and a parameter (all but `__proto__`); each place is held to
+  vega-lite for every member by `vl-prototype-names.test.ts` (conformance).
+- Names with a backslash of their own: a field path with an escaped backslash (`x\\y`, the column `x\y`) wherever
+  vega-lite 6.4.3 writes the field into a Vega `field` property, which it does without escaping the backslash, so its
+  chart reads another column (a scale domain, an aggregate, a bin, a time unit, a facet, a sort, an impute, a
+  regression, a repeat); and an output name (`as`) holding any backslash, or any escape in a field a regression, a
+  flatten or a repeat also writes as a name. Where vega-lite reads the field right (a tooltip, a text, an href, a
+  url, a description, a key, an order, `x2`, a predicate, a fold, a joinaggregate, a window, a lookup, a pivot, a
+  stack, a density, a quantile, a loess, an extent) it is drawn as there; each place is held to vega-lite by
+  `vl-escaped-names.test.ts` (conformance).
 
 ## Where it matches vega-lite on purpose, rather than the specification
 

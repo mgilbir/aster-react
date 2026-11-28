@@ -123,7 +123,7 @@ describe('topojson feature and mesh vs topojson-client (real topologies)', () =>
       })
     }
     it(`${file}: the objects are non-trivial`, () => {
-      const f = feature(topology, Object.keys(topology.objects)[0]!) as { features?: unknown[] } & Record<string, unknown>
+      const f = feature(topology, Object.keys(topology.objects)[0]!) as unknown as { features?: unknown[] }
       expect(JSON.stringify(f).length).toBeGreaterThan(10000)
     })
   }

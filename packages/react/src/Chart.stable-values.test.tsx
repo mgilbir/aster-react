@@ -7,7 +7,7 @@ import { forEachVariant } from './testing/variants'
 
 // The matrix runs every test below on <Chart>, <SvgChart> and <SvgChart interaction={interaction}>;
 // `Chart` is the variant's component (see testing/variants.tsx).
-forEachVariant(['svg'], (Chart, variant) => {
+forEachVariant(['svg'], (Chart) => {
   const rows = (n: number, bump = -1) => Array.from({ length: n }, (_, i) => ({ k: 'r' + i, v: (i * 37) % 100 + (i === bump ? 1 : 0) }))
   const spec = (values: unknown[]) => ({
     width: 300, height: 120, padding: 5, autosize: 'none',

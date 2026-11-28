@@ -16,6 +16,21 @@ function mulberry32(seed: number): () => number {
   }
 }
 
+/**
+ * The reference an incremental run is compared with is a chart compiled afresh from the same spec: a full run of the SAME compiled
+ * chart shares its caches with the incremental one and cannot see a stale one. `compile` remembers the spec; `fresh` runs a new
+ * compile of it.
+ */
+const specOf = new WeakMap<object, unknown>()
+function compile(spec: unknown): ReturnType<typeof compileChart> {
+  const chart = compileChart(spec as never)
+  specOf.set(chart, spec)
+  return chart
+}
+function fresh(chart: ReturnType<typeof compileChart>, input: Parameters<typeof evaluateChart>[1]): ReturnType<typeof evaluateChart> {
+  return evaluateChart(compileChart(specOf.get(chart) as never), input)
+}
+
 const BASE = { $schema: 'https://vega.github.io/schema/vega/v6.json', width: 200, height: 200, autosize: 'none' } as const
 const sc = (name: string, dom: unknown) => ({ name, type: 'linear', domain: dom, range: 'width' })
 const ysc = (name: string, dom: unknown) => ({ name, type: 'linear', domain: dom, range: 'height', zero: true, nice: true })
@@ -50,12 +65,12 @@ describe('differential multi-dataset / source-chain / signal interaction', () =>
         { type: 'symbol', from: { data: 'a' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { value: 0 }, size: { value: 40 } } } },
         { type: 'symbol', from: { data: 'b' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { value: 0 }, size: { value: 40 } } } },
       ] } as never
-    const chart = compileChart(spec)
+    const chart = compile(spec)
     const data = { a: [{ x: 1, y: 1 }, { x: 2, y: 2 }], b: [{ x: 3, y: 3 }, { x: 4, y: 4 }] }
     const next = { a: [{ x: 5, y: 1 }, { x: 2, y: 2 }], b: [{ x: 3, y: 3 }, { x: 8, y: 4 }] }
     evaluateChart(chart, { data })
     const inc = evaluateChart(chart, { data: next, dataChanges: { a: [0], b: [1] } })
-    const full = evaluateChart(chart, { data: next })
+    const full = fresh(chart, { data: next })
     expect(renderSceneToSvg(inc)).toBe(renderSceneToSvg(full))
   })
 
@@ -68,12 +83,12 @@ describe('differential multi-dataset / source-chain / signal interaction', () =>
       scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 10], range: 'height' }],
       marks: [{ type: 'symbol', from: { data: 'derived' }, encode: { update: { x: { scale: 'x', field: 'y2' }, y: { value: 0 }, size: { value: 40 } } } }],
     } as never
-    const chart = compileChart(spec)
+    const chart = compile(spec)
     const src = [{ x: 1 }, { x: 3 }]
     evaluateChart(chart, { data: { src } })
     const nextSrc = [{ x: 2 }, { x: 3 }]
     const inc = evaluateChart(chart, { data: { src: nextSrc }, dataChanges: { src: [0] } })
-    const full = evaluateChart(chart, { data: { src: nextSrc } })
+    const full = fresh(chart, { data: { src: nextSrc } })
     expect(renderSceneToSvg(inc)).toBe(renderSceneToSvg(full)) // derived re-derives to [4,6]
   })
 
@@ -84,13 +99,13 @@ describe('differential multi-dataset / source-chain / signal interaction', () =>
       scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: { signal: '[0, hi]' }, range: 'height', zero: true }],
       marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, size: { value: 40 } } } }],
     } as never
-    const chart = compileChart(spec)
+    const chart = compile(spec)
     const data = { t: [{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }] }
     const next = { t: [{ x: 1, y: 1 }, { x: 2, y: 8 }, { x: 3, y: 3 }] }
     evaluateChart(chart, { data, signals: { hi: 10 } })
     // signal unchanged (params stable) -> differential runs; scale domain {signal:'hi'}
     const inc = evaluateChart(chart, { data: next, dataChanges: { t: [1] }, signals: { hi: 10 } })
-    const full = evaluateChart(chart, { data: next, signals: { hi: 10 } })
+    const full = fresh(chart, { data: next, signals: { hi: 10 } })
     expect(renderSceneToSvg(inc)).toBe(renderSceneToSvg(full))
   })
 })
@@ -104,7 +119,7 @@ describe('differential fuzz (incremental === full re-derive)', () => {
     // incremental-oracle.test.ts.
     const rand = mulberry32(0xC0FFEE)
     for (const { name, spec } of fuzzSpecs()) {
-      const chart = compileChart(spec)
+      const chart = compile(spec)
       const n = 12
       const base = Array.from({ length: n }, (_, i) => ({ x: i % 4, y: i % 5, g: 'g' + (i % 3), v: i }))
       for (let trial = 0; trial < 8; trial++) {
@@ -140,7 +155,7 @@ describe('differential fuzz (incremental === full re-derive)', () => {
       ],
       marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'g' }, width: { scale: 'x', band: 1 }, y: { scale: 'y', field: 'v' }, y2: { scale: 'y', value: 0 } } } }],
     } as never
-    const chart = compileChart(spec)
+    const chart = compile(spec)
     const a = evaluateChart(chart, { data: { t: rows } })
     const groupA = a.items[0]!
     // Snapshot at return time: the earlier scene must read exactly this later.
@@ -150,7 +165,7 @@ describe('differential fuzz (incremental === full re-derive)', () => {
     const next = rows.map((r, i) => (i === 3 ? { g: r.g, v: r.v + 5 } : r))
     const b = evaluateChart(chart, { data: { t: next }, dataChanges: { t: [3] } })
     const itemsB = b.items[0]!.items as unknown[]
-    expect(renderSceneToSvg(b)).toBe(renderSceneToSvg(evaluateChart(chart, { data: { t: next } })))
+    expect(renderSceneToSvg(b)).toBe(renderSceneToSvg(fresh(chart, { data: { t: next } })))
     // The previous scene is never written: a new item array, with every
     // unchanged item shared by identity and the old array left as it was.
     expect(b.items[0]).not.toBe(groupA)
@@ -172,16 +187,16 @@ describe('differential fuzz (incremental === full re-derive)', () => {
       scales: [{ name: 'x', type: 'band', domain: { data: 't', field: 'g' }, range: 'width', paddingOuter: 0.1, paddingInner: 0.2 }, ysc('y', [0, 10])],
       marks: [sym('x')],
     } as never
-    const chart = compileChart(spec)
+    const chart = compile(spec)
     evaluateChart(chart, { data: { t: rows } })
     // Swap g values within the existing set: ordered distinct set unchanged.
     const swapped = rows.map((r, i) => (i === 0 ? { g: 'g1', v: r.v } : r))
     const incSwap = evaluateChart(chart, { data: { t: swapped }, dataChanges: { t: [0] } })
-    expect(renderSceneToSvg(incSwap)).toBe(renderSceneToSvg(evaluateChart(chart, { data: { t: swapped } })))
+    expect(renderSceneToSvg(incSwap)).toBe(renderSceneToSvg(fresh(chart, { data: { t: swapped } })))
     // Introduce a brand-new category: the domain must rebuild.
     const withNew = rows.map((r, i) => (i === 0 ? { g: 'gNew', v: r.v } : r))
     const incNew = evaluateChart(chart, { data: { t: withNew }, dataChanges: { t: [0] } })
-    expect(renderSceneToSvg(incNew)).toBe(renderSceneToSvg(evaluateChart(chart, { data: { t: withNew } })))
+    expect(renderSceneToSvg(incNew)).toBe(renderSceneToSvg(fresh(chart, { data: { t: withNew } })))
   })
 })
 
@@ -223,7 +238,7 @@ describe('autosize pad vs none', () => {
         },
       ],
       marks: [
-        { type: 'point', name: 'pts', from: { data: 'table' } as const } as never,
+        { type: 'symbol', name: 'pts', from: { data: 'table' } as const } as never,
       ],
     }
 
@@ -262,7 +277,7 @@ describe('autosize pad vs none', () => {
         },
       ],
       marks: [
-        { type: 'point', name: 'pts', from: { data: 'table' } as const } as never,
+        { type: 'symbol', name: 'pts', from: { data: 'table' } as const } as never,
       ],
     }
     const info = getChartInfo(spec, { width: 400, height: 300 })
@@ -276,7 +291,7 @@ describe('NaN fix (Bug 1)', () => {
     // When width is NaN (from vega-lite {signal: 'width'} compile),
     // resolveSize should fall through to the override, not return NaN.
     const spec = { width: { signal: 'width' } as unknown, height: { signal: 'height' } as unknown }
-    const chart = compileChart(spec)
+    const chart = compile(spec)
     const scene = evaluateChart(chart, { width: 600, height: 400 })
     expect(Number.isNaN(scene.width)).toBe(false)
     expect(scene.width).toBeGreaterThan(0)
@@ -292,6 +307,7 @@ describe('partial re-evaluation (reactive dataflow)', () => {
     data: [
       { name: 'src', values: [{ v: 1 }, { v: 3 }] },
       { name: 'derived', source: 'src', transform: [{ type: 'formula', expr: 'datum.v * 2', as: 'y2' }] },
+      { name: 'other', values: [{ v: 0 }] },
     ],
     scales: [
       { name: 'y', type: 'linear', domain: { data: 'derived', field: 'y2' }, range: 'height', zero: true, nice: true },
@@ -305,7 +321,7 @@ describe('partial re-evaluation (reactive dataflow)', () => {
     scene.items.find((g) => (g as { marktype?: string }).marktype === 'rect')!
 
   it('rebuilds a mark when a source-chain dataset changes (not stale reuse)', () => {
-    const chart = compileChart(spec)
+    const chart = compile(spec)
     const s1 = evaluateChart(chart, { data: { src: [{ v: 1 }, { v: 3 }] } })
     const g1 = rectGroup(s1)
     // `derived` (source: src) changes too; changedDatasets names only `src`.
@@ -315,7 +331,7 @@ describe('partial re-evaluation (reactive dataflow)', () => {
   })
 
   it('reuses a mark unaffected by the changed dataset', () => {
-    const chart = compileChart(spec)
+    const chart = compile(spec)
     const s1 = evaluateChart(chart, { data: { src: [{ v: 1 }, { v: 3 }] } })
     const g1 = rectGroup(s1)
     // Change an unrelated dataset name; the mark (from `derived`) is untouched.
@@ -347,7 +363,7 @@ describe('per-datum differential update', () => {
     scene.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!
 
   it('reuses unchanged items and re-encodes only changed indices', () => {
-    const chart = compileChart(spec)
+    const chart = compile(spec)
     const s1 = evaluateChart(chart, { data: { t: [{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }] } })
     // Snapshot the item references: the earlier scene must keep exactly these
     // after the update (checked below).
@@ -371,7 +387,7 @@ describe('per-datum differential update', () => {
   })
 
   it('falls back to full re-encode when an index is out of range', () => {
-    const chart = compileChart(spec)
+    const chart = compile(spec)
     const s1 = evaluateChart(chart, { data: { t: [{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }] } })
     const before = symbolItems(s1)
     // Length mismatch -> index alignment is invalid -> no reuse.
@@ -383,10 +399,29 @@ describe('per-datum differential update', () => {
     expect(after[0]).not.toBe(before[0])
   })
 
+  it('answers as a fresh chart does when a changed index is out of range or negative; one that is no whole number is refused (C232)', () => {
+    const rows = [{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }]
+    const next = [{ x: 1, y: 1 }, { x: 5, y: 2 }, { x: 3, y: 3 }]
+    // the data are the same length, and the hint names the row that changed (1) and others that are not there: the row that did
+    // change must still be drawn as it is, and nothing thrown. An index that is no whole number (1.5, NaN) is a malformed hint:
+    // refused before anything runs, naming the dataset
+    for (const bad of [[1, 1.5], [Number.NaN, 1]]) {
+      const chart = compile(spec)
+      evaluateChart(chart, { data: { t: rows } })
+      expect(() => evaluateChart(chart, { data: { t: next }, dataChanges: { t: bad } }), JSON.stringify(bad)).toThrow(/dataChanges names dataset "t".*not a row index/)
+    }
+    for (const changed of [[1, 7], [-1, 1], [1, 3], [7, 1, 1]]) {
+      const chart = compile(spec)
+      evaluateChart(chart, { data: { t: rows } })
+      const inc = evaluateChart(chart, { data: { t: next }, dataChanges: { t: changed } })
+      expect(renderSceneToSvg(inc), JSON.stringify(changed)).toBe(renderSceneToSvg(fresh(chart, { data: { t: next } })))
+    }
+  })
+
   it('invalidates reuse when a size/signal param changes', () => {
     // Item positions use range 'width'; a width change shifts every position, so
     // the previously-encoded items would be stale if reused.
-    const chart = compileChart(spec)
+    const chart = compile(spec)
     const s1 = evaluateChart(chart, { data: { t: [{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }] }, width: 200 })
     const beforeItems = [...symbolItems(s1)]
     const s2 = evaluateChart(chart, { data: { t: [{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }] }, dataChanges: { t: [1] }, width: 300 })
@@ -406,13 +441,13 @@ describe('per-datum differential update', () => {
       ],
       marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'g' }, width: { scale: 'x', band: 1 }, y: { scale: 'y', field: 's' }, y2: { scale: 'y', value: 0 } } } }],
     } as never
-    const chart = compileChart(ts)
+    const chart = compile(ts)
     const sums = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'rect')!.items!.map((it) => (it as { datum?: { s?: number } }).datum?.s)
     const init = [{ g: 'a', v: 1 }, { g: 'a', v: 2 }, { g: 'b', v: 5 }, { g: 'b', v: 7 }]
     const changed = [{ g: 'a', v: 3 }, { g: 'a', v: 2 }, { g: 'b', v: 5 }, { g: 'b', v: 7 }]
     evaluateChart(chart, { data: { t: init } })
     const inc = evaluateChart(chart, { data: { t: changed }, dataChanges: { t: [0] } })
-    const full = evaluateChart(chart, { data: { t: changed } })
+    const full = fresh(chart, { data: { t: changed } })
     // groups 'a'(3+2=5) and 'b'(12); order should be identical incrementally vs full.
     expect(sums(inc)).toEqual(sums(full))
   })
@@ -428,13 +463,13 @@ describe('per-datum differential update', () => {
       ],
       marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 's' }, y: { value: 0 }, size: { value: 40 } } } }],
     } as never
-    const chart = compileChart(ts)
+    const chart = compile(ts)
     const sums = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => (it as { datum?: { s?: number } }).datum?.s)
     const init = [{ g: 'a', v: 1 }, { g: 'a', v: 2 }, { g: 'b', v: 5 }, { g: 'b', v: 7 }]
     const changed = [{ g: 'a', v: 3 }, { g: 'a', v: 2 }, { g: 'b', v: 5 }, { g: 'b', v: 7 }]
     evaluateChart(chart, { data: { t: init } })
     const inc = evaluateChart(chart, { data: { t: changed }, dataChanges: { t: [0] } })
-    const full = evaluateChart(chart, { data: { t: changed } })
+    const full = fresh(chart, { data: { t: changed } })
     expect(sums(inc)).toEqual(sums(full)) // 'a'->5 (3+2), 'b'->12
   })
 
@@ -446,13 +481,13 @@ describe('per-datum differential update', () => {
       scales: [{ name: 'x', type: 'linear', domain: [0, 20], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 20], range: 'height' }],
       marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 's' }, y: { value: 0 }, size: { value: 40 } } } }],
     } as never
-    const chart = compileChart(ts)
+    const chart = compile(ts)
     const sums = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => (it as { datum?: { s?: number } }).datum?.s)
     const init = [{ g: 'a', v: 1 }, { g: 'a', v: 2 }, { g: 'b', v: 5 }, { g: 'b', v: 7 }]
     const changed = [{ g: 'a', v: 3 }, { g: 'a', v: 2 }, { g: 'b', v: 5 }, { g: 'b', v: 7 }]
     evaluateChart(chart, { data: { t: init } })
     const inc = evaluateChart(chart, { data: { t: changed }, dataChanges: { t: [0] } })
-    const full = evaluateChart(chart, { data: { t: changed } })
+    const full = fresh(chart, { data: { t: changed } })
     expect(sums(inc)).toEqual(sums(full)) // 'a' running sum -> [3,5]; 'b' -> [5,12]
   })
 
@@ -464,13 +499,13 @@ describe('per-datum differential update', () => {
       scales: [{ name: 'x', type: 'linear', domain: [0, 20], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 20], range: 'height' }],
       marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'y1' }, y: { value: 0 }, size: { value: 40 } } } }],
     } as never
-    const chart = compileChart(ts)
+    const chart = compile(ts)
     const y1 = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => (it as { datum?: { y1?: number } }).datum?.y1)
     const init = [{ g: 'a', v: 1 }, { g: 'a', v: 2 }, { g: 'b', v: 5 }, { g: 'b', v: 7 }]
     const changed = [{ g: 'a', v: 3 }, { g: 'a', v: 2 }, { g: 'b', v: 5 }, { g: 'b', v: 7 }]
     evaluateChart(chart, { data: { t: init } })
     const inc = evaluateChart(chart, { data: { t: changed }, dataChanges: { t: [0] } })
-    const full = evaluateChart(chart, { data: { t: changed } })
+    const full = fresh(chart, { data: { t: changed } })
     expect(y1(inc)).toEqual(y1(full)) // 'a' cumulative -> [3,5]; 'b' -> [5,12]
   })
 
@@ -482,13 +517,13 @@ describe('per-datum differential update', () => {
       scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 10], range: 'height' }],
       marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'v' }, y: { value: 0 }, size: { value: 40 } } } }],
     } as never
-    const chart = compileChart(ts)
+    const chart = compile(ts)
     const vs = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => (it as { datum?: { v?: number } }).datum?.v)
     const init = [{ v: 1 }, { v: 3 }, { v: 5 }, { v: 7 }]
     const changed = [{ v: 4 }, { v: 3 }, { v: 5 }, { v: 7 }] // index 0 now passes
     evaluateChart(chart, { data: { t: init } }) // -> [3,5,7]
     const inc = evaluateChart(chart, { data: { t: changed }, dataChanges: { t: [0] } }) // -> [4,3,5,7]
-    const full = evaluateChart(chart, { data: { t: changed } })
+    const full = fresh(chart, { data: { t: changed } })
     expect(vs(inc)).toEqual(vs(full))
   })
 
@@ -500,13 +535,13 @@ describe('per-datum differential update', () => {
       scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 10], range: 'height' }],
       marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'b0' }, y: { value: 0 }, size: { value: 40 } } } }],
     } as never
-    const chart = compileChart(ts)
+    const chart = compile(ts)
     const b0 = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => (it as { datum?: { b0?: number } }).datum?.b0)
     const init = [{ v: 1 }, { v: 3 }, { v: 5 }, { v: 7 }]
     const changed = [{ v: 2 }, { v: 3 }, { v: 5 }, { v: 7 }]
     evaluateChart(chart, { data: { t: init } })
     const inc = evaluateChart(chart, { data: { t: changed }, dataChanges: { t: [0] } })
-    const full = evaluateChart(chart, { data: { t: changed } })
+    const full = fresh(chart, { data: { t: changed } })
     expect(b0(inc)).toEqual(b0(full))
   })
 
@@ -518,13 +553,13 @@ describe('per-datum differential update', () => {
       scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 10], range: 'height' }],
       marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'b0' }, y: { value: 0 }, size: { value: 40 } } } }],
     } as never
-    const chart = compileChart(ts)
+    const chart = compile(ts)
     const b0 = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => (it as { datum?: { b0?: number } }).datum?.b0)
     const init = [{ v: 1 }, { v: 3 }, { v: 5 }, { v: 7 }]
     const changed = [{ v: 2 }, { v: 3 }, { v: 5 }, { v: 7 }] // stays within extent, old not at boundary
     evaluateChart(chart, { data: { t: init } })
     const inc = evaluateChart(chart, { data: { t: changed }, dataChanges: { t: [0] } })
-    const full = evaluateChart(chart, { data: { t: changed } })
+    const full = fresh(chart, { data: { t: changed } })
     expect(b0(inc)).toEqual(b0(full))
   })
 
@@ -536,13 +571,13 @@ describe('per-datum differential update', () => {
       scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 10], range: 'height' }],
       marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'val' }, y: { value: 0 }, size: { value: 40 } } } }],
     } as never
-    const chart = compileChart(ts)
+    const chart = compile(ts)
     const vals = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => (it as { datum?: { val?: number } }).datum?.val)
     const init = [{ id: 'r1', a: 1, b: 2 }, { id: 'r2', a: 3, b: 4 }]
     const changed = [{ id: 'r1', a: 5, b: 2 }, { id: 'r2', a: 3, b: 4 }] // r1 fold -> [5,2]
     evaluateChart(chart, { data: { t: init } }) // -> [1,2,3,4]
     const inc = evaluateChart(chart, { data: { t: changed }, dataChanges: { t: [0] } }) // -> [5,2,3,4]
-    const full = evaluateChart(chart, { data: { t: changed } })
+    const full = fresh(chart, { data: { t: changed } })
     expect(vals(inc)).toEqual(vals(full))
   })
 
@@ -554,13 +589,13 @@ describe('per-datum differential update', () => {
       scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 10], range: 'height' }],
       marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 't0' }, y: { value: 0 }, size: { value: 40 } } } }],
     } as never
-    const chart = compileChart(ts)
+    const chart = compile(ts)
     const t0 = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => String((it as { datum?: { t0?: unknown } }).datum?.t0))
     const init = [{ d: '2024-01-05' }, { d: '2024-02-10' }]
     const changed = [{ d: '2024-01-20' }, { d: '2024-02-10' }]
     evaluateChart(chart, { data: { t: init } })
     const inc = evaluateChart(chart, { data: { t: changed }, dataChanges: { t: [0] } })
-    const full = evaluateChart(chart, { data: { t: changed } })
+    const full = fresh(chart, { data: { t: changed } })
     expect(t0(inc)).toEqual(t0(full))
   })
 
@@ -575,12 +610,12 @@ describe('per-datum differential update', () => {
       scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 10], range: 'height' }],
       marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', value: 0 }, y: { value: 0 }, size: { value: 40 } } } }],
     } as never
-    const chart = compileChart(ts)
+    const chart = compile(ts)
     const lab = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => (it as { datum?: { lab?: string } }).datum?.lab)
     const src = [{ id: 1, label: 'x' }, { id: 2, label: 'y' }]
     evaluateChart(chart, { data: { src, t: [{ k: 1 }, { k: 2 }] } }) // -> [x,y]
     const inc = evaluateChart(chart, { data: { src, t: [{ k: 2 }, { k: 2 }] }, dataChanges: { t: [0] } }) // -> [y,y]
-    const full = evaluateChart(chart, { data: { src, t: [{ k: 2 }, { k: 2 }] } })
+    const full = fresh(chart, { data: { src, t: [{ k: 2 }, { k: 2 }] } })
     expect(lab(inc)).toEqual(lab(full)) // source unchanged -> both [y,y]
   })
 
@@ -592,13 +627,13 @@ describe('per-datum differential update', () => {
       scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: [0, 10], range: 'height' }],
       marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'vals' }, y: { value: 0 }, size: { value: 40 } } } }],
     } as never
-    const chart = compileChart(ts)
+    const chart = compile(ts)
     const vals = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => (it as { datum?: { vals?: number } }).datum?.vals)
     const init = [{ id: 'r1', vals: [10, 20] }, { id: 'r2', vals: [30] }]
     const changed = [{ id: 'r1', vals: [11, 20] }, { id: 'r2', vals: [30] }] // same array length
     evaluateChart(chart, { data: { t: init } })
     const inc = evaluateChart(chart, { data: { t: changed }, dataChanges: { t: [0] } })
-    const full = evaluateChart(chart, { data: { t: changed } })
+    const full = fresh(chart, { data: { t: changed } })
     expect(vals(inc)).toEqual(vals(full))
   })
 
@@ -608,18 +643,18 @@ describe('per-datum differential update', () => {
     const yScale = { name: 'y', type: 'linear', domain: [0, 10], range: 'height' }
     const sym = { type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'v' }, y: { value: 0 }, size: { value: 40 } } } }
     // collect: sorts by v descending (reorder) — a changed row re-sorts.
-    const collectChart = compileChart({ ...clock, data: [{ name: 't', values: [{ v: 1 }, { v: 4 }, { v: 2 }], transform: [{ type: 'collect', sort: { field: 'v', order: 'descending' } }] }], scales: [scale, yScale], marks: [sym] } as never)
+    const collectChart = compile({ ...clock, data: [{ name: 't', values: [{ v: 1 }, { v: 4 }, { v: 2 }], transform: [{ type: 'collect', sort: { field: 'v', order: 'descending' } }] }], scales: [scale, yScale], marks: [sym] } as never)
     const vs = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => (it as { datum?: { v?: number } }).datum?.v)
     evaluateChart(collectChart, { data: { t: [{ v: 1 }, { v: 4 }, { v: 2 }] } })
     const cInc = evaluateChart(collectChart, { data: { t: [{ v: 5 }, { v: 4 }, { v: 2 }] }, dataChanges: { t: [0] } })
-    const cFull = evaluateChart(collectChart, { data: { t: [{ v: 5 }, { v: 4 }, { v: 2 }] } })
+    const cFull = fresh(collectChart, { data: { t: [{ v: 5 }, { v: 4 }, { v: 2 }] } })
     expect(vs(cInc)).toEqual(vs(cFull)) // [5,4,2] sorted desc, deterministic
     // impute: fills a missing key per group.
-    const imputeChart = compileChart({ ...clock, data: [{ name: 't', values: [{ g: 'a', k: 1, v: 5 }, { g: 'a', k: 3, v: 9 }], transform: [{ type: 'impute', field: 'v', key: 'k', groupby: ['g'], method: 'value', value: 0 }] }], scales: [scale, yScale], marks: [sym] } as never)
+    const imputeChart = compile({ ...clock, data: [{ name: 't', values: [{ g: 'a', k: 1, v: 5 }, { g: 'a', k: 3, v: 9 }], transform: [{ type: 'impute', field: 'v', key: 'k', groupby: ['g'], method: 'value', value: 0 }] }], scales: [scale, yScale], marks: [sym] } as never)
     const iv = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => (it as { datum?: { v?: number } }).datum?.v)
     evaluateChart(imputeChart, { data: { t: [{ g: 'a', k: 1, v: 5 }, { g: 'a', k: 3, v: 9 }] } })
     const iInc = evaluateChart(imputeChart, { data: { t: [{ g: 'a', k: 1, v: 6 }, { g: 'a', k: 3, v: 9 }] }, dataChanges: { t: [0] } })
-    const iFull = evaluateChart(imputeChart, { data: { t: [{ g: 'a', k: 1, v: 6 }, { g: 'a', k: 3, v: 9 }] } })
+    const iFull = fresh(imputeChart, { data: { t: [{ g: 'a', k: 1, v: 6 }, { g: 'a', k: 3, v: 9 }] } })
     expect(iv(iInc)).toEqual(iv(iFull))
   })
 
@@ -631,13 +666,13 @@ describe('per-datum differential update', () => {
       scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: { data: 't', field: 'v' }, range: 'height', zero: true, nice: true }],
       marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', value: 0 }, y: { scale: 'y', field: 'v' }, size: { value: 40 } } } }],
     } as never
-    const chart = compileChart(ts)
+    const chart = compile(ts)
     const y = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => (it as { y?: number }).y)
     const init = [{ v: 1 }, { v: 3 }, { v: 5 }, { v: 7 }]
     const changed = [{ v: 1 }, { v: 4 }, { v: 5 }, { v: 7 }] // index 1 (3->4) stays within [1,7]; old not a boundary
     evaluateChart(chart, { data: { t: init } })
     const inc = evaluateChart(chart, { data: { t: changed }, dataChanges: { t: [1] } })
-    const full = evaluateChart(chart, { data: { t: changed } })
+    const full = fresh(chart, { data: { t: changed } })
     // Domain [1,7] unchanged, so the reused scale yields identical positions.
     expect(y(inc)).toEqual(y(full))
   })
@@ -653,7 +688,7 @@ describe('per-datum differential update', () => {
       ],
       marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' }, size: { value: 50 } } } }],
     } as never
-    const chart = compileChart(ts)
+    const chart = compile(ts)
     const items = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!
     evaluateChart(chart, { data: { t: [{ x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }] } })
     const s2 = evaluateChart(chart, { data: { t: [{ x: 1, y: 1 }, { x: 5, y: 2 }, { x: 3, y: 3 }] }, dataChanges: { t: [1] } })
@@ -674,12 +709,12 @@ describe('per-datum differential update', () => {
       scales: [{ name: 'x', type: 'linear', domain: [0, 10], range: 'width' }, { name: 'y', type: 'linear', domain: { data: 't', field: 'v' }, range: 'height', zero: true, nice: true }],
       marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', value: 0 }, y: { scale: 'y', field: 'v' }, size: { value: 40 } } } }],
     } as never
-    const chart = compileChart(ts)
+    const chart = compile(ts)
     const y = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!.map((it) => it.y)
     evaluateChart(chart, { data: { t: [{ v: 1 }, { v: 3 }, { v: 1 }, { v: 7 }] } })
     // index 0 (v:1 -> 2); index 2 still holds min 1, so the domain [1,7] is unchanged.
     const inc = evaluateChart(chart, { data: { t: [{ v: 2 }, { v: 3 }, { v: 1 }, { v: 7 }] }, dataChanges: { t: [0] } })
-    const full = evaluateChart(chart, { data: { t: [{ v: 2 }, { v: 3 }, { v: 1 }, { v: 7 }] } })
+    const full = fresh(chart, { data: { t: [{ v: 2 }, { v: 3 }, { v: 1 }, { v: 7 }] } })
     expect(y(inc)).toEqual(y(full))
   })
 
@@ -694,11 +729,11 @@ describe('per-datum differential update', () => {
       ],
       marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'g' }, width: { scale: 'x', band: 1 }, y: { scale: 'y', field: 'v' }, y2: { scale: 'y', value: 0 } } } }],
     } as never
-    const chart = compileChart(ts)
+    const chart = compile(ts)
     const x = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'rect')!.items!.map((it) => Math.round((it as { x?: number }).x! * 10) / 10)
     evaluateChart(chart, { data: { t: [{ g: 'a', v: 1 }, { g: 'b', v: 3 }] } })
     const inc = evaluateChart(chart, { data: { t: [{ g: 'z', v: 1 }, { g: 'b', v: 3 }] }, dataChanges: { t: [0] } })
-    const full = evaluateChart(chart, { data: { t: [{ g: 'z', v: 1 }, { g: 'b', v: 3 }] } })
+    const full = fresh(chart, { data: { t: [{ g: 'z', v: 1 }, { g: 'b', v: 3 }] } })
     expect(x(inc)).toEqual(x(full)) // new category 'z' -> domain rebuilt
   })
 
@@ -713,14 +748,14 @@ describe('per-datum differential update', () => {
       ],
       marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'g' }, width: { scale: 'x', band: 1 }, y: { scale: 'y', field: 's' }, y2: { scale: 'y', value: 0 } } } }],
     } as never
-    const chart = compileChart(ts)
+    const chart = compile(ts)
     const sums = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'rect')!.items!.map((it) => (it as { datum?: { s?: number } }).datum?.s)
     const init = [{ g: 'a', v: 1 }, { g: 'a', v: 2 }, { g: 'b', v: 5 }, { g: 'b', v: 7 }]
     // index 0 switches group a -> b
     const switched = [{ g: 'b', v: 3 }, { g: 'a', v: 2 }, { g: 'b', v: 5 }, { g: 'b', v: 7 }]
     evaluateChart(chart, { data: { t: init } })
     const inc = evaluateChart(chart, { data: { t: switched }, dataChanges: { t: [0] } })
-    const full = evaluateChart(chart, { data: { t: switched } })
+    const full = fresh(chart, { data: { t: switched } })
     expect(sums(inc)).toEqual(sums(full))
   })
 
@@ -737,7 +772,7 @@ describe('per-datum differential update', () => {
       ],
       marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'y2' }, y: { scale: 'y', value: 0 }, size: { value: 40 } } } }],
     } as never
-    const chart = compileChart(ts)
+    const chart = compile(ts)
     const items = (s: import('./types.js').SceneRoot) => s.items.find((g) => (g as { marktype?: string }).marktype === 'symbol')!.items!
     const s1 = evaluateChart(chart, { data: { t: [{ v: 1 }, { v: 3 }, { v: 5 }] } })
     const before = [...items(s1)]
@@ -762,7 +797,7 @@ describe('chartInfoFromScene', () => {
       ],
       marks: [{ type: 'line', from: { data: 't' }, encode: { update: { x: { scale: 'x', field: 'x' }, y: { scale: 'y', field: 'y' } } } }],
     }
-    const chart = compileChart(spec as never)
+    const chart = compile(spec as never)
     const scene = evaluateChart(chart)
     const info = chartInfoFromScene(scene)
     const reference = getChartInfo(spec as never)

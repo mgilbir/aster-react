@@ -82,7 +82,7 @@ export interface FlattenState { sizes: number[]; offsets: number[] }
 
 export function flattenSize(row: Row, fields: string[]): number {
   // vega's output length for one tuple; `fields` may be access paths (`a.b`, `a[0]`)
-  const maxlen = flattenLength(fieldsOf(fields).map((f) => f(row)))
+  const maxlen = flattenLength(fieldsOf(fields).map((f) => f(row)), fields)
   return maxlen > 0 ? maxlen : 0
 }
 
@@ -122,7 +122,8 @@ export function deriveStepState(t: CompiledTransform, input: Row[], output: Row[
 export function applyOneWithState(
   rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string, previous?: Row[],
 ): { rows: Row[]; state?: unknown } {
-  if (t.type === 'filter') {
+  // (a filter with a `signal` runs as a transform: the signal is bound there, see `publishSignal`)
+  if (t.type === 'filter' && !(t as { signal?: unknown }).signal) {
     // Predicate flags and output in one pass (same function, same errors as the
     // plain transform).
     const fn = exprRowPass((t as { expr?: string }).expr ?? '', tctx)

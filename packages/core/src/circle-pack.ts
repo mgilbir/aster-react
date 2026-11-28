@@ -21,6 +21,7 @@ export interface Circle {
 /** Fisher-Yates from the end; one draw per element. */
 function shuffleInPlace<T>(items: T[], random: () => number): T[] {
   let m = items.length
+  // bounded: one pass over the items
   while (m) {
     const i = random() * m-- | 0
     const t = items[m]!
@@ -98,6 +99,7 @@ export function packSiblings(circles: Circle[], random: () => number): number {
   next[2] = 0; prev[1] = 0
   let a = 0
   let b = 1
+  // bounded: every pass runs the walk below (a do-while), which ticks at least once
   for (let i = 3; i < n; ++i) {
     const c = circles[i]!
     placeTangent(circles[a]!, circles[b]!, c)
@@ -141,6 +143,7 @@ export function packSiblings(circles: Circle[], random: () => number): number {
     b = i
     let best = centroidScore(circles[a]!, circles[next[a]!]!)
     for (let m = next[i]!; m !== b; m = next[m]!) {
+      meterTick('pack')
       const score = centroidScore(circles[m]!, circles[next[m]!]!)
       if (score < best) { a = m; best = score }
     }
@@ -149,8 +152,10 @@ export function packSiblings(circles: Circle[], random: () => number): number {
 
   // enclose the front, then move the circles so that the enclosing circle is centred on the origin
   const front: Circle[] = [circles[b]!]
+  // bounded: the front, at most the circles placed
   for (let m = next[b]!; m !== b; m = next[m]!) front.push(circles[m]!)
   const enclosing = enclose(front, random)
+  // bounded: one pass over the circles
   for (let i = 0; i < n; ++i) {
     circles[i]!.x -= enclosing.x
     circles[i]!.y -= enclosing.y
@@ -168,6 +173,7 @@ function enclose(circles: Circle[], random: () => number): Circle {
   let enclosing: Circle | undefined
   let i = 0
   while (i < n) {
+    meterTick('pack')
     const p = shuffled[i]!
     if (enclosing && containsWeakly(enclosing, p)) ++i
     else {
@@ -185,7 +191,9 @@ function extendBasis(basis: Circle[], p: Circle): Circle[] {
   for (let i = 0; i < basis.length; ++i) {
     if (excludes(p, basis[i]!) && containsAllWeakly(circleOf2(basis[i]!, p), basis)) return [basis[i]!, p]
   }
+  // bounded: the basis holds at most 3 circles
   for (let i = 0; i < basis.length - 1; ++i) {
+    // bounded: the basis holds at most 3 circles
     for (let j = i + 1; j < basis.length; ++j) {
       if (
         excludes(circleOf2(basis[i]!, basis[j]!), p) &&
@@ -195,7 +203,8 @@ function extendBasis(basis: Circle[], p: Circle): Circle[] {
       ) return [basis[i]!, basis[j]!, p]
     }
   }
-  throw new Error('[aster] pack: unable to find enclosing circle')
+  // (a failure of the data, as vega's is: logged, and the view goes on. d3's error has no message; the one vega logs reads `Error`)
+  throw new Error('Error')
 }
 
 /** `a` does not contain `b`. */

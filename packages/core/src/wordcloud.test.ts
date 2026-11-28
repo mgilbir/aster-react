@@ -3,7 +3,9 @@ import { evaluateChart } from './evaluate.js'
 import { compileChart } from './index.js'
 import './addon-transforms.js'
 import { wordcloudRows } from './wordcloud.js'
+import { resolveTransformParams } from './param-resolve.js'
 import type { Row, TransformContext } from './transform.js'
+import type { CompiledTransform } from './types.js'
 
 /**
  * The layout itself is checked against vega-wordcloud in Chromium (conformance/src/wordcloud-vs-vega.test.ts), where d3-cloud has a
@@ -16,6 +18,10 @@ const ctxOf = (random: () => number): TransformContext => ({
   signals: {},
   inPlace: true,
 })
+
+/** The layout given its parameters as the engine gives them: resolved first (a `{field}` is the field's accessor, see param-resolve.ts). */
+const cloud = (rows: Row[], params: Record<string, unknown>, ctx: TransformContext): Row[] =>
+  wordcloudRows(rows, resolveTransformParams({ type: 'wordcloud', ...params } as CompiledTransform, ctx) as unknown as Record<string, unknown>, ctx)
 
 const counting = (): { next: () => number; drawn: () => number } => {
   let a = 0x5eed
@@ -39,20 +45,20 @@ describe('wordcloud (vega-wordcloud / d3-cloud)', () => {
   it('draws two numbers per word for its start and one for the direction of its spiral, in word order', () => {
     const r = counting()
     const rows = items(['alpha', 9], ['beta', 4], ['gamma', 1])
-    wordcloudRows(rows, { size: [300, 200], text: { field: 'text' }, fontSize: { field: 'datum.count' }, fontSizeRange: [10, 40] }, ctxOf(r.next))
+    cloud(rows, { size: [300, 200], text: { field: 'text' }, fontSize: { field: 'datum.count' }, fontSizeRange: [10, 40] }, ctxOf(r.next))
     expect(r.drawn()).toBe(9)
   })
 
   it('the same numbers give the same cloud', () => {
     const run = (): Row[] => {
       const r = counting()
-      return wordcloudRows(items(['alpha', 9], ['beta', 4], ['gamma', 1], ['delta', 6]), { size: [300, 200], text: { field: 'text' }, fontSize: { field: 'datum.count' }, fontSizeRange: [10, 40], padding: 2 }, ctxOf(r.next))
+      return cloud(items(['alpha', 9], ['beta', 4], ['gamma', 1], ['delta', 6]), { size: [300, 200], text: { field: 'text' }, fontSize: { field: 'datum.count' }, fontSizeRange: [10, 40], padding: 2 }, ctxOf(r.next))
     }
     expect(run()).toEqual(run())
   })
 
   it('writes x, y, font, fontSize, fontStyle, fontWeight and angle (as), the size scaled through the signed square root', () => {
-    const rows = wordcloudRows(
+    const rows = cloud(
       items(['small', 1], ['mid', 4], ['big', 9]),
       { size: [400, 300], text: { field: 'text' }, fontSize: { field: 'datum.count' }, fontSizeRange: [10, 40], font: 'serif', fontStyle: 'italic', fontWeight: 'bold', rotate: 30, as: ['px', 'py', 'f', 'fs', 'fst', 'fw', 'a'] },
       ctxOf(counting().next),
@@ -67,12 +73,12 @@ describe('wordcloud (vega-wordcloud / d3-cloud)', () => {
   })
 
   it('a field-valued font size is the size as it is when the spec gives no fontSizeRange', () => {
-    const rows = wordcloudRows(items(['a', 7], ['b', 13]), { size: [300, 200], text: { field: 'text' }, fontSize: { field: 'datum.count' } }, ctxOf(counting().next))
+    const rows = cloud(items(['a', 7], ['b', 13]), { size: [300, 200], text: { field: 'text' }, fontSize: { field: 'datum.count' } }, ctxOf(counting().next))
     expect(rows.map((r) => r.fontSize)).toEqual([7, 13])
   })
 
   it('a word with no room has no position and a font size of 0 (NaN, 0: the other outputs stay as they were)', () => {
-    const rows = wordcloudRows(items(['enormous', 1]), { size: [60, 40], text: { field: 'text' }, fontSize: 300 }, ctxOf(counting().next))
+    const rows = cloud(items(['enormous', 1]), { size: [60, 40], text: { field: 'text' }, fontSize: 300 }, ctxOf(counting().next))
     expect(rows[0]!.x).toBeNaN()
     expect(rows[0]!.y).toBeNaN()
     expect(rows[0]!.fontSize).toBe(0)
@@ -80,11 +86,14 @@ describe('wordcloud (vega-wordcloud / d3-cloud)', () => {
   })
 
   it('a size with a zero dimension is an error', () => {
-    expect(() => wordcloudRows(items(['a', 1]), { size: [0, 100], text: { field: 'text' } }, ctxOf(counting().next))).toThrow('Wordcloud size dimensions must be non-zero.')
+    expect(() => cloud(items(['a', 1]), { size: [0, 100], text: { field: 'text' } }, ctxOf(counting().next))).toThrow('Wordcloud size dimensions must be non-zero.')
   })
 
-  it('with no usable value the font size scale reads one past the end, as vega-util extent does: the accessor throws', () => {
-    expect(() => wordcloudRows(items(['a', 1]).map((r) => ({ ...r, datum: {} })), { size: [200, 100], text: { field: 'text' }, fontSize: { field: 'nope.count' }, fontSizeRange: [10, 40] }, ctxOf(counting().next))).toThrow()
+  it('with no usable value the font size scale reads one past the end, as vega-util extent does: the accessor throws vega\'s TypeError', () => {
+    // (vega's own run of the same spec logs `TypeError: Cannot read properties of undefined (reading 'count')`)
+    const call = (): unknown => cloud(items(['a', 1]).map((r) => ({ ...r, datum: {} })), { size: [200, 100], text: { field: 'text' }, fontSize: { field: 'nope.count' }, fontSizeRange: [10, 40] }, ctxOf(counting().next))
+    expect(call).toThrow(TypeError)
+    expect(call).toThrow("Cannot read properties of undefined (reading 'count')")
   })
 })
 
@@ -122,5 +131,14 @@ describe('wordcloud in a chart', () => {
     expect(r.drawn()).toBe(drawn)
     expect(positions(first)).toHaveLength(4)
     expect(positions(second)).toEqual(positions(first))
+  })
+})
+
+describe('the spiral is one of the two (C386)', () => {
+  it('a name that is a member of every object (`constructor`, `toString`) is no spiral, as an unknown name is not', () => {
+    for (const spiral of ['constructor', 'toString', '__proto__', 'hasOwnProperty', 'nope']) {
+      expect(() => cloud([{ text: 'a' }], { spiral, text: { field: 'text' } } as never, ctxOf(Math.random)), spiral)
+        .toThrow(`Wordcloud spiral "${spiral}" is not archimedean or rectangular.`)
+    }
   })
 })

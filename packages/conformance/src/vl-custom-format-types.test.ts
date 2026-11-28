@@ -17,6 +17,7 @@ type Obj = Record<string, unknown>
 const price = (v: unknown, fmt?: string): string => `[${fmt ?? ''}:${v}]`
 const when = (v: unknown, fmt?: string): string => `<${fmt ?? ''}|${new Date(v as number).getUTCFullYear()}>`
 const offs: Array<() => void> = []
+// (vega has no way to unregister an expression function; the registration lives in this file's module instance, which vitest gives to no other test file)
 beforeAll(() => {
   const ef = (vega as unknown as { expressionFunction: (n: string, f: unknown) => void }).expressionFunction
   ef('asterPrice', price)
@@ -32,7 +33,7 @@ const FLAG = { customFormatTypes: true }
 async function svgOf(vg: unknown): Promise<string> {
   const log = console.error
   console.error = () => {}
-  const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(vega.parse(vg as never), { renderer: 'none' })
+  const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(vega.parse(structuredClone(vg) as never), { renderer: 'none' })
   try { await view.runAsync(); return await view.toSVG() } finally { console.error = log; view.finalize() }
 }
 

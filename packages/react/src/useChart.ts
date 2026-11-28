@@ -1,9 +1,12 @@
 import * as React from 'react'
 import type { RuntimeInput, SceneRoot, VgSpec } from '@aster-charts/core'
-import { checkChartRows, checkSvgLength, createChartSession, renderSceneToSvg } from '@aster-charts/core/lean'
-import type { LoadOptions } from '@aster-charts/core/load'
-import { normalizeChartSpec, useStableContent, useStableSpec } from './spec.js'
+import type { ChartSession } from '@aster-charts/core/dom'
+import { checkChartRows, checkSvgLength, createChartSession, renderSceneToSvg } from '@aster-charts/core/internal'
+import { normalizeSpecResult, useStableContent, useStableSpec } from './spec.js'
+import { useDataInput, useStableLogger, useStablePolicy } from './inputs.js'
 import { useAddons } from './addons.js'
+import { acquireSpecData, isSpecDataWait, retainSpecData, type SpecDataOptions } from './specData.js'
+export { AsterUnstableLoadOptionError, resetSpecDataErrors } from './specData.js'
 
 /** The build's environment, as bundlers write it in (`process.env.NODE_ENV`); `process` may not exist at all (an unbundled import). */
 declare const process: { env: { NODE_ENV?: string } }
@@ -19,7 +22,7 @@ export interface UseChartResult {
   svg: string | null
   error: Error | null
   /** The underlying incremental session, stable across renders. */
-  session: ReturnType<typeof createChartSession>
+  session: ChartSession
 }
 
 /**
@@ -28,37 +31,62 @@ export interface UseChartResult {
  * `serialize: false`). Identical inputs return the cached scene.
  */
 export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartResult {
-  const { serialize = true, ...input } = options
-  // Content-stable spec and limits: an inline literal rebuilt every render must
-  // not look like a change (nor re-run the Vega-Lite compiler).
+  const { serialize = true, ...given } = options
+  // The React boundary's identity rule (inputs.ts), applied to every `RuntimeInput` field: JSON-shaped values by content, `data`
+  // by its datasets' row arrays, the logger and `urlPolicy`'s functions through a latest-ref, and the stateful objects
+  // (`random`, `textMetrics`, `dataPulse`) by identity. An inline literal rebuilt by every render evaluates nothing.
   const stableSpec = useStableSpec(spec)
-  const limits = useStableContent(input.limits)
-  const normalized = React.useMemo(() => normalizeChartSpec(stableSpec), [stableSpec])
+  const dataInput = useDataInput(given.data)
+  const input: RuntimeInput = {
+    limits: useStableContent(given.limits),
+    textMetrics: given.textMetrics,
+    urlPolicy: useStablePolicy(given.urlPolicy),
+    urlData: given.urlData,
+    data: dataInput.data,
+    width: given.width,
+    height: given.height,
+    signals: useStableContent(given.signals),
+    changedDatasets: useStableContent(given.changedDatasets),
+    dataChanges: useStableContent(given.dataChanges),
+    dataPulse: given.dataPulse,
+    autoChanges: given.autoChanges,
+    domainRaw: useStableContent(given.domainRaw),
+    logger: useStableLogger(given.logger),
+    random: given.random,
+    containerSize: useStableContent(given.containerSize),
+    measuredSize: useStableContent(given.measuredSize),
+    // (a session keeps its own previous rows and does not read it; named for the exhaustiveness of this record)
+    previousScene: given.previousScene,
+    // (the scene this evaluation continues, a running view's: compared by identity, a scene is the engine's object)
+    retainFrom: given.retainFrom,
+  }
+  // Every `RuntimeInput` field is a dependency. The record below must name each key of `RuntimeInput` (the type makes a
+  // missing one a compile error), so a new engine input cannot silently leave a stale result -- nor be compared by identity
+  // when the rule says content.
+  const deps: Required<{ [K in keyof RuntimeInput]: unknown }> = input as Required<{ [K in keyof RuntimeInput]: unknown }>
+  const limits = input.limits
+  // (normalized inside the guard: a value that is not a spec, a Vega-Lite spec without the compiler and a compile error are
+  // the result's `error`, as an evaluation error is; see `normalizeSpecResult`)
+  const { spec: normalized, error: specError } = React.useMemo(() => normalizeSpecResult(stableSpec), [stableSpec])
   // The opt-in add-ons the spec needs load before the first evaluation: the hook suspends meanwhile (a <Suspense> boundary
   // above shows its fallback), and an import that fails is the result's `error`.
   const addonError = useAddons(normalized, input.urlData, { limits: limits != null, random: input.random != null, signals: input.signals })
-  const sessionRef = React.useRef<ReturnType<typeof createChartSession> | null>(null)
+  const sessionRef = React.useRef<ChartSession | null>(null)
   if (sessionRef.current == null) sessionRef.current = createChartSession()
   const session = sessionRef.current
   // (development builds: the rows of a render that re-evaluates nothing are checked for in-place changes too, see row-watch.ts)
   try {
-    if (process.env.NODE_ENV !== 'production') checkChartRows(session, normalized, input)
+    if (process.env.NODE_ENV !== 'production' && normalized !== null) checkChartRows(session, normalized, input)
   } catch (e) {
     if (typeof process !== 'undefined') throw e
   }
-  // Every `RuntimeInput` field is a dependency. The record below must name each
-  // key of `RuntimeInput` (the type makes a missing one a compile error), so a new
-  // engine input cannot silently leave a stale result the way textMetrics,
-  // dataPulse, changedDatasets and autoChanges once did.
-  const deps: Required<{ [K in keyof RuntimeInput]: unknown }> = {
-    limits, textMetrics: input.textMetrics, urlPolicy: input.urlPolicy, urlData: input.urlData, data: input.data, width: input.width, height: input.height, signals: input.signals,
-    changedDatasets: input.changedDatasets, dataChanges: input.dataChanges, dataPulse: input.dataPulse,
-    autoChanges: input.autoChanges, domainRaw: input.domainRaw, logger: input.logger, random: input.random, containerSize: input.containerSize, measuredSize: input.measuredSize,
-  }
+  const dataError = dataInput.error
   return React.useMemo(() => {
+    if (specError) return { scene: null, svg: null, error: specError, session }
+    if (dataError) return { scene: null, svg: null, error: dataError, session }
     if (addonError) return { scene: null, svg: null, error: addonError, session }
     try {
-      const scene = session.evaluate(normalized, { ...input, limits })
+      const scene = session.evaluate(normalized!, given_(input))
       const svg = serialize ? renderSceneToSvg(scene) : null
       // Same budget as `renderSpec`: the serialized output length.
       if (svg != null && limits) checkSvgLength(svg, limits)
@@ -66,7 +94,15 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
     } catch (e) {
       return { scene: null, svg: null, error: e instanceof Error ? e : new Error(String(e)), session }
     }
-  }, [normalized, addonError, ...Object.values(deps), serialize, session])
+    // (`deps` names every RuntimeInput field: its values are the dependencies)
+  }, [normalized, specError, dataError, addonError, ...Object.values(deps), serialize, session])
+}
+
+/** The fields of `input` that are given (an absent field stays absent for the engine, as the caller wrote it). */
+function given_(input: RuntimeInput): RuntimeInput {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(input)) if (v !== undefined) out[k] = v
+  return out as RuntimeInput
 }
 
 // ---------------------------------------------------------------------------
@@ -76,78 +112,71 @@ export function useChart(spec: VgSpec, options: UseChartOptions = {}): UseChartR
 /**
  * Everything `loadSpecData` takes (`@aster-charts/core/load` `LoadOptions`): `fetch`,
  * `baseURL` (needed for relative urls), `protocols`, `allow`, `allowPrivateNetwork`,
- * `signal`, `timeoutMs`, `maxBytes`, `maxConcurrent`, `maxRedirects` and `limits`.
- * The defaults are the safe ones (public http/https hosts only), so a spec you did
- * not write cannot reach a private network; widen them deliberately.
+ * `signal`, `timeoutMs`, `maxBytes`, `maxTotalBytes`, `maxRequests`, `maxConcurrent`,
+ * `maxRedirects`, `signals` and `limits`. A network url needs an explicit policy: `allow`
+ * (an allowlist), or a `baseURL` it is on; non-public hosts are refused unless
+ * `allowPrivateNetwork` is set.
+ *
+ * Plus `cacheKey`: the host's own name for the load. The cache is shared by every
+ * component (and, on a server, by every request): the spec and the data options
+ * are compared by content, and `fetch` / `allow` by IDENTITY, so two different
+ * functions (two closures of one factory included) are never served one load.
+ * With a `cacheKey` the functions are not part of the key and the latest one
+ * given is called: it is the way to share a load across function identities,
+ * and the fix for an inline arrow, which is a new function on every render.
  */
-export type UseSpecDataOptions = LoadOptions
-
-const OBJECT_IDS = new WeakMap<object, number>()
-let OBJECT_SEQ = 0
-const RESOURCES = new WeakMap<object, { key: string; promise: Promise<VgSpec> }>()
-
-function objectId(o: object): number {
-  let id = OBJECT_IDS.get(o)
-  if (id === undefined) {
-    id = ++OBJECT_SEQ
-    OBJECT_IDS.set(o, id)
-  }
-  return id
-}
+export type UseSpecDataOptions = SpecDataOptions
 
 /**
- * Cache key of a set of load options: data by content, functions and other
- * objects (`fetch`, `allow`, `signal`) by identity. Same options, same promise.
- */
-function optionsKey(options: UseSpecDataOptions): string {
-  const parts: string[] = []
-  for (const name of Object.keys(options).sort()) {
-    const v = (options as Record<string, unknown>)[name]
-    if (v === undefined) continue
-    if (typeof v === 'function' || (typeof AbortSignal !== 'undefined' && v instanceof AbortSignal)) parts.push(`${name}=#${objectId(v as object)}`)
-    else parts.push(`${name}=${JSON.stringify(v)}`)
-  }
-  return parts.join('&')
-}
-
-/**
- * Stable promise for `loadSpecData(spec)`, keyed by the spec object and
- * fetch implementation. The loader addon is imported lazily, so a host that
- * never uses URL datasets never bundles the csv/topojson readers.
+ * The promise `useSpecData` reads: one per load, the same for every ask with the same inputs (see specData.ts for the key and
+ * the lifetime). The spec and the data options are compared by content, so inline literals of them are safe; `signal` and the
+ * function options by identity, unless a `cacheKey` names the load (then the latest function is called). A function option that is
+ * new on every ask, without a `cacheKey`, throws `AsterUnstableLoadOptionError` after a bounded number of loads. A rejected load
+ * stays the answer until an input changes or `resetSpecDataErrors()` is called. The loader add-on is imported lazily: a host that never uses URL datasets never bundles the
+ * csv/topojson readers.
  */
 export function loadSpecDataResource(
   spec: VgSpec,
   options: UseSpecDataOptions = {},
 ): Promise<VgSpec> {
-  const key = optionsKey(options)
-  const cached = RESOURCES.get(spec)
-  if (cached && cached.key === key) return cached.promise
-  const promise = import('@aster-charts/core/load').then((mod) =>
-    mod.loadSpecData(spec, options),
-  )
-  RESOURCES.set(spec, { key, promise })
-  // A failed load must not be cached forever: drop the entry so the next render
-  // (e.g. after the error boundary resets) retries instead of re-throwing the
-  // same rejection. The rejected promise is still what this render sees.
-  promise.catch(() => {
-    if (RESOURCES.get(spec)?.promise === promise) RESOURCES.delete(spec)
-  })
-  return promise
+  const load = acquireSpecData(spec, options)
+  // (a wait stand-in holds no data: ask again once it settles)
+  return isSpecDataWait(load) ? load.promise.then(() => loadSpecDataResource(spec, options)) : load.promise
 }
 
 /**
  * Suspense-friendly URL-data loader:
  *
  * ```tsx
+ * const allow = (url: URL) => url.origin === 'https://data.example.com'
  * function ChartFromUrl({ spec }) {
- *   const loaded = useSpecData(spec)
+ *   const loaded = useSpecData(spec, { allow })
  *   return <Chart spec={loaded} />
  * }
- * // wrap in <Suspense fallback=…>
+ * // wrap in <Suspense fallback=…> and an error boundary
+ * ```
+ *
+ * The spec and the data options are compared by content: an inline spec or options literal is the same load. Function options
+ * (`fetch`, `allow`) are compared by identity: hoist them, or give a `cacheKey` (then the latest function is called); an inline
+ * function without one throws `AsterUnstableLoadOptionError` after a bounded number of loads, instead of loading forever. A load
+ * that fails is thrown to the nearest error boundary, once: it is never retried by itself. It is tried again when an input
+ * changes, and after `resetSpecDataErrors()`, which the boundary calls when it is reset:
+ *
+ * ```tsx
+ * <ErrorBoundary onReset={resetSpecDataErrors} fallbackRender={...}>
  * ```
  */
 export function useSpecData(spec: VgSpec, options: UseSpecDataOptions = {}): VgSpec {
-  return React.use(loadSpecDataResource(spec, options))
+  let load = acquireSpecData(spec, options)
+  // A wait stand-in (too many loads in flight for inputs that change identity on every render) holds no data: suspend on it, and
+  // ask again when it settles (React may replay this render with the settled stand-in, so its value is never used).
+  while (isSpecDataWait(load)) {
+    React.use(load.promise as Promise<VgSpec>)
+    load = acquireSpecData(spec, options)
+  }
+  // (a mounted reader keeps its load in the cache; see specData.ts)
+  React.useEffect(() => retainSpecData(load), [load])
+  return React.use(load.promise as Promise<VgSpec>)
 }
 
 /**
@@ -157,15 +186,18 @@ export function useSpecData(spec: VgSpec, options: UseSpecDataOptions = {}): VgS
  */
 export async function loadSpecData(spec: VgSpec, options: UseSpecDataOptions = {}): Promise<VgSpec> {
   const mod = await import('@aster-charts/core/load')
-  return mod.loadSpecData(spec, options)
+  // (`cacheKey` names a cached load; this call caches nothing)
+  const { cacheKey: _unused, ...loaderOptions } = options
+  return mod.loadSpecData(spec, loaderOptions)
 }
 
 /** Options only the loader understands; everything else (and `limits`, which both use) goes to the chart. */
-const LOAD_ONLY_OPTIONS = ['fetch', 'baseURL', 'protocols', 'allow', 'allowPrivateNetwork', 'signal', 'timeoutMs', 'maxBytes', 'maxConcurrent', 'maxRedirects'] as const
+const LOAD_ONLY_OPTIONS = ['cacheKey', 'fetch', 'baseURL', 'protocols', 'allow', 'allowPrivateNetwork', 'signal', 'timeoutMs', 'maxBytes', 'maxTotalBytes', 'maxRequests', 'maxConcurrent', 'maxRedirects'] as const
 
 /**
  * A chart loaded with `useSpecData`, rendered headlessly. Takes the loader options
- * (`baseURL`, `allow`, ...) and the chart options together; `limits` applies to both.
+ * (`baseURL`, `allow`, ...) and the chart options together; `limits` and `signals` apply to
+ * both (a `{signal}` url is loaded for the host's value, and loaded again when it changes).
  */
 export function useChartData(
   spec: VgSpec,
@@ -180,6 +212,7 @@ export function useChartData(
     }
   }
   if (options.limits) loadOptions.limits = options.limits
+  if (options.signals) loadOptions.signals = options.signals
   const loaded = useSpecData(spec, loadOptions)
   return useChart(loaded, chartOptions)
 }

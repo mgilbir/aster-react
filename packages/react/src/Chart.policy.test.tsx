@@ -66,15 +66,30 @@ describe('urlPolicy reaches evaluation', () => {
     })
   })
 
-  it('useChart forwards it too, and re-evaluates when it changes', () => {
+  // (the React boundary's identity rule: a policy's values are compared by content and its functions are read through a
+  // latest-ref, so a new `allow` function is not itself a change -- it is the one called by the next evaluation -- while a
+  // changed value re-evaluates. This test asserted that a new function identity re-evaluates, which is what made an inline
+  // `urlPolicy={{ allow }}` re-evaluate on every render.)
+  it('useChart forwards it too: a changed value re-evaluates, and the latest allow is the one called', () => {
     let result: UseChartResult | null = null
-    function Probe({ policy }: { policy: Parameters<typeof useChart>[1] extends infer O ? (O extends { urlPolicy?: infer P } ? P : never) : never }): React.ReactElement {
-      result = useChart(imgSpec, { urlPolicy: policy, width: 80, height: 40 })
+    type Policy = Parameters<typeof useChart>[1] extends infer O ? (O extends { urlPolicy?: infer P } ? P : never) : never
+    function Probe({ policy, width = 80 }: { policy: Policy; width?: number }): React.ReactElement {
+      result = useChart(imgSpec, { urlPolicy: policy, width, height: 40 })
       return <div />
     }
     const { root } = mount(<Probe policy={{ allow: () => true }} />)
     expect(result!.error).toBeNull()
+    const first = result!.scene
+    // a new allow, same shape: nothing is evaluated again...
     act(() => { root.render(<Probe policy={{ allow }} />) })
+    expect(result!.scene).toBe(first)
+    // ...and the next evaluation calls it
+    act(() => { root.render(<Probe policy={{ allow }} width={81} />) })
+    expect(result!.error).toBeInstanceOf(AsterUrlError)
+    act(() => { root.render(<Probe policy={{ allow: () => true }} width={82} />) })
+    expect(result!.error).toBeNull()
+    // a changed value is a new policy: evaluated at once
+    act(() => { root.render(<Probe policy={{ allow: () => true, protocols: ['data:'] }} width={82} />) })
     expect(result!.error).toBeInstanceOf(AsterUrlError)
   })
 

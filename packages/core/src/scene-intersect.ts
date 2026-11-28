@@ -17,13 +17,12 @@
  *                          -- what vega-scenegraph asks a canvas context, which a browser has and headless Node does not
  *                          (without one it settles for the bounds)
  */
-import { Bounds, DEG_TO_RAD, boundGroupItem, boundText, boundTypedMark } from './bounds.js'
-import { textAnchor } from './text-metrics.js'
+import { Bounds, DEG_TO_RAD, boundGroupItem, boundText, itemBounds, multiMarkBounds, textAnchorAsIs } from './bounds.js'
 import { itemArcGeometry } from './render.js'
 import { insidePolys, type Poly } from './path-flatten.js'
-import { arcLocalPolys, pathMarkPolys, pathPolys, transformPolys } from './geometry-read.js'
-import { MARK_NODE } from './util.js'
-import { ceiling, HARD_CAPS, meterTick } from './limits.js'
+import { arcCanvasLocalPolys, pathMarkPolys, pathMarkPolysAt, pathPolys, transformPolys } from './geometry-read.js'
+import { MARK_NODE, ROOT_MARK_NODE } from './util.js'
+import { allot, HARD_CAPS, meterTick } from './limits.js'
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 
 type Rec = Record<string, unknown>
@@ -60,26 +59,38 @@ function intersectBoxLine(box: Bounds, x: number, y: number, u: number, v: numbe
   return true
 }
 
-/** The bounds of one item in the frame of its mark's group (vega's `item.bounds`). */
-function itemBounds(mark: SceneGroup, item: SceneItem): Bounds {
+/**
+ * The bounds of one item in the frame of its mark's group, as vega's bounds pass leaves them on the item (`item.bounds`): its own
+ * box, edges that are not numbers included -- which `encloses` and `intersects` then read as vega's do -- and for a line, an area
+ * or a trail a copy of its mark's, taken before the mark's clip cuts the mark's own.
+ */
+function itemBoundsOf(mark: SceneGroup, item: SceneItem, shared: () => Bounds): Bounds {
   if (mark.marktype === 'group') return boundGroupItem(new Bounds(), item as unknown as SceneGroup)
-  return boundTypedMark(new Bounds(), { marktype: mark.marktype, items: [item] } as unknown as SceneGroup)
+  if (mark.marktype === 'line' || mark.marktype === 'area' || mark.marktype === 'trail') return shared()
+  return itemBounds(new Bounds(), mark.marktype ?? '', item)
 }
 
-/** The mark's own bounds: the union of its items' (a line, area or trail has one for all of them, which each item shares). */
-function markBounds(mark: SceneGroup, items: SceneItem[]): Bounds {
-  if (items.length === 0) return new Bounds()
-  if (mark.marktype === 'line' || mark.marktype === 'area' || mark.marktype === 'trail') return boundTypedMark(new Bounds(), mark)
-  const b = new Bounds()
-  for (const it of items) b.union(itemBounds(mark, it))
-  return b
+/**
+ * The mark's own bounds (vega's `mark.bounds`): the union of its items' -- a line, an area or a trail has its own -- cut, when the
+ * mark clips, to the frame of the group around it (vega's `boundClip`: that group's width and height as they are).
+ */
+function markBounds(mark: SceneGroup, items: SceneItem[], frame: { width?: unknown; height?: unknown }): Bounds {
+  let b: Bounds
+  if (mark.marktype === 'line' || mark.marktype === 'area' || mark.marktype === 'trail') b = multiMarkBounds(mark)
+  else {
+    b = new Bounds()
+    for (const it of items) b.union(itemBounds(new Bounds(), mark.marktype ?? '', it))
+  }
+  return mark.clip ? b.intersect(new Bounds().set(0, 0, frame.width as number, frame.height as number)) : b
 }
 
 function intersectText(item: SceneItem, box: Bounds): boolean {
   // (vega's text `bound(tempBounds, item, 2)`: the corners of the text box, rotated about the anchor)
-  const angle = (item.angle || 0) * DEG_TO_RAD
+  // (the angle as it is: one the item does not have turns every corner to NaN, and a segment of NaN meets every box -- so a text
+  // with no angle meets any box its bounds meet, as in vega)
+  const angle = (item.angle as number) * DEG_TO_RAD
   const b = boundText(new Bounds(), { ...item, angle: 0 })
-  const [ax, ay] = textAnchor(item)
+  const [ax, ay] = textAnchorAsIs(item)
   const p = b.rotatedCorners(angle, ax, ay)
   return intersectBoxLine(box, p[0]!, p[1]!, p[2]!, p[3]!)
     || intersectBoxLine(box, p[0]!, p[1]!, p[4]!, p[5]!)
@@ -88,21 +99,28 @@ function intersectText(item: SceneItem, box: Bounds): boolean {
 }
 
 /** The outline of an arc, shape or path item, in the frame of its group. */
-function outlineOf(marktype: string, item: SceneItem): Poly[] {
+export function outlineOf(marktype: string, item: SceneItem): Poly[] {
   const it = item as Rec
-  const x = (it.x as number) || 0
-  const y = (it.y as number) || 0
+  const rawX = (it.x as number) || 0
+  const rawY = (it.y as number) || 0
+  // (a position that is a numeric string is its number in a transform)
+  const x = +rawX
+  const y = +rawY
   const rot = ((it.angle as number) || 0) * DEG_TO_RAD
   const cos = Math.cos(rot)
   const sin = Math.sin(rot)
   const place = (px: number, py: number): [number, number] => [x + px * cos - py * sin, y + px * sin + py * cos]
   if (marktype === 'arc') {
-    return transformPolys(arcLocalPolys(itemArcGeometry(it as SceneItem)), place)
+    return transformPolys(arcCanvasLocalPolys(itemArcGeometry(it as SceneItem)), place)
   }
   const sx = (it.scaleX as number) || 1
   const sy = (it.scaleY as number) || 1
   // (a path mark's text as vega draws it, the scale in its numbers; a shape's, the engine's own, scaled as it is drawn)
-  if (marktype === 'path') return transformPolys(pathMarkPolys(String(it.path ?? ''), sx, sy), place)
+  if (marktype === 'path') {
+    // (vega's canvas draws an unturned path at `x + l`, in JavaScript's arithmetic: a string position is joined to the number before it)
+    if (rot === 0 && (typeof rawX !== 'number' || typeof rawY !== 'number')) return pathMarkPolysAt(String(it.path ?? ''), sx, sy, rawX, rawY)
+    return transformPolys(pathMarkPolys(String(it.path ?? ''), sx, sy), place)
+  }
   return transformPolys(pathPolys(String(it.path ?? '')), (px, py) => place(px * sx, py * sy))
 }
 
@@ -133,7 +151,7 @@ function intersectPath(marktype: string, item: SceneItem, bounds: Bounds, box: B
  * moves: vega's walk never ends there) or work past the built-in `latticeTests` ceiling is refused with an `AsterLimitError`
  * (docs/LIMITS.md); under `limits`, the walk also counts against `maxTimeMs`.
  */
-function latticeInside(polys: Poly[], x1: number, y1: number, x2: number, y2: number): boolean {
+export function latticeInside(polys: Poly[], x1: number, y1: number, x2: number, y2: number): boolean {
   let minY = Infinity, maxY = -Infinity
   let edges = 0
   for (const { pts } of polys) {
@@ -146,26 +164,28 @@ function latticeInside(polys: Poly[], x1: number, y1: number, x2: number, y2: nu
       if (y > maxY) maxY = y
     }
   }
+  // (a region beyond 2^52 is one vega's walk never leaves -- `x + 1` no longer moves -- whatever the outline: refused, outline or not)
+  if (!(Math.abs(x1) <= SAFE && Math.abs(x2) <= SAFE && Math.abs(y1) <= SAFE && Math.abs(y2) <= SAFE)) allot('latticeTests', Infinity, 'intersect() lattice tests (a region beyond 2^52)')
   const r0 = Math.max(y1, Math.ceil(minY))
   const r1 = Math.min(y2, Math.floor(maxY))
   if (!(r0 <= r1)) return false
   // (the work: each row's crossings, then each candidate point tested against every edge; counted as it is done, after a
   // check that the rows' crossings alone fit)
   let work = (r1 - r0 + 1) * edges
-  if (!(Math.abs(x1) <= SAFE && Math.abs(x2) <= SAFE && Math.abs(r0) <= SAFE && Math.abs(r1) <= SAFE)) ceiling('latticeTests', Infinity, 'intersect() lattice tests (a region beyond 2^52)')
-  ceiling('latticeTests', work, 'intersect() lattice tests')
+  if (!(Math.abs(x1) <= SAFE && Math.abs(x2) <= SAFE && Math.abs(r0) <= SAFE && Math.abs(r1) <= SAFE)) allot('latticeTests', Infinity, 'intersect() lattice tests (a region beyond 2^52)')
+  allot('latticeTests', work, 'intersect() lattice tests')
   work = 0
   const xs: number[] = []
   const ws: number[] = []
   const order: number[] = []
   const test = (x: number, y: number): boolean => {
     if (!(x >= x1 && x <= x2)) return false
-    if ((work += edges) > HARD_CAPS.latticeTests) ceiling('latticeTests', work, 'intersect() lattice tests')
+    if ((work += edges) > HARD_CAPS.latticeTests) allot('latticeTests', work, 'intersect() lattice tests')
     return insidePolys(polys, x, y)
   }
   for (let y = r0; y <= r1; y++) {
     meterTick('intersect() lattice rows')
-    if ((work += edges) > HARD_CAPS.latticeTests) ceiling('latticeTests', work, 'intersect() lattice tests')
+    if ((work += edges) > HARD_CAPS.latticeTests) allot('latticeTests', work, 'intersect() lattice tests')
     xs.length = 0
     ws.length = 0
     for (const { pts } of polys) {
@@ -216,15 +236,9 @@ function test(marktype: string, item: SceneItem, bounds: Bounds, box: Bounds): b
   switch (marktype) {
     case 'group':
     case 'rect': {
-      let x = (it.x as number) || 0
-      let y = (it.y as number) || 0
-      let w = it.width as number | undefined
-      let h = it.height as number | undefined
-      if (marktype === 'rect') {
-        if (w == null && it.x2 != null) { w = Math.abs((it.x2 as number) - x); x = Math.min(x, it.x2 as number) }
-        if (h == null && it.y2 != null) { h = Math.abs((it.y2 as number) - y); y = Math.min(y, it.y2 as number) }
-      }
-      return intersects(box, new Bounds().set(x, y, x + (w || 0), y + (h || 0)))
+      const x = (it.x as number) || 0
+      const y = (it.y as number) || 0
+      return intersects(box, new Bounds().set(x, y, x + ((it.width as number) || 0), y + ((it.height as number) || 0)))
     }
     case 'symbol':
       return contains(box, (it.x as number) || 0, (it.y as number) || 0)
@@ -239,7 +253,7 @@ function test(marktype: string, item: SceneItem, bounds: Bounds, box: Bounds): b
       return intersectText(item, box)
     case 'image':
       return true
-    case 'arc': case 'shape': case 'path': case 'geoshape':
+    case 'arc': case 'shape': case 'path':
       return intersectPath(marktype, item, bounds, box)
     default:
       // a mark type the engine has no test for: vega's `Marks[type].isect` would be undefined; the bounds are all there is
@@ -252,23 +266,61 @@ type Filter = ((mark: { marktype?: string; name?: string }) => boolean) | null
 /** A mark container (symbols, rects...). A scene's group items carry `marktype: 'group'` themselves: they are not wrapped in a group mark. */
 const isLeafMark = (n: Rec): boolean => typeof n.marktype === 'string' && n.marktype !== 'group'
 
-function intersectMark(mark: SceneGroup, box: Bounds, filter: Filter, hits: SceneItem[]): void {
+function intersectMark(mark: SceneGroup, frame: { width?: unknown; height?: unknown }, box: Bounds, filter: Filter, hits: SceneItem[]): void {
   // (the items a pass that stopped in their mark's bounds never measured have no bounds to meet the box: see `SceneGroup.unmeasuredFrom`)
   const items = (mark.unmeasuredFrom === undefined ? mark.items ?? [] : (mark.items ?? []).slice(0, mark.unmeasuredFrom)) as SceneItem[]
   const type = mark.marktype
   if (items.length === 0) return
-  const mb = markBounds(mark, items)
+  const mb = markBounds(mark, items, frame)
   // visited if the bounds meet the box and (a group mark: we must recurse, or interactive and passes the filter)
   if (!(intersects(box, mb) && (type === 'group' || (mark.interactive !== false && (!filter || filter(mark)))))) return
   if (type === 'group') {
     for (const g of items) intersectGroup(g as unknown as SceneGroup, mark, box, filter, hits)
     return
   }
-  const nested = type === 'line' || type === 'area' || type === 'trail'
+  let copy: Bounds | undefined
+  const shared = (): Bounds => (copy ??= new Bounds().union(multiMarkBounds(mark)))
   for (const item of items) {
-    const bounds = nested ? mb : itemBounds(mark, item)
+    const bounds = itemBoundsOf(mark, item, shared)
     if (encloses(box, bounds) || (intersects(box, bounds) && test(type!, item, bounds, box))) hits.push(item)
   }
+}
+
+/**
+ * The marks of a group item, as vega's walk meets them: a leaf mark is itself; the group items of one group mark sit next to each
+ * other in this scene (one node each, the same name and mark), and are that mark; the node that clips a clipped group item's
+ * content (`contentClip`) is not a mark: its marks are the group item's own.
+ */
+function forEachMark(nodes: readonly unknown[], leaf: (mark: SceneGroup) => void, groupMark: (items: SceneGroup[]) => void): void {
+  for (let i = 0; i < nodes.length;) {
+    const node = nodes[i] as SceneGroup & Rec
+    if (isLeafMark(node as Rec)) { leaf(node); i++; continue }
+    if (!Array.isArray(node.items)) { i++; continue }
+    if (node.contentClip === true) { forEachMark(node.items, leaf, groupMark); i++; continue }
+    const run: SceneGroup[] = [node]
+    let j = i + 1
+    while (j < nodes.length && sameGroupMark(node, nodes[j] as Rec)) run.push(nodes[j++] as SceneGroup)
+    groupMark(run)
+    i = j
+  }
+}
+
+const sameGroupMark = (a: Rec, b: Rec): boolean =>
+  a._scope === true && b._scope === true && Array.isArray(b.items) && a.name === b.name && a.markIndex === b.markIndex
+
+/**
+ * Whether the walk enters a group mark: vega's `visitMark` asks the group MARK's bounds -- the union of its items' bounds, cut to
+ * the frame around it when the mark clips -- to meet the box, then enters every one of its items. Without the question, a group
+ * nobody can hit still moves the box (`translate(-x, -y)` then `translate(x, y)`, which are not exact inverses for a large x), and
+ * the marks drawn after it are tested against a box that has drifted.
+ */
+function visitsGroupMark(items: readonly SceneGroup[], frame: { width?: unknown; height?: unknown }, box: Bounds): boolean {
+  // (the union of the items' into an empty box, as vega's mark bounds take them: an item whose far edge is -Infinity, or not a
+  // number, leaves the mark's edge where the empty box had it, and that is what `visitMark` asks)
+  const b = new Bounds()
+  for (const g of items) b.union(boundGroupItem(new Bounds(), g))
+  if ((items[0] as Rec).markClip === true) b.intersect(new Bounds().set(0, 0, frame.width as number, frame.height as number))
+  return intersects(box, b)
 }
 
 function intersectGroup(group: SceneGroup, mark: { marktype?: string; name?: string }, box: Bounds, filter: Filter, hits: SceneItem[]): void {
@@ -282,23 +334,39 @@ function intersectGroup(group: SceneGroup, mark: { marktype?: string; name?: str
   const x = (group.x as number) || 0
   const y = (group.y as number) || 0
   box.translate(-x, -y)
-  for (const m of marks) {
-    const node = m as unknown as SceneGroup
-    if (isLeafMark(node as unknown as Rec)) intersectMark(node, box, filter, hits)
-    else if (Array.isArray(node.items)) intersectGroup(node, { marktype: 'group', name: (node as Rec).name as string | undefined }, box, filter, hits)
-  }
+  forEachMark(marks, (m) => intersectMark(m, group, box, filter, hits), (items) => {
+    if (!visitsGroupMark(items, group, box)) return
+    const groupMark = { marktype: 'group', name: (items[0] as Rec).name as string | undefined }
+    for (const g of items) intersectGroup(g, groupMark, box, filter, hits)
+  })
   box.translate(x, y)
 }
 
-/** The scene node `group` stands for: the mark a picked group item's facade says it belongs to, a group item of the scene itself, or the whole scene. */
+/**
+ * The scene node `group` stands for, as vega reads its third argument (`group || root`, then a mark node only):
+ *  - nothing (any falsy value): the whole scene;
+ *  - a mark node: the `mark` of a picked item's facade (what vega-lite passes as `unit.mark`; signals.ts links it to the scene
+ *    node of the item's mark), or a mark container of the scene itself (it has a `marktype` and items);
+ *  - anything else -- a picked item itself, a datum, a number, the `mark` of a guide part (whose mark has no node of its own
+ *    in Aster's scene) -- is vega's error, 'Intersect scene must be mark node or group item.' (never the whole scene).
+ */
 function sceneOf(scene: SceneRoot | undefined, group: unknown): { mark: SceneGroup } | { group: SceneGroup } | null {
-  if (group != null && typeof group === 'object') {
-    const g = group as Rec
-    const linked = (g.mark as Rec | undefined)?.[MARK_NODE as never] as Rec | undefined
+  if (group) {
+    const g = (typeof group === 'object' ? group : {}) as Rec
+    const linked = g[MARK_NODE as never] as Rec | undefined
+    // (the root group item's mark: vega-lite's `unit.mark` of a single view is the root mark, the whole scene)
+    if (linked !== undefined && linked === (ROOT_MARK_NODE as Rec)) return rootOf(scene)
     if (linked && Array.isArray(linked.items)) return { mark: linked as unknown as SceneGroup }
-    if (Array.isArray(g.items)) return isLeafMark(g) ? { mark: g as unknown as SceneGroup } : { group: g as unknown as SceneGroup }
+    // (an item's facade carries its `mark`: an item is no mark node, even a group item, which has a marktype and items)
+    const isItem = g.mark !== null && typeof g.mark === 'object'
+    if (!isItem && g.marktype && Array.isArray(g.items)) return { mark: g as unknown as SceneGroup }
+    throw new Error('Intersect scene must be mark node or group item.')
   }
-  // vega's root: a group mark holding the root group item, whose marks are the view's
+  return rootOf(scene)
+}
+
+/** vega's root: a group mark holding the root group item, whose marks are the view's. */
+function rootOf(scene: SceneRoot | undefined): { group: SceneGroup } | null {
   if (!scene) return null
   const root: Rec = { items: scene.items, x: 0, y: 0, width: scene.plotWidth ?? scene.width, height: scene.plotHeight ?? scene.height, name: 'root' }
   return { group: root as unknown as SceneGroup }
@@ -317,7 +385,9 @@ export function sceneIntersect(scene: SceneRoot | undefined, b: unknown, opt: un
   const target = sceneOf(scene, group)
   const hits: SceneItem[] = []
   if (!target) return hits
-  if ('mark' in target) intersectMark(target.mark, box, filter, hits)
+  // (a mark named by an item's facade: the frame its clip would cut its bounds to is its group's, which the facade does not carry --
+  // a mark of this scene that clips is cut where it is met inside its group, below)
+  if ('mark' in target) intersectMark(target.mark, {}, box, filter, hits)
   else intersectGroup(target.group, { marktype: 'group', name: (target.group as Rec).name as string | undefined }, box, filter, hits)
   return hits
 }

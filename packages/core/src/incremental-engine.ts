@@ -12,10 +12,13 @@ import {
   alignIndices, appendedSources, carryByAlignment, carryByMapping, carryBySources, sourceNumbersOf, type SourceNumbers,
 } from './identifier-ids.js'
 import { applyTransforms, exprRowPass, sortOrder, aggregateGroup, type Row } from './transform.js'
+import { fieldsArePlainNames } from './param-resolve.js'
+import { signalValueOf } from './transform-params.js'
 import { checkRowCount } from './limits.js'
-import { markTuples } from './util.js'
+import { markTuples, copyTuple } from './util.js'
+import { beforeWrite } from './content-stamp.js'
 import { datasetsReadIn } from './step-reuse.js'
-import { lexedText } from './expr-text.js'
+import { callPattern, lexedText } from './expr-text.js'
 import type { CompiledTransform, SortSpec } from './types.js'
 import {
   applyIdentifier, applyOne, DATA_DEPENDENT_EXPR, idField, notePublished, pulseBaseLength, withCarry,
@@ -136,6 +139,7 @@ function rowLocalAppendPulse(
     if (i < 0 || i >= base) continue
     const derived = applyOne([rows[i]!], t, tctx, sourceName)
     if (derived.length !== 1) return null
+    beforeWrite(prev, i)
     prev[i] = derived[0]!
     changed.push(i)
   }
@@ -148,7 +152,7 @@ function rowLocalAppendPulse(
 }
 
 function filterAppendPulse(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext,
   input: StepPulse, prev: Row[] | undefined, prevPass: boolean[] | undefined,
 ): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
   const base = pulseBaseLength(input)
@@ -179,6 +183,7 @@ function foldAppendPulse(
     const derived = applyOne([rows[i]!], t, tctx, sourceName)
     if (derived.length !== n) return null
     for (let j = 0; j < n; j++) {
+      beforeWrite(prev, i * n + j)
       prev[i * n + j] = derived[j]!
       changed.push(i * n + j)
     }
@@ -198,7 +203,8 @@ function rowsEqualBut(a: Row, b: Row, ignore: ReadonlySet<string>): boolean {
   for (const k in a) {
     if (ignore.has(k)) continue
     n++
-    if (!equalCell(a[k], b[k])) return false
+    const v = b[k]
+    if (!equalCell(a[k], v) || (v === undefined && !Object.hasOwn(b, k))) return false
   }
   let m = 0
   for (const k in b) if (!ignore.has(k)) m++
@@ -235,7 +241,7 @@ function rederiveAligned(
 }
 
 function filterPulse(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+  rows: Row[], t: CompiledTransform, tctx: StepTransformContext,
   input: StepPulse, prev: Row[] | undefined, prevPass: boolean[] | undefined,
 ): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
   const from = input.from!
@@ -366,7 +372,7 @@ function flattenPulse(
  * objects and output positions.
  */
 function aggregatePulse(
-  rows: Row[], t: CompiledTransform, tctx: StepTransformContext, sourceName: string,
+  rows: Row[], t: CompiledTransform,
   input: StepPulse, prev: Row[] | undefined, prevState: AggState | undefined,
 ): { rows: Row[]; pulse: StepPulse; state?: unknown } | null {
   if (!prevState) return null
@@ -581,6 +587,7 @@ function joinAggregateAppendPulse(
         if (old !== undefined && rowsEqual(derived[j]!, old)) continue
         changed.push(i)
       }
+      beforeWrite(prev, i)
       prev[i] = derived[j]!
     }
   }
@@ -677,7 +684,7 @@ function generatingPulse(
  * ...).
  */
 /** Expression functions that read a scale (see runtime.ts `SCALE_FN_EXPR`). */
-const READS_SCALE = /\b(scale|bandwidth|bandspace|invert|domain|range|copy|gradient)\s*\(/
+const READS_SCALE = callPattern('scale|bandwidth|bandspace|invert|domain|range|copy|gradient')
 
 /**
  * Whether a filter's verdict on a row is a function of the row (and of what does not change in this evaluation): a row it kept or
@@ -732,7 +739,7 @@ function identifierAppendPulse(
   const ids = tctx.ids
   if (!ids) return null
   for (let i = base; i < rows.length; i++) {
-    const row = { ...rows[i]! }
+    const row = copyTuple(rows[i]!)
     row[as] = row[as] || ++ids.value
     prev.push(row)
   }
@@ -762,30 +769,45 @@ function applyStepWithPulse(
   input: StepPulse, prev: Row[] | undefined, prevStepState: unknown, aliased?: ReadonlySet<string>, carry?: readonly unknown[],
 ): { rows: Row[]; pulse: StepPulse | null; state?: unknown } {
   const type = String(t.type)
+  // (the steps that keep state key or order rows by the raw `groupby` / `fields` / `sort`: a field written as a signal or an
+  // object is resolved per evaluation, by the step itself)
+  // (a step whose `signal` is bound to what it returns runs whole: the paths below make its rows without it)
+  const signal = (t as { signal?: unknown }).signal
+  if (typeof signal === 'string' && signal && signalValueOf(type) !== 'own') {
+    return { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+  }
+  if (keepsStepState(type) && !fieldsArePlainNames(t)) {
+    return { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
+  }
   if ((type === 'aggregate' || type === 'joinaggregate') && !groupwiseIncremental(t)) {
     return { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
   }
   if (input.appendOnly) {
-    // Fast paths that never need the full mapping.
+    // Fast paths that never need the full mapping. Those below write the rows the step made last time in place (an O(appended)
+    // update), after the claim that opened a journalled write of them (runtime.ts `claim`, content-stamp.ts `beginWrite`): the rows
+    // of a step that are a dataset's are the rows an earlier scene publishes (`datasetsOfScene`, its runtime's `data()`), which read
+    // them through their history -- the slots a write overwrites are journalled (`beforeWrite`) and the length they had is kept --,
+    // so a scene is never changed once returned, nor by an evaluation that is then rejected, and no step copies its rows (C30, Q14).
+    const writable = prev
     const appendLocal = rowLocal(t, tctx)
     if (appendLocal) {
-      const fast = rowLocalAppendPulse(rows, t, tctx, sourceName, input, prev)
+      const fast = rowLocalAppendPulse(rows, t, tctx, sourceName, input, writable)
       if (fast) return fast
     } else if (type === 'identifier') {
       // (rows numbered as their source rows: the appended rows are new source rows, unless a number says otherwise)
-      const fast = carry === undefined || carriesNone(carry, pulseBaseLength(input)) ? identifierAppendPulse(rows, t, tctx, input, prev) : null
+      const fast = carry === undefined || carriesNone(carry, pulseBaseLength(input)) ? identifierAppendPulse(rows, t, tctx, input, writable) : null
       if (fast) return fast
     } else if (type === 'filter') {
-      const fast = filterIsRowLocal(t, tctx) ? filterAppendPulse(rows, t, tctx, sourceName, input, prev, prevStepState as boolean[] | undefined) : null
+      const fast = filterIsRowLocal(t, tctx) ? filterAppendPulse(rows, t, tctx, input, writable, prevStepState as boolean[] | undefined) : null
       if (fast) return fast
     } else if (type === 'fold') {
-      const fast = foldAppendPulse(rows, t, tctx, sourceName, input, prev)
+      const fast = foldAppendPulse(rows, t, tctx, sourceName, input, writable)
       if (fast) return fast
     } else if (type === 'aggregate') {
       const fast = aggregateAppendPulse(rows, t, tctx, sourceName, input, prev, prevStepState as AggState | undefined)
       if (fast) return fast
     } else if (type === 'joinaggregate') {
-      const fast = joinAggregateAppendPulse(rows, t, tctx, sourceName, input, prev, prevStepState as AggState | undefined)
+      const fast = joinAggregateAppendPulse(rows, t, tctx, sourceName, input, writable, prevStepState as AggState | undefined)
       if (fast) return fast
     } else if (type === 'collect' && !isPlacing(t)) {
       const fast = orderedAppendPulse(rows, t, input, prev, prevStepState as { order: number[] } | undefined)
@@ -830,7 +852,7 @@ function applyStepWithPulse(
       return { rows: out, pulse: out.length === rows.length ? input : null }
     }
     case 'filter':
-      return (filterIsRowLocal(t, tctx) ? filterPulse(rows, t, tctx, sourceName, input, prev, prevStepState as boolean[] | undefined) : null)
+      return (filterIsRowLocal(t, tctx) ? filterPulse(rows, t, tctx, input, prev, prevStepState as boolean[] | undefined) : null)
         ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
     case 'fold':
       return foldPulse(rows, t, tctx, sourceName, input, prev)
@@ -839,7 +861,7 @@ function applyStepWithPulse(
       return flattenPulse(rows, t, tctx, sourceName, input, prev, prevStepState as FlattenState | undefined)
         ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
     case 'aggregate':
-      return aggregatePulse(rows, t, tctx, sourceName, input, prev, prevStepState as AggState | undefined)
+      return aggregatePulse(rows, t, input, prev, prevStepState as AggState | undefined)
         ?? { rows: applyOne(rows, t, tctx, sourceName), pulse: null }
     case 'joinaggregate':
       return joinAggregatePulse(rows, t, tctx, sourceName, input, prev, prevStepState as AggState | undefined)
@@ -935,7 +957,7 @@ export function applyPipelineWithPulse(
       pulse = res.pulse
       state.steps.push(cur)
       const next = res.state !== undefined ? res.state
-        : keepsStepState(String(t.type)) ? deriveStepState(t, stepInput, cur, tctx) : undefined
+        : keepsStepState(String(t.type)) && fieldsArePlainNames(t) ? deriveStepState(t, stepInput, cur, tctx) : undefined
       if (next !== undefined) state.stepState.set(key, next)
     }
     // A published signal that moved since the run the pulse is relative to changes what a later step of this pipeline makes of rows

@@ -10,7 +10,10 @@ import { readFileSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
-import { describe, it, expect } from 'vitest'
+import { SVG_CHART_INTERACTION_PROPS, SVG_CHART_SHARED_HANDLE, SVG_CHART_SHARED_PROPS } from './svg-chart-types.js'
+import { describe, it, expect, expectTypeOf } from 'vitest'
+import type { DataPulse, StreamFlush, StreamStats } from '@aster-charts/core'
+import type { ChartStreamHandle, ChartWorkerStreamHandle } from './index.js'
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -19,7 +22,7 @@ function compile(rootFiles: string[], paths?: Record<string, string[]>): ts.Diag
   const cfg = ts.readConfigFile(cfgPath, ts.sys.readFile)
   const parsed = ts.parseJsonConfigFileContent(cfg.config, ts.sys, PKG)
   const program = ts.createProgram({
-    rootNames: rootFiles.map((f) => join(PKG, 'type-fixtures', f)),
+    rootNames: rootFiles.map((f) => (f.startsWith('src/') ? join(PKG, f) : join(PKG, 'type-fixtures', f))),
     options: { ...parsed.options, noEmit: true, ...(paths ? { baseUrl: PKG, paths } : {}) },
   })
   return ts.getPreEmitDiagnostics(program).filter((d) => d.category === ts.DiagnosticCategory.Error)
@@ -37,6 +40,25 @@ describe('<SvgChart> prop typing', () => {
     expect(diags.map(where)).toEqual([])
   }, 120_000)
 
+  it('names every shared prop, every interaction prop, `png`, and calls every handle method (the fixture cannot fall behind the lists)', () => {
+    const file = join(PKG, 'type-fixtures', 'svg-chart-accepts.fixture.tsx')
+    const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.ES2022, true, ts.ScriptKind.TSX)
+    const passed = new Set<string>()
+    const used = new Set<string>()
+    const visit = (n: ts.Node): void => {
+      if ((ts.isJsxSelfClosingElement(n) || ts.isJsxOpeningElement(n)) && n.tagName.getText(source) === 'SvgChart') {
+        for (const a of n.attributes.properties) if (ts.isJsxAttribute(a)) passed.add(a.name.getText(source))
+      }
+      if (ts.isPropertyAccessExpression(n)) used.add(n.name.text)
+      ts.forEachChild(n, visit)
+    }
+    visit(source)
+    const wantProps = [...SVG_CHART_SHARED_PROPS, ...SVG_CHART_INTERACTION_PROPS, 'interaction', 'png', 'ref']
+    expect(wantProps.filter((p) => !passed.has(p)), 'props <SvgChart> has that the fixture never passes').toEqual([])
+    expect([...passed].filter((p) => !wantProps.includes(p as never)), 'props the fixture passes that <SvgChart> does not list').toEqual([])
+    expect(SVG_CHART_SHARED_HANDLE.filter((m) => !used.has(m)), 'handle members the fixture never touches').toEqual([])
+  })
+
   it('rejects interaction props without `interaction`, the canvas renderer and malformed capabilities, on exactly the marked lines', () => {
     const file = 'svg-chart-rejects.fixture.tsx'
     const diags = compile([file])
@@ -53,19 +75,22 @@ describe('<SvgChart> prop typing', () => {
 
 describe('<Chart> / <SvgChart> parity is enforced by the compiler', () => {
   it('parity.assert.ts compiles as it stands', () => {
-    expect(compile(['svg-chart-accepts.fixture.tsx']).filter((d) => d.file?.fileName.endsWith('parity.assert.ts')).map(where)).toEqual([])
+    // (the module itself is the root: the accepts fixture does not import it, so a program of the fixture alone never contains it)
+    expect(compile(['src/parity.assert.ts']).map(where)).toEqual([])
   }, 120_000)
 
+  // Each fixture augments the interface with one member nobody decided about: the program (the fixture and the assertion module it
+  // imports) must then fail on EXACTLY the assertion of that list, and nowhere else. Were parity.assert.ts already broken somewhere
+  // on its own, the plain program above would fail; were the fixture not to import it, nothing here would.
   it.each([
     ['bite-props.fixture.ts', 'PropsDecided', 'a prop added to ChartProps'],
     ['bite-handle.fixture.ts', 'HandleDecided', 'a method added to ChartHandle'],
   ])('%s: %s fails when %s has no decision for <SvgChart>', (fixture, assertion) => {
     const diags = compile([fixture])
     const src = readFileSync(join(PKG, 'src', 'parity.assert.ts'), 'utf8').split('\n')
-    const failing = diags
-      .filter((d) => d.file?.fileName.endsWith('parity.assert.ts'))
-      .map((d) => src[d.file!.getLineAndCharacterOfPosition(d.start!).line]!)
-    expect(failing.some((l) => l.includes(`type ${assertion} `)), diags.map(where).join('\n')).toBe(true)
+    const lines = diags.map((d) => (d.file?.fileName.endsWith('parity.assert.ts') ? src[d.file.getLineAndCharacterOfPosition(d.start!).line]! : `elsewhere: ${where(d)}`))
+    expect(lines, diags.map(where).join('\n')).toHaveLength(1)
+    expect(lines[0]).toContain(`type ${assertion} `)
   }, 120_000)
 })
 
@@ -90,4 +115,22 @@ describe('the documented <SvgChart> examples compile', () => {
   it('compile (the `@ts-expect-error` line in the second must really be an error)', () => {
     expect(compile(examples.map(([f]) => f), paths).map(where)).toEqual([])
   }, 120_000)
+})
+
+describe('the refs of the stream components are typed as their hooks are (C275)', () => {
+  // (checked by `pnpm typecheck`, which compiles this file: a handle member typed `unknown` again fails there)
+  it('<ChartStream>: flush, pending, pulse and stats return what the stream returns', () => {
+    expectTypeOf<ChartStreamHandle['flush']>().toEqualTypeOf<() => StreamFlush | null>()
+    expectTypeOf<ChartStreamHandle['pending']>().toEqualTypeOf<() => DataPulse>()
+    expectTypeOf<ChartStreamHandle['pulse']>().toEqualTypeOf<() => DataPulse | null>()
+    expectTypeOf<ChartStreamHandle['stats']>().toEqualTypeOf<() => StreamStats>()
+    expect(true).toBe(true)
+  })
+
+  it('<ChartWorkerStream>: the worker hook\'s shapes, a type of its own', () => {
+    expectTypeOf<ChartWorkerStreamHandle['flush']>().toEqualTypeOf<() => void>()
+    expectTypeOf<ChartWorkerStreamHandle['stats']>().toEqualTypeOf<() => StreamStats | null>()
+    expectTypeOf<ChartWorkerStreamHandle['pending']>().toEqualTypeOf<() => null>()
+    expect(true).toBe(true)
+  })
 })

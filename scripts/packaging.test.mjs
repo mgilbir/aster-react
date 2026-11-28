@@ -17,16 +17,30 @@ describe.each(PUBLIC)('@aster-charts/%s manifest', (name) => {
     for (const k of pkg.keywords) expect(typeof k === 'string' && k.trim() === k && k.length > 0, String(k)).toBe(true)
   })
 
-  it('every export entry uses the same conditions: types then default (the internal lean entries: types, browser, default)', () => {
+  it('every public export entry uses the same conditions: types then default; an internal entry declares nothing to a consumer (docs/ARCHITECTURE.md, "Internal plumbing")', () => {
     for (const [sub, target] of Object.entries(pkg.exports)) {
       if (sub === './package.json') continue
-      // (@aster-charts/core/lean*: the engine the React shells use, without its on-demand parts in a browser build; docs/ARCHITECTURE.md)
-      const lean = name === 'core' && /^\.\/lean(\/|$)/.test(sub)
-      expect(Object.keys(target), sub).toEqual(lean && 'browser' in target ? ['types', 'browser', 'default'] : ['types', 'default'])
+      if (/^\.\/internal(\/|$)/.test(sub)) {
+        // (@aster-charts/core/internal*: plumbing for the sibling packages and this repo's tests, not public API. A consumer's `types` is a
+        // module that declares nothing; this repo's tsconfig names the `aster-internal` condition, which finds the real declaration;
+        // `browser` is the engine without its on-demand parts: ADR 0011)
+        expect(name, `${sub}: only core has internal entries`).toBe('core')
+        expect(Object.keys(target), sub).toEqual('browser' in target ? ['aster-internal', 'types', 'browser', 'default'] : ['aster-internal', 'types', 'default'])
+        expect(target.types, sub).toBe('./dist/not-public.d.ts')
+        expect(target['aster-internal'], sub).toMatch(/^\.\/dist\/.+\.d\.ts$/)
+        expect(target.default, sub).toMatch(/^\.\/dist\/.+\.js$/)
+        if ('browser' in target) expect(target.browser, sub).toMatch(/^\.\/dist\/.+\.js$/)
+        continue
+      }
+      expect(Object.keys(target), sub).toEqual(['types', 'default'])
       expect(target.types, sub).toMatch(/^\.\/dist\/.+\.d\.ts$/)
       expect(target.default, sub).toMatch(/^\.\/dist\/.+\.js$/)
-      if (lean && 'browser' in target) expect(target.browser, sub).toMatch(/^\.\/dist\/.+\.js$/)
     }
+  })
+
+  it('emits no declaration for a member marked @internal (stripInternal)', () => {
+    const build = JSON.parse(read(`packages/${name}/tsconfig.build.json`))
+    expect(build.compilerOptions.stripInternal, 'tsconfig.build.json').toBe(true)
   })
 
   it('does not ship source maps (their ../src sources are not in the tarball)', () => {

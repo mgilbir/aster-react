@@ -36,12 +36,15 @@ export function enc(v: unknown): unknown {
   return v
 }
 
-/** `enc(f())`, or `{ $: 'throw' }` when `f` throws (both sides must refuse alike). */
+/**
+ * `enc(f())`, or `{ $: 'throw', name, message }` when `f` throws: both sides must refuse alike, with the same error class and
+ * message (a throw of any kind used to count as agreement with any other).
+ */
 export const attempt = (f: () => unknown): unknown => {
   try {
     return enc(f())
-  } catch {
-    return { $: 'throw' }
+  } catch (err) {
+    return { $: 'throw', name: (err as Error).name, message: (err as Error).message }
   }
 }
 
@@ -55,6 +58,17 @@ export const exact = (f: () => unknown): unknown => {
   } catch (err) {
     return { $: 'throw', name: (err as Error).name, message: (err as Error).message }
   }
+}
+
+/**
+ * The outcome of a function call that vega's dataflow logged an error for: `{ $: 'throw', message }` when the error is vega's own
+ * (its words are part of what it refuses with), `{ $: 'throw' }` when it is an error of the JavaScript engine (a TypeError, a
+ * RangeError), whose wording is the engine's and is not compared.
+ */
+export function loggedThrow(error: unknown): { $: 'throw'; message?: string } {
+  const e = error instanceof Error ? error : undefined
+  if (!e || e instanceof TypeError || e instanceof RangeError) return { $: 'throw' }
+  return { $: 'throw', message: e.message }
 }
 
 /** A Vega logger that collects errors (the dataflow swallows operator errors; this surfaces them). */

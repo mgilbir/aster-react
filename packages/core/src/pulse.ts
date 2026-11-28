@@ -3,22 +3,19 @@
  *
  * Vega's runtime is a pulse graph: a source dataset emits a change tuple, each
  * transform propagates it to its targets, and only the dirty marks re-encode.
- * Aster evaluates eagerly, but the same graph is useful for two things:
- *
- * - inferring a source pulse automatically when a host hands over new immutable
- *   row arrays (no explicit `dataChanges` needed), and
- * - naming the downstream datasets/marks and whether a transform can consume a
- *   row-wise pulse or needs a full re-derive.
+ * Aster evaluates eagerly; what it takes from pulses is inferring a source pulse
+ * automatically when a host hands over new immutable row arrays (no explicit
+ * `dataChanges` needed), which the evaluation then follows through the steps
+ * (incremental-engine.ts).
  *
  * A pulse carries more than the changed indices: length-changing updates
  * (append/insert/delete) also carry an index mapping (`from`/`to`) and the
  * added/removed ranges. Downstream transforms and marks use that mapping to
  * splice their cached rows/items instead of rebuilding the world.
  *
- * The graph is structural and cached on the compiled chart; pulses are plain
- * data so hosts can inspect them in tests/devtools.
+ * Pulses are plain data so hosts can inspect them in tests/devtools.
  */
-import type { CompiledChart, CompiledData, CompiledMark, CompiledTransform } from './types.js'
+import type { CompiledData } from './types.js'
 
 /** A contiguous range `[start, end)` in an array. */
 export type PulseRange = [number, number]
@@ -55,39 +52,7 @@ export interface RowDiff {
   baseLength?: number
 }
 
-const ROWWISE = new Set<string>([
-  'formula', 'identifier', 'timeunit',
-  // 1:1 geo transforms: each output row depends only on its own input row.
-  'geoshape', 'geopath', 'geopoint', 'linkpath', 'project', 'geojson',
-])
 const GROUPED = new Set<string>(['aggregate', 'joinaggregate', 'window', 'stack'])
-/** Transforms whose output row count/order is independent of the input order. */
-const EXPANDING = new Set<string>([
-  'fold', 'flatten', 'pivot', 'geojson', 'geopoint', 'geoshape', 'geopath', 'contour', 'linkpath',
-  'kde', 'quantile', 'regression', 'loess', 'nest', 'pack', 'partition', 'treemap', 'tree', 'treelinks', 'force', 'kde2d', 'isocontour', 'wordcloud',
-  'voronoi', 'cross', 'countpattern', 'dotbin', 'project', 'label', 'stratify', 'sequence',
-  'graticule',
-])
-
-/**
- * Transforms that emit exactly one output row per input row, in input order,
- * even when the output values depend on the whole dataset (pie angles, dotbin
- * bins, hierarchical layout). Their output can be spliced by index.
- */
-const INDEX_PRESERVING = new Set<string>([
-  'formula', 'identifier', 'timeunit', 'geoshape', 'geopath', 'geopoint', 'linkpath', 'project',
-  'geojson', 'label', 'heatmap', 'pie', 'dotbin', 'pack', 'partition', 'treemap', 'tree', 'voronoi',
-])
-
-/** Transforms that re-derive every output but never change the input mapping. */
-const STABLE_ROW_COUNT = new Set<string>([
-  ...INDEX_PRESERVING,
-  'extent', 'stratify',
-])
-
-function asRows(v: unknown): Record<string, unknown>[] | null {
-  return Array.isArray(v) && (v.length === 0 || (v[0] != null && typeof v[0] === 'object')) ? v as Record<string, unknown>[] : null
-}
 
 /**
  * Whether two cells hold the same value as the scene sees it: `Object.is` for a primitive (so `0` and `-0` differ, as a format or a
@@ -132,9 +97,50 @@ function sameValueAt(a: unknown, b: unknown, depth: number): boolean {
   return sameNested(a, b, depth)
 }
 
-/** Row equality: the same own fields, each `equalCell`. */
+/**
+ * Row equality: the same own fields, each `equalCell` (a field one row lacks is not the other's `undefined` field). A row that is
+ * not an object is a value, compared as a cell is.
+ */
 export function rowsEqual(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
   if (a === b) return true
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return equalCell(a, b)
+  return fieldsEqual(a, b)
+}
+
+/**
+ * How `diffRows` reads a pair of rows, in the one look it takes at each: `-1` when either is not an object (a primitive row, which
+ * the engine wraps as `{data: value}`, has no fields to compare, so a dataset holding one is not diffed: it is replaced as a
+ * whole; the same primitive at the same index is the same row, and is not looked at), else `1` for the same fields and `0` for
+ * different ones. Checking each row where it is compared, and not in a scan of
+ * both arrays first, is what keeps a whole-array replacement of a long dataset as cheap as it was (two more passes over the rows
+ * cost a third of it).
+ */
+function compareRows(a: unknown, b: unknown): -1 | 0 | 1 {
+  // the same value (the same object, or an identical primitive other than the zero `===` cannot tell from `-0`): nothing to look at,
+  // and not reading it at all is most of what a replacement that kept its rows (a `slice()` with one row changed) costs
+  if (a === b && a !== 0) return 1
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return -1
+  return a === b || fieldsEqual(a as Record<string, unknown>, b as Record<string, unknown>) ? 1 : 0
+}
+
+const isRow = (r: unknown): boolean => r !== null && typeof r === 'object'
+
+/**
+ * Arrays whose leading rows are known to be objects, by how many: what the engine ingested as they were (runtime.ts `ingestHostRows`)
+ * and what a diff against such an array found to be objects (`diffRows`). Rows are the host's and immutable (docs/API.md), so this
+ * holds for as long as the array lives, and the rows need not be looked at again: a session's next diff compares the rows of such an
+ * array by identity first, and the evaluation does not scan an array a diff vouched for.
+ */
+const OBJECT_ROWS = new WeakMap<readonly unknown[], number>()
+
+/** How many leading rows of `rows` are known to be objects (see `OBJECT_ROWS`). */
+export const objectRowsOf = (rows: readonly unknown[]): number => OBJECT_ROWS.get(rows) ?? 0
+
+/** Say that the first `n` rows of `rows` are objects. */
+export const noteObjectRows = (rows: readonly unknown[], n: number): void => { OBJECT_ROWS.set(rows, n) }
+
+/** The fields of two objects: the same own ones, each `equalCell`. */
+function fieldsEqual(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
   const proto = Object.getPrototypeOf(a)
   if (proto === Object.prototype || proto === null) {
     // `for...in` avoids the two Object.keys() allocations per row that made
@@ -144,7 +150,8 @@ export function rowsEqual(a: Record<string, unknown>, b: Record<string, unknown>
     let n = 0
     for (const k in a) {
       n++
-      if (!equalCell(a[k], b[k])) return false
+      const v = b[k]
+      if (!equalCell(a[k], v) || (v === undefined && !Object.hasOwn(b, k))) return false
     }
     let m = 0
     for (const _k in b) m++
@@ -152,7 +159,7 @@ export function rowsEqual(a: Record<string, unknown>, b: Record<string, unknown>
   }
   const ak = Object.keys(a)
   if (ak.length !== Object.keys(b).length) return false
-  for (const k of ak) if (!equalCell(a[k], b[k])) return false
+  for (const k of ak) if (!equalCell(a[k], b[k]) || (b[k] === undefined && !Object.hasOwn(b, k))) return false
   return true
 }
 
@@ -176,20 +183,54 @@ function pushRange(ranges: PulseRange[], start: number, end: number): void {
  * either side becomes an added/removed range.
  */
 export function diffRows(previous: unknown, next: unknown): RowDiff | null {
-  const p = asRows(previous)
-  const n = asRows(next)
-  if (!p || !n) return null
+  if (!Array.isArray(previous) || !Array.isArray(next)) return null
+  const p: readonly unknown[] = previous
+  const n: readonly unknown[] = next
+  // (every row of both arrays is looked at by one of the loops below, and each looks at a row as an object: a dataset with a row
+  // that is not one is not diffed, whichever row it is: see `compareRows`. When every row of `previous` is known to be an object
+  // (`OBJECT_ROWS`), a row of `next` that is the very same object needs no look at all -- not even the `0`/`-0` test of
+  // `compareRows`, which costs as much as the identity loop itself -- and every row of `next` is then known to be one too.)
+  const objects = OBJECT_ROWS.get(p) === p.length
   if (p.length === n.length) {
     const changed: number[] = []
-    for (let i = 0; i < n.length; i++) if (!rowsEqual(p[i]!, n[i]!)) changed.push(i)
+    if (objects) {
+      for (let i = 0; i < n.length; i++) {
+        if (p[i] === n[i]) continue
+        const same = compareRows(p[i], n[i])
+        if (same < 0) return null
+        if (same === 0) changed.push(i)
+      }
+      OBJECT_ROWS.set(n, n.length)
+    } else {
+      for (let i = 0; i < n.length; i++) {
+        const a = p[i]
+        const b = n[i]
+        if (a === b && a !== 0) continue // (see compareRows: the common row of a replacement is the very object it was)
+        const same = compareRows(a, b)
+        if (same < 0) return null
+        if (same === 0) changed.push(i)
+      }
+    }
     return { changed, sameLength: true, added: null, removed: null }
   }
 
   const min = Math.min(p.length, n.length)
   let prefix = 0
-  while (prefix < min && rowsEqual(p[prefix]!, n[prefix]!)) prefix++
+  if (objects) while (prefix < min && p[prefix] === n[prefix]) prefix++
+  while (prefix < min) {
+    const same = compareRows(p[prefix], n[prefix])
+    if (same < 0) return null
+    if (same === 0) break
+    prefix++
+  }
   let suffix = 0
-  while (suffix < min - prefix && rowsEqual(p[p.length - 1 - suffix]!, n[n.length - 1 - suffix]!)) suffix++
+  if (objects) while (suffix < min - prefix && p[p.length - 1 - suffix] === n[n.length - 1 - suffix]) suffix++
+  while (suffix < min - prefix) {
+    const same = compareRows(p[p.length - 1 - suffix], n[n.length - 1 - suffix])
+    if (same < 0) return null
+    if (same === 0) break
+    suffix++
+  }
 
   const from = new Array<number>(n.length).fill(-1)
   const to = new Array<number>(p.length).fill(-1)
@@ -216,15 +257,19 @@ export function diffRows(previous: unknown, next: unknown): RowDiff | null {
     const pi = prefix + k
     from[ni] = pi
     to[pi] = ni
-    if (!rowsEqual(p[pi]!, n[ni]!)) changed.push(ni)
+    const same = compareRows(p[pi], n[ni])
+    if (same < 0) return null
+    if (same === 0) changed.push(ni)
   }
   for (let k = paired; k < newMiddle; k++) {
     const ni = prefix + k
+    if (!isRow(n[ni])) return null
     from[ni] = -1
     pushRange(addedRanges, ni, ni + 1)
   }
   for (let k = paired; k < oldMiddle; k++) {
     const pi = prefix + k
+    if (!isRow(p[pi])) return null
     to[pi] = -1
     pushRange(removedRanges, pi, pi + 1)
   }
@@ -251,7 +296,50 @@ export function diffRows(previous: unknown, next: unknown): RowDiff | null {
     }
     if (appendOnly && from.length === p.length && p.length !== n.length) appendOnly = false
   }
+  if (objects) OBJECT_ROWS.set(n, n.length)
   return { changed, sameLength: false, added, removed, from, to, addedRanges, removedRanges, ...(appendOnly ? { appendOnly, baseLength } : {}) }
+}
+
+/**
+ * A dataset's pulse as a host states it (`RuntimeInput.dataPulse`, `StreamBatch.pulse`): the index mapping and the ranges, `added` and
+ * `removed` being ALL the ranges. Hosts that diffed the rows themselves (`diffRows`) pass its {@link RowDiff} instead; it is read by
+ * {@link pulseChangeOf}.
+ */
+export interface PulseChangeInput {
+  /** Indices (new coordinates) whose rows changed in place. */
+  changed?: number[]
+  /** new index -> previous index (-1 for inserted rows). */
+  from?: number[]
+  /** previous index -> new index (-1 for removed rows). */
+  to?: number[]
+  /** Appended ranges in new coordinates. */
+  added?: PulseRange[]
+  /** Removed ranges in previous coordinates. */
+  removed?: PulseRange[]
+  /**
+   * Compact append-only pulse: the retained prefix is unchanged in index, so `from` can be synthesised on demand. `baseLength` is the
+   * previous length.
+   */
+  appendOnly?: boolean
+  baseLength?: number
+}
+
+/**
+ * The pulse a host handed in, as the one shape the engine reads. A `RowDiff` (what `diffRows` returns) names its first range in
+ * `added` / `removed` and all of them in `addedRanges` / `removedRanges`; the long form names all of them in `added` / `removed`.
+ */
+export function pulseChangeOf(p: PulseChangeInput | RowDiff): PulseChangeInput {
+  if (!('sameLength' in p)) return p
+  const added = p.addedRanges ?? (p.added ? [p.added] : undefined)
+  const removed = p.removedRanges ?? (p.removed ? [p.removed] : undefined)
+  return {
+    changed: p.changed,
+    ...(p.from ? { from: p.from } : {}),
+    ...(p.to ? { to: p.to } : {}),
+    ...(added ? { added } : {}),
+    ...(removed ? { removed } : {}),
+    ...(p.appendOnly ? { appendOnly: true, baseLength: p.baseLength } : {}),
+  }
 }
 
 export interface DatasetPulse extends RowDiff {
@@ -275,114 +363,10 @@ export interface DataPulse {
   structural: Set<string>
 }
 
-export interface PulseNode {
-  name: string
-  /** The dataset this one derives from (the first, when it derives from several: see `sources`). */
-  source?: string
-  sources?: string[]
-  transforms: string[]
-  downstream: string[]
-  marks: string[]
-  /** False when a transform changes row count/order and needs a full re-derive. */
-  rowWise: boolean
-  /** True when every transform preserves the input row index (mapping-spliceable). */
-  indexPreserving: boolean
-}
-
-export interface PulseGraph {
-  nodes: Map<string, PulseNode>
-  /** Source dataset -> mark names drawing from it (directly or via groups). */
-  markSources: Map<string, string[]>
-}
-
 /** The names a dataset derives from: its `source`, one name or a list (vega-parser: `array(data.source)`). */
 export function sourceNames(d: CompiledData): string[] {
   const s = d.source
   return s === undefined || s === '' ? [] : Array.isArray(s) ? s : [s]
-}
-
-function transformsOf(d: CompiledData): CompiledTransform[] {
-  return d.transform ?? []
-}
-
-function isRowWise(d: CompiledData): boolean {
-  return transformsOf(d).every((t) => ROWWISE.has(String(t.type)))
-}
-
-function isIndexPreserving(d: CompiledData): boolean {
-  return transformsOf(d).every((t) => STABLE_ROW_COUNT.has(String(t.type)) || t.type === 'filter'
-    || t.type === 'fold' || t.type === 'flatten' || t.type === 'aggregate'
-    || t.type === 'joinaggregate' || t.type === 'window' || t.type === 'stack')
-}
-
-/** Build the structural dataflow graph for a compiled chart. */
-export function buildPulseGraph(chart: CompiledChart): PulseGraph {
-  const nodes = new Map<string, PulseNode>()
-  for (const d of chart.data) {
-    nodes.set(d.name, {
-      name: d.name,
-      source: sourceNames(d)[0],
-      ...(sourceNames(d).length > 1 ? { sources: sourceNames(d) } : {}),
-      transforms: transformsOf(d).map((t) => String(t.type)),
-      downstream: [],
-      marks: [],
-      rowWise: isRowWise(d),
-      indexPreserving: isIndexPreserving(d),
-    })
-  }
-  for (const node of nodes.values()) {
-    for (const src of node.sources ?? (node.source ? [node.source] : [])) if (nodes.has(src)) nodes.get(src)!.downstream.push(node.name)
-  }
-  const markSources = new Map<string, string[]>()
-  const walkMarks = (marks: CompiledMark[] | undefined): void => {
-    for (const m of marks ?? []) {
-      const src = (m.from as { data?: string } | undefined)?.data
-      if (src) {
-        const list = markSources.get(src) ?? []
-        if (!list.includes(m.name ?? m.type)) list.push(m.name ?? m.type)
-        markSources.set(src, list)
-        const node = nodes.get(src)
-        if (node && m.name && !node.marks.includes(m.name)) node.marks.push(m.name)
-      }
-      const nested = (m as { marks?: CompiledMark[] }).marks
-      if (nested) walkMarks(nested)
-    }
-  }
-  walkMarks(chart.marks)
-  return { nodes, markSources }
-}
-
-export interface PulsePropagation {
-  datasets: Set<string>
-  marks: Set<string>
-  /** Datasets whose transform chain cannot consume row-wise changes. */
-  fullRederive: Set<string>
-}
-
-/** Propagate a source pulse through the graph (including derived sources). */
-export function propagatePulse(graph: PulseGraph, changed: Iterable<string>): PulsePropagation {
-  const datasets = new Set<string>()
-  const marks = new Set<string>()
-  const fullRederive = new Set<string>()
-  const queue = [...changed]
-  while (queue.length) {
-    const name = queue.shift()!
-    if (datasets.has(name)) continue
-    datasets.add(name)
-    const node = graph.nodes.get(name)
-    if (!node) continue
-    for (const m of node.marks) marks.add(m)
-    if (!node.rowWise) fullRederive.add(name)
-    for (const next of node.downstream) {
-      if (!datasets.has(next)) queue.push(next)
-    }
-  }
-  return { datasets, marks, fullRederive }
-}
-
-/** True when a transform chain contains a row-expanding/reordering operator. */
-export function transformNeedsFullRederive(types: string[]): boolean {
-  return types.some((t) => EXPANDING.has(t) && !STABLE_ROW_COUNT.has(t))
 }
 
 /** Grouped transforms (aggregate/window/stack) consume dirty groups in place. */

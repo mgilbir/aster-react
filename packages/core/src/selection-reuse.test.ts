@@ -169,14 +169,15 @@ describe('a point selection over numbered rows: its dataset, scales and marks ac
   const START: PointWorld = { t: ROWS, store: [], u: 0, k: -1, op: 1 }
   const routes: Array<[string, (spec: VgSpec) => (w: PointWorld) => SceneRoot]> = [
     ['a session', (spec) => { const s = createChartSession(); return (w) => s.evaluate(spec, pointInput(w)) }],
-    // (told what changed: the rows of `t` when they changed, a dataset nothing reads otherwise)
+    // (told what changed: the rows of `t` when they changed, and otherwise that nothing did -- an empty list; a name that is no
+    // dataset is refused since C232)
     ['evaluateChart told what changed', (spec) => {
       const chart = compileChart(spec)
       let was: PointWorld | undefined
       return (w) => {
         const changed = was === undefined ? [] : [...(was.t !== w.t ? ['t'] : []), ...(was.store !== w.store ? ['store'] : [])]
         was = w
-        return evaluateChart(chart, pointInput(w, { changedDatasets: changed.length ? changed : ['nothing'] }))
+        return evaluateChart(chart, pointInput(w, { changedDatasets: changed }))
       }
     }],
   ]
@@ -196,8 +197,15 @@ describe('a point selection over numbered rows: its dataset, scales and marks ac
         if (route === 'a session' || !step.what.startsWith('a row')) {
           expect(encoded, `${what}: items encoded`).toEqual(step.encodes)
           expect(BOTH.filter((m) => keptMark(prev, scene, m)), `${what}: marks kept`).toEqual(step.kept)
-          expect(SCALES.filter((n) => scaleOf(prev, n) === scaleOf(scene, n)), `${what}: scales kept`).toEqual(step.scales)
+        } else {
+          // (C658) `changedDatasets` says which dataset changed, not how: with no pulse, both marks over it encode every row of `d`
+          // again and keep no item; the scales are still kept by the census whenever the session keeps them
+          const rows = rowsOf(scene, 'd')?.length ?? -1
+          expect(encoded, `${what}: items encoded`).toEqual({ plain: rows, tested: rows })
+          expect(BOTH.map((m) => keptItems(prev, scene, m)), `${what}: items kept`).toEqual([0, 0])
+          expect(BOTH.filter((m) => keptMark(prev, scene, m)), `${what}: marks kept`).toEqual([])
         }
+        expect(SCALES.filter((n) => scaleOf(prev, n) === scaleOf(scene, n)), `${what}: scales kept`).toEqual(step.scales)
         if (step.sameRows) {
           // (the dataset is the array it was: no step of it ran, the `identifier` included, in either round)
           expect(rowsOf(scene, 'd'), `${what}: the dataset kept`).toBe(rowsOf(prev, 'd'))
@@ -209,13 +217,15 @@ describe('a point selection over numbered rows: its dataset, scales and marks ac
   }
 
   it('evaluateChart told what changed: a row appended keeps the items of the rows before it', () => {
-    // (`changedDatasets` says which dataset changed, not how: the marks are made again but for the items the census-kept scales and
-    // equal rows let them keep -- here none, as the route has no pulse; the scene is the fresh one, which is what the walk pins)
+    // (told by an append pulse: each mark keeps the N items of the rows before and encodes the appended row's alone)
     const chart = compileChart(POINT)
-    evaluateChart(chart, pointInput(START))
+    const prev = evaluateChart(chart, pointInput(START))
     const w = { ...START, t: append(START.t, 5.5), u: 1 }
-    const scene = evaluateChart(chart, pointInput(w, { dataPulse: { t: { appendOnly: true, baseLength: N, changed: [] } } }))
+    const { scene, encoded } = encodedBy(() => evaluateChart(chart, pointInput(w, { dataPulse: { t: { appendOnly: true, baseLength: N, changed: [] } } })))
     expectFresh(POINT, scene, pointInput(w), 'evaluateChart, a pulse and a signal nothing reads')
+    expect(BOTH.map((m) => keptItems(prev, scene, m))).toEqual([N, N])
+    expect(BOTH.map((m) => groupNamed(scene, m)?.items?.length)).toEqual([N + 1, N + 1])
+    expect(encoded).toEqual({ plain: 1, tested: 1 })
   })
 
   it('a view that fits its container keeps the dataset, the scales and the marks in both passes', () => {
@@ -823,7 +833,8 @@ describe('what a kept build or a keyed pulse must not take over', () => {
   })
 
   it('under limits a kept build would count its rows once: none is kept, and the limit is where it was', () => {
-    // (each round of the evaluation runs the fold: 10 rows generated twice)
+    // (the fold runs once per evaluation, as vega's does: `picked` reads `store`, which is built before it, and no dataset reads
+    // `picked`, so no round builds the datasets again -- 10 rows generated, by the first evaluation and by the second alike)
     const spec = {
       width: 100, height: 50, autosize: 'none',
       signals: [{ name: 'u', value: 0 }, { name: 'picked', update: "length(data('store'))" }],
@@ -831,7 +842,7 @@ describe('what a kept build or a keyed pulse must not take over', () => {
       marks: [{ type: 'symbol', from: { data: 'f' }, encode: { update: { x: { field: 'value' } } } }],
     } as unknown as VgSpec
     const t = Array.from({ length: 10 }, (_, i) => ({ a: i, b: i * 2 }))
-    for (const [limit, throws] of [[19, true], [20, false]] as const) {
+    for (const [limit, throws] of [[9, true], [10, false]] as const) {
       const input = (u: number): RuntimeInput => ({ data: { t, store: [] }, signals: { u }, limits: { maxGeneratedRows: limit } })
       const s = createChartSession()
       const first = (): SceneRoot => s.evaluate(spec, input(0))

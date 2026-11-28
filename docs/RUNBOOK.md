@@ -23,7 +23,7 @@ corpus, and the command that re-runs one spec of each:
 | `conformance` | canonical SVG of real vega against Aster (`.vg.json` and `.vl.json`, the latter compiled by `vega-lite`) | `ASTER_CORPUS_FILTER='^bar-basic$' pnpm conformance` |
 | `conformance-vl` | `.vl.json` only: `@aster-charts/vl` against `vega-lite`, see 1.4 | `pnpm conformance-vl bar-basic` (a substring; no `--`) |
 | `scene-diff` | resolved scales, groups and items per scope, before any SVG is written | `pnpm scene-diff -- --filter bar-basic` (add `--scales-only`) |
-| `incremental-diff` | an incremental evaluation (random per-datum changeset) against a fresh one of the same data, over the inline-data specs; it does not involve vega | `pnpm conformance:diff` (all specs, about 5 s; it takes no filter) |
+| `incremental-diff` | an incremental evaluation (random per-datum changeset) against a fresh one of the same data, over the inline-data specs; it does not involve vega | `pnpm conformance:diff -- --filter=bar-basic` |
 | `a11y-parity` | guide captions against vega-scenegraph's `aria-label` | `pnpm a11y-parity -- --filter bar-basic` |
 | `transform-matrix` | transform option combinations (not per spec: cases are generated) | `pnpm transform-matrix -- --filter aggregate` |
 | `browser-conformance` | vega-embed and Aster in Chromium with live canvas text metrics | `pnpm conformance:browser -- --filter=bar-basic` |
@@ -32,14 +32,16 @@ corpus, and the command that re-runs one spec of each:
 
 The filters differ on purpose of the script that owns them: `ASTER_CORPUS_FILTER` is a regular expression, `conformance-vl` takes
 a positional substring, `scene-diff`, `a11y-parity` and `transform-matrix` take `--filter <substring>`, the browser scripts
-`--filter=<substring>`. `conformance-vl bar-basic` works; `conformance-vl -- bar-basic` passes the `--` as the filter and runs zero
-specs.
+`--filter=<substring>`. `conformance-vl bar-basic` works; `conformance-vl -- bar-basic` passes the `--` as the filter, runs zero
+specs and fails: every gate fails a run that compared nothing (`[<gate>] FLOOR ...`), and a narrowed run applies no floors.
 
 ### 1.2 Rule out a stale build first
 
 The harness imports `@aster-charts/core`, `@aster-charts/react` and `@aster-charts/vl` by package name, which resolves to each package's **`dist`**, not
 its `src`. If you edited a source file and did not rebuild, the conformance run is checking the old code and says nothing about
-your edit. See section 2. When in doubt: `pnpm build`, then re-run.
+your edit. See section 2. The gates check it: a gate refuses to run when a package's compiled sources are newer than its
+`dist` (`[<gate>] ERROR packages/core/src was edited after packages/core/dist was built`, scripts/lib/dist-fresh.mjs).
+When in doubt: `pnpm build`, then re-run.
 
 ### 1.3 Reproduce with one spec
 
@@ -110,7 +112,7 @@ the same spec in `packages/conformance/corpus` with the other marks removed is t
 `pnpm conformance:browser -- --filter=<name>` renders in Chromium with vega-embed and with Aster, with live canvas text metrics
 instead of the headless estimate (`docs/FONTS.md`). A spec that is green in Node and red here is measuring text differently. Install
 the browser once with the command in CONTRIBUTING.md. For the interaction gates (`conformance:signals`, `conformance:selections`,
-`conformance:intersect`) the debugging variables are in the table of section 3 (`SIG_PRINT`, `SEL_*`). With a filter, run the selections script
+`conformance:intersect`) the debugging variables are in the table of section 3 (`--print-vega`, `PICK_DEBUG`, `SEL_*`). With a filter, run the selections script
 directly, because the package script also passes `--min-cases` and `--max-retained`, which a filtered run cannot meet:
 
 ```bash
@@ -192,23 +194,35 @@ TZ=Asia/Kolkata pnpm exec vitest run packages/core/src/calendar.tz.test.ts
 | `ASTER_CORPUS_DIR` | `packages/conformance/src/run.ts` (`pnpm conformance`) | `corpus` | The corpus directory to run, relative to `packages/conformance`. `scripts/test-tz.mjs` sets `corpus-tz`. |
 | `ASTER_CORPUS_FILTER` | `packages/conformance/src/run.ts` | unset: all specs | A regular expression; only specs whose name matches run. A filter that matches nothing fails with `corpus is empty`. |
 | `ASTER_GALLERY_CACHE_DIR` | `packages/conformance/src/gallery/cache.ts` | `packages/conformance/.gallery` | Where the fetched official gallery examples live. `vitest.config.mjs` points the default test run at a directory that does not exist, so a test that needs the cache fails everywhere, not only on CI (`scripts/gallery-isolation.test.mjs` guards this); the gallery gate (`vitest.gallery.config.mjs`) does not. |
+| `ASTER_RATCHET_BASE` | `packages/conformance/src/gallery/ratchet.test.ts` | unset: where the branch left `origin/main` (or `main`), else the first parent of `HEAD` | The revision the gallery ratchet files (floors, passing lists, swap pairs, manifest) are held against: a run may not lose what that revision had. A value that names no commit compares the files with themselves, so it holds nothing. |
 | `ASTER_V8_SORT_FLAG` | `scripts/vitest-engine.setup.mjs`, `packages/conformance/src/sort-engine.test.ts` | set by `vitest.config.mjs`: `--maglev-disable-builtin-reducers` if this V8 has it, else empty | Pins V8's inlined `Array.prototype.sort` off so the in-process oracle sorts deterministically; the sort-engine test turns it back on to prove Aster does not depend on the pin. Not for setting by hand. |
+| `TMPDIR` | Node's `os.tmpdir()`; `scripts/lib/temp-dir.mjs` (every temp directory the tests, gates and scripts make), `scripts/gates.mjs` (each gate gets a fresh one and fails if it leaves anything) | the OS default (`/tmp`) | Where temp directories go. Keep it short when you set it: tsx listens on a unix socket under it (a path limit of about 107 characters). The tests that guard the clean-up set it per child process. |
+| `NODE_COMPILE_CACHE` | `scripts/lib/temp-dir.mjs` (`sandboxEnv`) | `node_modules/.cache/node-compile-cache` | Where Node keeps its compile cache for a sandboxed gate or test child; left to Node's default (`$TMPDIR/node-compile-cache`) it would count as a leftover in the sandbox. A value already set is kept. |
 | `TZ` | Node itself; many tests set and restore `process.env.TZ` | the machine's zone | The time zone. `pnpm test:tz [zone ...]` runs the zone-sensitive tests and the `corpus-tz` corpus under `America/New_York`, `Asia/Kolkata` and `Australia/Lord_Howe` (and `UTC` for the corpus). Set it yourself to run any one test file in a zone. |
 
-`NODE_ENV` appears in the repository only as an esbuild `define` (`"process.env.NODE_ENV": '"production"'`) that the bundling scripts
-substitute; nothing reads it.
+`NODE_ENV` is read by the shipped packages, not only substituted by the bundling scripts: `packages/core/src/session.ts`, `row-watch.ts`
+and `packages/vl/src/rows.ts` run the development-time row checks (`checkChartRows`) when `process.env.NODE_ENV !== 'production'`, and
+`packages/react/src/{ChartCore.tsx,useChart.ts,worker.ts}` gate their development warnings on it the same way. A bundler's `define`
+(`"process.env.NODE_ENV": '"production"'`, which every script that bundles the packages sets) removes those branches from a production
+bundle; `scripts/dev-warning-bundlers.test.mjs` runs it both ways and `pnpm check:bundle` asserts the production bundles carry no
+development-only code. Set it yourself to see the checks run (`NODE_ENV=development`) or not (`production`) under vitest.
 
 ### Generated differential and property tests
 
 | Variable | Test | Default | Effect |
 |---|---|---|---|
-| `ASTER_ORACLE_SEEDS`, `ASTER_ORACLE_STEPS`, `ASTER_ORACLE_START`, `ASTER_ORACLE_SEED` | `packages/core/src/incremental-oracle.test.ts` | 40, 12, 1, unset | Seeds to run, steps per seed, first seed, and a single seed to replay (incremental evaluation equals a fresh one). |
+| `ASTER_ORACLE_SEEDS`, `ASTER_ORACLE_STEPS`, `ASTER_ORACLE_START`, `ASTER_ORACLE_SEED` | `packages/core/src/incremental-oracle.test.ts` | one per pipeline of `PIPES`, 12, 1, unset | Seeds to run per family (fewer than the pipeline list is refused; a value that is not a whole number is an error), steps per seed, first seed, and a single seed to replay (incremental evaluation equals a fresh one). |
 | `ASTER_DOM_ORACLE_SEEDS`, `_STEPS`, `_START`, `_SEED` | `packages/core/src/dom-oracle.test.ts` | 40, 10, 1, unset | Same knobs for the patched DOM against a DOM built fresh. |
 | `ASTER_CANVAS_ORACLE_SEEDS`, `_STEPS`, `_START`, `_SEED` | `packages/core/src/canvas-append-oracle.test.ts` | 60, 12, 1, unset | Same knobs for canvas append painting against a full repaint. |
 | `ASTER_REUSE_SEEDS`, `ASTER_REUSE_SEED` | `packages/core/src/dataset-reuse.test.ts` | 300, unset | Number of generated charts; replay one seed. |
 | `ASTER_ONCE_SEEDS`, `ASTER_ONCE_SCOPED` | `packages/core/src/evaluate-once.test.ts` | 300, 200 | Generated charts for the plain and the group-scope tests. |
 | `ASTER_STREAM_SEEDS`, `ASTER_STREAM_SEED`, `ASTER_STREAM_TRACE` | `packages/core/src/stream.property.test.ts` | 25, unset, unset | Seeds per policy; replay one seed; any non-empty value adds the flush/push trace to a failure message. |
+| `ASTER_ENGINE_MAXBAD` | `differential-expression-engine-gen.test.mts` | 8 | How many failing generated expressions the test collects before it stops and reports them. |
 | `ASTER_EXPR_FUZZ_SEED`, `ASTER_EXPR_FUZZ_N` | `differential-vega-expression-gen.test.mts`, `differential-vega-interpreter-gen.test.mts` | `0xA57E12`, 30000 | Seed and number of generated expression sources, against real vega's parser and interpreter. |
+| `ASTER_DATUM_SEEDS` | `packages/conformance/src/datum-identity-vs-vega.test.ts` | 40 | Seeds of the generated pipelines of the tuple-identity differential (`datum === src` against real vega). |
+| `ASTER_HISTORY_SEEDS` | `packages/conformance/src/tuple-history-vs-vega.test.ts` | 24 | Seeds of the generated drag-to-reorder specs driven through both event loops against real vega (what tuples carry from run to run, C68). |
+| `ASTER_HISTORY_TYPE_SEEDS` | `packages/conformance/src/tuple-history-types-vs-vega.test.ts` | 16 | Seeds per transform type of the generated read-after-later-write pipelines, top level and derived, against real vega (C68). |
+| `ASTER_ORDER_SEEDS` | `packages/conformance/src/signal-order-generated-vs-vega.test.ts` | 40 | Seeds per family of the generated signal-order differential (signals, datasets and scales settle in vega's order). |
 | `ASTER_DIFF_SCALE` | `scaled()` in `packages/conformance/scripts/differential-gen.mts`, used by the generated differentials | 1 | Multiplies every generated case count (a value that is not a positive number counts as 1). |
 | `ASTER_DIFF_TRACE` | `differential-gen.mts`, `differential-scale-gen.test.mts` | unset | A file path: each case's name and label is appended before it runs, so the last line names the case that crashed a worker. |
 | `ASTER_DIFF_MESSAGES` | `differential-d3-interpolate-gen.test.mts`, `differential-scale-gen.test.mts` | unset | Any non-empty value also compares the wording of a `TypeError` (it quotes variables of the library that raised it). |
@@ -230,11 +244,12 @@ substitute; nothing reads it.
 
 | Variable | Script | Default | Effect |
 |---|---|---|---|
-| `SIG_PRINT` | `scripts/browser-signals.mts` (`pnpm conformance:signals`) | unset | Any non-empty value prints vega's final signal values for every case where vega did not error. |
+| `ONLY` | `packages/benchmarks/scripts/probes/discrete-scale-appends.mjs` | unset | `stream` skips the session cases and runs only the `createChartStream` append cases (a node probe, no Chromium). |
+| `--print-vega` (a flag) | `scripts/browser-signals.mts` (`pnpm conformance:signals`) | off | Prints vega's final signal values for every case where vega did not error. |
+| `PICK_DEBUG` | `scripts/browser-signals-pick.mts` (the pointer phase of `pnpm conformance:signals`) | unset | Any non-empty value prints every edge answer and the SVG target of every pointer difference. |
 | `SEL_DEBUG` | `scripts/browser-vl-selections.mts` (`pnpm conformance:selections`) | unset | Any non-empty value logs each case's frame rectangle, pointer targets, the mounted markup and the signals at each step. Verbose: use it with `--filter=`. |
 | `SEL_TRACE` | same | unset | Logs the `grid_translate_anchor`, `grid_translate_delta` and `unit` signals around each drag step. |
 | `SEL_MOD` | same | unset | Wraps vega's `modify` expression function, logs each call (group, dataset, row count before/after) and prints the `modlog` per case. |
-| `SEL_NOFRESH` | same | unset | Skips vega's fresh-render snapshot, so a difference cannot be classified as `retained` and shows as a failure. |
 | `SEL_MAX` | same | 6 | How many problems are printed per failing case. |
 | `SEL_DUMP`, `SEL_DUMP_AT`, `SEL_DUMP_DIR` | same | unset, 0, `<os tmpdir>/aster-vl-selections-dump` | `SEL_DUMP` (any value) writes `sel-vega.svg`, `sel-aster.svg` and `sel-vega-fresh.svg` for step `SEL_DUMP_AT` into `SEL_DUMP_DIR`, which is created if missing; the script prints the directory. Each case overwrites the previous one's files, so combine it with `--filter`. |
 
@@ -242,7 +257,8 @@ substitute; nothing reads it.
 
 | Variable | Read by | Default | Effect |
 |---|---|---|---|
-| `ASTER_BUDGET_IGNORE_SIDE_EFFECTS` | `packages/benchmarks/scripts/budget.mjs` | unset | `1` bundles as if the packages declared no `sideEffects` field. The bundle rows must then FAIL; `scripts/bundle-shaking.test.mjs` uses it to prove the budget watches tree-shaking. |
+| `FAKE_GATE` | `scripts/run-gate.fixture.mjs` (driven by `scripts/run-gate.test.mjs`) | unset | A JSON description of what a stand-in gate reports to `runGate` (counters, cases that agree, differ or error, problems, a crash), so the test can watch each verdict of `runGate` without a browser. |
+| `ASTER_BUDGET_SIDE_EFFECTS` | `packages/benchmarks/scripts/budget.mjs` | unset | `all` bundles as if the packages declared no `sideEffects` field (nothing shakes), `none` as if no module had an effect (a row built on a bare `import '...'` loses it). The rows must then FAIL; `scripts/bundle-shaking.test.mjs` uses both to prove the budget watches tree-shaking. `ASTER_BUDGET_IGNORE_SIDE_EFFECTS=1` is the old name of `all`. |
 | `ASTER_SHAKE_ENV` | `scripts/check-bundle-shaking.mjs` | `{}` | Set by the script itself: the JSON argument its generated runner passes to the bundled pattern module. Do not set it. |
 | `ASTER_VERIFY_PUBLISH_ROOT`, `ASTER_VERIFY_PUBLISH_PACKER` | `scripts/verify-publish.mjs` | the repository root, `pnpm` | Test hooks of `scripts/verify-publish.test.mjs`: a copy of the repository to verify, and the packer (`npm` proves the `workspace:` check bites). |
 | `ASTER_RELEASE_WORKFLOW` | `scripts/release-workflow.test.mjs` | `.github/workflows/release.yml` | The workflow file the guard reads, so a fault-injected copy can be checked. |

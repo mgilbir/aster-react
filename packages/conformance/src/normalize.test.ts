@@ -90,6 +90,23 @@ const PLANTED: Array<[string, string, string]> = [
   ['a shape\'s ARIA vs none', wrap(RECT.replace('<rect', '<rect role="graphics-symbol" aria-label="a: 1"')), wrap(RECT)],
   ['background path of a group item', wrap(`<g><path class="background" aria-hidden="true" d="M0,0h0v0h0Z"/>${RECT}</g>`), wrap(`<g>${RECT}</g>`)],
   ['foreground path of a group item', wrap(`<g>${RECT}<path class="foreground" aria-hidden="true" d="" display="none"/></g>`), wrap(`<g>${RECT}</g>`)],
+  // (C192: the painted boxes are conservative -- an arc reaches up to its ellipse's diameter from its end point, an S / T curve's
+  // implicit control point bulges it, a tspan's own offsets place its line)
+  ['a 270-degree wedge over a rect, swapped', wrap('<path d="M150,100A50,50,0,1,1,100,50L100,100Z" fill="red"/><rect x="60" y="120" width="20" height="20" fill="blue"/>', 200, 200), wrap('<rect x="60" y="120" width="20" height="20" fill="blue"/><path d="M150,100A50,50,0,1,1,100,50L100,100Z" fill="red"/>', 200, 200)],
+  ['an arc whose radii are too small to reach its end (scaled up), swapped', wrap('<path d="M0,100A10,10,0,0,1,100,100Z" fill="red"/><rect x="45" y="55" width="10" height="10" fill="blue"/>', 200, 200), wrap('<rect x="45" y="55" width="10" height="10" fill="blue"/><path d="M0,100A10,10,0,0,1,100,100Z" fill="red"/>', 200, 200)],
+  ['an S curve bulging over a rect, swapped', wrap('<path d="M0,100C0,0,100,0,100,100S200,300,200,100Z" fill="red"/><rect x="140" y="170" width="10" height="10" fill="blue"/>', 200, 200), wrap('<rect x="140" y="170" width="10" height="10" fill="blue"/><path d="M0,100C0,0,100,0,100,100S200,300,200,100Z" fill="red"/>', 200, 200)],
+  ['a T curve bulging over a rect, swapped', wrap('<path d="M0,100Q50,0,100,100T200,100Z" fill="red"/><rect x="140" y="140" width="10" height="10" fill="blue"/>', 200, 200), wrap('<rect x="140" y="140" width="10" height="10" fill="blue"/><path d="M0,100Q50,0,100,100T200,100Z" fill="red"/>', 200, 200)],
+  ['a second line (tspan dy=60) over a rect, swapped', wrap('<text x="20" y="20" fill="#000" font-size="10px" font-family="sans-serif">a<tspan x="20" dy="60">MMMMMMMMMM</tspan></text><rect x="20" y="70" width="60" height="12" fill="blue"/>', 200, 200), wrap('<rect x="20" y="70" width="60" height="12" fill="blue"/><text x="20" y="20" fill="#000" font-size="10px" font-family="sans-serif">a<tspan x="20" dy="60">MMMMMMMMMM</tspan></text>', 200, 200)],
+  ['a tspan placed by its own y over a rect, swapped', wrap('<text x="20" y="20" fill="#000" font-size="10px" font-family="sans-serif">a<tspan x="20" y="150">b</tspan></text><rect x="10" y="140" width="30" height="12" fill="blue"/>', 200, 200), wrap('<rect x="10" y="140" width="30" height="12" fill="blue"/><text x="20" y="20" fill="#000" font-size="10px" font-family="sans-serif">a<tspan x="20" y="150">b</tspan></text>', 200, 200)],
+  // (C206: only space, tab, CR and LF are XML whitespace; a browser does not collapse or trim a no-break or other Unicode space)
+  ...(['\u00a0', '\u202f', '\u2003', '\u3000', '\ufeff'] as const).flatMap((sp): Array<[string, string, string]> => [
+    [`a ${JSON.stringify(sp)} between words is not a space`, wrap(TEXT.replace('>hi<', '>1 000<')), wrap(TEXT.replace('>hi<', `>1${sp}000<`))],
+    [`a run of ${JSON.stringify(sp)} is not one`, wrap(TEXT.replace('>hi<', `>1${sp}000<`)), wrap(TEXT.replace('>hi<', `>1${sp}${sp}${sp}000<`))],
+    [`a leading ${JSON.stringify(sp)} is not trimmed`, wrap(TEXT.replace('>hi<', '>x<')), wrap(TEXT.replace('>hi<', `>${sp}x<`))],
+  ]),
+  ['a no-break space spelt as a character reference is still one', wrap(TEXT.replace('>hi<', '>x<')), wrap(TEXT.replace('>hi<', '>&#160;&#160;x<'))],
+  ['a space and a no-break space', wrap(TEXT.replace('>hi<', '>a b<')), wrap(TEXT.replace('>hi<', '>a\u00a0b<'))],
+  ['a linear part moved by 2e-4 (the 4 decimals of a matrix)', wrap('<rect width="1" height="1" fill="red" transform="scale(1.0002)"/>'), wrap('<rect width="1" height="1" fill="red" transform="scale(1.0004)"/>')],
 ]
 
 describe('canonicalizeSvg bites: every planted difference is reported', () => {
@@ -139,7 +156,14 @@ const EQUIVALENT: Array<[string, string, string]> = [
   ['text em dy vs px', wrap(TEXT.replace('<text', '<text dy="0.5em"')), wrap(TEXT.replace('<text', '<text dy="5"'))],
   ['swapped disjoint rects (paint order cannot matter)', wrap('<rect x="0" y="0" width="10" height="10" fill="red"/><rect x="50" y="0" width="10" height="10" fill="blue"/>'), wrap('<rect x="50" y="0" width="10" height="10" fill="blue"/><rect x="0" y="0" width="10" height="10" fill="red"/>')],
   ['text and a far-away line swap', wrap(`${TEXT}<line x1="0" y1="70" x2="90" y2="70" stroke="#888"/>`), wrap(`<line x1="0" y1="70" x2="90" y2="70" stroke="#888"/>${TEXT}`)],
+  // (C206, the other half: XML whitespace does collapse, however it is spelt)
+  ['a tab, a newline and a run of spaces are one space', wrap(TEXT.replace('>hi<', '>a b<')), wrap(TEXT.replace('>hi<', '>a \t\r\n  b<'))],
+  ['spaces spelt as character references collapse like spaces', wrap(TEXT.replace('>hi<', '>a b<')), wrap(TEXT.replace('>hi<', '>a&#32;&#32;&#x9;b<'))],
+  ['a linear part moved by 2e-5 is rounding', wrap('<rect width="1" height="1" fill="red" transform="scale(1.00002)"/>'), wrap('<rect width="1" height="1" fill="red" transform="scale(1.00004)"/>')],
   ['zero-size butt path', wrap(`<path d="M0,0h0v0h0Z" fill="red"/>${RECT}`), wrap(RECT)],
+  // (the boxes stay tight enough that what cannot overlap still swaps: a small arc and a multi-line text far from a rect)
+  ['a small wedge and a far rect swap', wrap('<path d="M20,20A5,5,0,1,1,15,15L15,20Z" fill="red"/><rect x="80" y="60" width="10" height="10" fill="blue"/>'), wrap('<rect x="80" y="60" width="10" height="10" fill="blue"/><path d="M20,20A5,5,0,1,1,15,15L15,20Z" fill="red"/>')],
+  ['a two-line text and a far rect swap', wrap('<text x="5" y="10" fill="#000" font-size="5px" font-family="sans-serif">a<tspan x="5" dy="6">b</tspan></text><rect x="80" y="60" width="10" height="10" fill="blue"/>'), wrap('<rect x="80" y="60" width="10" height="10" fill="blue"/><text x="5" y="10" fill="#000" font-size="5px" font-family="sans-serif">a<tspan x="5" dy="6">b</tspan></text>')],
 ]
 
 describe('canonicalizeSvg ignores representation-only differences', () => {
@@ -181,5 +205,28 @@ describe('canonicalizeSvg misc contracts', () => {
   it('throws on constructs it cannot judge instead of ignoring them', () => {
     expect(() => canonicalizeSvg(wrap('<foreignObject/>'))).toThrow(/unsupported element/)
     expect(() => canonicalizeSvg(wrap('<rect width="1" height="1" transform="wobble(3)"/>'))).toThrow(/transform/)
+  })
+})
+
+// What "canonical SVG equal" does NOT mean (audit C721): each of these is invisible to the canonicalizer, by design or as an open
+// limit named in normalize.ts's header ("NOT SEEN"). The tests pin that the header is true: if the canonicalizer starts to see
+// one of them, a test here fails and the header (and TESTING.md) must change with it.
+describe('canonicalizeSvg: what it does not see (the header says so)', () => {
+  const same = (a: string, b: string): void => expect(diff(a, b)).toEqual([])
+  const svg = (attrs: string, body = RECT): string => `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="80" ${attrs}>${body}</svg>`
+  it('the ARIA and class of the root <svg>', () => {
+    same(svg('role="graphics-document" aria-roledescription="visualization" aria-label="a" class="marks"'), svg(''))
+  })
+  it('<title>, <desc> and <metadata> content', () => {
+    same(svg('', `<title>one</title><desc>x</desc>${RECT}`), svg('', `<title>two</title><metadata>m</metadata>${RECT}`))
+  })
+  it('pointer-events (the interaction tests gate it)', () => {
+    same(svg('', '<rect width="10" height="10" fill="red" pointer-events="none"/>'), svg('', '<rect width="10" height="10" fill="red"/>'))
+  })
+  it('the class of a shape that carries no role or aria attribute', () => {
+    same(svg('', '<rect class="a" width="10" height="10" fill="red"/>'), svg('', '<rect class="b" width="10" height="10" fill="red"/>'))
+  })
+  it('an offset below the 0.0005 precision', () => {
+    same(svg('', '<rect x="10.0001" width="10" height="10" fill="red"/>'), svg('', '<rect x="10" width="10" height="10" fill="red"/>'))
   })
 })

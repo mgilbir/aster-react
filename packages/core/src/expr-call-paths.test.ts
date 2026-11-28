@@ -79,31 +79,7 @@ describe.each(PATHS)('on %s', (_path, run) => {
     })
   })
 
-  describe('a name inherited from Object.prototype is no function, before any argument is evaluated', () => {
-    it('fails reading `apply` off nothing, whatever the arguments would do', () => {
-      const host = { functions: {} as Record<string, unknown> }
-      for (const name of ['constructor', 'hasOwnProperty', 'valueOf', '__proto__', '__defineGetter__', 'isPrototypeOf']) {
-        for (const args of ['', '1', 'datum.n.x', '1, 2, 3, 4']) {
-          const ast = parseExpression(`${name}(${args})`)
-          const got = thrown(() => expressionInterpreter.parameter(host, { ast })({ n: null }, {}))
-          expect(got, `${name}(${args})`).toBe("TypeError: Cannot read properties of undefined (reading 'apply')")
-        }
-      }
-    })
-  })
-
   describe('the function a call resolves to is read on every call', () => {
-    it('a table entry replaced after the call was compiled is called, as a host function with its `this`', () => {
-      const functions: Record<string, unknown> = {}
-      const ast = parseExpression('abs(-2)')
-      const evaluate = expressionInterpreter.parameter({ functions }, { ast })
-      expect(evaluate({}, {})).toBe(2) // the default table's own `abs`
-      functions.abs = function (this: Record<string, unknown>, v: number) { return [v, typeof this.view, typeof this.abs] }
-      expect(evaluate({}, {})).toEqual([-2, 'function', 'function'])
-      delete functions.abs
-      expect(evaluate({}, {})).toBe(2)
-    })
-
     it('a registered function receives `this` (the function table and the event functions); a built-in is called directly', () => {
       const seen: unknown[] = []
       const dispose = registerExpressionFunction('probeThis', function (this: Record<string, unknown>, ...args: unknown[]) {
@@ -119,23 +95,10 @@ describe.each(PATHS)('on %s', (_path, run) => {
       }
     })
 
-    it('a runtime\'s function table follows the registry: a function registered or disposed after it was made is seen by the next compile', () => {
-      const runtime = { ...rt }
-      expect(compileExpr('abs(-1)', runtime as never)({}, {})).toBe(1) // the runtime's table is made here
-      expect(() => compileExpr('lateFn(1)', runtime as never)).toThrow('Unrecognized function: lateFn')
-      const dispose = registerExpressionFunction('lateFn', (v: unknown) => `late ${String(v)}`)
-      try {
-        expect(compileExpr('lateFn(1)', runtime as never)({}, {})).toBe('late 1')
-      } finally {
-        dispose()
-      }
-      expect(() => compileExpr('lateFn(2)', runtime as never)).toThrow('Unrecognized function: lateFn')
-    })
-
     it('a built-in is handed exactly the arguments the call has (arity is observable through `arguments.length`)', () => {
       const scale = Object.assign((v: unknown) => `s(${String(v)})`, { domain: () => [0, 1] })
       const withScale = { ...rt, scale: (name: string) => (name === 'x' ? scale : undefined) }
-      const ev = (src: string): unknown => compileExpr(src, withScale as never)({}, {})
+      const ev = (src: string): unknown => run(src, {}, {}, withScale as never)
       // `scale(name)` gives the scale itself; `scale(name, undefined)` applies it to undefined
       expect(typeof ev('scale("x")')).toBe('function')
       expect(ev('scale("x", datum.missing)')).toBe('s(undefined)')
@@ -181,18 +144,60 @@ describe.each(PATHS)('on %s', (_path, run) => {
     it('a literal key naming an Object.prototype member keeps the guarded read; any other literal key reads as the named form does', () => {
       const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
       const datum = { list: [1, 2], f: Function, o: { a: 1 } }
-      // `datum.f` holds Function: neither form produces it
-      expect(run('datum["f"]', datum)).toBeUndefined()
-      expect(run('datum.f', datum)).toBeUndefined()
-      expect(errors).toHaveBeenCalledTimes(2)
-      // a function's risky key is never resolved; an array's is the plain read (vega-interpreter's), one hop short of Function
-      expect(run('datum.list["constructor"]["constructor"]', datum)).toBeUndefined()
-      expect(run('datum.list.constructor.constructor', datum)).toBeUndefined()
+      // `datum.f` holds Function: neither form produces it, and the refusal is an error of the evaluation (reported through the
+      // engine's logger as any expression error), never a console write that bypasses it (C707)
+      expect(thrown(() => run('datum["f"]', datum))).toMatch(/Prevented interpretation of member "f"/)
+      expect(thrown(() => run('datum.f', datum))).toMatch(/Prevented interpretation of member "f"/)
+      // a risky key resolves only as an own property (C384): an array's inherited `constructor` is not read, nor anything past it
+      expect(run('datum.list["constructor"]', datum)).toBeUndefined()
+      expect(run('datum.list.constructor', datum)).toBeUndefined()
+      expect(thrown(() => run('datum.list.constructor.constructor', datum))).toBe("TypeError: Cannot read properties of undefined (reading 'constructor')")
       expect(run('datum["o"]["a"] + datum.list[1] + datum.list["1"]', datum)).toBe(5)
-      // (the guarded read of a risky key resolves nothing, so it has nothing to report: only the two reads of Function above logged)
-      expect(errors).toHaveBeenCalledTimes(2)
+      expect(errors).not.toHaveBeenCalled()
       expect(thrown(() => run('datum.n["x"]', {}))).toBe("TypeError: Cannot read properties of undefined (reading 'x')")
       expect(thrown(() => run('datum.n[0]', {}))).toBe("TypeError: Cannot read properties of undefined (reading '0')")
+    })
+  })
+})
+
+// These build their own host (a function table, a runtime) and read the interpreter through it: there is one path to check, not two.
+describe('how a call finds its function (the interpreter\'s own table and a runtime\'s, one path each)', () => {
+  describe('a name inherited from Object.prototype is no function, before any argument is evaluated', () => {
+    it('fails reading `apply` off nothing, whatever the arguments would do', () => {
+      const host = { functions: {} as Record<string, unknown> }
+      for (const name of ['constructor', 'hasOwnProperty', 'valueOf', '__proto__', '__defineGetter__', 'isPrototypeOf']) {
+        for (const args of ['', '1', 'datum.n.x', '1, 2, 3, 4']) {
+          const ast = parseExpression(`${name}(${args})`)
+          const got = thrown(() => expressionInterpreter.parameter(host, { ast })({ n: null }, {}))
+          expect(got, `${name}(${args})`).toBe("TypeError: Cannot read properties of undefined (reading 'apply')")
+        }
+      }
+    })
+  })
+
+  describe('the function a call resolves to is read on every call', () => {
+    it('a table entry replaced after the call was compiled is called, as a host function with its `this`', () => {
+      const functions: Record<string, unknown> = {}
+      const ast = parseExpression('abs(-2)')
+      const evaluate = expressionInterpreter.parameter({ functions }, { ast })
+      expect(evaluate({}, {})).toBe(2) // the default table's own `abs`
+      functions.abs = function (this: Record<string, unknown>, v: number) { return [v, typeof this.view, typeof this.abs] }
+      expect(evaluate({}, {})).toEqual([-2, 'function', 'function'])
+      delete functions.abs
+      expect(evaluate({}, {})).toBe(2)
+    })
+
+    it('a runtime\'s function table follows the registry: a function registered or disposed after it was made is seen by the next compile', () => {
+      const runtime = { ...rt }
+      expect(compileExpr('abs(-1)', runtime as never)({}, {})).toBe(1) // the runtime's table is made here
+      expect(() => compileExpr('lateFn(1)', runtime as never)).toThrow('Unrecognized function: lateFn')
+      const dispose = registerExpressionFunction('lateFn', (v: unknown) => `late ${String(v)}`)
+      try {
+        expect(compileExpr('lateFn(1)', runtime as never)({}, {})).toBe('late 1')
+      } finally {
+        dispose()
+      }
+      expect(() => compileExpr('lateFn(2)', runtime as never)).toThrow('Unrecognized function: lateFn')
     })
   })
 })

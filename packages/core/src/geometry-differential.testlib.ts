@@ -1,37 +1,53 @@
 /**
- * Test-only (excluded from the published build): the old implementation (the `legacy-*.testlib.ts` copies of stack/3-expr, the base this lands on) against
- * the current one, consumer by consumer, over one scene. Every consumer of mark geometry is compared on the SAME scene object, so
- * a hit result can be compared by item identity:
+ * Test-only (excluded from the published build): what the renderers keep on a scene between draws, checked for NEUTRALITY. A scene
+ * that was drawn before holds what the renderers cached on it (a mark's generated geometry, a descriptor per item, the hit index's
+ * runs); `coldCopy` is the same scene with none of it (a copy of every object, so every cache keyed by an object starts empty). Each
+ * consumer is run on the scene and on its cold copy, consumer by consumer:
  *  - the SVG string (`renderSceneToSvg`), byte for byte;
  *  - the DOM descriptor tree (`sceneToDomDesc`, per item and dense-batched);
  *  - the canvas: every call and every property write on the context, numbers compared with `Object.is` (so -0 and NaN count),
  *    batched and unbatched, at dpr 1 and 2;
- *  - the hit index: `query`, `queryMark`, `pick` and `tooltip` at every probe point (grid and linear mode), each target's item,
- *    marktype, kind and fromData, and `size`;
- *  - bounds: `boundTypedMark` of every mark and `boundLeaf` of every item (both miter settings), bit for bit;
- *  - `sceneIntersect` over probe boxes; the label transform's painter (`drawMark`) as a call log.
+ *  - the canvas append path.
+ * This says that a cache never changes what is drawn. It says nothing about whether what is drawn is right: that is the renderers
+ * against vega (packages/conformance/src/render-updates-vs-vega.test.ts: generated specs and their incremental updates, SVG, DOM and
+ * canvas; the corpus gates; geometry-vs-vega.test.ts and `pnpm conformance:geometry` for bounds, the pick and `intersect()`).
+ * There is no second implementation here: a copy of the renderers that follows the fixes proves only that a refactor changed nothing.
  */
 import type { SceneGroup, SceneItem, SceneRoot } from './types.js'
 import { renderSceneToSvg } from './render.js'
-import { renderSceneToSvg as legacySvg } from './legacy-render.testlib.js'
 import { sceneToDomDesc, type DomRenderOptions } from './dom.js'
-import { sceneToDomDesc as legacyDomDesc } from './legacy-dom.testlib.js'
 import { renderSceneToCanvas, renderSceneToCanvasAppend, snapshotCanvasScene, type CanvasLike, type RenderCanvasOptions } from './canvas.js'
-import {
-  renderSceneToCanvas as legacyCanvas,
-  renderSceneToCanvasAppend as legacyCanvasAppend,
-  snapshotCanvasScene as legacySnapshot,
-} from './legacy-canvas.testlib.js'
-import { buildHitIndex, type HitTarget } from './hit.js'
-import { buildHitIndex as legacyHitIndex } from './legacy-hit.testlib.js'
-import { Bounds, boundLeaf, boundTypedMark } from './bounds.js'
-import { Bounds as LegacyBounds, boundLeaf as legacyBoundLeaf, boundTypedMark as legacyBoundTypedMark } from './legacy-bounds.testlib.js'
-import { sceneIntersect } from './scene-intersect.js'
-import { sceneIntersect as legacyIntersect } from './legacy-scene-intersect.testlib.js'
-import { drawMark } from './label-draw.js'
-import { drawMark as legacyDrawMark } from './legacy-label-draw.testlib.js'
-import './legacy-guide-caption.testlib.js'
 import './guide-caption.js'
+
+/** A descriptor tree as text, without the patcher's `clean` flags (bookkeeping about the scene's last draw, not part of what is drawn). */
+export const descText = (d: unknown): string => JSON.stringify(d, (k, v) => (k === 'clean' ? undefined : v))
+
+/**
+ * A copy of `v` that shares no object with it that a renderer could have cached something on: every plain object and array is copied
+ * (own properties, enumerable or not, as the descriptor says; cycles kept), what is not plain (a Map, a Set, a Date, a typed array, a
+ * function) is shared, being read-only data or code.
+ */
+export function coldCopy<T>(v: T, seen: Map<object, unknown> = new Map()): T {
+  if (v === null || typeof v !== 'object') return v
+  const done = seen.get(v)
+  if (done !== undefined) return done as T
+  if (Array.isArray(v)) {
+    const out: unknown[] = []
+    seen.set(v, out)
+    for (const x of v) out.push(coldCopy(x, seen))
+    return out as T
+  }
+  const proto = Object.getPrototypeOf(v) as object | null
+  if (proto !== Object.prototype && proto !== null) return v
+  const out = Object.create(proto) as Record<PropertyKey, unknown>
+  seen.set(v, out)
+  for (const k of Reflect.ownKeys(v)) {
+    const d = Object.getOwnPropertyDescriptor(v, k)!
+    if ('value' in d) d.value = coldCopy(d.value, seen)
+    Object.defineProperty(out, k, d)
+  }
+  return out as T
+}
 
 type Rnd = () => number
 
@@ -84,11 +100,9 @@ export interface Diff { consumer: string; detail: string }
 
 function firstDiff(a: readonly string[], b: readonly string[]): string | null {
   const n = Math.max(a.length, b.length)
-  for (let i = 0; i < n; i++) if (a[i] !== b[i]) return `#${i}: old ${a[i]} / new ${b[i]} (lengths ${a.length} / ${b.length})`
+  for (let i = 0; i < n; i++) if (a[i] !== b[i]) return `#${i}: warm ${a[i]} / cold ${b[i]} (lengths ${a.length} / ${b.length})`
   return null
 }
-
-const targetText = (t: HitTarget | null, ids: Map<object, number>): string => (t === null ? 'null' : `${t.marktype}:${t.kind}:${t.fromData}:${argText(t.item, ids)}`)
 
 /** Every mark container of the scene (a group whose items are mark items), with the offset of its frame. */
 export function marksOf(scene: SceneRoot): Array<{ mark: SceneGroup; x: number; y: number }> {
@@ -102,8 +116,6 @@ export function marksOf(scene: SceneRoot): Array<{ mark: SceneGroup; x: number; 
   for (const g of scene.items ?? []) walk(g, 0, 0)
   return out
 }
-
-const boxText = (b: { x1: number; y1: number; x2: number; y2: number }): string => [b.x1, b.y1, b.x2, b.y2].map(numText).join(',')
 
 /** Probe points: a random spread over the view and around every item's position (on it, and just off it). */
 export function probePoints(scene: SceneRoot, r: Rnd, random = 40, max = 160): Array<[number, number]> {
@@ -146,81 +158,41 @@ export function probePoints(scene: SceneRoot, r: Rnd, random = 40, max = 160): A
   return out
 }
 
-/** Compares every consumer, old vs new, on `scene`; returns the differences (empty: identical). */
-export function diffScene(scene: SceneRoot, r: Rnd, opts: { label?: string; dom?: boolean; canvas?: boolean; hit?: boolean; bounds?: boolean; intersect?: boolean; label2?: boolean } = {}): Diff[] {
+/** Compares the SVG, DOM and canvas renderers on `scene` with what they make of its cold copy; returns the differences (empty: neutral). */
+export function diffScene(scene: SceneRoot, opts: { dom?: boolean; canvas?: boolean } = {}): Diff[] {
   const diffs: Diff[] = []
-  const tryBoth = <T,>(consumer: string, oldFn: () => T, newFn: () => T, eq: (a: T, b: T) => string | null): void => {
+  const cold = coldCopy(scene)
+  const tryBoth = <T,>(consumer: string, warmFn: (s: SceneRoot) => T, eq: (a: T, b: T) => string | null): void => {
     let a: T | Error
     let b: T | Error
-    try { a = oldFn() } catch (e) { a = e as Error }
-    try { b = newFn() } catch (e) { b = e as Error }
+    try { a = warmFn(scene) } catch (e) { a = e as Error }
+    try { b = warmFn(cold) } catch (e) { b = e as Error }
     if (a instanceof Error || b instanceof Error) {
       const am = a instanceof Error ? `throws ${a.message}` : 'returns'
       const bm = b instanceof Error ? `throws ${b.message}` : 'returns'
-      if (am !== bm) diffs.push({ consumer, detail: `old ${am} / new ${bm}` })
+      if (am !== bm) diffs.push({ consumer, detail: `warm ${am} / cold ${bm}` })
       return
     }
     const d = eq(a, b)
     if (d !== null) diffs.push({ consumer, detail: d })
   }
-  tryBoth('svg', () => legacySvg(scene), () => renderSceneToSvg(scene), (a, b) => (a === b ? null : firstDiff([a], [b])))
+  tryBoth('svg', (s) => renderSceneToSvg(s), (a, b) => (a === b ? null : firstDiff([a], [b])))
   if (opts.dom !== false) {
     for (const o of [{}, { denseMarks: true, denseChunkSize: 40 }] as DomRenderOptions[]) {
-      tryBoth(`dom${o.denseMarks ? '-dense' : ''}`, () => JSON.stringify(legacyDomDesc(scene, o)), () => JSON.stringify(sceneToDomDesc(scene, o)), (a, b) => (a === b ? null : firstDiff([a], [b])))
+      tryBoth(`dom${o.denseMarks ? '-dense' : ''}`, (s) => descText(sceneToDomDesc(s, o)), (a, b) => (a === b ? null : firstDiff([a], [b])))
     }
   }
   if (opts.canvas !== false) {
     for (const o of [{}, { batchSymbols: false }, { dpr: 2 }] as RenderCanvasOptions[]) {
-      tryBoth(`canvas${JSON.stringify(o)}`, () => canvasLog((c) => legacyCanvas(scene, c, o)), () => canvasLog((c) => renderSceneToCanvas(scene, c, o)), firstDiff)
+      tryBoth(`canvas${JSON.stringify(o)}`, (s) => canvasLog((c) => renderSceneToCanvas(s, c, o)), firstDiff)
     }
-  }
-  if (opts.hit !== false) {
-    const pts = probePoints(scene, r)
-    for (const cell of [undefined, 1e9]) {
-      tryBoth(`hit${cell ? '-linear' : ''}`, () => {
-        const ids = new Map<object, number>()
-        const ix = legacyHitIndex(scene, cell)
-        return [`size ${ix.size()}`, ...pts.flatMap(([x, y]) => [targetText(ix.query(x, y), ids), targetText(ix.queryMark(x, y), ids), targetText(ix.pick(x, y), ids), targetText(ix.tooltip(x, y), ids)])]
-      }, () => {
-        const ids = new Map<object, number>()
-        const ix = buildHitIndex(scene, cell)
-        return [`size ${ix.size()}`, ...pts.flatMap(([x, y]) => [targetText(ix.query(x, y), ids), targetText(ix.queryMark(x, y), ids), targetText(ix.pick(x, y), ids), targetText(ix.tooltip(x, y), ids)])]
-      }, firstDiff)
-    }
-  }
-  if (opts.bounds !== false) {
-    tryBoth('bounds', () => marksOf(scene).flatMap(({ mark }) => [
-      boxText(legacyBoundTypedMark(new LegacyBounds(), mark)),
-      boxText(legacyBoundTypedMark(new LegacyBounds(), mark, true)),
-      ...(mark.items ?? []).flatMap((it) => [boxText(legacyBoundLeaf(new LegacyBounds(), it as SceneItem)), boxText(legacyBoundLeaf(new LegacyBounds(), it as SceneItem, true))]),
-    ]), () => marksOf(scene).flatMap(({ mark }) => [
-      boxText(boundTypedMark(new Bounds(), mark)),
-      boxText(boundTypedMark(new Bounds(), mark, true)),
-      ...(mark.items ?? []).flatMap((it) => [boxText(boundLeaf(new Bounds(), it as SceneItem)), boxText(boundLeaf(new Bounds(), it as SceneItem, true))]),
-    ]), firstDiff)
-  }
-  if (opts.intersect !== false) {
-    const W = scene.plotWidth ?? scene.width ?? 200
-    const H = scene.plotHeight ?? scene.height ?? 200
-    const boxes: number[][][] = []
-    for (let i = 0; i < 6; i++) {
-      const x = r() * W, y = r() * H
-      boxes.push([[x, y], [x + r() * W * 0.6, y + r() * H * 0.6]])
-    }
-    const ids = new Map<object, number>()
-    tryBoth('intersect', () => boxes.map((b) => legacyIntersect(scene, b, null, null).map((it) => argText(it, ids)).join(' ')), () => boxes.map((b) => sceneIntersect(scene, b, null, null).map((it) => argText(it, ids)).join(' ')), firstDiff)
-  }
-  if (opts.label2 !== false) {
-    tryBoth('label-draw', () => marksOf(scene).flatMap(({ mark }) => { const { ctx, log } = loggingContext(); legacyDrawMark(mark, ctx as never); return log }),
-      () => marksOf(scene).flatMap(({ mark }) => { const { ctx, log } = loggingContext(); drawMark(mark, ctx as never); return log }), firstDiff)
   }
   return diffs
 }
 
-/** The canvas append path, old vs new: `prev` painted, then `next` appended on top (or refused). */
+/** The canvas append path on `prev` and `next` and on their cold copies: `prev` painted, then `next` appended on top (or refused). */
 export function diffAppend(prev: SceneRoot, next: SceneRoot): Diff[] {
-  const a = canvasLog((c) => { c.save(); const ok = legacyCanvasAppend(legacySnapshot(prev), next, c); c.restore(); if (!ok) c.restore() })
-  const b = canvasLog((c) => { c.save(); const ok = renderSceneToCanvasAppend(snapshotCanvasScene(prev), next, c); c.restore(); if (!ok) c.restore() })
-  const d = firstDiff(a, b)
+  const append = (p: SceneRoot, n: SceneRoot): string[] => canvasLog((c) => { c.save(); const ok = renderSceneToCanvasAppend(snapshotCanvasScene(p), n, c); c.restore(); if (!ok) c.restore() })
+  const d = firstDiff(append(prev, next), append(coldCopy(prev), coldCopy(next)))
   return d === null ? [] : [{ consumer: 'canvas-append', detail: d }]
 }

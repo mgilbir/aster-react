@@ -20,7 +20,7 @@ type Spec = Record<string, unknown>
 
 async function oracle(spec: Spec): Promise<string> {
   const view = new (vega as unknown as { View: new (rt: unknown, o: unknown) => { runAsync(): Promise<void>; toSVG(): Promise<string>; finalize(): void } }).View(
-    vega.parse(spec as never), { renderer: 'none', logLevel: 0 })
+    vega.parse(structuredClone(spec) as never), { renderer: 'none', logLevel: 0 })
   try {
     await view.runAsync()
     return await view.toSVG()
@@ -86,9 +86,7 @@ describe('guides and titles have the structure and ARIA vega writes', () => {
       // the oracle really has the guide: the comparison below is not an empty one
       for (const re of expected) expect(want.structure.some((l) => re.test(l.trim())), `${re} is in vega's structure`).toBe(true)
       const got = asterSvgs(spec)
-      // (the discrete legend's own label format and width differ from vega's, a separate defect: only its structure is held here)
-      const only = name.startsWith('discrete')
-      const judged = (g: string): string[] => diffCanonical(want, canonicalizeSvg(g)).filter((d) => !only || d.startsWith('structure:'))
+      const judged = (g: string): string[] => diffCanonical(want, canonicalizeSvg(g))
       expect(judged(got.string), 'string renderer').toEqual([])
       expect(judged(got.dom), 'DOM path').toEqual([])
     })

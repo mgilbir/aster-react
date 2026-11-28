@@ -8,11 +8,15 @@ import { forEachVariant } from './testing/variants'
 
 // The matrix runs every test below on <Chart>, <SvgChart> and <SvgChart interaction={interaction}>;
 // `Chart` is the variant's component (see testing/variants.tsx).
+/** The URL policy every network load needs: a module-level function, so the Suspense resource key is stable across renders. */
+const allow = (u: URL): boolean => u.origin === 'https://example.com'
+
 forEachVariant(['svg'], (Chart, variant) => {
+  // (each variant loads its own url: useSpecData's cache is module-wide, and equal inputs share one load)
   const urlSpec = {
     $schema: 'https://vega.github.io/schema/vega/v6.json',
     width: 200, height: 100, padding: 0, autosize: 'none',
-    data: [{ name: 't', url: 'https://example.test/data.csv', format: { type: 'csv' } }],
+    data: [{ name: 't', url: `https://example.com/data-${variant.name}.csv`, format: { type: 'csv' } }],
     scales: [
       { name: 'x', type: 'linear', domain: { data: 't', field: 'x' }, range: 'width' },
       { name: 'y', type: 'linear', domain: { data: 't', field: 'y' }, range: 'height' },
@@ -38,7 +42,7 @@ forEachVariant(['svg'], (Chart, variant) => {
     it('suspends, loads URL data through the load addon, then renders', async () => {
       const fetchImpl = fetchText('x,y\n0,1\n1,2\n2,3\n')
       function App() {
-        const loaded = useSpecData(urlSpec, { fetch: fetchImpl })
+        const loaded = useSpecData(urlSpec, { fetch: fetchImpl, allow })
         const rows = (loaded.data as Array<{ values?: unknown[] }>)[0]!.values!
         return <div data-testid="app" data-rows={rows.length}><Chart spec={loaded} width={200} height={100} a11y={false} /></div>
       }

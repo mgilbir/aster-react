@@ -22,12 +22,14 @@
 // where the code is densest (a guide is a layout, a text measurement and half a dozen marks), a
 // projection is a formula and a clipping rule whose difference is invisible until it is drawn, a
 // config is the same property table reached by a different piece of code, and the last two are the
-// widest declared surface there is: sixty channels, most of which no chart in any corpus sets. A
+// widest declared surface there is: sixty-nine channels, most of which no chart in any corpus sets. A
 // property is swept when the schema says enough to choose values honestly:
 //
 //   * an **enum**, including one inside a `oneOf` beside a signal reference: every word it lists;
 //   * a **boolean**: both;
 //   * a **number**: a small fixed set, since the schema does not say what a sensible one is;
+//   * a property that is several of these (`tickCount`: interval words or a number; `labelOverlap`: words or a boolean): the
+//     values of every such branch together;
 //   * a **number array** of a stated length: one plausible tuple.
 //
 // Anything else is skipped and *counted*: a free string (there is no honest value to choose), an
@@ -373,7 +375,6 @@ const MARK_BASES = {
   }),
 };
 
-/** Where each family's property is written into the base chart. */
 /**
  * Every projection upstream registers, read from its own registry table.
  *
@@ -756,6 +757,7 @@ const CONFIG_BLOCKS = {
   ),
 };
 
+/** Where each family's property is written into the base chart. */
 function buildFamilies() {
   return {
   // The **bottom** axis, which is the one with a band scale under it: half of what an axis property
@@ -876,7 +878,7 @@ function buildFamilies() {
   mark: (spec, property, value) => {
     spec.marks[0][property] = value;
   },
-  // An **encode channel**, written into the mark's `enter` block as a literal value. Sixty of them
+  // An **encode channel**, written into the mark's `enter` block as a literal value. Sixty-nine of them
   // are declared and a bar chart reads perhaps eight, so this is the widest gap between what the
   // schema says and what any corpus exercises.
   //
@@ -933,10 +935,8 @@ const SHARED_SKIP = {
   interactive: 'no pointer in a static render',
   format: 'a format specifier, which the schema does not enumerate',
   formatType: 'meaningless without a matching format',
-  text: 'the title text itself',
   subtitle: 'the subtitle text itself',
   scheme: 'a scheme name, swept through range instead',
-  reverse: 'covered by the boolean sweep of the scale family',
   bins: 'needs bin boundaries of its own',
   init: 'an initial value for an interactive scale',
   on: 'event handlers, which a static render never fires',
@@ -976,10 +976,6 @@ const FREE_STRINGS = {
   labelFontStyle: 'concatenated into the CSS font string verbatim; see `fontStyle`',
   titleFontStyle: 'concatenated into the CSS font string verbatim; see `fontStyle`',
   subtitleFontStyle: 'concatenated into the CSS font string verbatim; see `fontStyle`',
-  cursor: 'a CSS cursor name, emitted verbatim; no pointer in a static render reads it',
-  ariaRole: 'an ARIA role, emitted verbatim',
-  ariaRoleDescription: 'an ARIA role description, emitted verbatim',
-  description: 'prose, emitted verbatim',
   title: 'the guide title itself, which is text rather than a setting',
   ellipsis: "the string a truncated label ends with; `item.ellipsis || '…'` accepts any",
   lineBreak: 'the separator `text.split(item.lineBreak)` uses; any string is one',
@@ -1030,6 +1026,9 @@ const FAMILY_SKIP = {
     // It wants a colour-ranged base of its own, which is its own change.
     interpolate: 'the space a range interpolates through, which needs a range that has one',
   },
+  title: {
+    text: 'the title text itself',
+  },
   projection: {
     name: 'names the projection every mark and transform here refers to',
     // The family *is* the type: `projection-mercator` sets it, and sweeping it as a property would
@@ -1040,7 +1039,9 @@ const FAMILY_SKIP = {
     // a map is most obviously wrong about.
     scale: null,
   },
+  // (the shared `type` is a scale's; a legend's is `gradient` or `symbol`, which the schema enumerates)
   legend: {
+    type: null,
     fill: 'names the scale a legend describes',
     stroke: 'names the scale a legend describes',
     size: 'names the scale a legend describes',
@@ -1050,6 +1051,18 @@ const FAMILY_SKIP = {
     strokeWidth: 'names the scale a legend describes',
   },
 };
+
+/**
+ * The top-level properties, which the schema states in an `allOf` beside a `$ref` to a scope.
+ *
+ * `width`, `height`, `padding`, `autosize`, `background`, `style` and `description` — everything a
+ * specification says about the drawing as a whole rather than about anything in it.
+ */
+function viewProperties() {
+  const block = schema.allOf.find((branch) => branch.properties);
+  const { $schema: _ignored, config: _alsoIgnored, ...rest } = block.properties;
+  return rest;
+}
 
 /**
  * The properties a family declares, dug out of however the schema spells that family.
@@ -1064,18 +1077,6 @@ const FAMILY_SKIP = {
  * band branch has never heard of it. Nine properties were reachable through no family at all until
  * the scale types got one each.
  */
-/**
- * The top-level properties, which the schema states in an `allOf` beside a `$ref` to a scope.
- *
- * `width`, `height`, `padding`, `autosize`, `background`, `style` and `description` — everything a
- * specification says about the drawing as a whole rather than about anything in it.
- */
-function viewProperties() {
-  const block = schema.allOf.find((branch) => branch.properties);
-  const { $schema: _ignored, config: _alsoIgnored, ...rest } = block.properties;
-  return rest;
-}
-
 function propertiesOf(family) {
   if (family === 'view') return viewProperties();
   // A range name is a *key*, not a declared property: the schema has no word for any of them, so
@@ -1209,6 +1210,12 @@ function buildVocabulary() {
   // `item.dir === 'rtl'` in `vega-scenegraph/src/util/text.js`, which is a two-valued test: a
   // right-to-left run is laid out from the other end, and every other string means left-to-right.
   dir: ['ltr', 'rtl'],
+  // Written into the SVG verbatim, and the comparison reads them: the ARIA attributes are the accessibility structure the
+  // canonicalizer compares (N-structure), and a mark's cursor is its style. One honest value each.
+  description: ['A described item'],
+  ariaRole: ['img'],
+  ariaRoleDescription: ['a picture'],
+  cursor: ['pointer'],
 };
 
 /** `symbolType` is a legend's word for the same twelve names. */
@@ -1230,6 +1237,9 @@ const VOCABULARY_ALIAS = {
   tickCap: 'strokeCap',
 };
 
+/** The one colour tried where the schema says a colour, chosen to be unlike every default. */
+const COLOUR = '#b35a1f';
+
 /**
  * Values that belong to **one family**, where the schema declares a shape rather than a number.
  *
@@ -1246,9 +1256,6 @@ const VOCABULARY_ALIAS = {
  * setting a scale and a translation the composite ignores, and drew at its unfitted default. Left to
  * the array rule it was offered `[4, 2]`, which is not geometry at all.
  */
-/** The one colour tried where the schema says a colour, chosen to be unlike every default. */
-const COLOUR = '#b35a1f';
-
 const FAMILY_VOCABULARY = {
   // A range is set three ways and all three are ordinary: a **scheme** by name, the colours written
   // **out**, and — for a diverging one — a scheme with an `extent` that reads part of it or turns
@@ -1369,7 +1376,7 @@ function branchesOf(fragment, depth = 0) {
   if (nested) return nested.flatMap((branch) => branchesOf(branch, depth + 1));
   // An **encoder value**, which is where a channel's own enumeration lives: a channel is declared
   // as `{"value": {"enum": […]}}` rather than as the enum itself, because a channel may equally be
-  // a field, a scale lookup or a signal. Following the `value` property is what makes the sixty
+  // a field, a scale lookup or a signal. Following the `value` property is what makes the sixty-nine
   // encode channels reachable at all; without it every one of them read as unenumerable.
   if (fragment.properties && fragment.properties.value) {
     return branchesOf(fragment.properties.value, depth + 1);
@@ -1404,23 +1411,59 @@ function valuesFor(fragment, property, family) {
   return null;
 }
 
+/**
+ * The values every enumerable branch of a schema fragment declares, together: every word of every enum branch, the booleans
+ * of a boolean branch, the numbers of a number branch (`tickCount` is interval words AND numbers, `labelOverlap` words AND
+ * booleans). Empty when no branch is enumerable. Shared by both schema sweeps.
+ */
+export function enumerableUnion(branches, numbers) {
+  const values = [];
+  const kinds = [];
+  const seen = new Set();
+  const add = (kind, list) => {
+    let any = false;
+    for (const v of list) {
+      // `null` is in several of these enumerations as "unset", which is what leaving the property out already tests.
+      if (v === null) continue;
+      const key = JSON.stringify(v);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      values.push(v);
+      any = true;
+    }
+    if (any && !kinds.includes(kind)) kinds.push(kind);
+  };
+  const types = (branch) => (Array.isArray(branch.type) ? branch.type : [branch.type]);
+  for (const branch of branches) if (branch.enum) add('enum', branch.enum);
+  for (const branch of branches) if (types(branch).includes('boolean')) add('boolean', [true, false]);
+  // (`numbers` is a list, or a function of the branch that says which numbers it can take)
+  for (const branch of branches) if (types(branch).includes('number') || types(branch).includes('integer')) add('number', typeof numbers === 'function' ? numbers(branch) : numbers);
+  return { kind: kinds.join('+'), values };
+}
+
+/**
+ * A case name no earlier case has: the base name, else the base name with the next free number. The count is kept on the BASE
+ * name and the loop runs until the name is free, so a third value that slugs alike gets `-3` (and a base name that is itself
+ * `x-2` cannot collide with the second `x`).
+ */
+export function uniqueName(used, base) {
+  if (!used.has(base)) {
+    used.set(base, 1);
+    return base;
+  }
+  let n = used.get(base);
+  let name;
+  do name = `${base}-${++n}`; while (used.has(name));
+  used.set(base, n);
+  used.set(name, 1);
+  return name;
+}
+
 /** Collects the candidate values a schema fragment declares, or null where there are none. */
 function declaredValues(fragment) {
   const branches = branchesOf(fragment);
-  for (const branch of branches) {
-    // `null` is in several of these enumerations as "unset", which is what leaving the property out
-    // already tests.
-    if (branch.enum) {
-      const values = branch.enum.filter((v) => v !== null);
-      if (values.length) return { kind: 'enum', values };
-    }
-  }
-  for (const branch of branches) {
-    if (branch.type === 'boolean') return { kind: 'boolean', values: [true, false] };
-  }
-  for (const branch of branches) {
-    if (branch.type === 'number') return { kind: 'number', values: NUMBERS };
-  }
+  const union = enumerableUnion(branches, NUMBERS);
+  if (union.values.length) return union;
   // A colour is named by the definition it references rather than by the property's name, so this
   // stays schema-driven: `titleColor` is `oneOf [null, string, colorValue]`, and the bare `string`
   // branch on its own would be skipped as a free string.
@@ -1467,6 +1510,87 @@ function init(ctx) {
   FAMILIES = buildFamilies();
 }
 
+/**
+ * The FORMS an encode channel is written in, and the structural channels the schema sweep reaches only as one literal value
+ * (audit C74). The schema loop above writes every channel as `{value}` in `enter`, so a per-item `zindex` was the same on every
+ * item, a colour was always a string, a mark's `key` and `sort` were skipped, and a mark `zindex` was only set on the top-level
+ * mark. Each case here gives the items DIFFERING rows (overlapping marks, so the order they are painted in shows) and writes one
+ * channel in one form: `{field}`, `{signal}`, `{color: {r,g,b}}` (and h/s/l, h/c/l, l/a/b), `{gradient}`, a `key` with duplicate
+ * keys, a `zindex` on marks nested in a group (both orders, and a tie), a text drawn from a mark that has a `sort`.
+ */
+const FORM_ROWS = [
+  { k: 'a', x: 40, y: 40, z: 2, v: 1 },
+  { k: 'b', x: 62, y: 50, z: -1, v: 2 },
+  { k: 'a', x: 84, y: 60, z: 0, v: 3 },
+  { k: 'c', x: 52, y: 72, z: 1, v: 4 },
+];
+
+function formChart(marks, scales = []) {
+  return {
+    width: 160,
+    height: 110,
+    padding: 5,
+    autosize: 'none',
+    background: 'white',
+    data: [{ name: 'f', values: FORM_ROWS.map((r) => ({ ...r })) }],
+    scales: [
+      { name: 'col', type: 'ordinal', domain: ['a', 'b', 'c'], range: ['#d62728', '#1f77b4', '#2ca02c'] },
+      { name: 'seq', type: 'linear', domain: [1, 4], range: ['#ffffcc', '#800026'] },
+      ...scales,
+    ],
+    marks,
+  };
+}
+
+/** Large overlapping symbols, one per row, painted in the order the channels under test decide. */
+function formSymbols(update, mark = {}) {
+  return {
+    type: 'symbol',
+    from: { data: 'f' },
+    ...mark,
+    encode: { update: { x: { field: 'x' }, y: { field: 'y' }, size: { value: 1800 }, fill: { scale: 'col', field: 'k' }, stroke: { value: '#000000' }, ...update } },
+  };
+}
+
+function formRect(zindex, fill) {
+  return {
+    type: 'rect',
+    ...(zindex === undefined ? {} : { zindex }),
+    encode: { update: { x: { value: 10 }, y: { value: 10 }, width: { value: 60 }, height: { value: 60 }, fill: { value: fill } } },
+  };
+}
+
+export function formCases() {
+  const out = [];
+  const add = (property, name, spec) => out.push({ name: `channel-form-${property}-${name}`, family: 'channel-form', property, spec });
+  add('zindex', 'field', formChart([formSymbols({ zindex: { field: 'z' } })]));
+  add('zindex', 'signal', formChart([formSymbols({ zindex: { signal: 'datum.z' } })]));
+  add('zindex', 'signal-negated', formChart([formSymbols({ zindex: { signal: '-datum.z' } })]));
+  add('zindex', 'literal', formChart([formSymbols({ zindex: { value: 1 } })]));
+  for (const [name, color] of Object.entries({
+    rgb: { r: { field: 'x' }, g: { value: 100 }, b: { value: 40 } },
+    hsl: { h: { field: 'x' }, s: { value: 0.6 }, l: { value: 0.5 } },
+    hcl: { h: { field: 'x' }, c: { value: 40 }, l: { value: 60 } },
+    lab: { l: { field: 'x' }, a: { value: 20 }, b: { value: -30 } },
+  })) {
+    add('fill', `color-${name}`, formChart([formSymbols({ fill: { color } })]));
+  }
+  add('fill', 'gradient', formChart([formSymbols({ fill: { gradient: 'seq', start: [0, 0], stop: [1, 1] } })]));
+  add('fill', 'signal', formChart([formSymbols({ fill: { signal: "datum.k === 'a' ? '#d62728' : '#1f77b4'" } })]));
+  add('key', 'duplicate', formChart([formSymbols({}, { key: 'k' })]));
+  add('key', 'unique', formChart([formSymbols({}, { key: 'x' })]));
+  for (const [name, [first, second]] of Object.entries({ 'raised-first': [1, 0], 'raised-second': [0, 1], tie: [0, 0], negative: [-1, undefined] })) {
+    add('zindex', `mark-in-group-${name}`, formChart([{ type: 'group', marks: [formRect(first, '#d62728'), { ...formRect(second, '#1f77b4'), encode: { update: { x: { value: 40 }, y: { value: 30 }, width: { value: 60 }, height: { value: 60 }, fill: { value: '#1f77b4' } } } }] }]));
+  }
+  for (const [name, sort] of Object.entries({ ascending: { field: 'datum.x' }, descending: { field: 'datum.x', order: 'descending' }, 'by-y': { field: 'datum.y', order: 'descending' } })) {
+    add('sort', name, formChart([
+      formSymbols({}, { name: 'base', sort }),
+      { type: 'text', from: { data: 'base' }, encode: { update: { x: { field: 'x' }, y: { field: 'y' }, text: { field: 'datum.k' }, align: { value: 'center' }, baseline: { value: 'middle' } } } },
+    ]));
+  }
+  return out;
+}
+
 export function generate(ctx) {
   init(ctx);
   const cases = [];
@@ -1506,12 +1630,15 @@ export function generate(ctx) {
         // A name that has already been used gets a number: two values can slug the same way
         // (`0` and `-0`, `"a b"` and `"a_b"`) and a second case replacing the first would silently
         // shrink the sweep.
-        let name = `${family}-${property}-${slug(value)}`;
-        if (used.has(name)) name = `${name}-${used.get(name) + 1}`;
-        used.set(name, (used.get(name) || 0) + 1);
+        const name = uniqueName(used, `${family}-${property}-${slug(value)}`);
         cases.push({ name, family, property, spec });
       }
     }
+  }
+  // the forms and structural channels the loop above cannot write (C74)
+  for (const c of formCases()) {
+    c.name = uniqueName(used, c.name);
+    cases.push(c);
   }
   return { cases, skips };
 }

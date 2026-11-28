@@ -14,7 +14,8 @@ the browser).
   the new immutable data array.
 - Transforms with no fast path (the global fitters `kde`, `regression`, `loess`, `quantile`, `contour`,
   `wordcloud`, ...) re-derive on an append; the downstream change result is still correct.
-- Huge or untrusted specs: combine `limits` with `useChartWorker`.
+- Huge or untrusted specs: combine `limits` with `useChartWorker` and its `workerFactory`: `limits` gives the typed errors, and the
+  hook's deadline (`timeoutMs`) terminates and replaces a worker that runs away.
 - Dense marks: canvas avoids SVG node cost; hit testing uses a uniform grid above 400 items.
 - Accessibility tree: set `a11y={{ summaryThreshold: N }}` (default 150) to collapse very dense marks into one
   summary node.
@@ -34,12 +35,12 @@ the browser).
   byte-identically.
 - **Kept dataset steps**: a resize, a signal write or a re-render with equal rows no longer runs every dataset pipeline from its
   first step. A step records the signals it reads, the rows it was made from and (for a drawing step) the random source; the next
-  evaluation keeps the rows of every step whose reads are as they were, republishing the signals it wrote. The React mount, which
-  evaluates the spec at its own size and then at the measured container's, pays for the datasets once. Consecutive steps that
+  evaluation keeps the rows of every step whose reads are as they were, republishing the signals it wrote. The React mount of a chart that fills its
+  element (`width="container"`), which evaluates the spec at its own size and then at the measured element's, pays for the datasets once. Consecutive steps that
   only add fields (`bin`, `formula`, `timeunit`) write onto one set of rows instead of copying every row per step
   ([ARCHITECTURE.md](ARCHITECTURE.md#incremental-evaluation)).
 - **Fit views update incrementally**: a view that fits its viewport (`autosize` fit / fit-x / fit-y, Vega-Lite
-  `"container"` sizes, and every `<Chart>` sized by its measured container) builds its content twice, at the viewport
+  `"container"` sizes, and every `<Chart>` that fills its element with `width` / `height="container"`) builds its content twice, at the viewport
   and at the fitted size. Each pass of an update is made from the same pass of the evaluation before, so a one-row
   update re-encodes one item per pass instead of every item of the first pass. The view keeps both passes' state, so a fit view
   also retains the first pass's items between updates (not measured here; [ARCHITECTURE.md](ARCHITECTURE.md#incremental-evaluation)).
@@ -67,8 +68,9 @@ the browser).
 - **Streams**: `createChartStream` adds a bounded queue with coalesce/drop-oldest/drop-newest/error policies
   and explicit `flush()` pulses. `<ChartStream>`/`<ChartWorkerStream>` reuse the SVG patcher and the canvas
   backend; canvas path parsing and symbol generation are cached, solid paints skip bbox computation, dense
-  same-paint symbol runs batch into one fill/stroke, and append-only streamed scenes paint just the new mark
-  items.
+  same-paint symbol runs batch into one fill or one stroke when that paints what one path per item paints (opaque,
+  unblended, filled or stroked but not both; a translucent, blended or filled-and-stroked run is cut where a symbol's ink
+  box meets one already in the batch, so each batch is symbols that cannot share a pixel), and append-only streamed scenes paint just the new mark items.
 - **Incremental scales**: continuous and discrete domains are reused when a changeset provably cannot move
   them; append-only continuous updates patch the min/max census in O(appended) instead of rescanning. A discrete
   scale over data (ordinal colour, shape, size, strokeDash; band; point) keeps its object when its rows change and its
@@ -86,8 +88,9 @@ the browser).
   per mark group.
 - **Dense marks (`denseMarks`, default `'auto'`)**: symbol marks with at least 512 items render as chunked
   `<path>` elements (256 items per chunk, positions baked into `d`) instead of one transformed element per
-  datum. Chunks are cached per group, so an append re-serializes one chunk. Only opaque marks batch
-  (translucency must composite per item); rotated marks keep their own element; `'auto'` stays per-item when
+  datum. Chunks are cached per group, so an append re-serializes one chunk. Only opaque, unblended marks that
+  are filled or stroked but not both batch (translucency must composite per item, and one path paints all its fill
+  under all its stroke); rotated marks keep their own element; `'auto'` stays per-item when
   the spec has `signal.on` streams. SSR emits per-item markup for hydration and the client switches to batched
   in place. Tooltips and hit testing use the scene index; `pnpm conformance:batch` gates pixel parity against
   the per-item rendering. The node count matters because appending one node to a very large SVG, and above
@@ -102,6 +105,13 @@ the browser).
 
 ## Reference measurements
 
+The compute-side sections below (fit views, signal changes, selections, discrete scales, group marks) are before and after pairs: each names the
+branch it was measured on and its base, and a probe that is committed under `packages/benchmarks/scripts/probes/` (`<worktree>` is any
+checkout with a built `dist`, `.` for this one). The "before" builds are the base commits they name; to repeat a comparison, build the base
+commit in a second worktree (`git worktree add`, `pnpm install`, `pnpm build`) and run the same probe on both, alternating, three rounds, on an idle
+machine. Run on a different tree, a probe gives that tree's figure, not the one printed here; the printed figures belong to the date and machine in
+their paragraph.
+
 Measured 2026-11-05 on main at 098b243 on the development machine (Linux x86_64, node v26.13.0, headless Chromium
 from Playwright), after `pnpm build`. The machine is shared: other users kept the load average between 0.5 and 5
 during the runs. The Node figures are the median of three runs unless a table shows each run; the browser figures
@@ -114,19 +124,23 @@ chosen are at the top of `packages/benchmarks/src/incremental.bench.tsx`. What e
 
 ### Compute: incremental append vs full evaluation (node, no paint)
 
-`pnpm bench:incremental -- --points=10000 --reps=30` (three runs, medians in ms), 800x500 symbol chart,
-one row appended per update:
+`pnpm bench:incremental -- --points=10000 --reps=30` (three runs of the final stack tip, 2026-11-26, medians in ms, on a shared machine at load
+averages of 2 to 40, so absolute figures are 2 to 3 times those of the quiet-machine runs this table had before; the ratios are what to read, and
+"Final audit" below has the same paths against origin/main, alternating), 800x500 symbol chart, one row appended per update:
 
 | Path | Run 1 | Run 2 | Run 3 |
 |---|---|---|---|
-| full `evaluateChart` | 2.9 | 3.0 | 2.7 |
-| `createChartStream` append + flush | 0.2 | 0.2 | 0.2 |
-| `view.change(changeset().insert(...)).run()` in vega (`renderer: 'none'`) | 1.2 | 1.2 | 1.1 |
-| append speedup vs full | 18.3x | 15.8x | 18.2x |
-| append vs vega | 7.1x | 5.8x | 6.6x |
-| whole-array replacement speedup vs full | 15.9x | 12.7x | 17.1x |
-| DOM patch (`patchSceneDom`, 4000 points, jsdom) vs `renderSceneToSvg` | 3.3x | 3.7x | 5.4x |
-| dense 100,000-symbol mark: append patch vs mount (ms) | 1.31 vs 314.3 (249x) | 1.17 vs 275.6 (254x) | 1.12 vs 265.9 (254x) |
+| full `evaluateChart` | 10.2 | 8.5 | 6.2 |
+| `createChartStream` append + flush | 0.7 | 0.8 | 0.8 |
+| `view.change(changeset().insert(...)).run()` in vega (`renderer: 'none'`) | 2.8 | 3.4 | 2.8 |
+| append speedup vs full | 12.1x | 8.7x | 8.0x |
+| append vs vega | 3.8x | 4.2x | 3.3x |
+| whole-array replacement speedup vs full | 9.0x | 9.5x | 9.0x |
+| DOM patch (`patchSceneDom`, 4000 points, jsdom) vs `renderSceneToSvg` | 4.1x | 3.9x | 4.3x |
+| dense 100,000-symbol mark: append patch vs mount (ms) | 0.60 vs 617.0 (971x) | 0.58 vs 557.0 (986x) | 0.58 vs 568.2 (976x) |
+
+The append-versus-full ratio gate (floor 8x) read 10.2x to 11.4x on a quiet machine on the final tip (13.4x to 15.9x on origin/main): the full evaluation got
+faster (3.5 to 2.8 ms) and a development-build append slower (0.23 to 0.29 ms over its first 30 updates), see "Final audit".
 
 `pnpm bench:incremental -- --points=100000 --reps=40`: full evaluate 42.1 ms, stream append 0.3 ms
 (163x), vega `view.change` 19.0 ms (13.6 to 34.7 ms across the runs: Aster 54x to 107x cheaper), whole-array
@@ -135,7 +149,7 @@ replacement 37x; dense append patch 1.00 ms vs a 263.3 ms mount (273x).
 ### One-row updates on a view that fits its viewport (node, no DOM)
 
 Measured 2026-11-09 on perf/fit-incremental against its base (df41263), the two builds run alternately, three rounds each,
-load average 4 to 10. `node perf.mjs <worktree> 1`, a probe kept outside the repository: a 10,000-point symbol chart with two
+load average 4 to 10. `node packages/benchmarks/scripts/probes/fit-view-update.mjs <worktree> 1`: a 10,000-point symbol chart with two
 axes, `createChartSession().evaluate(spec, { data, dataChanges: { t: [i] }, ...size })`, 40 updates of one row inside the
 domain, median ms per update. `fixed` is the Vega spec at `width/height` 600x300 (autosize pad, the control), `measured` the
 same spec with `measuredSize` (autosize fit containing the padding), `vl-fixed` a Vega-Lite point chart at 600x300 (the
@@ -156,11 +170,11 @@ the axis labels) re-encodes what reads the size, as a resize of a fixed-size vie
 ### Signal changes no mark reads (node, no DOM)
 
 Measured 2026-11-10 on perf/signal-scoped-reuse against its base (main at e31d61c), the two builds run alternately, three
-rounds each, on the shared machine. `node tick.mjs <worktree>`, a probe kept outside the repository: a Vega-Lite `time`
+rounds each, on the shared machine. `node packages/benchmarks/scripts/probes/time-tick.mjs <worktree>`: a Vega-Lite `time`
 animation over 3,000 points (`params: [{ name: 'anim', select: { type: 'point', on: 'timer', fields: ['year'] } }]`, a
 `filter` by it, `time: year` over three years), `createChartSession().evaluate(vg, { signals: { anim_clock } })` with only the
 clock advanced by 16 ms per tick and no data change, 30 ticks, median and p90 ms per tick. The control is the fixed-size
-one-row update of the section above (`node perf.mjs <worktree>`, its last run of three), which this change does not touch.
+one-row update of the section above (`node packages/benchmarks/scripts/probes/fit-view-update.mjs <worktree>`, its last run of three), which this change does not touch.
 
 | Case | base, rounds 1-3 | this change, rounds 1-3 |
 |---|---|---|
@@ -178,8 +192,8 @@ on 10,000 points (`createChartStream`, 500 appends, the same alternation) went f
 ### Selections, and rows with a signal change (node, and Chromium)
 
 Measured 2026-11-10 on perf/selection-signal-reuse against its base (perf/transition-retarget-by-identity at 082a700, which holds
-the signal-scoped reuse above), the two builds run alternately, three rounds each, on the shared machine. `node probe.mjs <worktree>`
-and `node fit.mjs <worktree>`, probes kept outside the repository: Vega-Lite scatters of 5,000 points compiled by
+the signal-scoped reuse above), the two builds run alternately, three rounds each, on the shared machine. `node packages/benchmarks/scripts/probes/selection-reuse.mjs <worktree>`
+and `node packages/benchmarks/scripts/probes/selection-fit.mjs <worktree>`: Vega-Lite scatters of 5,000 points compiled by
 `@aster-charts/vl`, driven through `createChartSession().evaluate` as `<Chart>` drives it (each store handed back as data, a new
 array on every edit), 40 evaluations per case (30 for the fit view, `width: "container"` with a measured 640 x 300), median ms.
 `unread` changes a param no mark reads; `click` / `move` / `drag` put another tuple in the store; `append` adds one row inside the
@@ -201,13 +215,13 @@ over an append then: see the next section).
 | fit view, hover, unread | 47.64 / 47.25 / 48.26 | 1.98 / 1.78 / 1.81 | 2 of 2 scales, 5000 of 5000 items |
 | fit view, hover, append + unread | 56.10 / 55.80 / 55.50 | 2.06 / 2.09 / 2.10 | 5030 of 5031 items |
 | fit view, brush, append + unread | 52.93 / 53.13 / 52.93 | 2.13 / 2.09 / 2.14 | 5030 of 5031 items |
-| controls: fixed-size one-row update (`perf.mjs`, last run of three) | 0.58 / 0.57 / 0.57 | 0.60 / 0.56 / 0.56 | |
-| controls: `time` animation tick (`tick.mjs`) | 0.91 / 0.92 / 0.91 | 0.90 / 0.91 / 0.91 | |
+| controls: fixed-size one-row update (`fit-view-update.mjs`, last run of three) | 0.58 / 0.57 / 0.57 | 0.60 / 0.56 / 0.56 | |
+| controls: `time` animation tick (`time-tick.mjs`) | 0.91 / 0.92 / 0.91 | 0.90 / 0.91 / 0.91 | |
 | controls: one-row stream append, 10,000 rows, no transforms (µs) | 68 / 70 / 68 | 69 / 69 / 70 | |
 | one-row stream append through formula, formula, filter (µs) | 273 / 276 / 317 | 279 / 282 / 282 | |
 
 A drag step costs what it did, a little more (17.2-17.4 ms before, 17.3-17.9 after: the keys of the store the points read are
-made on every step, and the points are encoded again, as they must be). In headless Chromium (`node drag.mjs <worktree> brush|hover
+made on every step, and the points are encoded again, as they must be). In headless Chromium (`node packages/benchmarks/scripts/probes/selection-drag.mjs <worktree> brush|hover
 5000`: `<Chart>` bundled from each worktree, 50 pointer moves, the time from a move to the second animation frame after it, which
 counts whole frames), a brush drag went from 115.1 / 115.2 / 115.3 to 81.8 / 81.8 / 81.8 ms and a hover sweep from 97.8 / 104.5 /
 98.1 to 64.4 / 64.6 / 64.3 ms median. `pnpm bench:incremental -- --points=10000 --reps=30`, three runs each, alternated: append
@@ -217,7 +231,7 @@ replacement 15.42x / 15.08x / 15.13x before, 16.24x / 16.62x / 16.90x after; the
 ### Discrete scales over changing rows (node, no DOM)
 
 Measured 2026-11-10 on perf/discrete-scale-appends against its base (72ffeea, which holds #136-#138), the two builds run
-alternately, three rounds each, load average 1.3 to 1.8. `node probe.mjs <worktree> 5000 20`, a probe kept outside the repository:
+alternately, three rounds each, load average 1.3 to 1.8. `node packages/benchmarks/scripts/probes/discrete-scale-appends.mjs <worktree> 5000 20`:
 Vega-Lite charts of 5,000 rows in five categories compiled by `@aster-charts/vl`, driven through `createChartSession().evaluate` as
 `<Chart>` drives it (a new array per update, which the session diffs), 20 updates per case, median ms; `stream` is a
 `createChartStream` append of one row, as `<ChartStream>` delivers it (80 appends). `scatter` is a point chart coloured by a
@@ -240,9 +254,9 @@ x bands, coloured by category, `line` one line per category. Items kept are coun
 | stacked, a category edited to another | 2.21 / 2.19 / 2.19 | 2.05 / 2.03 / 1.98 | both discrete scales, 68 of 70 bars |
 | line, a row of a category appended | 17.53 / 17.56 / 17.54 | 18.07 / 17.73 / 18.30 | the colour scale; no item (group marks were made again then: see the next section) |
 | line, a value edited | 16.26 / 16.46 / 16.55 | 17.07 / 17.08 / 16.99 | the colour scale; no item |
-| controls: fixed-size one-row update (`perf.mjs`) | 0.55 / 0.55 / 0.56 | 0.57 / 0.57 / 0.58 | |
-| controls: `time` animation tick (`tick.mjs`) | 0.91 / 1.04 / 0.92 | 0.94 / 0.93 / 0.93 | 3000 of 3000 items, both |
-| controls: point / brush, an unread signal (`sel.mjs`) | 0.44 / 0.44 / 0.46, 0.78 / 0.75 / 0.76 | 0.46 / 0.47 / 0.48, 0.79 / 0.77 / 0.75 | |
+| controls: fixed-size one-row update (`fit-view-update.mjs`) | 0.55 / 0.55 / 0.56 | 0.57 / 0.57 / 0.58 | |
+| controls: `time` animation tick (`time-tick.mjs`) | 0.91 / 1.04 / 0.92 | 0.94 / 0.93 / 0.93 | 3000 of 3000 items, both |
+| controls: point / brush, an unread signal (`selection-unread.mjs`) | 0.44 / 0.44 / 0.46, 0.78 / 0.75 / 0.76 | 0.46 / 0.47 / 0.48, 0.79 / 0.77 / 0.75 | |
 
 A new category costs what it did: every item is coloured again, as a fresh evaluation colours it. The line chart keeps its colour
 scale but draws its lines in a group mark, which is made again on every evaluation, so its cost does not move (0.1 to 0.6 ms more in
@@ -256,7 +270,7 @@ after (`<ChartStream>` on 10,000 points: 16.6 ms median frame before and 16.7 ms
 ### Marks inside group items over changing rows (node, no DOM)
 
 Measured 2026-11-10 on perf/discrete-scale-appends (11933f5) against the same base (72ffeea), alternated, three rounds each, load
-average 2.9 to 5.3. `node groups.mjs <worktree> 5000 15`, a probe kept outside the repository: Vega-Lite charts of 5,000 rows in five
+average 2.9 to 5.3. `node packages/benchmarks/scripts/probes/group-marks.mjs <worktree> 5000 15`: Vega-Lite charts of 5,000 rows in five
 categories through `createChartSession().evaluate` (a new array per update), 15 updates per case, median ms. `line` is one line per
 category (a group mark faceted by the category, its line sorted), `facet` a scatter faceted into a column per category (each cell
 with its grid axes), `concat` two views side by side. Items and groups (cells, headers, the groups of guides) are counted by identity
@@ -274,9 +288,9 @@ after the last update. The controls are the earlier sections' probes.
 | concat, a row removed | 25.49 / 24.96 / 25.04 | 3.78 / 4.35 / 3.73 | 9970 of 9970 items |
 | concat, a value edited | 24.77 / 25.07 / 24.82 | 3.67 / 3.66 / 3.44 | 9998 of 10000 items |
 | scatter by category, append (the previous section's probe) | 15.61 / 16.43 / 15.89 | 1.69 / 1.68 / 1.72 | |
-| controls: fixed-size one-row update (`perf.mjs`) | 0.57 / 0.56 / 0.58 | 0.58 / 0.59 / 0.58 | |
-| controls: `time` animation tick (`tick.mjs`) | 0.93 / 0.93 / 0.93 | 0.96 / 0.95 / 0.95 | 3000 of 3000 items, both |
-| controls: point / brush, an unread signal (`sel.mjs`) | 0.45 / 0.46 / 0.46, 0.79 / 0.75 / 0.74 | 0.47 / 0.49 / 0.49, 0.77 / 0.76 / 0.78 | |
+| controls: fixed-size one-row update (`fit-view-update.mjs`) | 0.57 / 0.56 / 0.58 | 0.58 / 0.59 / 0.58 | |
+| controls: `time` animation tick (`time-tick.mjs`) | 0.93 / 0.93 / 0.93 | 0.96 / 0.95 / 0.95 | 3000 of 3000 items, both |
+| controls: point / brush, an unread signal (`selection-unread.mjs`) | 0.45 / 0.46 / 0.46, 0.79 / 0.75 / 0.74 | 0.47 / 0.49 / 0.49, 0.77 / 0.76 / 0.78 | |
 
 The groups not kept are the cell (or line) that changed, the groups above it, and the view's own axes and legend, which are made
 again on every evaluation (comparing them would cost every chart without a group mark: a first version that did took the
@@ -298,17 +312,28 @@ re-encode): row-wise `formula` 22.6 to 1.0 ms (23.1x), fixed-scale symbol 19.2 t
 asterDom 2.9 / react-vega 6.1 / vega-embed hook 3.7; scatter 4.6 / 4.2 / 33.1 / 70.7; bar 13.4 / 13.8 / 86.5 /
 62.4. DOM nodes for the scatter chart: 82 vs 1073.
 
-`pnpm bench:browser -- --points=1000` (headless Chromium, median ms, first render / update):
-line aster 2.65 / 2.55, asterDom 1.75 / 1.90, react-vega 2.90 / 3.45, vega-embed hook 2.40 / 2.60; scatter aster
-2.90 / 3.45, asterDom 2.75 / 3.30, react-vega 8.20 / 7.90, vega-embed hook 7.05 / 8.35; bar aster 10.10 / 8.00,
-asterDom 9.25 / 7.30, react-vega 15.50 / 16.75, vega-embed hook 14.90 / 8.30. Stable-content re-render (fresh spec
-object, same data): 0 DOM mutations on all four; 0.3 ms for Aster vs 0.1 ms for the Vega wrappers. Under a
-one-update-per-frame stream the line chart holds 16.7 ms median frames on all four; long frames (over 21 ms) are
-0.0% for Aster, 1.7% to 3.7% for the Vega embeds. Run alternately against the 2026-10-27 build (2a03147), Aster's
-first render and update timings here read 5% to 17% slower (about 5% normalised by the Vega embeds of the same run),
-but the work does not differ: both builds emit byte-identical SVG for these charts, and CPU profiles of the same
-mounts and updates in Chromium, taken alternately, show the current build busy no longer than the old one (2.4 to 3.7 s
-against 2.7 to 4.0 s, tracking the machine's load). The timing difference is within this machine's noise.
+`pnpm bench:browser -- --points=1000 --memory=true` (headless Chromium; the table is the median of three runs made on 2026-11-23 at load
+averages between 2 and 21 on a shared machine, median ms, first render / update). `aster` is `<Chart incremental={false}>` (string mode: the
+svg is re-serialized and set as markup per update) and `asterDom` is `<Chart>`, whose default is the incremental patcher; until 2026-11-23 the
+`aster` row was the same configuration as `asterDom` (it left `incremental` to its default), so the two differed only by noise:
+
+| 1000 points | aster (string mode) | asterDom (default) | react-vega | vega-embed hook |
+|---|---|---|---|---|
+| line | 5.9 / 3.4 | 3.2 / 2.9 | 5.7 / 5.0 | 3.4 / 3.6 |
+| scatter | 5.1 / 5.3 | 2.7 / 3.0 | 7.7 / 8.6 | 7.7 / 9.4 |
+| bar | 14.0 / 14.0 | 17.4 / 16.0 | 25.7 / 33.8 | 35.4 / 16.9 |
+
+The runs disagree about the order on bar (the default mode led in two of the three: 9.9 / 8.6 ms against string mode's 11.2 / 11.5 in the
+quietest, 17.4 / 16.0 against 14.0 / 14.0 in the busiest), so only the large differences mean something: the incremental mode is the faster
+one on line and scatter, a scatter of 1000 points is about 2x quicker to render and update in it than in string mode, and both modes are
+ahead of react-vega and level with or ahead of vega-embed's hook (which updates in place with `view.change`) everywhere except line's first
+render in string mode. `src/browser-floors.ts` fails the nightly run for ratios far outside these (the default mode 1.5x the faster Vega embed,
+string mode 3x, the default mode 2x string mode). Stable-content re-render (fresh spec object, same data): 0 DOM mutations on all four, in
+every run; 0.0 to 0.5 ms. Under a one-update-per-frame stream the share of frames over 21 ms ranged, over the three runs, 0.0% to 2.2% for the
+default mode on line and 0.0% to 9.6% on scatter (0.6% to 3.9% and 2.2% to 57% for string mode), against 0.0% to 3.4% and 2.3% to 52% for the
+Vega embeds; on bar every engine drops frames, the default mode 2.8% to 72%, string mode 61% to 100%, react-vega 98%, the hook 5% to 56%, the
+spread being the machine's load, not the chart. Retained heap after churn (mount, 30 updates, unmount, five times, a collection before each
+reading): -0.3 to 0.7 MB for every embed. Container resizes were followed 4 of 4 times by every embed.
 
 `pnpm bench:memory` (jsdom heap growth per cycle, steady state, kB): line update aster 24.4 /
 asterDom 28.6 / react-vega 42.2 / vega-embed hook 12.4; scatter update 27.1 / 26.9 / 46.0 / 36.2.
@@ -330,99 +355,134 @@ symbol fill, headless Chromium, median frame / share of frames over 21 ms / DOM 
 3 s; with `denseMarks` 33.5 ms, 96.3% long, 402 DOM nodes, 82 to 84 appends. Dense marks cut the per-frame cost by
 about 4.8x; neither SVG variant holds a 16.7 ms frame at 100,000 points, canvas does.
 
+## Final audit (2026-11-26): origin/main (7d438d0) against the stack tip, every benchmark
+
+Every benchmark of `packages/benchmarks`, the probes under `scripts/probes/` and a set of paths of their own were run on three builds side by side, in rotating
+order (main, the stack tip before this audit, the audited tip), five to nine rounds each, cold and warm, with a fixed pure-JS control per case and the Vega
+embeds as the control of the browser and jsdom rows. A path counts as slower only when the median of the per-round ratios is over 10% and holds in most rounds. The
+machine was shared (load average 2 to 40): numbers are CPU time for the Node paths, and a path measured on a loaded machine was repeated on a quiet one.
+
+**Fixed by the audit** (each has a test that fails with the fix removed; commits `fix(core)`/`perf(core)`/`perf(vl)` of `fix/audit-f3-perf-audit`):
+
+- a running view (`<Chart>`'s session) kept every scene it had ever continued alive: one scene per update, about 300 kB for a 1000-point line chart and 1 MB for a scatter (bench:memory, `asterDom` row,
+  297 kB per update against 28 kB on main). The scene a view continues was held by the input its runtime's closures kept.
+- a signal write on a 10 000-item chart took 2.3 times main's time (4.4 against 1.96 ms): the expression runtime kept the evaluation's items map, and the scene before the last kept every later scene's items alive through the minor collections.
+- a Vega-Lite line, area or trail chart (quantitative or temporal x: `toNumber` / `toDate` as a formula over its own field) was 3 to 4.5 times slower to update (3.7 -> 11 to 16 ms for one edited row of 5 000 points) and a stream or session append over such rows 12 times
+  slower and linear in the rows (0.10 -> 1.27 ms at 10 000): the tuple history copied every row with a recorded origin at every evaluation. A cast of its own field needs no history.
+- the dense SVG append patch of 100 000 symbols took twice main's time (1.19 against 0.60 ms): the paint order read every item's `zindex` at every patch.
+- a full evaluation of a 10 000-point scatter was 16% slower than main's (11.8 against 10.2 ms): an adjustment for `x2` / `xc` / `y2` / `yc` was made, with closures, for every item whether or not the set had one.
+- the first append to a stream whose spec holds 10 000 rows took 53 ms (main 3.3): the stream walked all of its own frozen copy to know it was frozen.
+
+**Still slower than main by more than 10%** (numbers and reasons; the rest of the table is level or faster):
+
+- a stream append (10 000 rows): +13% in a production build, +22% in a development one (and +27% over a stream's first 30 appends, which `bench:incremental` measures: the append-versus-full ratio gate reads 10.2x to 11.4x against its 8x floor on a quiet machine, 7.9x once in
+  five loaded runs). Spread over about twenty per-evaluation additions of the runtime work of this release, none above 1.5 us.
+- the accessible tree: +21% for a chart of at most 150 items (0.24 -> 0.29 ms), +83% for 15 000 items in summary mode (4.2 -> 7.7 ms): each item's box is its exact vega bounds, and its id the hash of its datum.
+- `compileChart` +25% (59 -> 74 us) and Vega-Lite `compile` +33% to +42% for facet, layer and parameter specs (0.24 to 0.34 -> 0.32 to 0.47 ms; point +1%, hconcat +7%): the schema and consumption checks and the compile-time expression vetting; once per spec.
+- the first operations of a process: importing `core` +14% (89 -> 102 ms CPU), the first Vega-Lite compile 18 -> 27 ms, and a larger code base takes about three times as many operations to reach the speed main reaches in 100.
+- a scatter of translucent or stroked symbols draws one element per batch of symbols whose ink cannot overlap (about 45 elements for 1 000 random symbols, against 4 on main, which batched overlapping ones wrongly): Chromium first render 2.6 -> 3.2 ms and update 2.9 -> 3.5 ms (+21% to +23%, from +80% and +100% when each symbol had its own element; quiet machine, five rotating triples). The remaining 0.6 ms is the 45 elements against 4 and the box of each symbol. A symbol with a `description` (every Vega-Lite mark has one) keeps its element, so a Vega-Lite scatter is not batched this way.
+- a repeated `evaluate` with identical inputs 0.05 -> 0.10 ms, a brush with an unrelated signal write 0.31 -> 0.43 ms, `<Chart>`'s line update in Chromium 2.15 -> 2.40 ms (+12%, quiet machine, six rotating triples; a CPU profile of 120 updates puts it all in compile and evaluate, React's render and commit are level: 0.01 ms; the +29% of a loaded run did not repeat).
+
+**Steady state, long loops, three rounds, alternating processes**
+
+| Path (CPU ms per operation unless noted) | origin/main | stack tip before the audit | final | final vs main |
+|---|---|---|---|---|
+| evaluate scatter 10k (full) | 10.2 | 11.8 | 10.1 | -1% |
+| evaluate bar 1k (full) | 4.13 | 4.31 | 4.13 | +0% |
+| evaluate scatter, expression encode 10k | 12.7 | 13.7 | 12.3 | -3% |
+| stream append 10k rows (NODE_ENV=production) | 0.117 | 0.141 | 0.132 | +13% |
+| stream append 10k rows (dev) | 0.123 | 0.161 | 0.15 | +22% |
+| session signal write 10k items | 1.96 | 4.43 | 1.94 | -1% |
+| session signal write 10k items, under limits | 15.5 | 17.4 | 15.9 | +3% |
+| vega-lite line, 5k points, edit one row (quantitative x) | 3.68 | 13.8 | 3.84 | +4% |
+| vega-lite line, 5k points, edit one row (temporal x) | 3.82 | 16.4 | 4.1 | +7% |
+| dense SVG append patch, 100k symbols (jsdom) | 0.131 | 0.328 | 0.123 | -6% |
+| a11y tree, 15k items, default summary | 4.18 | 5.97 | 7.66 | +83% |
+| a11y tree, 15k items, every item a node | 38.6 | 69.5 | 54.7 | +42% |
+| compileChart (core) | 0.0593 | 0.0745 | 0.074 | +25% |
+| VL compile: point (fresh spec objects, median) | 0.158 | 0.164 | 0.159 | +1% |
+| VL compile: facet (fresh, median) | 0.244 | 0.373 | 0.347 | +42% |
+| VL compile: layer (fresh, median) | 0.24 | 0.336 | 0.32 | +33% |
+| VL compile: params/selection (fresh, median) | 0.339 | 0.508 | 0.466 | +37% |
+| VL compile: hconcat (fresh, median) | 0.531 | 0.584 | 0.569 | +7% |
+| VL scatter stream append, 120 appends then 2400 (wall median, last blocks) | 0.421 | 0.362 | 0.353 | -16% |
+| corpus (436 vega specs): compile+evaluate+svg, first pass | 1.06e+03 | 1.18e+03 | 1.17e+03 | +10% |
+| first evaluate of a 10k-row session (per session, warm JIT) | 13.8 | 14.3 | 13.7 | -0% |
+
+Transforms over 50 000 rows with and without `limits` (the per-loop clock ticks), the label transform, `bench:transforms`, `bench:scales`, `bench:transition`, `bench:browser-stream`, `bench:memory` and the whole Vega corpus (436 specs: evaluate and render level, compile +45%) were run too: none is more than 10% slower than main apart from what is listed above (`bench:scales` +4% to +9% of 2 to 9 us,
+`bench:transition` at 10 000 rects +11% for a non-animated patch). Bundle sizes are in the table below (every row grew by the release's features: `<Chart>` +33 kB gzip up front, +48 kB with what loads on demand).
+
 ## Bundle sizes
 
 `pnpm bench:bundle` (esbuild, minified, react external; every chunk counts, including the ones loaded on demand), measured
-2026-11-06: `@aster-charts/react` `<Chart>` 264.0 kB gzip (711.5 kB minified, 222.9 kB brotli), `<SvgChart>` from `@aster-charts/react/lite`
-243.2 kB gzip (656.5 kB minified, 206.5 kB brotli), `<SvgChart>` + `interaction` 258.4 kB gzip (695.4 kB minified,
-218.8 kB brotli), vs react-vega 288.7 kB gzip (832.2 kB minified, 239.9 kB brotli) and the official vega-embed tutorial 288.0 kB
-(830.5 kB minified, 239.6 kB brotli). The Aster rows are Vega only. The react-vega and vega-embed bundles include
-Vega-Lite (about 731 kB of their source inputs), so the like-for-like comparison for a Vega-Lite app is `<Chart>` plus the
-Vega-Lite compiler: 308.3 kB gzip eager plus 59.1 kB gzip loaded on demand (the `budget` rows below), 367.4 kB in all, which
-is above react-vega's 288.7 kB. The smaller figure holds for Vega specs only.
+2026-11-23: `@aster-charts/react` `<Chart>` 312.7 kB gzip (845.6 kB minified, 261.8 kB brotli), `<SvgChart>` from `@aster-charts/react/lite`
+284.3 kB gzip (770.3 kB minified, 239.0 kB brotli), `<SvgChart>` + `interaction` 302.7 kB gzip (817.1 kB minified, 254.4 kB brotli), vs react-vega
+288.7 kB gzip (832.2 kB minified, 239.9 kB brotli) and the official vega-embed tutorial 288.0 kB (830.5 kB minified, 239.6 kB brotli). The
+Aster rows are Vega only and count every chunk, the ones a browser build fetches on demand included (`<Chart>` is 226.0 kB of that up front,
+the table below). The react-vega and vega-embed bundles include Vega-Lite (about 731 kB of their source inputs), so the like-for-like
+comparison for a Vega-Lite app is `<Chart>` plus the Vega-Lite compiler: 367.5 kB gzip up front plus 151.6 kB loaded on demand (the `budget`
+rows below), 519.1 kB in all, which is above react-vega's 288.7 kB. The smaller figure holds for Vega specs only.
 
 `pnpm --filter @aster-charts/benchmarks run budget` bundles one tiny app per documented import pattern (esbuild, minify,
-`NODE_ENV=production`, tree-shaking on, react external) and gates its gzip size (default level). The add-on rows are
-MARGINAL: the add-on's gzip added to the `@aster-charts/core` app. The old rows measured each add-on standalone, which
-double counted the code it shares with core (hit read 15.6 kB where an app pays about 5). Each budget is the measured
-size plus 0.5 kB (`packages/benchmarks/scripts/budget.mjs` holds the rationale and the budgets, which are not copied
-here); a change that needs more room edits the number in the same PR. These rows count the code a page loads eagerly: a
-chunk loaded on demand is reported next to the row and is not in the gzip column. Measured 2026-11-06 with
-`pnpm --filter @aster-charts/benchmarks run budget` (all rows PASS):
+`NODE_ENV=production`, tree-shaking on, react external) and gates its gzip size (default level). Every file of the app is gzipped
+on its own and the figures are the sums, because a browser fetches separately compressed files (one gzip of their concatenation read
+3 to 5% under what is transferred; the React rows went up 6.5 to 11.5 kB when the method changed, with no code change). The add-on rows
+are MARGINAL: the add-on's gzip added to the `@aster-charts/core` app (the old rows measured each add-on standalone, which double counted
+the code it shares with core). A row counts the code a page loads up front: the entry and every chunk it imports statically. The React rows
+also carry a TOTAL, the up-front size plus every chunk the app can fetch later, so code moved behind an `import()` that every chart triggers
+cannot lower a row unseen. Each ceiling is the measured size plus 0.5 kB, and the measure must stay 0.3 to 0.7 kB under it: a change that grows
+a row past that, or shrinks it past the other side (a ceiling gone stale, or an import that was shaken out and now measures nothing), fails
+and re-sets the ceiling in its own change. The rows and ceilings are in `packages/benchmarks/scripts/budget-rows.mjs` (the history of why a
+row grew is the git log of that file); the run prints the measure, the ceiling and the headroom of each. A row that names no ceiling, a
+ceiling that names no row, an esbuild warning and a `dist` that is not the build of the sources (a missing or older output, an output whose
+source is gone) all fail. Measured 2026-11-26 with `pnpm --filter @aster-charts/benchmarks run budget` (all rows PASS). **`scripts/perf-docs.test.mjs` ties every figure below, and the sentences derived from them here, in `docs/API.md` and in the react README, to the ceilings in `budget-rows.mjs`: change a ceiling and the test names the doc that is stale.**
 
-| Import pattern | gzip kB (eager) | Loaded on demand (gzip kB) |
-|---|---|---|
-| `import { renderSpec } from '@aster-charts/core'` | 152.5 | |
-| `import { useChart } from '@aster-charts/react'` | 163.7 | 61.1 |
-| `import { Chart } from '@aster-charts/react'` | 205.3 | 59.1 |
-| `import { SvgChart } from '@aster-charts/react/lite'` | 182.5 | 61.1 |
-| `<SvgChart>` + `import { interaction } from '@aster-charts/react/interaction'` | 199.7 | 59.1 |
-| `import '@aster-charts/react/vl'` + `<Chart>` | 308.3 | 59.1 |
-| core + `@aster-charts/core/dom` (marginal) | 10.6 | |
-| core + `@aster-charts/core/canvas` (marginal) | 6.1 | |
-| core + `@aster-charts/core/hit` (marginal) | 6.4 | |
-| core + `@aster-charts/core/signals` (marginal) | 12.9 | |
-| core + `@aster-charts/core/load` (marginal) | 5.4 | |
-| core + `@aster-charts/core/geo` (marginal) | 16.0 | |
-| core + `@aster-charts/core/transforms` (marginal) | 39.2 | |
+| Row (`budget-rows.mjs` name) | Import pattern | gzip kB (up front) | Up front + on demand (gzip kB) |
+|---|---|---|---|
+| `@aster-charts/core` | `import { renderSpec } from '@aster-charts/core'` | 206.3 |  |
+| `@aster-charts/react useChart` | `import { useChart } from '@aster-charts/react'` | 181.7 | 339.0 |
+| `@aster-charts/react Chart` | `import { Chart } from '@aster-charts/react'` | 226.0 | 377.6 |
+| `@aster-charts/react SvgChart` | `import { SvgChart } from '@aster-charts/react/lite'` | 210.7 | 341.4 |
+| `@aster-charts/react SvgChart + interaction` | `<SvgChart>` + `import { interaction } from '@aster-charts/react/interaction'` | 225.6 | 366.0 |
+| `@aster-charts/react Chart + VL` | `import '@aster-charts/react/vl'` + `<Chart>` | 367.5 | 519.1 |
+| `@aster-charts/react Chart + all` | `import '@aster-charts/react/all'` + `<Chart>` | 305.6 | 378.6 |
+| `@aster-charts/react useChartWorker` | `import { useChartWorker } from '@aster-charts/react'` | 237.2 | 338.0 |
+| `@aster-charts/react hydrateChart` | `import { hydrateChart } from '@aster-charts/react'` | 236.9 | 337.3 |
+| `@aster-charts/react/ssr` | `import { renderChartToStaticMarkup, hydrateChart } from '@aster-charts/react/ssr'` | 237.3 | 310.0 |
+| `+ @aster-charts/core/dom` | core + `@aster-charts/core/dom` (marginal) | 13.9 |  |
+| `+ @aster-charts/core/canvas` | core + `@aster-charts/core/canvas` (marginal) | 7.3 |  |
+| `+ @aster-charts/core/hit` | core + `@aster-charts/core/hit` (marginal) | 13.1 |  |
+| `+ @aster-charts/core/signals` | core + `@aster-charts/core/signals` (marginal) | 17.8 |  |
+| `+ @aster-charts/core/load` | core + `@aster-charts/core/load` (marginal) | 9.8 |  |
+| `+ @aster-charts/core/geo` | core + `@aster-charts/core/geo` (marginal) | 16.2 |  |
+| `+ @aster-charts/core/transforms` | core + `@aster-charts/core/transforms` (marginal) | 40.7 |  |
+| `+ @aster-charts/core/transition` | core + `@aster-charts/core/transition` (marginal) | 3.9 |  |
+| `+ @aster-charts/core/png` | core + `@aster-charts/core/png` (marginal) | 9.2 |  |
 
-Transitions (the `transition` prop, [ANIMATION.md](ANIMATION.md)), measured 2026-11-09 with the same command against the tree
-before them (which read 152.7, 163.9, 205.7, 182.8, 200.1 and 308.8 for the first six rows): `@aster-charts/core` 152.8, `useChart`
-164.4, `<Chart>` 206.9, `<SvgChart>` 184.0, `<SvgChart>` + `interaction` 201.6, `<Chart>` + VL 310.2 kB gzip eager, and the
-on-demand column of the React rows up by 3.4 kB (to 64.5 and 62.5): the animation module, a new marginal row
-`core + @aster-charts/core/transition` of 3.1 kB that an app fetches only when a chart sets the prop. The eager growth is the
-prop handling and the scene stamps (0.85 kB of `<Chart>`'s 1.2) and the chunk boundary the on-demand module draws around the
-colour and field code it shares with core (0.35 kB; `useChart` pays only that). `budget.mjs` keeps the breakdown. With the `maxItems` limit and on top of the fit-view work
-(the combined stack, measured 2026-11-09 with the same command): the transition module is 3.3 kB and `<Chart>` 207.4 kB gzip eager.
-
-Signal-scoped reuse (the keys of marks and scales, the kept copies and the steps that read a dataset by name), measured
-2026-11-10 with the same command against main at e31d61c (kB gzip, before -> after): `@aster-charts/core` 153.0 -> 154.5,
-`useChart` 164.6 -> 166.1, `<Chart>` 207.4 -> 208.7, `<SvgChart>` 184.4 -> 185.8, `<SvgChart>` + `interaction` 202.0 -> 203.3,
-`<Chart>` + VL 310.6 -> 312.1; the marginal rows did not move.
-
-Selections under signal changes (kept dataset builds, marks keyed by the datasets they read by name, pulses with a signal change,
-names read as the expression lexer reads them), measured 2026-11-10 with the same command against its base 082a700 (kB gzip,
-before -> after): `@aster-charts/core` 154.5 -> 155.7, `useChart` 166.1 -> 167.4, `<Chart>` 208.7 -> 210.0, `<SvgChart>` 185.8 ->
-187.1, `<SvgChart>` + `interaction` 203.3 -> 204.4, `<Chart>` + VL 312.1 -> 313.3; `+ @aster-charts/core/dom` 10.6 -> 10.7, the
-other marginal rows did not move.
-
-Parts on demand (the aggregating, window and reshaping transforms, time scales and formats, the curves besides `linear`, colour
-ramps and blending, and the scale types besides linear, ordinal, band, point, time and utc, loaded by the shells in a browser build
-the first time a chart needs them: [ARCHITECTURE.md](ARCHITECTURE.md#the-parts-of-the-engine-most-charts-never-run)), measured
-2026-11-16 with the same command against origin/main at a078891 (kB gzip eager, before -> after): `useChart` 168.9 -> 145.0,
-`<Chart>` 204.5 -> 180.5, `<SvgChart>` 190.7 -> 166.9, `<SvgChart>` + `interaction` 204.2 -> 180.2, `<Chart>` + VL 311.1 -> 287.0;
-the families moved to the on-demand column (`<Chart>` 107.2 -> 137.1). `@aster-charts/core` 172.7 -> 174.7: its entry carries every
-part, as before, and pays the slot reads and the part objects. A new row, `import '@aster-charts/react/all'` + `<Chart>`, is what an app
-that wants no first-render wait pays: 246.4 kB gzip, every part of the engine up front (67.5 kB stay on demand: the add-ons and the
-transition module).
+(The older figures in this chapter, dated 2026-11-06 and before, were measured by the concatenated method and are kept as the history
+of what each change cost; compare them with the table above only after adding the per-file difference.)
 
 The manifests list only the files that really have an import effect (see
 [ARCHITECTURE.md](ARCHITECTURE.md#side-effects-and-tree-shaking)). Without a `sideEffects` field a bundler must assume
 every module has effects, so `import { useChart }` pulled in `Chart`, `ChartStream`, `useChartStream`,
-`useChartWorkerStream`, the worker host and `batches` (37.7 kB gzip it never calls); `ASTER_BUDGET_IGNORE_SIDE_EFFECTS=1
-node packages/benchmarks/scripts/budget.mjs`, run from `packages/benchmarks`, bundles the apps that way.
+`useChartWorkerStream`, the worker host and `batches` (37.7 kB gzip it never calls); `ASTER_BUDGET_SIDE_EFFECTS=all
+node packages/benchmarks/scripts/budget.mjs` bundles the apps that way, and `ASTER_BUDGET_SIDE_EFFECTS=none` as if no module had an effect (a
+row built on a bare `import '...'` then measures nothing and fails).
 `<Chart>` is a shell over `ChartCore` with injected capabilities; that costs a little code in both shells: the property
 reads through the capability objects (a minifier cannot rename them) and the report of a missing capability, which only
-`<SvgChart>` can trigger but both share. `<SvgChart>` is 22.8 kB smaller than `<Chart>` (205.3 minus 182.5): it leaves out the canvas
-renderer, the hit index and the signal loop. Their marginal rows (6.1, 6.4 and 12.9 kB) are each measured on their own,
-so they do not add up to the 22.8 kB gap. The rows that contain no such
+`<SvgChart>` can trigger but both share. `<SvgChart>` is 15.3 kB smaller than `<Chart>` (226.0 minus 210.7): it leaves out the canvas
+renderer, the hit index and the signal loop. Their marginal rows (7.3, 13.1 and 17.8 kB) are each measured on their own,
+so they do not add up to the 15.3 kB gap. The rows that contain no such
 code are checked on the module list, not only the byte count: `pnpm check:bundle` asserts on the esbuild metafile that the
 `<SvgChart>` bundle reads no `core/canvas`, `core/hit` or `core/signals` module, and that with `interaction` it reads hit and
 signals but still no canvas (`hit.ts` and `canvas.ts` share the path parser through `path-data.ts` for exactly this reason).
 
 The `useChart` and `<Chart>` rows fail if the field is removed or widened; `scripts/bundle-shaking.test.mjs` plants
-that fault and requires the budget to fail. The other direction (a list that is too narrow drops a registration) is
+that fault, and the opposite one (an import shaken out), and requires the budget to fail. The other direction (a list that is too narrow drops a registration) is
 caught by `pnpm check:bundle`, which bundles and executes each import pattern.
 
-The Vega-Lite compiler is 103.0 kB gzip on top of the base `<Chart>` (308.3 minus 205.3, measured 2026-11-06). It was 54.1 at an earlier measurement, before the selections, maps and animation work.
-
-Where the growth sits, measured 2026-11-06 on `@aster-charts/vl` alone (esbuild, minified, `@aster-charts/core` external): the bundle is 324,435 bytes minified and 105.8 kB gzip level 9, against 176,836 bytes and 55.6 kB for the tree of 2026-10-23 (commit 861eb0b). The largest increases are in `compile.ts` (+74.0 kB minified) and `validate.ts` (+19.1 kB). With the selection modules (`selection.ts`, `selection-signals.ts`, `selection-marks.ts`, `selection-model.ts`) replaced by stubs the bundle is 7.1 kB gzip smaller, with `geo.ts` stubbed 1.5 kB smaller and with `animation.ts` stubbed 0.8 kB smaller (9.2 kB for the three together), so those three feature modules are a minor part of the growth. The selection handling inside `compile.ts` is not part of that figure.
-
-Trimming the validation layer
-(`packages/vl/src/validate.ts`: allow-lists derived from one table each, shared message templates, dead branches removed;
-no check dropped, every message unchanged) took `@aster-charts/vl` from 180,940 to 176,836 bytes minified (-4.1 kB) and from
-55,828 to 55,606 bytes gzip level 9 (-0.2 kB): the validator is mostly unique error text, which gzip already compresses well.
-Measure it with `node` and esbuild on `packages/vl/dist/index.js` (`@aster-charts/core` external, minify).
+The Vega-Lite compiler is 141.5 kB gzip on top of the base `<Chart>` (367.5 minus 226.0, measured 2026-11-26; 54.1 at the end of October,
+before the selections, maps and animation work).
 
 ## Dated measurement notes
 
@@ -467,3 +527,46 @@ What made this cheap: a chart's guide marks are shared by every chart whose guid
 (the merged default config is built once and frozen, so a spec without a config shares it), the entries of a guide are closures made once
 per entry and bound to an evaluation's scales (the marks' own evaluator is never called by a guide: sharing it made the marks' evaluation
 slower), ticks, grid lines and labels are made by one constructor per leaf kind, and nothing keeps a weak-map entry per chart.
+
+### Bundle size history
+
+The rows of the table in [Bundle sizes](#bundle-sizes) move with every change; these are the dated notes of the changes that moved them,
+kept as they were written. The figures in them are before and after pairs measured on the commits they name; today's sizes are the table's.
+
+Transitions (the `transition` prop, [ANIMATION.md](ANIMATION.md)), measured 2026-11-09 with the same command against the tree
+before them (which read 152.7, 163.9, 205.7, 182.8, 200.1 and 308.8 for the first six rows): `@aster-charts/core` 152.8, `useChart`
+164.4, `<Chart>` 206.9, `<SvgChart>` 184.0, `<SvgChart>` + `interaction` 201.6, `<Chart>` + VL 310.2 kB gzip eager, and the
+on-demand column of the React rows up by 3.4 kB (to 64.5 and 62.5): the animation module, a new marginal row
+`core + @aster-charts/core/transition` of 3.1 kB that an app fetches only when a chart sets the prop. The eager growth is the
+prop handling and the scene stamps (0.85 kB of `<Chart>`'s 1.2) and the chunk boundary the on-demand module draws around the
+colour and field code it shares with core (0.35 kB; `useChart` pays only that). `budget.mjs` keeps the breakdown. With the `maxItems` limit and on top of the fit-view work
+(the combined stack, measured 2026-11-09 with the same command): the transition module is 3.3 kB and `<Chart>` 207.4 kB gzip eager.
+
+Signal-scoped reuse (the keys of marks and scales, the kept copies and the steps that read a dataset by name), measured
+2026-11-10 with the same command against main at e31d61c (kB gzip, before -> after): `@aster-charts/core` 153.0 -> 154.5,
+`useChart` 164.6 -> 166.1, `<Chart>` 207.4 -> 208.7, `<SvgChart>` 184.4 -> 185.8, `<SvgChart>` + `interaction` 202.0 -> 203.3,
+`<Chart>` + VL 310.6 -> 312.1; the marginal rows did not move.
+
+Selections under signal changes (kept dataset builds, marks keyed by the datasets they read by name, pulses with a signal change,
+names read as the expression lexer reads them), measured 2026-11-10 with the same command against its base 082a700 (kB gzip,
+before -> after): `@aster-charts/core` 154.5 -> 155.7, `useChart` 166.1 -> 167.4, `<Chart>` 208.7 -> 210.0, `<SvgChart>` 185.8 ->
+187.1, `<SvgChart>` + `interaction` 203.3 -> 204.4, `<Chart>` + VL 312.1 -> 313.3; `+ @aster-charts/core/dom` 10.6 -> 10.7, the
+other marginal rows did not move.
+
+Parts on demand (the aggregating, window and reshaping transforms, time scales and formats, the curves besides `linear`, colour
+ramps and blending, and the scale types besides linear, ordinal, band, point, time and utc, loaded by the shells in a browser build
+the first time a chart needs them: [ARCHITECTURE.md](ARCHITECTURE.md#the-parts-of-the-engine-most-charts-never-run)), measured
+2026-11-16 with the same command against origin/main at a078891 (kB gzip eager, before -> after): `useChart` 168.9 -> 145.0,
+`<Chart>` 204.5 -> 180.5, `<SvgChart>` 190.7 -> 166.9, `<SvgChart>` + `interaction` 204.2 -> 180.2, `<Chart>` + VL 311.1 -> 287.0;
+the families moved to the on-demand column (`<Chart>` 107.2 -> 137.1). `@aster-charts/core` 172.7 -> 174.7: its entry carries every
+part, as before, and pays the slot reads and the part objects. A new row, `import '@aster-charts/react/all'` + `<Chart>`, is what an app
+that wants no first-render wait pays: 246.4 kB gzip, every part of the engine up front (67.5 kB stay on demand: the add-ons and the
+transition module).
+
+Where the growth sits, measured 2026-11-06 on `@aster-charts/vl` alone (esbuild, minified, `@aster-charts/core` external): the bundle is 324,435 bytes minified and 105.8 kB gzip level 9, against 176,836 bytes and 55.6 kB for the tree of 2026-10-23 (commit 861eb0b). The largest increases are in `compile.ts` (+74.0 kB minified) and `validate.ts` (+19.1 kB). With the selection modules (`selection.ts`, `selection-signals.ts`, `selection-marks.ts`, `selection-model.ts`) replaced by stubs the bundle is 7.1 kB gzip smaller, with `geo.ts` stubbed 1.5 kB smaller and with `animation.ts` stubbed 0.8 kB smaller (9.2 kB for the three together), so those three feature modules are a minor part of the growth. The selection handling inside `compile.ts` is not part of that figure.
+
+Trimming the validation layer
+(`packages/vl/src/validate.ts`: allow-lists derived from one table each, shared message templates, dead branches removed;
+no check dropped, every message unchanged) took `@aster-charts/vl` from 180,940 to 176,836 bytes minified (-4.1 kB) and from
+55,828 to 55,606 bytes gzip level 9 (-0.2 kB): the validator is mostly unique error text, which gzip already compresses well.
+Measure it with `node` and esbuild on `packages/vl/dist/index.js` (`@aster-charts/core` external, minify).

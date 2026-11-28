@@ -34,12 +34,16 @@ export async function rowsOf(spec: any): Promise<unknown[]> {
   return view.data(name).map((row: any) => JSON.parse(JSON.stringify(row, (_k, v) => v)))
 }
 
-export function bothCompile(spec: any): { ours: any; theirs: any } | { refusedBy: 'aster' | 'vega-lite' } {
+/**
+ * One spec through both compilers. `refusedBy` says who refused it: `both` (the comparison holds when each refuses what the other does),
+ * `vega-lite` (it refused and Aster compiled: a difference, which the callers fail on) or `aster`.
+ */
+export function bothCompile(spec: any): { ours: any; theirs: any } | { refusedBy: 'aster' | 'vega-lite' | 'both' } {
   let theirs: any
   try { theirs = (vl as any).compile(JSON.parse(JSON.stringify(spec)), { logger: silent }).spec } catch { theirs = undefined }
   let ours: any
   try { ours = compile(JSON.parse(JSON.stringify(spec))) } catch { ours = undefined }
-  if (theirs === undefined && ours === undefined) return { refusedBy: 'vega-lite' }
+  if (theirs === undefined && ours === undefined) return { refusedBy: 'both' }
   if (theirs === undefined) return { refusedBy: 'vega-lite' }
   if (ours === undefined) return { refusedBy: 'aster' }
   return { ours, theirs }

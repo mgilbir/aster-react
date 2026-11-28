@@ -27,9 +27,6 @@
  * something different from vega-lite's output counts as 'vega-differ' and fails the run. Aster's runtime
  * is lenient, so without this flag an invalid emitted spec can still look "ok".
  */
-import { mkdtempSync, readdirSync, symlinkSync, mkdirSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join, dirname } from 'node:path'
 import { createRequire } from 'node:module'
 import * as vega from 'vega'
 import * as vl from 'vega-lite'
@@ -38,44 +35,17 @@ import '@aster-charts/core/transforms'
 import { renderSpec, renderSceneToSvg } from '@aster-charts/core'
 import { createChartSession } from '@aster-charts/core/dom'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
-import { compile as compileVL } from '@aster-charts/vl'
-import { renderWithVega, renderWithVegaChecked } from './render-vega.js'
+import { compile as compileVL, VLCompileError } from '@aster-charts/vl'
+import { renderWithVegaChecked, settleWithin, type CheckedRender } from './render-vega.js'
+import { withOracleRandom } from './gallery/seeded.js'
 import { canonicalizeSvg, diffCanonical } from './normalize.js'
+import { deepFreeze, forEngines } from './engines.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { makeShimNodeModules, removeShimNodeModules } from './sweeps/shim-node-modules.mjs'
 
 cli({ url: import.meta.url, flags: { floor: 'value', 'min-ok': 'value', 'max-node-error': 'value', 'max-retained': 'value', filter: 'value', 'vega-check': 'bool' }, args: '<sweep-name>' })
 
 const require = createRequire(import.meta.url)
-
-/** Build a shim node_modules dir symlinking every package the sweep reads. */
-function makeNodeModules(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'aster-sweep-'))
-  mkdirSync(join(dir, 'node_modules'))
-  const base = dirname(require.resolve('vega')) // .../vega/build
-  const stores = [
-    join(base, '..', '..'), // vega@x.y.z/node_modules (vega, vega-scenegraph, vega-projection)
-    join(dirname(require.resolve('vega-lite')), '..', '..'), // vega-lite@x/node_modules
-  ]
-  const seen = new Set<string>()
-  for (const store of stores) {
-    let entries: string[] = []
-    try {
-      entries = readdirSync(store)
-    } catch {
-      continue
-    }
-    for (const name of entries) {
-      if (seen.has(name) || name.startsWith('.')) continue
-      seen.add(name)
-      try {
-        symlinkSync(join(store, name), join(dir, 'node_modules', name), 'dir')
-      } catch {
-        /* already linked */
-      }
-    }
-  }
-  return join(dir, 'node_modules')
-}
 
 interface SweepCase {
   name: string
@@ -142,23 +112,53 @@ function isBootstrapCase(c: SweepCase): boolean {
   return /-aggregate-ci[01]$/.test(c.name)
 }
 
-/** Render the oracle once. Throws on an oracle error. */
-async function renderOracle(vgSpec: Record<string, unknown>, writes: SweepCase['writes']): Promise<string> {
-  const runtime = vega.parse(vgSpec as never)
+/**
+ * Render the oracle once. Throws on an oracle error.
+ * Every render parses a copy of its own: vega writes onto the rows it ingests, so a second render of `vgSpec` (the
+ * nondeterminism check, the fresh render of a signals case) would otherwise read the first one's answers.
+ */
+async function renderOracle(vgSpec: Record<string, unknown>, writes: SweepCase['writes'], logged?: string[]): Promise<string> {
+  const runtime = vega.parse(structuredClone(vgSpec) as never)
   const view = new (vega as any).View(runtime, { renderer: 'none' })
+  // (what the view logs as an error is kept, not printed: when the render then crashes, the case is judged by what was logged)
+  if (logged) view.logger(collectingLogger(logged))
   try {
-    await view.runAsync()
-    let svg: string = await view.toSVG()
+    await settleWithin(view.runAsync(), 'the oracle (vega runAsync)')
+    let svg: string = await settleWithin(view.toSVG() as Promise<string>, 'the oracle (vega toSVG)')
     // signals sweep: write the requested signals and re-render
     for (const w of writes ?? []) {
       view.signal(w.name, w.value)
-      await view.runAsync()
+      await settleWithin(view.runAsync(), 'the oracle (vega runAsync after a signal write)')
     }
-    if (writes?.length) svg = await view.toSVG()
+    if (writes?.length) svg = await settleWithin(view.toSVG() as Promise<string>, 'the oracle (vega toSVG)')
     return svg
   } finally {
     view.finalize()
   }
+}
+
+/** A vega logger that keeps the messages it is given as errors, in `into`, and prints nothing. */
+function collectingLogger(into: string[]): unknown {
+  const logger = {
+    level: () => 2,
+    error: (...a: unknown[]) => { into.push(errorMessage(a)); return logger },
+    warn: () => logger,
+    info: () => logger,
+    debug: () => logger,
+  }
+  return logger
+}
+
+/** The message of what a logger was given: the first line, without the error's name (vega logs the Error, Aster the message). */
+const errorMessage = (a: readonly unknown[]): string => a.map((x) => (x as Error)?.message ?? String(x)).join(' ').split('\n')[0]!.replace(/^[A-Za-z]*Error: /, '')
+
+/**
+ * Whether the two engines refused the spec for the same reason: vega logged errors and then failed to draw (a view whose scale could
+ * not be made crashes its renderer later), and Aster logged the same errors, in the same order, and drew what it could. That is
+ * an agreement about the spec, not an oracle crash nobody can explain: the engines say the same of it.
+ */
+export function refusedForTheSameReason(oracleLogged: readonly string[], asterLogged: readonly string[]): boolean {
+  return oracleLogged.length > 0 && oracleLogged.length === asterLogged.length && oracleLogged.every((m, i) => m === asterLogged[i])
 }
 
 /** True when two oracle renders of the same spec canonicalize differently. */
@@ -176,7 +176,7 @@ async function oracleIsNondeterministic(vgSpec: Record<string, unknown>, writes:
  * value (no earlier run to retain anything from). Null when that cannot be built or errors.
  */
 async function renderOracleFresh(vgSpec: Record<string, unknown>, writes: NonNullable<SweepCase['writes']>): Promise<string | null> {
-  const spec = JSON.parse(JSON.stringify(vgSpec)) as { signals?: Array<Record<string, unknown>> }
+  const spec = structuredClone(vgSpec) as { signals?: Array<Record<string, unknown>> }
   for (const w of writes) {
     const def = spec.signals?.find((s) => s.name === w.name)
     if (!def) return null
@@ -194,19 +194,38 @@ async function renderOracleFresh(vgSpec: Record<string, unknown>, writes: NonNul
 /** --vega-check: also render the Vega @aster-charts/vl EMITS through real vega (see the header). */
 let vegaCheck = false
 
-async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 'retained' | 'both-refused' | 'node-error' | 'engine-error' | 'differ' | 'nondeterministic' | 'vega-differ'> {
+/**
+ * `serial`: the case runs alone (nothing else draws random numbers meanwhile), so the --vega-check renders of a bootstrap case
+ * can each draw from the same seeded stream and be compared exactly (see the pool in `main`).
+ */
+/** Whether a compiled Vega spec encodes a mark property named `undefined`: vega-lite's own sign that it placed nothing where it meant to. */
+function writesUndefinedChannel(node: unknown): boolean {
+  if (Array.isArray(node)) return node.some(writesUndefinedChannel)
+  if (node === null || typeof node !== 'object') return false
+  const rec = node as Record<string, unknown>
+  const encode = rec.encode as Record<string, Record<string, unknown>> | undefined
+  if (encode !== undefined && typeof encode === 'object') {
+    for (const set of Object.values(encode)) if (set !== null && typeof set === 'object' && Object.hasOwn(set, 'undefined')) return true
+  }
+  return Object.values(rec).some(writesUndefinedChannel)
+}
+
+async function runOneCase(c: SweepCase, serial = false): Promise<'ok' | 'retained' | 'both-refused' | 'node-error' | 'engine-error' | 'differ' | 'nondeterministic' | 'vega-differ'> {
+  // Each engine is handed a copy of its own, taken before either runs (engines.ts): vega writes its transforms' answers onto
+  // the rows it ingests, and an Aster handed those rows would agree with the oracle without running a transform at all.
+  // `vgSpec` is the oracle's source, never rendered itself (renderOracle copies it for every render).
   // Vega-Lite cases compare the compiled Vega: upstream vl.compile vs
   // @aster-charts/vl, each rendered through its own engine (a VL defect lives in
   // the spec it emits — see the sweep's header note).
-  let vgSpec = c.spec as Record<string, unknown>
-  let ourVgSpec = (c.ourSpec ?? c.spec) as Record<string, unknown>
+  let [vgSpec, ourVgSpec] = forEngines(c.spec, (oracle, aster) => [oracle, c.ourSpec !== undefined ? forEngines(c.ourSpec, (_, ours) => ours) : aster])
   if (c.lite) {
+    const ourVl = ourVgSpec
     try {
-      vgSpec = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, unknown> } }).compile(c.spec).spec
+      vgSpec = (vl as unknown as { compile: (s: unknown) => { spec: Record<string, unknown> } }).compile(vgSpec).spec
     } catch (e) {
       // upstream refuses to compile: an agreement only if we refuse too
       try {
-        compileVL(c.spec as never)
+        compileVL(ourVl as never)
         console.error(`  [node-error] ${c.name}: ${(e as Error).message.split('\n')[0]}`)
         return 'node-error'
       } catch {
@@ -214,34 +233,49 @@ async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 're
       }
     }
     try {
-      ourVgSpec = compileVL(c.spec as never) as unknown as Record<string, unknown>
+      ourVgSpec = compileVL(ourVl as never) as unknown as Record<string, unknown>
     } catch (e) {
+      // A refusal (a VLCompileError) of a spec whose vega-lite chart Vega cannot run is the agreement DECISIONS Q9 asks for: vega-lite
+      // compiled a chart that is wrong, and the compiler would not draw it. Any other refusal, or one of a chart Vega does run, is an
+      // engine error.
+      if (e instanceof VLCompileError) {
+        // (and so is a chart vega-lite writes a property under the name `undefined` of: the encoding of a position it could not place)
+        if (writesUndefinedChannel(vgSpec)) return 'both-refused'
+        try {
+          await renderOracle(vgSpec, c.writes, [])
+        } catch {
+          return 'both-refused'
+        }
+      }
       console.error(`  [engine-error] ${c.name}: ${(e as Error).message.split('\n')[0]}`)
       return 'engine-error'
     }
   }
   let oracleSvg: string | null = null
   let oracleErr = ''
+  const oracleLogged: string[] = []
   try {
-    oracleSvg = await renderOracle(vgSpec, c.writes)
+    oracleSvg = await renderOracle(vgSpec, c.writes, oracleLogged)
   } catch (e) {
     oracleErr = (e as Error).message
   }
 
   let ourSvg: string | null = null
   let ourErr = ''
+  const ourLogged: string[] = []
+  const logger = { error: (...a: unknown[]) => { ourLogged.push(errorMessage(a)) }, warn: () => {} }
   try {
-    const loaded = await loadSpecData(ourVgSpec as never, TRUSTED_LOAD_OPTIONS)
+    const loaded = await settleWithin(loadSpecData(ourVgSpec as never, TRUSTED_LOAD_OPTIONS), "Aster's data load")
     if (c.writes?.length) {
       // signals sweep: the engine does what the oracle does -- draw, write the
       // signals into the running chart, draw again (an incremental session, so
       // retained state across the write is compared too).
       const session = createChartSession()
-      session.evaluate(loaded as never)
-      const input = { signals: Object.fromEntries(c.writes.map((w) => [w.name, w.value])) }
-      ourSvg = renderSceneToSvg(session.evaluate(loaded as never, input))
+      session.evaluate(loaded as never, { logger } as never)
+      const input = { signals: Object.fromEntries(c.writes.map((w) => [w.name, w.value])), logger }
+      ourSvg = renderSceneToSvg(session.evaluate(loaded as never, input as never))
     } else {
-      ourSvg = renderSpec(loaded as never)
+      ourSvg = renderSpec(loaded as never, { logger } as never)
     }
   } catch (e) {
     ourErr = (e as Error).message
@@ -253,6 +287,10 @@ async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 're
     return 'engine-error'
   }
   if (oracleErr) {
+    // vega logged an error and went on, and its renderer then crashed on what the failed step left: the case is vega's own refusal,
+    // and Aster's agreement with it is the same error logged (a scheme word the pinned vega does not know, an interval `nice` on a
+    // scale that takes none). An oracle that crashed with nothing logged, or with something Aster did not say, is a node error.
+    if (refusedForTheSameReason(oracleLogged, ourLogged)) return 'both-refused'
     console.error(`  [node-error] ${c.name}: ${oracleErr.split('\n')[0]}`)
     return 'node-error'
   }
@@ -276,13 +314,17 @@ async function runOneCase(c: SweepCase, nodeModules: string): Promise<'ok' | 're
     console.error(`  [differ] ${c.name} (${c.family}.${c.property}): canonicalizer cannot judge: ${(e as Error).message}`)
     return 'differ'
   }
-  if (diffs.length === 0 && vegaCheck && c.lite && !isBootstrapCase(c)) {
+  if (diffs.length === 0 && vegaCheck && c.lite) {
     // Aster's runtime is lenient: an emitted spec real vega rejects, warns about (beyond what
     // vega-lite's own output raises) or renders differently must not count as ok.
-    const [checked, oracleChecked] = await Promise.all([
-      renderWithVegaChecked(JSON.parse(JSON.stringify(ourVgSpec))),
-      renderWithVegaChecked(vgSpec),
-    ])
+    // A bootstrap case (ci0/ci1 draw random numbers) runs alone, each render drawing from the same seeded stream: the two
+    // renders of real vega are then a function of their specs and compare exactly, as every other case's do.
+    const bootstrap = isBootstrapCase(c)
+    if (bootstrap && !serial) throw new Error(`${c.name}: a bootstrap case is --vega-checked only when it runs alone`)
+    const render = (spec: Record<string, unknown>): Promise<CheckedRender> => (bootstrap ? withOracleRandom(() => renderWithVegaChecked(spec)) : renderWithVegaChecked(spec))
+    const [checked, oracleChecked] = bootstrap
+      ? [await render(structuredClone(ourVgSpec)), await render(structuredClone(vgSpec))]
+      : await Promise.all([render(structuredClone(ourVgSpec)), render(structuredClone(vgSpec))])
     const inherited = new Set([...oracleChecked.errors, ...oracleChecked.warnings])
     const bad = [...checked.errors, ...checked.warnings].filter((m) => !inherited.has(m))
     if (bad.length) {
@@ -352,7 +394,7 @@ async function main(): Promise<void> {
     }
   }
 
-  const nodeModules = makeNodeModules()
+  const nodeModules = makeShimNodeModules(require)
   try {
     const { generate } = await import(`./sweeps/${sweepName}.mjs`)
     const ctx = { vega, vl, require, nodeModules }
@@ -364,7 +406,9 @@ async function main(): Promise<void> {
       process.exitCode = 1
       return
     }
-    const out = { cases: resolved.cases, skips: generated.skips }
+    // (the cases are the source both engines copy from: frozen, a path that handed one to an engine directly would fail at
+    // vega's first write instead of sharing it)
+    const out = { cases: deepFreeze(resolved.cases), skips: generated.skips }
     const all = out.cases.filter((c) => !filter || c.name.includes(filter))
     console.log(`[${sweepName}] ${out.cases.length} cases generated, ${out.skips.length} properties skipped; running ${all.length}`)
     const problems: string[] = []
@@ -378,6 +422,16 @@ async function main(): Promise<void> {
 
     const status: Status = { ok: 0, retained: 0, bothRefused: 0, nodeError: 0, engineError: 0, differ: 0, nondeterministic: 0, vegaDiffer: 0, failNames: [] }
     const CONCURRENCY = 8
+    // (with --vega-check, the bootstrap cases run after the pool, one at a time: see runOneCase's `serial`)
+    const deferred = vegaCheck ? all.filter((c) => c.lite && isBootstrapCase(c)) : []
+    const pooled = deferred.length ? all.filter((c) => !deferred.includes(c)) : all
+    const tally = (c: SweepCase, r: Awaited<ReturnType<typeof runOneCase>>): void => {
+      if (r === 'ok') status.ok++
+      else if (r === 'retained') status.retained++
+      else if (r === 'both-refused') status.bothRefused++
+      else if (r === 'nondeterministic') status.nondeterministic++
+      else { status[r === 'vega-differ' ? 'vegaDiffer' : r === 'node-error' ? 'nodeError' : r === 'engine-error' ? 'engineError' : 'differ']++; status.failNames.push(c.name) }
+    }
     let idx = 0
     const workers: Promise<void>[] = []
     for (let w = 0; w < CONCURRENCY; w++) {
@@ -385,21 +439,14 @@ async function main(): Promise<void> {
         (async () => {
           while (true) {
             const i = idx++
-            if (i >= all.length) break
-            const r = await runOneCase(all[i]!, nodeModules)
-            if (r === 'ok') status.ok++
-            else if (r === 'retained') status.retained++
-            else if (r === 'both-refused') status.bothRefused++
-            else if (r === 'nondeterministic') status.nondeterministic++
-            else if (r === 'vega-differ') { status.vegaDiffer++; status.failNames.push(all[i]!.name) }
-            else if (r === 'node-error') { status.nodeError++; status.failNames.push(all[i]!.name) }
-            else if (r === 'engine-error') { status.engineError++; status.failNames.push(all[i]!.name) }
-            else { status.differ++; status.failNames.push(all[i]!.name) }
+            if (i >= pooled.length) break
+            tally(pooled[i]!, await runOneCase(pooled[i]!))
           }
         })(),
       )
     }
     await Promise.all(workers)
+    for (const c of deferred) tally(c, await runOneCase(c, true))
 
     const total = all.length
     console.log(`[${sweepName}] results: ${status.ok} ok, ${status.retained} retained, ${status.bothRefused} both-refused, ${status.nodeError} node-error, ${status.engineError} engine-error, ${status.differ} differ, ${status.nondeterministic} nondeterministic${vegaCheck ? `, ${status.vegaDiffer} vega-differ` : ''} / ${total}`)
@@ -446,7 +493,7 @@ async function main(): Promise<void> {
       console.log(`[${sweepName}] PASS`)
     }
   } finally {
-    rmSync(nodeModules, { recursive: true, force: true })
+    removeShimNodeModules(nodeModules)
   }
 }
 

@@ -22,7 +22,7 @@ import { SpecParseError } from './parse-error.js'
 import { parseExpressionCached, type Expr } from './expr-parser.js'
 import { expressionRegistryEpoch, isExpressionFunction } from './expression.js'
 import { ExpressionConstants, FIRST_ARGUMENT_ONLY as EVALUATED_FIRST_ONLY } from './expr-interpreter.js'
-import { DisallowedObjectProperties } from './util.js'
+import { DisallowedObjectProperties, registerTextTable } from './util.js'
 import { stringValue } from './spec-structure.js'
 
 type Call = Extract<Expr, { type: 'CallExpression' }>
@@ -170,15 +170,25 @@ interface Verdict {
  * compiled again), and is neither parsed nor walked a second time. Two generations bound it: a text read in the young one is
  * found there; one found in the old one moves up; when the young one is full it becomes the old one and the old one goes.
  */
-const GENERATION = 4096
+/** Texts a generation holds; the check keeps at most twice this many. */
+export const EXPRESSION_CHECK_GENERATION = 4096
+const GENERATION = EXPRESSION_CHECK_GENERATION
+/** ... and by the length of their texts, as the process-wide text tables are (util.ts `TextTable`): one generation holds at most this. */
+const GENERATION_CHARS = 2_000_000
 let young = new Map<string, Verdict>()
 let old = new Map<string, Verdict>()
+let youngChars = 0
+let oldChars = 0
+registerTextTable('expression verdicts', () => ({ entries: young.size + old.size, chars: youngChars + oldChars, maxEntries: 2 * GENERATION, maxChars: 2 * GENERATION_CHARS }))
 const NO_NAMES: readonly string[] = []
+
+/** Texts the check holds now (for tests). @internal */
+export const expressionCheckCacheSize = (): number => young.size + old.size
 
 function verdictOf(text: string): Verdict {
   const registry = expressionRegistryEpoch()
   let verdict = young.get(text)
-  if (verdict === undefined && (verdict = old.get(text)) !== undefined) young.set(text, verdict)
+  if (verdict === undefined && (verdict = old.get(text)) !== undefined) keep(text, verdict)
   if (verdict !== undefined && verdict.registry === registry) return verdict
   let tree: Expr
   try {
@@ -191,9 +201,21 @@ function verdictOf(text: string): Verdict {
   const reader = new Reader()
   const refusal = reader.walk(tree, true) ?? reader.codegen
   verdict = { refusal, names: refusal ? NO_NAMES : reader.names, registry, regex: refusal ? false : makesRegex(tree) }
-  if (young.size >= GENERATION) { old = young; young = new Map() }
-  young.set(text, verdict)
+  keep(text, verdict)
   return verdict
+}
+
+/** Keep a verdict in the young generation; a full one (by count or by the length of its texts) becomes the old one. */
+function keep(text: string, verdict: Verdict): void {
+  if (text.length > GENERATION_CHARS / 4) return
+  if (young.size >= GENERATION || youngChars + text.length > GENERATION_CHARS) {
+    old = young
+    oldChars = youngChars
+    young = new Map()
+    youngChars = 0
+  }
+  if (!young.has(text)) youngChars += text.length
+  young.set(text, verdict)
 }
 
 /**

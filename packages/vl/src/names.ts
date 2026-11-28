@@ -14,6 +14,35 @@
  *    different inputs from colliding after sanitizing.
  */
 
+/**
+ * The prototype of a `dict`: no string keys at all, and none behind it (its own prototype is null). It only answers a coercion as
+ * an ordinary object does (`String(t)` is "[object Object]", `+t` is NaN), so a value of the wrong type in a spec is coerced, as
+ * it would be in a plain object, instead of throwing a TypeError.
+ */
+const DICT_PROTO: object = Object.freeze(Object.create(null, { [Symbol.toPrimitive]: { value: (): string => '[object Object]' } }))
+
+/**
+ * A table keyed by names a spec supplies (fields, parameters, datasets, styles, views ...). Nothing it inherits has a name, so every name
+ * is a key like any other: `__proto__` is stored as an own key instead of replacing the prototype, and a lookup of `constructor`,
+ * `toString` or `hasOwnProperty` that was never stored is `undefined`, not something Object.prototype holds. The spec the
+ * compiler works on is made of these (rows.ts cloneSpecStructure); a table of the compiler's own keyed by a spec's names is one
+ * too, or a Map. compile.ts turns the output back into ordinary objects at its one exit (`exprRefsToSignals`).
+ */
+export function dict<T = unknown>(): Record<string, T> {
+  return Object.create(DICT_PROTO) as Record<string, T>
+}
+
+/** `out[key] = value` that keeps `__proto__` an own key, as JSON.parse does (an assignment to an ordinary object would replace its prototype). */
+export function setOwn(out: Record<string, unknown>, key: string, value: unknown): void {
+  if (key === '__proto__') Object.defineProperty(out, key, { value, writable: true, enumerable: true, configurable: true })
+  else out[key] = value
+}
+
+/** `obj[key]` when `obj` has `key` of its own; `undefined` otherwise (never what the prototype holds: `constructor`, `toString` ...). */
+export function own(obj: Record<string, unknown>, key: string): unknown {
+  return Object.hasOwn(obj, key) ? obj[key] : undefined
+}
+
 export class VLCompileError extends Error {
   constructor(message: string) {
     super(`[aster/vl] ${message}`)
@@ -113,7 +142,8 @@ export function signalSafe(key: string): string {
  * A user field path (as written in a Vega-Lite spec) resolved to the flat,
  * access-path-safe key the compiler uses everywhere internally.
  *
- *  - an ordinary column name ("IMDB Rating", "a'b") keeps its name;
+ *  - an ordinary column name ("IMDB Rating", "größe €") keeps its name (a quote is a path's quoting: "a'b" is malformed, and
+ *    splitAccessPath refuses it, as vega-lite does; "a\\'b" is the column a'b);
  *  - a nested path ("o.v", "a[0]") or an escaped key ("a\\.b") gets a sanitized
  *    key, and `expr` (a Vega expression that reads the ORIGINAL location)
  *    tells the pipeline to copy the value into that key once, up front.

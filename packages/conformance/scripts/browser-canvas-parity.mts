@@ -14,10 +14,18 @@
  * A second phase (browser-canvas-append.mts) checks that incremental append painting
  * equals a full repaint, pixel for pixel.
  * A third phase (browser-canvas-symbols.mts) checks that batched symbol runs paint the plain path's pixels, in time.
- * A fourth phase (browser-canvas-dirty.mts) checks that a signal-driven scene <Chart> paints nothing for (it paints the same pixels)
- * leaves the canvas showing exactly a full repaint of it, at device pixel ratios 1 and 2.
+ * A fourth phase (browser-canvas-dirty.mts) checks that when <Chart> paints nothing for a signal-driven scene (because it
+ * paints the same pixels), the canvas shows exactly what a full repaint of that scene shows, at device pixel ratios 1 and 2.
  *
- * Run: npx tsx scripts/browser-canvas-parity.mts [--limit=N] [--filter=substr]
+ * The verdict is runGate's (scripts/lib/run-gate.mjs). Its counters are what was compared on the path each phase exists to
+ * test, with floors on a full run: `compared` (entries compared in pixels with ink on both sides), `gradient` (generated
+ * scale gradients compared, call by call), `append-frames` (frames painted by the append path), `untouched-frames` (frames
+ * <Chart> painted nothing for), `symbol-ink` (symbol cases with ink) and `path2d` (symbol cases the real context painted
+ * through Path2D). Phase 1 reads the built packages (dist; runGate refuses a stale build), phases 2-4 the core sources.
+ * A narrowed run (`--filter`, `--limit`, a tolerance flag) runs phase 1 only. `--plant-difference` paints a 3x3 black square
+ * onto Aster's canvas in every phase.
+ *
+ * Run after `pnpm build`: npx tsx scripts/browser-canvas-parity.mts [--limit=N] [--filter=substr] [--browser=chromium]
  */
 import { readdirSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -27,22 +35,28 @@ import { chromium } from 'playwright'
 import * as vega from 'vega'
 import { gradientSpec, makeRng, UNPAINTABLE_KINDS } from './gradient-gen.mts'
 import { cli } from '../../../scripts/lib/cli.mjs'
-import { CANVAS_LIMITS } from './canvas-pixels.mts'
+import { makeTempDir } from '../../../scripts/lib/temp-dir.mjs'
+import { GATE_FLAGS, intOption, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
+import { CANVAS_LIMITS, COMPARE_PIXELS_SOURCE } from './canvas-pixels.mts'
+import { compileChart, evaluateChart } from '@aster-charts/core'
+import { launchBrowser } from '../../../scripts/lib/launch-browser.mjs'
 
-cli({ url: import.meta.url, flags: { limit: 'eq', filter: 'eq', browser: 'eq', pixel: 'eq', ratio: 'eq', mean: 'eq' } })
+cli({ url: import.meta.url, flags: { limit: 'eq', filter: 'eq', browser: 'eq', pixel: 'eq', ratio: 'eq', mean: 'eq', local: 'eq', ...GATE_FLAGS } })
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)
-const OUT_DIR = join(CONF_DIR, '.tmp-browser-canvas')
+const OUT_DIR = makeTempDir('.tmp-browser-canvas-', CONF_DIR) // (one directory per run: concurrent runs do not clobber each other)
 const argv = process.argv.slice(2)
 const arg = (n: string, d: string): string => argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1] ?? d
-const LIMIT = Number(arg('limit', '0'))
+const LIMIT = intOption(argv.find((a) => a.startsWith('--limit='))?.split('=')[1], '--limit', 0)
 const FILTER = arg('filter', '')
 const BROWSER = arg('browser', 'chromium') as 'chromium' | 'firefox' | 'webkit'
-// Pixel tolerance, measured (see the block comment above the diff in the page code):
+// Pixel tolerance, measured (canvas-pixels.mts `comparePixels` is the comparison):
 //   PIXEL  a pixel differs when |dR|+|dG|+|dB|+|dA| > PIXEL (48 = 12/255 per channel on average)
 //   RATIO  an entry may have at most this fraction of differing pixels
 //   MEAN   and at most this mean per-channel difference over ALL pixels
+//   LOCAL  and at most this many differing pixels in any WINDOW x WINDOW square (a mark missing, moved or recoloured is
+//          concentrated; rounding noise is spread along edges), and ink on one side requires ink on the other
 // Against vega's own canvas, 1156 of the 1216 entries compared are BIT-EXACT (`--pixel=0 --ratio=0 --mean=0`
 // counts them, Chromium, 2026-11-06); the rest of the
 // agreeing entries differ only by the 3-decimal rounding of path coordinates (Aster
@@ -54,10 +68,16 @@ const BROWSER = arg('browser', 'chromium') as 'chromium' | 'firefox' | 'webkit'
 // on the same corpus is 0.08% / mean 0.06 (line-curve-cardinal-tension-0-3.vg), so its
 // limits are one step looser; Chromium and Firefox measured the same as above.
 // (Chromium's numbers are shared with the gates that compare a live canvas after interaction: canvas-pixels.mts)
-const LIMITS = { chromium: { ratio: CANVAS_LIMITS.ratio, mean: CANVAS_LIMITS.mean }, firefox: { ratio: 0.0005, mean: 0.05 }, webkit: { ratio: 0.001, mean: 0.07 } } as const
+// LOCAL, measured per browser over the corpus (2026-11-23): Chromium 7 (legend-discretizing-labels.vg), Firefox 6
+// (vlx-geo-geoshape-config-projection-signal-expr), WebKit 13 (geoshape-point-radius.vg: a geoshape point's small circle,
+// 2 in Chromium and 4 in Firefox); a missing 5x5 mark is 25, a 7x7 one moved by a pixel 14.
+const LIMITS = { chromium: { ratio: CANVAS_LIMITS.ratio, mean: CANVAS_LIMITS.mean, local: CANVAS_LIMITS.local }, firefox: { ratio: 0.0005, mean: 0.05, local: CANVAS_LIMITS.local }, webkit: { ratio: 0.001, mean: 0.07, local: 13 } } as const
 const PIXEL = Number(arg('pixel', String(CANVAS_LIMITS.pixel)))
 const RATIO = Number(arg('ratio', String(LIMITS[BROWSER].ratio)))
 const MEAN = Number(arg('mean', String(LIMITS[BROWSER].mean)))
+const LOCAL = Number(arg('local', String(LIMITS[BROWSER].local)))
+/** A narrowed run (filter, limit, or a tolerance other than the measured one): the floors are not applied. */
+const NARROWED = Boolean(FILTER) || LIMIT > 0 || ['pixel', 'ratio', 'mean', 'local'].some((n) => argv.some((a) => a.startsWith(`--${n}=`)))
 
 interface Entry { name: string; spec: Record<string, unknown> }
 
@@ -72,12 +92,9 @@ function loadCorpus(): Entry[] {
   return entries
 }
 
-// Entries the pixel gate cannot judge because the ORACLE's own output is undefined, with the
-// evidence. There is no other exclusion: every corpus entry (including URL data and images)
-// is compared.
-const SKIP = new Map<string, string>([
-  ['area-gradient', "the spec's fill is the string 'gradient' (not a colour, not a gradient object): vega's canvas assigns fillStyle='gradient', which a canvas ignores (invalid colour strings leave the previous value), so the pixels vega paints depend on whatever fillStyle earlier items left behind, not on the spec. Evidence: view.scenegraph() item.fill === 'gradient'; vega's canvas shows no area at all while aster shows a white one. The SVG gate compares this entry's markup strictly."],
-])
+// No entry is skipped: every corpus entry (including URL data and images) is compared. One whose ORACLE output is undefined is compared
+// like the others and listed, with the evidence, in the expected-differences table (scripts/lib/expected-differences.mjs), which requires
+// it to still differ (none today: `area-gradient` was one while its fill was the string 'gradient'; it now holds a real gradient object).
 const synthetic: Entry[] = [
   {
     name: 'canvas-custom-font',
@@ -219,23 +236,60 @@ for (const [name, shape] of CUSTOM_SHAPES) {
     },
   })
 }
+// Images a spec names on the NETWORK (the gate serves them below, the same bytes to both engines; the corpus's image spec carries
+// data: URLs, which are no request at all, so the `images-served` floor needs these): a url from the data, with sizes taken from the
+// URL by the served picture (`<w>x<h>`), and one fixed url with the aspect kept, aligned and based by the mark's own anchors.
+{
+  const base = { $schema: 'https://vega.github.io/schema/vega/v6.json', width: 200, height: 120, padding: 5, autosize: 'none', background: 'white' }
+  synthetic.push({
+    name: 'canvas-network-image-data-urls',
+    spec: {
+      ...base,
+      data: [{ name: 't', values: [{ x: 10, y: 10, url: 'https://gallery.invalid/images/tile-40x30.svg', w: 40, h: 30 }, { x: 80, y: 40, url: 'https://gallery.invalid/images/tile-64x48.svg', w: 64, h: 48 }] }],
+      marks: [{ type: 'image', from: { data: 't' }, encode: { update: { x: { field: 'x' }, y: { field: 'y' }, url: { field: 'url' }, width: { field: 'w' }, height: { field: 'h' } } } }],
+    },
+  })
+  synthetic.push({
+    name: 'canvas-network-image-aspect-anchors',
+    spec: {
+      ...base,
+      marks: [{ type: 'image', encode: { update: {
+        x: { value: 100 }, y: { value: 60 }, url: { value: 'https://gallery.invalid/images/tile-80x40.svg' }, width: { value: 60 }, height: { value: 60 },
+        align: { value: 'center' }, baseline: { value: 'middle' }, aspect: { value: true }, opacity: { value: 0.8 },
+      } } }],
+    },
+  })
+}
 // The gradient of a scale (`{gradient: <scale>, start, stop, count}`, `gradient(scale, ...)`), generated over the kinds of scale, the
 // options and the marks that paint (gradient-gen.mts; the SVG side is differential-gradient.test.mts). Their CanvasGradients are
 // compared in pixels with vega's; the specs that vega itself refuses at parse (a hole in the call), and the scales whose stops are no
 // colours (a number: `addColorStop` throws in vega's canvas too), are not specs for a canvas.
+/**
+ * The generated gradients vega itself refuses at parse (a hole in a `gradient()` call): no spec for a canvas, but compared
+ * all the same, for the refusal: Aster must refuse each with vega's message (in Node, before the browser starts).
+ */
+const gradientRefusals: Array<{ name: string; spec: Record<string, unknown>; message: string }> = []
+let unpaintableGradients = 0
 {
   const r = makeRng(2024)
   for (let i = 0; i < 220; i++) {
     const { spec, kind } = gradientSpec(r)
-    if (UNPAINTABLE_KINDS.has(kind)) continue
-    try { vega.parse(structuredClone(spec) as never) } catch { continue }
-    synthetic.push({ name: `canvas-gradient-${i}`, spec: { $schema: 'https://vega.github.io/schema/vega/v6.json', background: 'white', ...spec } })
+    // (the scales whose stops are no colours: a number is no colour, `addColorStop` throws in vega's canvas too; their SVG is
+    // compared by differential-gradient.test.mts)
+    if (UNPAINTABLE_KINDS.has(kind)) {
+      unpaintableGradients++
+      continue
+    }
+    let refusal: string | null = null
+    try { vega.parse(structuredClone(spec) as never) } catch (e) { refusal = e instanceof Error ? e.message : String(e) }
+    const entry = { name: `canvas-gradient-${i}`, spec: { $schema: 'https://vega.github.io/schema/vega/v6.json', background: 'white', ...spec } }
+    if (refusal === null) synthetic.push(entry)
+    else gradientRefusals.push({ ...entry, message: refusal })
   }
 }
-const all = [...loadCorpus(), ...synthetic].filter((e) => !FILTER || e.name.includes(FILTER))
-const entries = all.filter((e) => !SKIP.has(e.name)).slice(0, LIMIT || undefined)
-const skippedNames = all.filter((e) => SKIP.has(e.name)).map((e) => e.name)
-console.log(`[browser-canvas] ${BROWSER}: ${entries.length} entries compared${skippedNames.length ? `; ${skippedNames.length} skipped with a recorded reason: ${skippedNames.map((n) => `${n} (${SKIP.get(n)})`).join('; ')}` : ''}`)
+const entries = [...loadCorpus(), ...synthetic].filter((e) => !FILTER || e.name.includes(FILTER)).slice(0, LIMIT || undefined)
+const refusals = gradientRefusals.filter((e) => !FILTER || e.name.includes(FILTER))
+console.log(`[browser-canvas] ${BROWSER}: ${entries.length} entries; generated gradients: ${synthetic.filter((e) => e.name.startsWith('canvas-gradient-')).length} painted, ${gradientRefusals.length} refused by vega.parse (refusal compared), ${unpaintableGradients} of unpaintable kinds (SVG only)`)
 
 const entrySrc = `
 import embed from 'vega-embed'
@@ -254,24 +308,15 @@ function pixels(canvas) {
   return { data, w: canvas.width, h: canvas.height }
 }
 
-// Exact per-pixel diff: a pixel differs when the sum of its four channel differences
-// exceeds PIXEL. No neighbourhood matching: a mark one pixel off is a difference.
+// The one pixel comparison of the gates (canvas-pixels.mts): no neighbourhood matching, a mark one pixel off is concentrated
+// in a square of the picture and fails the LOCAL limit.
+const comparePixels = ${COMPARE_PIXELS_SOURCE}
+const LIMITS = { pixel: ${PIXEL}, ratio: ${RATIO}, mean: ${MEAN}, window: ${CANVAS_LIMITS.window}, local: ${LOCAL} }
 function diff(a, b) {
-  if (a.w !== b.w || a.h !== b.h) return { error: 'size ' + a.w + 'x' + a.h + ' != ' + b.w + 'x' + b.h }
-  const count = a.w * a.h
-  if (count === 0) return { ratio: 0, mean: 0 }
-  let bad = 0, sum = 0
-  for (let i = 0; i < count * 4; i += 4) {
-    const d = Math.abs(a.data[i] - b.data[i]) + Math.abs(a.data[i+1] - b.data[i+1]) + Math.abs(a.data[i+2] - b.data[i+2]) + Math.abs(a.data[i+3] - b.data[i+3])
-    sum += d
-    if (d > PIXEL) bad++
-  }
-  return { ratio: bad / count, mean: sum / (count * 4) }
+  if (a.w !== b.w || a.h !== b.h) return { error: 'size ' + a.w + 'x' + a.h + ' != ' + b.w + 'x' + b.h, inkA: false, inkB: false }
+  return comparePixels(a.data, b.data, a.w, a.h, LIMITS)
 }
 
-const PIXEL = ${PIXEL}
-const RATIO = ${RATIO}
-const MEAN = ${MEAN}
 function loadImage(url) {
   return new Promise((resolve) => {
     const img = new Image()
@@ -318,7 +363,7 @@ window.__rec = null
   G.addColorStop = function (o, c) { put('stop' + r6(o) + c); return addStop.call(this, o, c) }
 }
 
-window.__runCanvas = async (entry) => {
+window.__runCanvas = async (entry, plant) => {
   try {
     const spec = entry.spec
     const isVl = String(spec.$schema ?? '').includes('vega-lite')
@@ -353,6 +398,8 @@ window.__runCanvas = async (entry) => {
     ours.width = scene.width
     ours.height = scene.height
     renderSceneToCanvas(scene, ours.getContext('2d'))
+    // (--plant-difference: a 3x3 black mark the oracle did not draw)
+    if (plant) { const g = ours.getContext('2d'); g.fillStyle = '#000'; g.fillRect(Math.floor(ours.width / 2), Math.floor(ours.height / 2), 3, 3) }
     const b = pixels(ours)
     const asterCalls = callLevel ? window.__rec : null
     window.__rec = null
@@ -362,74 +409,137 @@ window.__runCanvas = async (entry) => {
       for (let i = 0; i < n; i++) if (vegaCalls[i] !== asterCalls[i]) { callDiff = 'call ' + i + ': vega ' + vegaCalls[i] + ' vs aster ' + asterCalls[i]; break }
     }
     const d = diff(a, b)
-    return { ...d, callDiff, pass: !d.error && d.ratio <= RATIO && d.mean <= MEAN && callDiff === null }
+    return { error: d.error, local: d.local, ratio: d.ratio, mean: d.mean, ink: d.inkA && d.inkB, callDiff, callLevel, pass: d.error === null && callDiff === null }
   } catch (err) {
     return { pass: false, error: err instanceof Error ? err.message : String(err) }
   }
 }
 `
 
-rmSync(OUT_DIR, { recursive: true, force: true })
-mkdirSync(OUT_DIR, { recursive: true })
-writeFileSync(join(OUT_DIR, 'page-entry.ts'), entrySrc)
-await build({
-  entryPoints: [join(OUT_DIR, 'page-entry.ts')],
-  bundle: true,
-  format: 'iife',
-  platform: 'browser',
-  outfile: join(OUT_DIR, 'page.js'),
-  define: { 'process.env.NODE_ENV': '"production"' },
-  banner: { js: 'var process = { env: { NODE_ENV: "production" } };' },
-  logLevel: 'silent',
-})
-writeFileSync(join(OUT_DIR, 'index.html'), `<!doctype html><html><body><script src="./page.js"></script></body></html>`)
-
-const playwright = await import('playwright')
-const browser = await playwright[BROWSER].launch({ headless: true, args: BROWSER === 'chromium' ? ['--disable-dev-shm-usage'] : [] })
-const page = await browser.newPage({ deviceScaleFactor: 1 })
-page.on('pageerror', (e) => console.error('[page]', e.message.slice(0, 200)))
-await page.goto(`file://${join(OUT_DIR, 'index.html')}`)
-await page.waitForFunction(() => '__runCanvas' in window, null, { timeout: 30_000 })
-await page.evaluate((data) => { (window as unknown as { __entries: unknown }).__entries = data }, entries)
-
-let pass = 0
-const failures: Array<{ name: string; error?: string; ratio?: number; mean?: number }> = []
-const t0 = Date.now()
-for (let i = 0; i < entries.length; i++) {
-  const r = await page.evaluate((idx: number) => {
-    const es = (window as unknown as { __entries: Entry[] }).__entries
-    return (window as unknown as { __runCanvas: (e: Entry) => Promise<{ pass: boolean; error?: string; ratio?: number; mean?: number }> }).__runCanvas(es[idx]!)
-  }, i)
-  if (r.pass) pass++
-  else failures.push({ name: entries[i]!.name, error: r.error ?? (r as { callDiff?: string }).callDiff ?? undefined, ratio: r.ratio, mean: r.mean })
-  if ((i + 1) % 25 === 0) console.log(`  ${i + 1}/${entries.length} (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
-}
-await browser.close()
-rmSync(OUT_DIR, { recursive: true, force: true })
-
-console.log(`\n[browser-canvas] ${BROWSER}: ${pass}/${entries.length} passed (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
-if (failures.length) {
-  console.log(`[browser-canvas] failing: ${failures.map((f) => f.name).join(', ')}`)
-  for (const f of failures.slice(0, 20)) {
-    console.log(`  ${f.name}: ${f.error ?? `ratio=${f.ratio?.toFixed(4)} mean=${f.mean?.toFixed(2)}`}`)
+/** Aster's refusal of each generated gradient vega refuses: the same message. */
+function compareRefusals(gate: Gate): void {
+  for (const e of refusals) {
+    let ours: string | null = null
+    try { evaluateChart(compileChart(structuredClone(e.spec) as never)) } catch (err) { ours = err instanceof Error ? err.message : String(err) }
+    if (ours === e.message) gate.agree(`${e.name} (refused)`, 'gradient-refusals')
+    else gate.differ(`${e.name} (refused)`, `vega refuses: ${e.message}; Aster: ${ours ?? 'accepts it'}`, 'gradient-refusals')
   }
 }
 
-// Phase 2: incremental canvas painting (append path) must equal a full repaint, pixel for pixel.
-const { runAppendPixelOracle } = await import('./browser-canvas-append.mts')
-const append = await runAppendPixelOracle(BROWSER, 60, 14)
-console.log(`[browser-canvas] append-vs-full-repaint ${BROWSER}: ${append.runs} scenarios, ${append.appended} append-path frames, ${append.failures.length} failing`)
-for (const f of append.failures.slice(0, 20)) console.log(`  ${f}`)
+/** A picture for an image URL: its size from a `<w>x<h>` in the URL (placehold.co style), else 64 x 64; hard-edged stripes. */
+function servedImage(url: string): string {
+  const m = /(\d+)x(\d+)/.exec(url)
+  const w = m ? Number(m[1]) : 64
+  const h = m ? Number(m[2]) : 64
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="${w}" height="${h}" fill="#2a6f97"/>`
+    + `<rect width="${w / 2}" height="${h / 2}" fill="#f4a261"/><rect x="${w / 2}" y="${h / 2}" width="${w / 2}" height="${h / 2}" fill="#e76f51"/></svg>`
+}
 
-// Phase 3: a batched run of symbols (a browser context builds closed symbols as Path2D) must paint the plain path's pixels, fast.
-const { runSymbolRunOracle } = await import('./browser-canvas-symbols.mts')
-const symbols = await runSymbolRunOracle(BROWSER)
-console.log(`[browser-canvas] symbol-runs ${BROWSER}: ${symbols.cases} cases (${symbols.withInk} with ink), ${symbols.failures.length} failing; 100k scatter ms: ${symbols.timings.map((t) => `${t.shape}=${t.ms}`).join(' ')}`)
-for (const f of symbols.failures.slice(0, 20)) console.log(`  ${f}`)
+interface CanvasResult { pass: boolean; error?: string | null; callDiff?: string | null; callLevel?: boolean; ink?: boolean; ratio?: number; mean?: number; local?: number }
 
-// Phase 4: signal moves; a frame that paints nothing (the same pixels) must show what a full repaint shows, pixel for pixel.
-const { runDirtyPixelOracle } = await import('./browser-canvas-dirty.mts')
-const dirty = await runDirtyPixelOracle(BROWSER, 80, 14)
-console.log(`[browser-canvas] signal-moves-vs-full-repaint ${BROWSER}: ${dirty.runs} scenarios, ${dirty.untouched} frames that painted nothing, ${dirty.repainted} full repaints, ${dirty.failures.length} failing`)
-for (const f of dirty.failures.slice(0, 20)) console.log(`  ${f}`)
-process.exit(failures.length || append.failures.length || symbols.failures.length || dirty.failures.length ? 1 : 0)
+async function phase1(gate: Gate): Promise<void> {
+  rmSync(OUT_DIR, { recursive: true, force: true })
+  mkdirSync(OUT_DIR, { recursive: true })
+  writeFileSync(join(OUT_DIR, 'page-entry.ts'), entrySrc)
+  await build({
+    entryPoints: [join(OUT_DIR, 'page-entry.ts')],
+    bundle: true,
+    format: 'iife',
+    platform: 'browser',
+    outfile: join(OUT_DIR, 'page.js'),
+    define: { 'process.env.NODE_ENV': '"production"' },
+    banner: { js: 'var process = { env: { NODE_ENV: "production" } };' },
+    logLevel: 'silent',
+  })
+  writeFileSync(join(OUT_DIR, 'index.html'), `<!doctype html><html><body><script src="./page.js"></script></body></html>`)
+
+  const playwright = await import('playwright')
+  const browser = await launchBrowser(playwright[BROWSER], { headless: true, args: BROWSER === 'chromium' ? ['--disable-dev-shm-usage'] : [] })
+  try {
+    const page = await browser.newPage({ deviceScaleFactor: 1 })
+    page.on('pageerror', (e) => gate.problem(`page error: ${e.message.slice(0, 200)}`))
+    // An image a spec names on the network is served here, the same bytes to both engines, so image marks are compared offline
+    // too (an image that fails to load paints nothing in either engine: blank against blank proves nothing).
+    let served = 0
+    await page.route(/^https?:\/\//, (route) => {
+      if (route.request().resourceType() !== 'image') return route.continue()
+      served++
+      return route.fulfill({ status: 200, contentType: 'image/svg+xml', headers: { 'access-control-allow-origin': '*' }, body: servedImage(route.request().url()) })
+    })
+    await page.goto(`file://${join(OUT_DIR, 'index.html')}`)
+    await page.waitForFunction(() => '__runCanvas' in window, null, { timeout: 30_000 })
+    await page.evaluate((data) => { (window as unknown as { __entries: unknown }).__entries = data }, entries)
+    let pass = 0
+    let blank = 0
+    const t0 = Date.now()
+    for (let i = 0; i < entries.length; i++) {
+      const name = entries[i]!.name
+      const r = await page.evaluate(([idx, plant]) => {
+        const es = (window as unknown as { __entries: Entry[] }).__entries
+        return (window as unknown as { __runCanvas: (e: Entry, plant: boolean) => Promise<CanvasResult> }).__runCanvas(es[idx as number]!, plant as boolean)
+      }, [i, gate.plant] as const)
+      // the call-level entries are compared call by call; the others count only when there was ink to compare
+      const counter = r.callLevel ? 'gradient' : r.ink ? 'compared' : 'blank'
+      const failedToCompare = !r.pass && r.ratio === undefined && r.callDiff == null && r.local === undefined
+      if (r.pass) {
+        pass++
+        gate.agree(name, counter)
+      } else if (failedToCompare) gate.error(name, r.error ?? 'error')
+      else gate.differ(name, `${r.callDiff ?? r.error} (ratio=${r.ratio?.toExponential(2)} mean=${r.mean?.toFixed(3)} local=${r.local})`, counter)
+      if (counter === 'blank' && !failedToCompare) {
+        blank++
+        console.log(`  blank on both sides (compared, proving nothing): ${name}`)
+      }
+      if ((i + 1) % 25 === 0) console.log(`  ${i + 1}/${entries.length} (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
+    }
+    gate.count('images-served', served)
+    console.log(`\n[browser-canvas] ${BROWSER}: ${pass}/${entries.length} passed (${blank} blank on both sides, ${served} network images served, ${((Date.now() - t0) / 1000).toFixed(0)}s)`)
+  } finally {
+    await browser.close()
+    rmSync(OUT_DIR, { recursive: true, force: true })
+  }
+}
+
+await runGate({
+  name: 'canvas',
+  counters: {
+    compared: { floor: 1146, what: 'entries compared in pixels with ink on both sides' },
+    gradient: { floor: 150, what: 'generated scale gradients compared call by call and in pixels' },
+    'gradient-refusals': { floor: 46, what: 'generated gradients vega refuses, refused by Aster with the same message' },
+    'append-frames': { floor: 309, what: 'frames painted by the append path and compared with a full repaint' },
+    'untouched-frames': { floor: 414, what: 'frames <Chart> painted nothing for, compared with a full repaint' },
+    'symbol-ink': { floor: 876, what: 'symbol-run cases with ink compared with the plain path' },
+    path2d: { floor: 432, what: 'symbol-run cases the real context painted through Path2D' },
+    'images-served': { floor: 3, what: 'network images served to both engines (image marks compared offline)' },
+    'append-scenarios': { floor: 120, what: 'append scenarios run' },
+    'symbol-cases': { floor: 908, what: 'symbol-run cases compared with the plain path' },
+    'dirty-scenarios': { floor: 160, what: 'signal-move scenarios run' },
+    blank: { floor: 0, what: 'entries blank on both sides (compared, proving nothing)' },
+  },
+  // (the floors are today's numbers, Chromium, 2026-11-23; they only ratchet up)
+  partial: NARROWED,
+  run: async (gate) => {
+    compareRefusals(gate)
+    await phase1(gate)
+    if (NARROWED) return
+    // Phase 2: incremental canvas painting (append path) must equal a full repaint, pixel for pixel.
+    const { runAppendPixelOracle } = await import('./browser-canvas-append.mts')
+    const append = await runAppendPixelOracle(BROWSER, 60, 14, gate.plant)
+    for (const c of append.cases) if (c.error) gate.differ(`append ${c.name}`, c.error, 'append-scenarios'); else gate.agree(`append ${c.name}`, 'append-scenarios')
+    gate.count('append-frames', append.appended)
+    console.log(`[browser-canvas] append-vs-full-repaint ${BROWSER}: ${append.cases.length} scenarios, ${append.appended} append-path frames`)
+    // Phase 3: a batched run of symbols (a browser context builds closed symbols as Path2D) must paint the plain path's pixels, fast.
+    const { runSymbolRunOracle } = await import('./browser-canvas-symbols.mts')
+    const symbols = await runSymbolRunOracle(BROWSER, gate.plant)
+    for (const c of symbols.cases) if (c.error) gate.differ(`symbols ${c.name}`, c.error, 'symbol-cases'); else gate.agree(`symbols ${c.name}`, 'symbol-cases')
+    gate.count('symbol-ink', symbols.withInk)
+    gate.count('path2d', symbols.path2d)
+    console.log(`[browser-canvas] symbol-runs ${BROWSER}: ${symbols.cases.length} cases (${symbols.withInk} with ink, ${symbols.path2d} through Path2D); 100k scatter ms: ${symbols.timings.map((t) => `${t.shape}=${t.ms}`).join(' ')}`)
+    // Phase 4: signal moves; a frame that paints nothing (the same pixels) must show what a full repaint shows, pixel for pixel.
+    const { runDirtyPixelOracle } = await import('./browser-canvas-dirty.mts')
+    const dirty = await runDirtyPixelOracle(BROWSER, 80, 14, gate.plant)
+    for (const c of dirty.cases) if (c.error) gate.differ(`dirty ${c.name}`, c.error, 'dirty-scenarios'); else gate.agree(`dirty ${c.name}`, 'dirty-scenarios')
+    gate.count('untouched-frames', dirty.untouched)
+    console.log(`[browser-canvas] signal-moves-vs-full-repaint ${BROWSER}: ${dirty.cases.length} scenarios, ${dirty.untouched} frames that painted nothing, ${dirty.repainted} full repaints`)
+  },
+})

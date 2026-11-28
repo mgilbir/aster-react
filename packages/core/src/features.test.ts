@@ -23,7 +23,7 @@ describe('enter + update encode merge', () => {
     const mark = chart.marks[0]!
     const update = mark.encode!.update!
     // enter.x merged in; update.fill overrides enter.fill
-    expect(update.x).toBeDefined()
+    expect(update.x).toEqual({ scale: 'x', field: 'a' })
     expect(update.fill).toEqual({ value: 'blue' })
     expect(update.y).toEqual({ value: 10 })
   })

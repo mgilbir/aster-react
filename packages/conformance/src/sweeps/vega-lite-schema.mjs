@@ -1,12 +1,14 @@
 // One Vega-Lite specification per property value Vega-Lite's own schema
-// declares. The test compares the Vega the engine compiles each into with the
-// Vega upstream compiles it into.
+// declares. The runner (src/run-sweep.ts) compiles each with upstream vega-lite
+// and with @aster-charts/vl, renders upstream's Vega through real vega and ours
+// through Aster, and compares the pictures (canonical SVG with its ARIA
+// structure); with --vega-check it also renders the Vega ours emits through
+// real vega. src/diff-vl.ts is the by-hand comparison of the emitted specs.
 //
 // That is where a Vega-Lite defect lives. Vega-Lite's whole value is the
 // defaults it supplies (a scale type, a stack transform, a tick count, a label
 // angle, a band size) and every one of them is a property of the
-// specification it emits. Comparing the emitted Vega names the rule that
-// drifted; comparing the picture would say "some marks moved".
+// specification it emits, and shows in the picture it draws.
 //
 // The surface is much larger than Vega's: 458 definitions, a MarkDef of 88
 // properties, an Encoding of 38 channels, a Config of 72. The fixture corpus
@@ -39,8 +41,10 @@
 // One family per guide block a channel carries (axis, legend, header, scale),
 // and one per configuration block; see GUIDE_CHARTS and CONFIG_CHARTS.
 //
-// Values are chosen from the schema and nothing else: an enum's words, both
-// booleans, a small fixed set of numbers, one colour, one string. Anything the
+// Values are chosen from the schema and nothing else: an enum's words (every
+// enum of the property's branches), both booleans, a small fixed set of
+// numbers (all three where a property is several of them), one colour, one
+// string. Anything the
 // schema does not say enough about is skipped and counted, with its reason.
 //
 // A specification upstream refuses is still a case: "upstream will not compile
@@ -48,6 +52,7 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { enumerableUnion, uniqueName } from './vega-schema.mjs';
 
 /** The rows every chart here draws: a category, a number, a second number, and a date. */
 const ROWS = [
@@ -321,25 +326,11 @@ const SKIP = {
   point: 'a line or area overlay, which is a mark specification rather than a value',
   line: 'an area overlay, which is a mark specification rather than a value',
   style: 'names config blocks the base chart does not declare',
-  tooltip: 'a pointer affordance, and there is no pointer in a compiled specification',
   text: 'the text itself, which the encoding supplies',
   url: 'an image to fetch, and a comparison that fetched one would be measuring the network',
-  description: 'prose, emitted verbatim',
-  aria: 'an accessibility flag with no geometry',
-  ariaRole: 'prose, emitted verbatim',
-  ariaRoleDescription: 'prose, emitted verbatim',
-  href: 'a link, which draws nothing',
-  x: 'a position the encoding already supplies',
-  y: 'a position the encoding already supplies',
-  x2: 'a position the encoding already supplies',
-  y2: 'a position the encoding already supplies',
-  theta: 'a position the encoding already supplies',
-  theta2: 'a position the encoding already supplies',
-  radius: 'a position the encoding already supplies',
-  radius2: 'a position the encoding already supplies',
-  width: "the mark's own size, which the view already fixes",
-  height: "the mark's own size, which the view already fixes",
-  clip: 'clipping, which changes no property of the compiled specification',
+  // (swept, every one: the comparison is the rendered SVG with its ARIA structure, its links and its clip geometry, so
+  // `tooltip`, `description`, `aria`, `ariaRole*`, `href` and `clip` are observable, and a literal position or size on the
+  // mark is a value the compiled specification either keeps or lets the encoding override, as vega-lite decides)
   font: 'a font family, resolved by whatever engine measures the text',
   timeUnitBandSize: 'a band size in time units, which needs a time-unit encoding to mean anything',
   timeUnitBandPosition:
@@ -369,8 +360,14 @@ const ENCODING_SKIP = {
   bin: 'a bin, whose object form is a table of properties and whose bare form the mark families already draw',
 };
 
-/** The numbers tried for a number-typed property. */
-const NUMBERS = [0, 0.5, 8, -4];
+/** The numbers tried for a number-typed property: a boundary, a fraction, a large value, a negative one. */
+const NUMBERS = [0, 0.5, 1, 8, -4];
+/**
+ * What is tried where a number the schema forbids would be drawn: a spec that breaks its schema (`opacity: 8`, `size: -4`) is not a
+ * spec @aster-charts/vl is asked to draw (it checks every spec against the schema and refuses what breaks it), so each number is
+ * one the property can take. A property keeps as many values as it had: a forbidden one is replaced by the next of these that fits.
+ */
+const REPLACEMENTS = [1, 2, 4, 16, 30, 0.25, 0.75, 100, 360, 3, 5, 10];
 
 /** The one colour tried where the schema says a colour, chosen to be unlike every default. */
 const COLOUR = '#b35a1f';
@@ -406,6 +403,107 @@ const STRINGS = {
   description: 'Aa',
 };
 
+/**
+ * COMPOSITION, TRANSFORMS, CONDITIONS and PARAMETERS (audit C301, "narrow input space"): everything above sweeps one unit chart.
+ * The charts here are the composite shapes (layer, hconcat, vconcat, concat, repeat, facet) with every value of the properties the
+ * composition itself owns (`resolve` of scale, axis and legend, `spacing`, `align`, `center`, `bounds`), a unit chart through each
+ * transform (filter, calculate, aggregate, bin object, impute, window, fold, timeUnit, stack), a `condition` on a test and on a
+ * parameter, and the parameter forms that draw (a selection with an initial value, a variable parameter read by an encoding).
+ * Compared like every other case: both compilers' Vega rendered, the pictures and their ARIA structure equal.
+ */
+const UNIT = (extra = {}) => ({
+  width: 90,
+  height: 70,
+  mark: 'point',
+  encoding: {
+    x: { field: 'w', type: 'quantitative' },
+    y: { field: 'v', type: 'quantitative' },
+    color: { field: 'c', type: 'nominal' },
+    ...extra,
+  },
+});
+
+const inLayer = ({ width: _w, height: _h, ...rest }) => rest;
+
+const COMPOSITES = {
+  // (a layer's size is the layer's: a child's own width and height are not part of the layer's grammar)
+  layer: (resolve) => ({ resolve, width: 90, height: 70, layer: [inLayer(UNIT()), inLayer({ ...UNIT(), mark: 'line' })] }),
+  hconcat: (resolve) => ({ resolve, hconcat: [UNIT(), { ...UNIT(), mark: 'bar' }] }),
+  vconcat: (resolve) => ({ resolve, vconcat: [UNIT(), { ...UNIT(), mark: 'bar' }] }),
+  concat: (resolve) => ({ resolve, columns: 2, concat: [UNIT(), { ...UNIT(), mark: 'bar' }, { ...UNIT(), mark: 'tick' }] }),
+  repeat: (resolve) => ({
+    resolve,
+    repeat: { column: ['v', 'w'] },
+    spec: { ...UNIT({ x: { field: { repeat: 'column' }, type: 'quantitative' } }), encoding: { x: { field: { repeat: 'column' }, type: 'quantitative' }, y: { field: 'v', type: 'quantitative' }, color: { field: 'c', type: 'nominal' } } },
+  }),
+  facet: (resolve) => ({
+    resolve,
+    facet: { column: { field: 'c', type: 'nominal' } },
+    spec: { width: 60, height: 70, mark: 'bar', encoding: { x: { field: 'w', type: 'ordinal' }, y: { field: 'v', type: 'quantitative' }, color: { field: 'c', type: 'nominal' } } },
+  }),
+};
+
+const TRANSFORMS = {
+  filter: { transform: [{ filter: 'datum.v > 50' }] },
+  'filter-field-predicate': { transform: [{ filter: { field: 'c', oneOf: ['alpha', 'delta'] } }] },
+  calculate: { transform: [{ calculate: 'datum.v * 2', as: 'v' }] },
+  aggregate: { transform: [{ aggregate: [{ op: 'mean', field: 'v', as: 'v' }], groupby: ['c'] }] },
+  window: { transform: [{ window: [{ op: 'rank', as: 'w' }], sort: [{ field: 'v', order: 'descending' }] }] },
+  impute: { transform: [{ impute: 'v', key: 'w', value: 0 }] },
+  fold: { transform: [{ fold: ['v', 'w'], as: ['k', 'v'] }] },
+  stack: { transform: [{ stack: 'v', groupby: ['c'], as: ['v0', 'v1'] }], encoding: { y: { field: 'v0', type: 'quantitative' }, y2: { field: 'v1' } } },
+  'bin-object': { encoding: { x: { bin: { maxbins: 3, extent: [0, 10] }, field: 'w', type: 'quantitative' }, y: { aggregate: 'count', type: 'quantitative' } } },
+  'bin-step': { encoding: { x: { bin: { step: 4 }, field: 'w', type: 'quantitative' }, y: { aggregate: 'count', type: 'quantitative' } } },
+  'time-unit': { encoding: { x: { timeUnit: 'month', field: 't', type: 'temporal' }, y: { aggregate: 'sum', field: 'v', type: 'quantitative' } } },
+};
+
+const CONDITIONS = {
+  'test-value': { color: { condition: { test: 'datum.v > 50', value: 'firebrick' }, value: 'steelblue' } },
+  'test-field': { color: { condition: { test: 'datum.v > 50', field: 'c', type: 'nominal' }, value: 'grey' } },
+  'param-value': { params: [{ name: 'pick', select: 'point' }], encoding: { opacity: { condition: { param: 'pick', value: 1 }, value: 0.3 } } },
+  'param-empty-false': { params: [{ name: 'pick', select: 'point' }], encoding: { opacity: { condition: { param: 'pick', empty: false, value: 1 }, value: 0.3 } } },
+  'interval-initial': { params: [{ name: 'brush', select: { type: 'interval', encodings: ['x'] }, value: { x: [2, 6] } }], encoding: { opacity: { condition: { param: 'brush', value: 1 }, value: 0.3 } } },
+  'point-initial': { params: [{ name: 'pick', select: { type: 'point', fields: ['c'] }, value: [{ c: 'beta' }] }], encoding: { size: { condition: { param: 'pick', value: 200 }, value: 40 } } },
+  'variable-param': { params: [{ name: 'cutoff', value: 50 }], transform: [{ filter: 'datum.v > cutoff' }] },
+  'variable-param-expr': { params: [{ name: 'op', value: 0.4 }], mark: { type: 'point', opacity: { expr: 'op' } } },
+};
+
+function compositionCases(used, slug) {
+  const out = [];
+  const add = (family, property, value, spec) => {
+    const name = uniqueName(used, `${family}-${property}-${slug(value)}`);
+    out.push({ name, family, property, lite: true, spec: { $schema: SCHEMA_URL, data: { values: ROWS }, ...spec } });
+  };
+  for (const [kind, build] of Object.entries(COMPOSITES)) {
+    add('composition', kind, 'plain', build(undefined));
+    for (const channel of ['scale', 'axis', 'legend']) {
+      for (const axisOrChannel of channel === 'scale' ? ['x', 'y', 'color'] : channel === 'axis' ? ['x', 'y'] : ['color']) {
+        for (const mode of ['shared', 'independent']) add('composition', `${kind}-resolve-${channel}`, `${axisOrChannel}-${mode}`, build({ [channel]: { [axisOrChannel]: mode } }));
+      }
+    }
+    if (kind !== 'layer') {
+      for (const spacing of [0, 8, 40]) add('composition', `${kind}-spacing`, spacing, { ...build(undefined), spacing });
+      // (`align` is a property of concat, repeat and facet; hconcat and vconcat have none)
+      if (kind !== 'hconcat' && kind !== 'vconcat') for (const align of ['all', 'each', 'none']) add('composition', `${kind}-align`, align, { ...build(undefined), align });
+      for (const center of [true, false]) add('composition', `${kind}-center`, center, { ...build(undefined), center });
+      for (const bounds of ['full', 'flush']) add('composition', `${kind}-bounds`, bounds, { ...build(undefined), bounds });
+    }
+  }
+  for (const [name, t] of Object.entries(TRANSFORMS)) {
+    const unit = UNIT();
+    add('transform', name, 'unit', { ...unit, ...t, encoding: { ...unit.encoding, ...(t.encoding ?? {}) }, transform: t.transform });
+    add('transform', name, 'in-layer', { width: 90, height: 70, layer: [inLayer({ ...unit, ...t, encoding: { ...unit.encoding, ...(t.encoding ?? {}) }, transform: t.transform })] });
+    add('transform', name, 'in-facet', { facet: { column: { field: 'c', type: 'nominal' } }, spec: { ...unit, width: 50, ...t, encoding: { ...unit.encoding, ...(t.encoding ?? {}) }, transform: t.transform } });
+  }
+  for (const [name, c] of Object.entries(CONDITIONS)) {
+    const unit = UNIT();
+    const spec = { ...unit, ...(c.params ? { params: c.params } : {}), ...(c.transform ? { transform: c.transform } : {}), ...(c.mark ? { mark: c.mark } : {}), encoding: { ...unit.encoding, ...(c.encoding ?? {}), ...(c.color ? { color: c.color } : {}) } }
+    add('condition', name, 'unit', spec);
+    add('condition', name, 'in-layer', { width: 90, height: 70, layer: [inLayer(spec)] });
+  }
+  return out;
+}
+
 export function generate(ctx) {
   const schema = JSON.parse(
     readFileSync(
@@ -429,6 +527,8 @@ export function generate(ctx) {
     }
     const nested = fragment.oneOf || fragment.anyOf || fragment.allOf;
     if (nested) return nested.flatMap((branch) => branchesOf(branch, depth + 1));
+    // (a branch that is one constant is an enumeration of one: `domain: "unaggregated"`, not a free string)
+    if (fragment.const !== undefined && fragment.enum === undefined) return [{ ...fragment, enum: [fragment.const] }];
     return [fragment];
   }
 
@@ -450,21 +550,47 @@ export function generate(ctx) {
     return branch?.properties ?? null;
   }
 
+  /**
+   * The bounds a fragment puts on its number alternatives from outside them: `{anyOf: [{type: number}, ExprRef], minimum: 0, maximum: 1}`
+   * (opacity) bounds the number that is in the anyOf, and nothing says so in the branch.
+   */
+  function outerBounds(fragment, depth = 0, into = { minimum: -Infinity, maximum: Infinity }) {
+    if (!fragment || depth > 8) return into;
+    if (fragment.$ref) return outerBounds(schema.definitions[fragment.$ref.split('/').pop()], depth + 1, into);
+    if (fragment.minimum !== undefined) into.minimum = Math.max(into.minimum, fragment.minimum);
+    if (fragment.maximum !== undefined) into.maximum = Math.min(into.maximum, fragment.maximum);
+    for (const nested of fragment.oneOf || fragment.anyOf || fragment.allOf || []) {
+      // (the bounds of a nested alternative are its own: they stay with the branch)
+      if (nested.anyOf || nested.oneOf || nested.allOf || nested.$ref) outerBounds(nested, depth + 1, into);
+    }
+    return into;
+  }
+
+  /** The numbers a number branch can take: as many as NUMBERS has, and the ends of its range. A branch of words and numbers (fontWeight) takes the words it lists. */
+  function numbersFor(branch, outer) {
+    if (branch.enum) return [];
+    const minimum = Math.max(outer.minimum, branch.minimum ?? -Infinity);
+    const maximum = Math.min(outer.maximum, branch.maximum ?? Infinity);
+    const exclusiveMinimum = typeof branch.exclusiveMinimum === 'number' ? branch.exclusiveMinimum : -Infinity;
+    const fits = (n) => n >= minimum && n <= maximum && n > exclusiveMinimum && (branch.type !== 'integer' || Number.isInteger(n));
+    const taken = NUMBERS.filter(fits);
+    for (const n of REPLACEMENTS) {
+      if (taken.length >= NUMBERS.length) break;
+      if (fits(n) && !taken.includes(n)) taken.push(n);
+    }
+    // (and the two ends of what the property takes: a bound is where an off-by-one is)
+    for (const bound of [minimum, maximum]) if (Number.isFinite(bound) && fits(bound) && !taken.includes(bound)) taken.push(bound);
+    return taken;
+  }
+
   /** Collects the candidate values a schema fragment declares, or null where there are none. */
   function declaredValues(fragment, name) {
     const branches = branchesOf(fragment);
-    for (const branch of branches) {
-      if (branch.enum) {
-        const values = branch.enum.filter((v) => v !== null);
-        if (values.length) return { kind: 'enum', values };
-      }
-    }
-    for (const branch of branches) {
-      if (branch.type === 'boolean') return { kind: 'boolean', values: [true, false] };
-    }
-    for (const branch of branches) {
-      if (branch.type === 'number') return { kind: 'number', values: NUMBERS };
-    }
+    // every enumerable branch together (vega-schema.mjs `enumerableUnion`): `stack` is words AND booleans, `timeUnit` and `sort`
+    // several enums, `tickCount` and `nice` words AND numbers
+    const bounds = outerBounds(fragment);
+    const union = enumerableUnion(branches, (branch) => numbersFor(branch, bounds));
+    if (union.values.length) return union;
     // A colour is named by the definition it references rather than by the property's name.
     if (JSON.stringify(fragment).includes('Color')) return { kind: 'colour', values: [COLOUR] };
     for (const branch of branches) {
@@ -572,12 +698,12 @@ export function generate(ctx) {
       for (const value of candidates.values) {
         const spec = baseSpec();
         apply(spec, property, value);
-        let name = `${family}-${property}-${slug(value)}`;
-        if (used.has(name)) name = `${name}-${used.get(name) + 1}`;
-        used.set(name, (used.get(name) || 0) + 1);
+        const name = uniqueName(used, `${family}-${property}-${slug(value)}`);
         cases.push({ name, family, property, lite: true, spec });
       }
     }
   }
+  // composition, transforms, conditions and parameters (C301)
+  cases.push(...compositionCases(used, slug));
   return { cases, skips };
 }

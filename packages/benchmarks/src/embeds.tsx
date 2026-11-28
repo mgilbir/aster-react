@@ -1,7 +1,9 @@
 /**
  * The three embedding approaches under benchmark, behind one React interface.
  *
- * - aster:      @aster-charts/react <Chart> (our library)
+ * - aster:      @aster-charts/react <Chart incremental={false}> (our library, string mode: every update re-serializes the svg and
+ *               sets it as markup)
+ * - asterDom:   @aster-charts/react <Chart incremental> (our library, the default: the live svg is patched in place)
  * - reactVega:  <VegaEmbed> from react-vega v8 (community-standard React wrapper;
  *               re-embeds whenever the spec deep-changes)
  * - embedHook:  vega-embed inside useEffect following the official tutorials, incl.
@@ -57,9 +59,16 @@ function useContainerWidth(
   }, [ref, onWidth, enabled])
 }
 
-function AsterEmbed({ spec, width, height, responsive, dom, data, dataChanges }: EmbedProps & { dom?: boolean; data?: Record<string, unknown[]>; dataChanges?: Record<string, number[]> }) {
-  if (responsive) return <AsterChart spec={spec} data={data} dataChanges={dataChanges} incremental={dom} />
-  return <AsterChart spec={spec} data={data} dataChanges={dataChanges} width={width} height={height} incremental={dom} />
+/**
+ * The `incremental` prop each aster embed passes, always explicit: `<Chart>` defaults to true, so leaving `aster` to the default
+ * made the two rows the same configuration (C304). benchmarks/src/embeds.test.tsx renders both and reads the prop.
+ */
+export const ASTER_INCREMENTAL: Readonly<Record<'aster' | 'asterDom', boolean>> = { aster: false, asterDom: true }
+
+function AsterEmbed({ spec, width, height, responsive, incremental, data, dataChanges }: EmbedProps & { incremental: boolean }) {
+  // (responsive: the width of the element, as the other embeds take it from their container; the height is the spec's)
+  if (responsive) return <AsterChart spec={spec} data={data} dataChanges={dataChanges} width="container" incremental={incremental} />
+  return <AsterChart spec={spec} data={data} dataChanges={dataChanges} width={width} height={height} incremental={incremental} />
 }
 
 function ReactVegaEmbed({ spec, width, height, responsive }: EmbedProps) {
@@ -155,9 +164,9 @@ function EmbedHookEmbed({ spec, width, height, responsive }: EmbedProps) {
 export function BenchEmbed({ name, ...props }: EmbedProps & { name: EmbedName }) {
   switch (name) {
     case 'aster':
-      return <AsterEmbed {...props} />
+      return <AsterEmbed {...props} incremental={ASTER_INCREMENTAL.aster} />
     case 'asterDom':
-      return <AsterEmbed {...props} dom />
+      return <AsterEmbed {...props} incremental={ASTER_INCREMENTAL.asterDom} />
     case 'reactVega':
       return <ReactVegaEmbed {...props} />
     case 'embedHook':

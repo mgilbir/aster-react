@@ -12,6 +12,7 @@ export type Tiling = (parent: HierNode, x0: number, y0: number, x1: number, y1: 
 /** Lay `nodes[from, to)` (values summing to `total`) side by side across the width, each full height. */
 function tileAlongX(nodes: readonly HierNode[], from: number, to: number, total: number, x0: number, y0: number, x1: number, y1: number): void {
   const k = total && (x1 - x0) / total
+  // bounded: the nodes of one row of the layout
   for (let i = from; i < to; ++i) {
     const node = nodes[i]!
     node.y0 = y0
@@ -24,6 +25,7 @@ function tileAlongX(nodes: readonly HierNode[], from: number, to: number, total:
 /** Lay `nodes[from, to)` (values summing to `total`) one under the other down the height, each full width. */
 function tileAlongY(nodes: readonly HierNode[], from: number, to: number, total: number, x0: number, y0: number, x1: number, y1: number): void {
   const k = total && (y1 - y0) / total
+  // bounded: the nodes of one row of the layout
   for (let i = from; i < to; ++i) {
     const node = nodes[i]!
     node.x0 = x0
@@ -58,6 +60,7 @@ export const tileBinary: Tiling = (parent, x0, y0, x1, y1) => {
   for (let i = 0; i < n; ++i) sums[i + 1] = sum += nodes[i]!.value
   // work list of (from, to, value, rectangle); the halves of a range are independent
   const work: number[] = [0, n, parent.value, x0, y0, x1, y1]
+  // bounded: each range is split once into two smaller ones: at most twice the nodes in all
   while (work.length) {
     const ay1 = work.pop()!
     const ax1 = work.pop()!
@@ -79,6 +82,7 @@ export const tileBinary: Tiling = (parent, x0, y0, x1, y1) => {
     const target = value / 2 + offset
     let k = i + 1
     let hi = j - 1
+    // bounded: binary search over the range
     while (k < hi) {
       const mid = k + hi >>> 1
       if (sums[mid]! < target) k = mid + 1
@@ -120,17 +124,20 @@ function squarify(ratio: number, parent: HierNode, x0: number, y0: number, x1: n
   let value = parent.value
   let from = 0
   let to = 0
+  // bounded: every row moves `from` on to its end: one pass over the nodes in all
   while (from < n) {
     const dx = x1 - x0
     const dy = y1 - y0
     // the row starts at the next child with a value (the empty ones before it ride along)
     let total: number
+    // bounded: `to` only moves forward: one pass over the nodes in all
     do total = nodes[to++]!.value; while (!total && to < n)
     let min = total
     let max = total
     const alpha = Math.max(dy / dx, dx / dy) / (value * ratio)
     let beta = total * total * alpha
     let worst = Math.max(max / beta, beta / min)
+    // bounded: `to` only moves forward: one pass over the nodes in all
     for (; to < n; ++to) {
       const v = nodes[to]!.value
       total += v
@@ -170,6 +177,7 @@ export function resquarified(ratio: number): Tiling {
       let value = parent.value
       for (const row of memo.rows) {
         row.value = 0
+        // bounded: the nodes of one remembered row: the rows partition the nodes
         for (let i = 0; i < row.nodes.length; ++i) row.value += row.nodes[i]!.value
         if (row.alongX) tileAlongX(row.nodes, 0, row.nodes.length, row.value, x0, y0, x1, value ? y0 += (y1 - y0) * row.value / value : y1)
         else tileAlongY(row.nodes, 0, row.nodes.length, row.value, x0, y0, value ? x0 += (x1 - x0) * row.value / value : x1, y1)

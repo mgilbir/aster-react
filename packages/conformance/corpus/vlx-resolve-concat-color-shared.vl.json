@@ -1,7 +1,8 @@
 {
   "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "description": "a shared colour scale is the default of a concat, written out; the two charts colour different fields, so 'independent' draws different colours",
   "padding": 5,
-  "autosize": "none",
+  "autosize": "pad",
   "data": {
     "name": "table",
     "values": [
@@ -150,7 +151,7 @@
           "type": "quantitative"
         },
         "color": {
-          "field": "c",
+          "field": "g",
           "type": "nominal"
         }
       }

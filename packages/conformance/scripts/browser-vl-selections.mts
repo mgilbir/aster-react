@@ -27,36 +27,43 @@
  * index among the group frames in document order), and positions are fractions of that frame. Their signals live in
  * group scopes, which are compared too (vega: the sub-contexts of the view's state).
  *
+ * The verdict is runGate's (scripts/lib/run-gate.mjs): `compared` counts the (case, renderer) runs compared, floored at
+ * `--min-cases` x renderers; the retained ratchets fail the gate; a narrowed run (`--filter`, `--renderer`) applies no
+ * floor but still fails on zero runs. `--plant-difference` changes a signal Aster reports at every step.
+ *
  * Run: pnpm conformance:selections [--filter=substr] [--min-cases=N] [--max-retained=N] [--max-retained-canvas=N] [--renderer=svg|canvas]
  *   (after `pnpm build`)
  *
- * Debugging: SEL_DUMP=1 writes the SVGs of one step of every case (the step set by SEL_DUMP_AT, default 0 = the initial render) as
+ * Debugging (diagnostics only: none of these changes the verdict): SEL_DEBUG=1 prints the frames, pointer targets and stores
+ * of every step; SEL_TRACE=1 the translate signals during a drag; SEL_MOD=1 logs vega's `modify` calls; SEL_MAX=N prints N
+ * problems per case (default 6). SEL_DUMP=1 writes the SVGs of one step of every case (the step set by SEL_DUMP_AT, default 0 = the initial render) as
  * sel-vega.svg, sel-aster.svg and sel-vega-fresh.svg into SEL_DUMP_DIR (default `aster-vl-selections-dump` under the OS temp
  * directory; created if missing) and prints the directory. Each case overwrites the previous one's files, so combine it with --filter.
  */
-import { writeFileSync, rmSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
+import { writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { createRequire } from 'node:module'
 import { build } from 'esbuild'
 import type { Page } from 'playwright'
 import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { makeTempDir } from '../../../scripts/lib/temp-dir.mjs'
+import { GATE_FLAGS, intOption, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
 import { READ_PIXELS, pixelDiff, type Pixels } from './canvas-pixels.mts'
 import { chartBenchSurvival } from './chart-bench-survival.mts'
+import { launchBrowser } from '../../../scripts/lib/launch-browser.mjs'
 
-cli({ url: import.meta.url, flags: { filter: 'eq', 'min-cases': 'eq', 'max-retained': 'eq', 'max-retained-canvas': 'eq', renderer: 'eq' } })
+cli({ url: import.meta.url, flags: { filter: 'eq', 'min-cases': 'eq', 'max-retained': 'eq', 'max-retained-canvas': 'eq', renderer: 'eq', ...GATE_FLAGS } })
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)
 const ROOT = dirname(dirname(CONF_DIR))
 const REACT_DIR = join(ROOT, 'packages', 'react')
-const OUT_DIR = join(CONF_DIR, '.tmp-browser-vl-selections')
+const OUT_DIR = makeTempDir('.tmp-browser-vl-selections-', CONF_DIR) // (one directory per run: concurrent runs do not clobber each other)
 const argv = process.argv.slice(2)
 const arg = (n: string, d: string): string => argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1] ?? d
 const FILTER = arg('filter', '')
-const MIN_CASES = Number(arg('min-cases', '0'))
+const MIN_CASES = intOption(argv.find((a) => a.startsWith('--min-cases='))?.split('=')[1], '--min-cases', 0)
 /** Ceiling on the steps classified `retained` (Aster == vega's fresh render != vega's retained render), like sweep-signals' --max-retained. */
 const MAX_RETAINED = Number(arg('max-retained', '1e9'))
 /** The same ceiling for the canvas renderer's steps (vega's fresh render painted by its canvas renderer, `toCanvas()`). */
@@ -64,8 +71,6 @@ const MAX_RETAINED_CANVAS = Number(arg('max-retained-canvas', '1e9'))
 type Renderer = 'svg' | 'canvas'
 /** Every case runs on both renderers; `--renderer` keeps one (debugging). */
 const RENDERERS: Renderer[] = arg('renderer', '') ? [arg('renderer', '') as Renderer] : ['svg', 'canvas']
-const require = createRequire(import.meta.url)
-void require
 
 // ---- cases ------------------------------------------------------------------------
 
@@ -128,6 +133,18 @@ const colorBy = (param: string, extra: Record<string, unknown> = {}): Record<str
 const sel = (name: string, select: unknown, extra: Record<string, unknown> = {}): Record<string, unknown> => ({ name, select, ...extra })
 
 const CASES: Case[] = [
+  {
+    // vega-lite's point clear is `click[!event.item]`-like only for the view's own items: a click in the padding (outside the frame)
+    // changes NOTHING in vega, while one on an empty point of the plot clears (the case above). Aster must do exactly that: the
+    // steps that click the padding are in no `moves`, and every step compares the stores and the SVG with vega's.
+    name: 'point click: a click in the padding (right, top, left, bottom) leaves the selection, as in vega',
+    spec: base({ padding: 24, params: [sel('pick', 'point')], mark: 'point', encoding: { ...xy, color: colorBy('pick') } }),
+    steps: [
+      { t: 'clickMark', i: 0 }, { t: 'click', x: 1.06, y: 0.5 }, { t: 'clickMark', i: 3 }, { t: 'click', x: 0.5, y: -0.1 },
+      { t: 'clickMark', i: 1 }, { t: 'click', x: -0.4, y: 0.5 }, { t: 'clickMark', i: 2 }, { t: 'click', x: 0.5, y: 1.4 },
+    ],
+    moves: [0, 2, 4, 6],
+  },
   {
     name: 'point click, replace, shift-toggle, clear on empty, dblclick',
     spec: base({ params: [sel('pick', 'point')], mark: 'point', encoding: { ...xy, color: colorBy('pick') } }),
@@ -238,6 +255,14 @@ const CASES: Case[] = [
     spec: base({ params: [sel('grid', 'interval', { bind: 'scales' })], mark: 'point', encoding: xy }),
     steps: [{ t: 'drag', x0: 0.5, y0: 0.5, x1: 0.3, y1: 0.6 }, { t: 'wheel', x: 0.5, y: 0.5, dy: -120 }, { t: 'wheel', x: 0.2, y: 0.8, dy: 200 }, { t: 'dblclick', x: 0.5, y: 0.5 }],
     moves: [0, 1, 2, 3],
+  },
+  {
+    // (the selections gate's only other temporal axis is an interval brush: a temporal `bind: "scales"` pans and zooms in
+    // milliseconds, which a Date-returning `invert` must not turn into NaN)
+    name: 'bind scales on a temporal axis: drag pans, wheel zooms, dblclick resets',
+    spec: base({ params: [sel('grid', 'interval', { bind: 'scales' })], mark: 'point', encoding: { x: { field: 'd', type: 'temporal' }, y: { field: 'b', type: 'quantitative' } } }),
+    steps: [{ t: 'drag', x0: 0.5, y0: 0.5, x1: 0.3, y1: 0.6 }, { t: 'wheel', x: 0.5, y: 0.5, dy: -120 }, { t: 'dblclick', x: 0.5, y: 0.5 }],
+    moves: [0, 1, 2],
   },
   {
     name: 'bind scales on log and pow scales',
@@ -736,13 +761,11 @@ await build({
   absWorkingDir: CONF_DIR,
 })
 writeFileSync(join(OUT_DIR, 'index.html'), '<!doctype html><html><body style="margin:0;width:900px;height:700px"><script src="./page.js"></script></body></html>')
-void readFileSync
-void readdirSync
 
 // ---- driver -----------------------------------------------------------------------
 
 const playwright = await import('playwright')
-const browser = await playwright.chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] })
+const browser = await launchBrowser(playwright.chromium, { headless: true, args: ['--disable-dev-shm-usage'] })
 
 /** What a step left: the signals, the stores, and the picture (the SVG text, or on the canvas renderer the canvas's pixels). */
 interface Snapshot { signals: Record<string, string>; stores: Record<string, string>; scoped?: string; tip?: string; svg: string | Pixels; fresh?: string | Pixels }
@@ -924,13 +947,13 @@ async function drive(engine: 'vega' | 'aster', renderer: Renderer, c: Case): Pro
     const settle = (): Promise<unknown> => page.evaluate(() => (window as unknown as { __settle: () => Promise<unknown> }).__settle())
     await settle()
     if (c.wait) { await page.waitForTimeout(c.wait); await settle() }
-    const snaps: Snapshot[] = [await snapshot(page, engine === 'vega' && !process.env.SEL_NOFRESH)]
+    const snaps: Snapshot[] = [await snapshot(page, engine === 'vega')]
     const unreachable: number[] = []
     for (const [k, s] of c.steps.entries()) {
       if (!(await runStep(page, s, engine, renderer))) unreachable.push(k)
       await settle()
       await settle()
-      snaps.push(await snapshot(page, engine === 'vega' && !process.env.SEL_NOFRESH))
+      snaps.push(await snapshot(page, engine === 'vega'))
     }
     if (pageErrors.length) return { error: `page errors: ${pageErrors.join(' | ')}` }
     const errors = await page.evaluate(() => (window as unknown as { __errors: string[] }).__errors)
@@ -945,119 +968,126 @@ async function drive(engine: 'vega' | 'aster', renderer: Renderer, c: Case): Pro
   }
 }
 
-let pass = 0
-let runs = 0
-let unreachableSteps = 0
-const retainedSteps: Record<Renderer, string[]> = { svg: [], canvas: [] }
-const failures: string[] = []
-const t0 = Date.now()
-/** How two pictures differ (strict canonical SVG, or pixels within the canvas gate's tolerance), or null. */
-const pictureDiff = (a: string | Pixels, b: string | Pixels): string | null => {
-  if (typeof a !== 'string' || typeof b !== 'string') return typeof a === 'string' || typeof b === 'string' ? 'svg against pixels' : pixelDiff(a, b)
-  const d = diffCanonical(canonicalizeSvg(a), canonicalizeSvg(b))
-  return d.length ? String(d[0]) : null
-}
-for (const c of cases) for (const renderer of RENDERERS) {
-  runs++
-  const [v, a] = [await drive('vega', renderer, c), await drive('aster', renderer, c)]
-  const problems: string[] = []
-  if ('error' in v) problems.push(`vega side failed: ${v.error}`)
-  else if ('error' in a) problems.push(`aster side failed: ${a.error}`)
-  else {
-    if (a.errors.length) problems.push(`aster logged: ${a.errors[0]!.slice(0, 200)}`)
-    if (v.errors.length) problems.push(`vega logged: ${v.errors[0]!.slice(0, 200)}`)
-    if (process.env.SEL_DEBUG) for (let i = 0; i < v.snaps.length; i++) console.log(i, "V", v.snaps[i]!.signals.pick_c_legend, v.snaps[i]!.signals.pick_toggle, v.snaps[i]!.signals.pick_tuple, "| A", a.snaps[i]!.signals.pick_c_legend, a.snaps[i]!.signals.pick_toggle, a.snaps[i]!.signals.pick_tuple)
-    if (process.env.SEL_MOD) console.log('modlog', JSON.stringify(v.modlog ?? null))
-    for (let i = 0; i < v.snaps.length; i++) {
-      const label = i === 0 ? 'initial' : `step ${i - 1} (${c.steps[i - 1]!.t})`
-      const vs = v.snaps[i]!
-      const as = a.snaps[i]!
-      for (const n of Object.keys(vs.signals)) {
-        if (vs.signals[n] !== as.signals[n]) problems.push(`${label}: signal ${n}: vega=${vs.signals[n]!.slice(0, 160)} aster=${as.signals[n]!.slice(0, 160)}`)
+async function main(gate: Gate): Promise<void> {
+  let pass = 0
+  let runs = 0
+  let unreachableSteps = 0
+  const retainedSteps: Record<Renderer, string[]> = { svg: [], canvas: [] }
+  const t0 = Date.now()
+  /** How two pictures differ (strict canonical SVG, or pixels within the canvas gate's tolerance), or null. */
+  const pictureDiff = (a: string | Pixels, b: string | Pixels): string | null => {
+    if (typeof a !== 'string' || typeof b !== 'string') return typeof a === 'string' || typeof b === 'string' ? 'svg against pixels' : pixelDiff(a, b)
+    const d = diffCanonical(canonicalizeSvg(a), canonicalizeSvg(b))
+    return d.length ? String(d[0]) : null
+  }
+  for (const c of cases) for (const renderer of RENDERERS) {
+    runs++
+    const [v, a] = [await drive('vega', renderer, c), await drive('aster', renderer, c)]
+    // (--plant-difference: the first signal Aster reports at every step is not the one it computed)
+  if (gate.plant && !('error' in a)) for (const snap of a.snaps) { const k = Object.keys(snap.signals)[0]; if (k !== undefined) snap.signals[k] = `${snap.signals[k]} (planted)` }
+    const problems: string[] = []
+    const compared = !('error' in v) && !('error' in a)
+    if ('error' in v) problems.push(`vega side failed: ${v.error}`)
+    else if ('error' in a) problems.push(`aster side failed: ${a.error}`)
+    else {
+      if (a.errors.length) problems.push(`aster logged: ${a.errors[0]!.slice(0, 200)}`)
+      if (v.errors.length) problems.push(`vega logged: ${v.errors[0]!.slice(0, 200)}`)
+      if (process.env.SEL_DEBUG) for (let i = 0; i < v.snaps.length; i++) console.log(i, "V", v.snaps[i]!.signals.pick_c_legend, v.snaps[i]!.signals.pick_toggle, v.snaps[i]!.signals.pick_tuple, "| A", a.snaps[i]!.signals.pick_c_legend, a.snaps[i]!.signals.pick_toggle, a.snaps[i]!.signals.pick_tuple)
+      if (process.env.SEL_MOD) console.log('modlog', JSON.stringify(v.modlog ?? null))
+      for (let i = 0; i < v.snaps.length; i++) {
+        const label = i === 0 ? 'initial' : `step ${i - 1} (${c.steps[i - 1]!.t})`
+        const vs = v.snaps[i]!
+        const as = a.snaps[i]!
+        for (const n of new Set([...Object.keys(vs.signals), ...Object.keys(as.signals)])) {
+          if (vs.signals[n] !== as.signals[n]) problems.push(`${label}: signal ${n}: vega=${String(vs.signals[n]).slice(0, 160)} aster=${String(as.signals[n]).slice(0, 160)}`)
+        }
+        if (vs.scoped !== as.scoped) {
+          // name the first scope that has no counterpart
+          const vsc = JSON.parse(vs.scoped!) as string[]
+          const asc = JSON.parse(as.scoped!) as string[]
+          const onlyV = vsc.find((x) => !asc.includes(x))
+          const onlyA = asc.find((x) => !vsc.includes(x))
+          const where = `${vsc.length} vs ${asc.length} scopes; only in vega: ${String(onlyV).slice(0, 300)}; only in aster: ${String(onlyA).slice(0, 300)}`
+          problems.push(`${label}: scoped signals: ${where}`)
+        }
+        const how = i > 0 ? c.tooltip?.[i - 1] : undefined
+        const want = how === 'equal' ? vs.tip : how === 'current' ? v.snaps[i + 1]?.tip : how === 'hidden' ? 'null' : undefined
+        if (want !== undefined && as.tip !== want) problems.push(`${label}: tooltip (${how}): want ${String(want).slice(0, 200)}, aster=${String(as.tip).slice(0, 200)} (vega now ${String(vs.tip).slice(0, 120)})`)
+        for (const n of Object.keys(vs.stores)) {
+          if (vs.stores[n] !== as.stores[n]) problems.push(`${label}: store ${n}: vega=${vs.stores[n]!.slice(0, 200)} aster=${as.stores[n]!.slice(0, 200)}`)
+        }
+        if (process.env.SEL_DUMP && i === Number(process.env.SEL_DUMP_AT ?? 0) && typeof vs.svg === 'string') {
+          const dir = process.env.SEL_DUMP_DIR ?? join(CONF_DIR, '.tmp-vl-selections-dump')
+          mkdirSync(dir, { recursive: true })
+          writeFileSync(join(dir, 'sel-vega.svg'), vs.svg)
+          writeFileSync(join(dir, 'sel-aster.svg'), String(as.svg))
+          writeFileSync(join(dir, 'sel-vega-fresh.svg'), String(vs.fresh ?? ''))
+          console.log(`[browser-vl-selections] SEL_DUMP: ${c.name} / ${label} written to ${dir}`)
+        }
+        const diff = pictureDiff(vs.svg, as.svg)
+        if (diff) {
+          // The documented deviation: after a signal write Aster renders the FRESH result, vega keeps its first autosize,
+          // padding and tick order. Accepted only when Aster equals vega's own fresh render of the same spec at the same
+          // signal and store values EXACTLY (on the canvas: within the canvas gate's tolerance), and vega's retained render
+          // really differs from that fresh one.
+          const fresh = vs.fresh ?? vs.svg
+          const freshDiff = pictureDiff(fresh, as.svg)
+          if (freshDiff === null && pictureDiff(fresh, vs.svg) !== null) retainedSteps[renderer].push(`${c.name} / ${label}`)
+          else problems.push(`${label}: ${renderer === 'canvas' ? 'canvas' : 'svg'} differs from vega's retained render (${diff.slice(0, 160)}) and from vega's fresh render (${String(freshDiff).slice(0, 220)})`)
+        }
       }
-      if (vs.scoped !== as.scoped) {
-        // name the first scope that has no counterpart
-        const vsc = JSON.parse(vs.scoped!) as string[]
-        const asc = JSON.parse(as.scoped!) as string[]
-        const onlyV = vsc.find((x) => !asc.includes(x))
-        const onlyA = asc.find((x) => !vsc.includes(x))
-        const where = `${vsc.length} vs ${asc.length} scopes; only in vega: ${String(onlyV).slice(0, 300)}; only in aster: ${String(onlyA).slice(0, 300)}`
-        problems.push(`${label}: scoped signals: ${where}`)
+      if (c.tooltip) {
+        const steps = Object.entries(c.tooltip).map(([k, how]) => [Number(k), how] as const)
+        if (!steps.some(([k, how]) => how === 'equal' && v.snaps[k + 1]?.tip !== 'null')) problems.push('VACUOUS: vega never showed a tooltip')
+        // the differences are real: vega lags on a move to a new x, and its svg keeps the tooltip off the marks where its canvas does not
+        if (!steps.some(([k, how]) => how === 'current' && v.snaps[k + 1]?.tip !== v.snaps[k + 2]?.tip)) problems.push('VACUOUS: vega\'s tooltip never lagged a move')
+        for (const [k, how] of steps) {
+          if (how !== 'hidden') continue
+          const vegaKeeps = v.snaps[k + 1]?.tip !== 'null'
+          if (vegaKeeps !== (renderer === 'svg')) problems.push(`step ${k}: vega's ${renderer} renderer ${vegaKeeps ? 'kept' : 'hid'} the tooltip off the marks (its svg keeps it, its canvas hides it)`)
+        }
       }
-      const how = i > 0 ? c.tooltip?.[i - 1] : undefined
-      const want = how === 'equal' ? vs.tip : how === 'current' ? v.snaps[i + 1]?.tip : how === 'hidden' ? 'null' : undefined
-      if (want !== undefined && as.tip !== want) problems.push(`${label}: tooltip (${how}): want ${String(want).slice(0, 200)}, aster=${String(as.tip).slice(0, 200)} (vega now ${String(vs.tip).slice(0, 120)})`)
-      for (const n of Object.keys(vs.stores)) {
-        if (vs.stores[n] !== as.stores[n]) problems.push(`${label}: store ${n}: vega=${vs.stores[n]!.slice(0, 200)} aster=${as.stores[n]!.slice(0, 200)}`)
-      }
-      if (process.env.SEL_DUMP && i === Number(process.env.SEL_DUMP_AT ?? 0) && typeof vs.svg === 'string') {
-        const dir = process.env.SEL_DUMP_DIR ?? join(tmpdir(), 'aster-vl-selections-dump')
-        mkdirSync(dir, { recursive: true })
-        writeFileSync(join(dir, 'sel-vega.svg'), vs.svg)
-        writeFileSync(join(dir, 'sel-aster.svg'), String(as.svg))
-        writeFileSync(join(dir, 'sel-vega-fresh.svg'), String(vs.fresh ?? ''))
-        console.log(`[browser-vl-selections] SEL_DUMP: ${c.name} / ${label} written to ${dir}`)
-      }
-      const diff = pictureDiff(vs.svg, as.svg)
-      if (diff) {
-        // The documented deviation: after a signal write Aster renders the FRESH result, vega keeps its first autosize,
-        // padding and tick order. Accepted only when Aster equals vega's own fresh render of the same spec at the same
-        // signal and store values EXACTLY (on the canvas: within the canvas gate's tolerance), and vega's retained render
-        // really differs from that fresh one.
-        const fresh = vs.fresh ?? vs.svg
-        const freshDiff = pictureDiff(fresh, as.svg)
-        if (freshDiff === null && pictureDiff(fresh, vs.svg) !== null) retainedSteps[renderer].push(`${c.name} / ${label}`)
-        else problems.push(`${label}: ${renderer === 'canvas' ? 'canvas' : 'svg'} differs from vega's retained render (${diff.slice(0, 160)}) and from vega's fresh render (${String(freshDiff).slice(0, 220)})`)
+      for (const i of c.moves) {
+        // (pressed outside vega's canvas: out of the pointer's reach, see runStep; compared, but not required to move)
+        if (v.unreachable.includes(i)) { unreachableSteps++; continue }
+        const before = v.snaps[i]!
+        const after = v.snaps[i + 1]!
+        if (JSON.stringify(before.stores) === JSON.stringify(after.stores) && JSON.stringify(before.signals) === JSON.stringify(after.signals)) {
+          problems.push(`VACUOUS: step ${i} (${c.steps[i]!.t}) changed neither a signal nor a store in vega`)
+        }
       }
     }
-    if (c.tooltip) {
-      const steps = Object.entries(c.tooltip).map(([k, how]) => [Number(k), how] as const)
-      if (!steps.some(([k, how]) => how === 'equal' && v.snaps[k + 1]?.tip !== 'null')) problems.push('VACUOUS: vega never showed a tooltip')
-      // the differences are real: vega lags on a move to a new x, and its svg keeps the tooltip off the marks where its canvas does not
-      if (!steps.some(([k, how]) => how === 'current' && v.snaps[k + 1]?.tip !== v.snaps[k + 2]?.tip)) problems.push('VACUOUS: vega\'s tooltip never lagged a move')
-      for (const [k, how] of steps) {
-        if (how !== 'hidden') continue
-        const vegaKeeps = v.snaps[k + 1]?.tip !== 'null'
-        if (vegaKeeps !== (renderer === 'svg')) problems.push(`step ${k}: vega's ${renderer} renderer ${vegaKeeps ? 'kept' : 'hid'} the tooltip off the marks (its svg keeps it, its canvas hides it)`)
-      }
-    }
-    for (const i of c.moves) {
-      // (pressed outside vega's canvas: out of the pointer's reach, see runStep; compared, but not required to move)
-      if (v.unreachable.includes(i)) { unreachableSteps++; continue }
-      const before = v.snaps[i]!
-      const after = v.snaps[i + 1]!
-      if (JSON.stringify(before.stores) === JSON.stringify(after.stores) && JSON.stringify(before.signals) === JSON.stringify(after.signals)) {
-        problems.push(`VACUOUS: step ${i} (${c.steps[i]!.t}) changed neither a signal nor a store in vega`)
-      }
+    const name = `${c.name} [${renderer}]`
+    const detail = problems.slice(0, Number(process.env.SEL_MAX ?? 6)).join('\n      ')
+    if (!compared) gate.error(name, detail)
+    else if (problems.length) gate.differ(name, detail)
+    else {
+      pass++
+      gate.agree(name)
     }
   }
-  if (problems.length === 0) pass++
-  else failures.push(`${c.name} [${renderer}]:\n      ${problems.slice(0, Number(process.env.SEL_MAX ?? 6)).join('\n      ')}`)
-}
-await browser.close()
-rmSync(OUT_DIR, { recursive: true, force: true })
 
-console.log(`\n[browser-vl-selections] ${pass}/${runs} runs agree with real vega + vega-lite (${cases.length} cases on ${RENDERERS.join(' and ')}) (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
-for (const f of failures) console.log(`  FAIL ${f}`)
-if (unreachableSteps) console.log(`[browser-vl-selections] ${unreachableSteps} step(s) pressed outside a CSS-scaled canvas, which vega reads in CSS pixels: compared, not required to move`)
-let ratchet = false
-for (const [renderer, ceiling, flag] of [['svg', MAX_RETAINED, '--max-retained'], ['canvas', MAX_RETAINED_CANVAS, '--max-retained-canvas']] as const) {
-  if (!RENDERERS.includes(renderer)) continue
-  const steps = retainedSteps[renderer]
-  console.log(`[browser-vl-selections] retained on ${renderer} (Aster == vega's fresh render, vega's retained render differs): ${steps.length} step(s), ceiling ${ceiling}`)
-  for (const r of steps) console.log(`  retained ${r}`)
-  if (steps.length > ceiling) {
-    console.log(`[browser-vl-selections] RATCHET: ${steps.length} retained steps on ${renderer} > ${flag} ${ceiling}`)
-    ratchet = true
+  console.log(`\n[browser-vl-selections] ${pass}/${runs} runs agree with real vega + vega-lite (${cases.length} cases on ${RENDERERS.join(' and ')}) (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
+  if (unreachableSteps) console.log(`[browser-vl-selections] ${unreachableSteps} step(s) pressed outside a CSS-scaled canvas, which vega reads in CSS pixels: compared, not required to move`)
+  for (const [renderer, ceiling, flag] of [['svg', MAX_RETAINED, '--max-retained'], ['canvas', MAX_RETAINED_CANVAS, '--max-retained-canvas']] as const) {
+    if (!RENDERERS.includes(renderer)) continue
+    const steps = retainedSteps[renderer]
+    console.log(`[browser-vl-selections] retained on ${renderer} (Aster == vega's fresh render, vega's retained render differs): ${steps.length} step(s), ceiling ${ceiling}`)
+    for (const r of steps) console.log(`  retained ${r}`)
+    if (steps.length > ceiling) gate.problem(`RATCHET: ${steps.length} retained steps on ${renderer} > ${flag} ${ceiling}`)
   }
 }
-if (ratchet) process.exit(1)
-if (MIN_CASES && cases.length < MIN_CASES) {
-  console.log(`[browser-vl-selections] FLOOR: ${cases.length} cases < --min-cases ${MIN_CASES}`)
-  process.exit(1)
-}
-if (cases.length === 0) {
-  console.log('[browser-vl-selections] no cases ran')
-  process.exit(1)
-}
-process.exit(failures.length ? 1 : 0)
+
+await runGate({
+  name: 'selections-browser',
+  counters: { compared: { floor: MIN_CASES * RENDERERS.length, what: '(case, renderer) runs compared with real vega + vega-lite' } },
+  partial: Boolean(FILTER) || RENDERERS.length < 2 || MIN_CASES === 0,
+  run: async (gate) => {
+    try {
+      await main(gate)
+    } finally {
+      await browser.close()
+      rmSync(OUT_DIR, { recursive: true, force: true })
+    }
+  },
+})

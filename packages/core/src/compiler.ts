@@ -4,15 +4,22 @@
  * through `@aster-charts/vl` (packages/vl), the from-scratch Vega-Lite compiler, which
  * emits the Vega this compiler consumes.
  */
+import { handlesItems } from './encode-handlers.js'
 import { dict, ownGet } from './util.js'
+import { SpecParseError } from './parse-error.js'
+import { parseExpressionCached } from './expr-parser.js'
 import { assertSpecDepth } from './limits.js'
-import { dataInputOf, normalizeSpecLists } from './spec-structure.js'
+import { dataInputOf, normalizeSpecLists, VEGA_MARK_TYPES } from './spec-structure.js'
 import { noteWrittenType, transformTypeOf } from './transform-names.js'
-import { checkExpressions } from './spec-expressions.js'
+import { checkSpecExpressions } from './spec-expressions.js'
+import { engineSlotMessage, isEngineSlot } from './item-slots.js'
+import { checkFieldReferences } from './param-resolve.js'
 import { markPlacing } from './tuple-order.js'
 import { markShareable } from './guide-encode.js'
+import { ENTER_COPY, setSpatialProgram, spatialProgramOf } from './spatial.js'
 import { defaultMergedConfig, mergeVegaConfig, vegaDefaultConfig } from './config-defaults.js'
 import { isSignalRef, paddingOf, staticAutosize, viewProperty, viewSignals } from './view-props.js'
+import { assertSpecObject } from './spec-guards.js'
 import type {
   CompiledAxis,
   CompiledChart,
@@ -32,9 +39,7 @@ import type {
 
 
 export function compileChart(givenSpec: VgSpec): CompiledChart {
-  if (!givenSpec || typeof givenSpec !== 'object') {
-    throw new Error('[aster] compileChart expects a Vega spec object')
-  }
+  assertSpecObject(givenSpec, 'compileChart')
   // a spec nested past the ceiling (or cyclic) is a typed error here, not a RangeError from the recursion below
   assertSpecDepth(givenSpec)
   // vega-parser reads every scope list through vega-util `array()` and refuses a spec that uses a data
@@ -48,7 +53,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
     ? defaultMergedConfig()
     : mergeVegaConfig(vegaDefaultConfig(), userConfig)) as Record<string, unknown>
   // (one walk, in vega-parser's order: the data sets and scales a spec names, the parameters of its transforms, its expressions)
-  const regexSites = checkExpressions(rawSpec, mergedConfig)
+  const { regexSites, unitIndexed } = checkSpecExpressions(rawSpec, mergedConfig)
   markSeq = 0
   const spec: VgSpec = { ...rawSpec, config: mergedConfig as VgSpec['config'] }
 
@@ -97,7 +102,7 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
   const frameStrokeCap = resolveFrameString(spec, 'strokeCap')
   const frameStrokeJoin = resolveFrameString(spec, 'strokeJoin')
   // (an `autosize` signal is read when the chart is evaluated; this is the property as vega-parser makes it the signal's value)
-  const { type: autosize, contains: autosizeContains } = staticAutosize(viewValue('autosize'))
+  const { type: autosize, contains: autosizeContains, resize: autosizeResize } = staticAutosize(viewValue('autosize'))
   const configRange = (cfg as { range?: Record<string, unknown> }).range
 
   const data: CompiledData[] = []
@@ -128,12 +133,16 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
 
   return {
     ...((q) => (q === undefined ? {} : { callsIsTuple: q }))(tupleQuestions(spec)),
+    ...(comparesTuples(spec) ? { comparesTuples: true as const } : {}),
     ...(regexSites.length ? { regexSites } : {}),
+    ...(unitIndexed.length ? { unitIndexed } : {}),
     autosize,
     width,
     height,
     padding,
     background,
+    // (vega-parser: `spec.description || config.description`, which vega-view writes as the container's aria-label)
+    ...((rawSpec.description || (mergedConfig as { description?: unknown }).description) ? { description: String(rawSpec.description || (mergedConfig as { description?: unknown }).description) } : {}),
     frameStroke,
     frameFill,
     ...(frameFillTransparent ? { frameFillTransparent: true as const } : {}),
@@ -161,9 +170,12 @@ export function compileChart(givenSpec: VgSpec): CompiledChart {
     projections,
     configRange,
     autosizeContains,
+    ...(autosizeResize === true ? { autosizeResize: true } : {}),
     style: cfgStyle,
     ...(cfg.lineBreak != null ? { lineBreak: cfg.lineBreak } : {}),
     ...(cfg.events != null && typeof cfg.events === 'object' ? { eventConfig: cfg.events as CompiledChart['eventConfig'] } : {}),
+    // (vega-view reads `spec.locale` when it is truthy: an object's `number` and `time` halves; anything else is the default locale)
+    ...(cfg.locale != null && typeof cfg.locale === 'object' ? { locale: cfg.locale as CompiledChart['locale'] } : {}),
     layout: (spec.layout as Record<string, unknown> | undefined) ?? undefined,
     ...(contentSized.length ? { contentSized } : {}),
   }
@@ -199,6 +211,45 @@ function compileProjection(pr: Record<string, unknown>, config?: Record<string, 
  *   events): its value is then `{}` or a facet cell's datum, registered whatever the evaluation. A host can still set the signal;
  *   `'facet'` says the evaluation looks at the value it is given (see `registersTuples` in runtime.ts).
  */
+/**
+ * Whether an expression of the spec compares two values that may be objects: an equality operator neither of whose operands is a
+ * literal, one of them a bare name (`datum === src`, `item != hovered`). Over-counting costs only the bookkeeping of
+ * `withTupleOrigins`; a comparison it misses would compare copies of one row as different objects.
+ */
+const EQUALITY = new Set(['==', '!=', '===', '!=='])
+const NOT_OBJECTS = new Set(['undefined', 'NaN', 'Infinity'])
+function comparesTuples(spec: unknown): boolean {
+  const seen = new Set<unknown>()
+  const isName = (n: { type?: unknown; name?: unknown }): boolean => n.type === 'Identifier' && !NOT_OBJECTS.has(n.name as string)
+  const compares = (tree: unknown): boolean => {
+    const stack: unknown[] = [tree]
+    while (stack.length) {
+      const e = stack.pop()
+      if (e === null || typeof e !== 'object') continue
+      if (Array.isArray(e)) { for (const x of e) stack.push(x); continue }
+      const node = e as { type?: unknown; operator?: unknown; left?: { type?: unknown; name?: unknown }; right?: { type?: unknown; name?: unknown } }
+      if (node.type === 'BinaryExpression' && EQUALITY.has(node.operator as string) && node.left && node.right
+        && node.left.type !== 'Literal' && node.right.type !== 'Literal' && (isName(node.left) || isName(node.right))) return true
+      for (const v of Object.values(node)) if (v !== null && typeof v === 'object') stack.push(v)
+    }
+    return false
+  }
+  const walk = (v: unknown): boolean => {
+    if (typeof v === 'string') {
+      if (!/[=!]=/.test(v)) return false
+      let tree: unknown
+      try { tree = parseExpressionCached(v) } catch { return false }
+      return compares(tree)
+    }
+    if (v === null || typeof v !== 'object' || seen.has(v)) return false
+    seen.add(v)
+    if (Array.isArray(v)) return v.some(walk)
+    // (a dataset's inline rows are data, not expressions: never read -- a host's row may be read only where the chart draws it)
+    return Object.keys(v).some((k) => !(k === 'values' && Array.isArray((v as Record<string, unknown>)[k])) && walk((v as Record<string, unknown>)[k]))
+  }
+  return walk(spec)
+}
+
 function tupleQuestions(spec: unknown): true | 'facet' | undefined {
   const seen = new Set<unknown>()
   let facet = false
@@ -270,8 +321,36 @@ function frameEncodeOf(spec: VgSpec): { frameEncode: NonNullable<CompiledChart['
     const v = frameStyleValue(spec, k)
     if (v !== undefined) aria[k] = (v !== null && typeof v === 'object' && 'signal' in v ? { signal: (v as { signal: string }).signal } : { value: v }) as EncodeValue
   }
-  if (own === undefined && Object.keys(aria).length === 0) return undefined
-  return { frameEncode: { ...aria, ...(own?.enter ?? {}), ...(own?.update ?? {}) } as NonNullable<CompiledChart['frameEncode']> }
+  // The root group's encode is vega-parser's `rootEncode` under the view's own: x and y 0 in `enter`, the size signals in `update`.
+  // Its defaults (config.group, then the view's styles) can only add the edges `x2`, `xc`, `y2`, `yc` to its spatial channels
+  // (the others are its own), and they land in `enter`: an `xc` places the root group at `xc` (vega adjusts each set on its own).
+  const ownEnter = (own?.enter ?? {}) as Record<string, EncodeValue>
+  const ownUpdate = (own?.update ?? {}) as Record<string, EncodeValue>
+  const enter: Record<string, EncodeValue> = { x: { value: 0 }, y: { value: 0 } } as Record<string, EncodeValue>
+  const update: Record<string, EncodeValue> = { width: { signal: 'width' }, height: { signal: 'height' } } as Record<string, EncodeValue>
+  const has = (k: string): boolean => Object.hasOwn(enter, k) || Object.hasOwn(update, k) || hasOwnChannel({ enter: ownEnter, update: ownUpdate }, k)
+  let spatialDefaults = false
+  for (const k of ['x2', 'xc', 'y2', 'yc']) {
+    const v = frameStyleValue(spec, k)
+    if (v === undefined || has(k)) continue
+    spatialDefaults = true
+    if (v && typeof v === 'object' && (v as { signal?: unknown }).signal) update[k] = { signal: (v as { signal: string }).signal } as EncodeValue
+    else enter[k] = { value: v } as EncodeValue
+  }
+  Object.assign(enter, ownEnter)
+  Object.assign(update, ownUpdate)
+  const keys = (set: Record<string, unknown>): Set<string> => new Set(Object.keys(set).filter((k) => set[k] != null))
+  const program = spatialDefaults || own !== undefined ? spatialProgramOf('group', keys(enter), keys(update)) : undefined
+  if (program === undefined && !spatialDefaults) {
+    if (own === undefined && Object.keys(aria).length === 0) return undefined
+    return { frameEncode: { ...aria, ...ownEnter, ...ownUpdate } as NonNullable<CompiledChart['frameEncode']> }
+  }
+  const merged: Record<string, EncodeValue | EncodeValue[]> = { ...aria, ...enter, ...update }
+  if (program) {
+    for (const dim of [program.x, program.y]) for (const k of dim?.enter ?? []) if (dim!.update.includes(k)) merged[ENTER_COPY + k] = enter[k]!
+    setSpatialProgram(merged, program)
+  }
+  return { frameEncode: merged as NonNullable<CompiledChart['frameEncode']> }
 }
 
 /** The cell background fill. */
@@ -334,8 +413,10 @@ function compileSignalDefs(signals?: Array<Record<string, unknown>>): CompiledSi
       // vega leaves such a signal undefined until the event.)
       // Keep the full event-stream spec: the host binds these via
       // bindSignalEvents (signals.ts) to drive the event loop.
-      // Entries are kept whole (and copied, so the compiled chart never aliases the
-      // spec): the event loop interprets `events` (string | object | array) itself.
+      // Entries are kept whole (each entry object copied; what an entry holds -- its `events`, an
+      // `encode` -- is the spec's, as are a dataset's `values` and `format`, a guide's `encode` and a
+      // transform's parameter values: the compiled chart is not to be written, nor the spec while it is
+      // in use): the event loop interprets `events` (string | object | array) itself.
       const on = (s.on as SignalOnDef[]).filter((o) => o != null && typeof o === 'object').map((o) => ({ ...o })) as SignalOnDef[]
       def.on = on
     }
@@ -367,6 +448,8 @@ function compileData(d: Record<string, unknown>): CompiledData {
     compiled.transform.push(compileTransform(t))
   }
   markPlacing(compiled.transform as ReadonlyArray<{ type?: unknown; sort?: unknown }>)
+  const on = (Array.isArray(d.on) ? d.on : d.on != null ? [d.on] : []).filter((x): x is Record<string, unknown> => x !== null && typeof x === 'object')
+  if (on.length) compiled.on = on
   return compiled
 }
 
@@ -378,15 +461,19 @@ function compileTransform(t: Record<string, unknown>): CompiledTransform {
     if (key === 'type') continue
     out[key] = t[key]
   }
+  // (a field that is no access path is refused as vega's runtime refuses it, building the view)
+  checkFieldReferences(out)
   return out as CompiledTransform
 }
 
+
 function compileScale(s: Record<string, unknown>): CompiledScale {
+  // (a scale of a type vega-scale does not register is refused when the spec's expressions are read: spec-structure.ts `checkScale`)
   // prototype-less: scale keys are spec data (`__proto__` stays a plain key)
   const out = dict<unknown>({ name: s.name, type: s.type, domain: s.domain, range: s.range })
   // vega-parser copies every other scale key through to the Scale transform
   // (interpolateGamma, schemeExtent, domainImplicit, ...): a whitelist silently
-  // dropped whatever it forgot. buildScale ignores keys the scale has no setter for.
+  // dropped whatever it forgot. buildScale warns about a key the scale has no method of its own for, as vega does.
   for (const key of Object.keys(s)) {
     if (key === 'name' || key === 'type' || key === 'domain' || key === 'range') continue
     if (s[key] !== undefined) out[key] = s[key]
@@ -418,7 +505,7 @@ function compileGuideAxes(raw: Array<Record<string, unknown>> | undefined, cfg: 
       // `orient: {signal}`: the config blocks are consulted per key, as signal expressions over the orient signal (vega's
       // axis config), so a guide property that carries one is a signal property like any other
       const sc = [...scales].reverse().find((s) => s.name === a.scale)
-      const axis = compileAxis(applyConfigDefaults({ ...a, orient: '' }, signalOrientDefaults(cfg, (orientRaw as { signal: string }).signal, sc?.type === 'band'), scales))
+      const axis = compileAxis(applyConfigDefaults({ ...a, orient: '' }, signalOrientDefaults(cfg, (orientRaw as { signal: string }).signal, sc?.type === 'band')))
       axes.push({ ...axis, orientSignal: { signal: (orientRaw as { signal: string }).signal } })
       continue
     }
@@ -438,7 +525,7 @@ function compileGuideAxes(raw: Array<Record<string, unknown>> | undefined, cfg: 
       if (band) Object.assign(defaults, cfgAxisBand)
       if (memo !== undefined) { Object.freeze(defaults); markShareable(defaults); memo.set(memoKey, defaults) }
     }
-    axes.push(compileAxis(applyConfigDefaults(a, defaults, scales)))
+    axes.push(compileAxis(applyConfigDefaults(a, defaults)))
   }
   return axes
 }
@@ -447,7 +534,7 @@ function compileGuideAxes(raw: Array<Record<string, unknown>> | undefined, cfg: 
 function compileGuideLegends(raw: Array<Record<string, unknown>> | undefined, cfg: Record<string, unknown>): CompiledLegend[] {
   const cfgLegend = (cfg.legend ?? {}) as Record<string, unknown>
   if (cfg === defaultMergedConfig() && cfg.legend) markShareable(cfgLegend)
-  return (raw ?? []).map((l) => compileLegend(applyConfigDefaults(l, cfgLegend, undefined, true)))
+  return (raw ?? []).map((l) => compileLegend(applyConfigDefaults(l, cfgLegend, true)))
 }
 
 /** Where the config blocks say a thing about the orient: the keys of the blocks, whichever block holds them. */
@@ -510,12 +597,8 @@ function compileAxis(a: Record<string, unknown>): CompiledAxis {
     scale: a.scale as string,
     orient: a.orient as CompiledAxis['orient'],
   }
-  for (const key of ['grid', 'gridColor', 'gridWidth', 'gridDash', 'gridOpacity', 'gridCap', 'gridScale', 'domain', 'labels', 'ticks', 'tickCount', 'tickMinStep', 'tickSize', 'title', 'titlePadding', 'titleFontSize', 'titleFontWeight', 'titleOpacity', 'titleColor', 'titleAngle', 'titleAlign', 'titleBaseline', 'titleX', 'titleY', 'labelAlign', 'labelBaseline', 'labelFlush', 'labelFlushOffset', 'labelOverlap', 'labelSeparation', 'labelPadding', 'labelAngle', 'labelOffset', 'labelColor', 'labelOpacity', 'labelFontSize', 'labelFont', 'labelFontStyle', 'labelFontWeight', 'labelLimit', 'labelExpr', 'bandPosition', 'tickColor', 'tickWidth', 'tickDash', 'tickOffset', 'tickRound', 'tickExtra', 'domainColor', 'domainWidth', 'domainDash', 'domainOpacity', 'domainCap', 'maxExtent', 'minExtent', 'titleAnchor', 'titleLimit', 'titleFont', 'titleLineHeight', 'translate', 'position', 'offset', 'tickBand', 'format', 'formatType', 'zindex', 'values', 'aria', 'description'] as const) {
-    if (a[key] !== undefined) (out as unknown as Record<string, unknown>)[key] = a[key]
-  }
-  // Every other axis property vega defines (tickCap, tickOpacity, *DashOffset,
-  // titleFontStyle, ...) is carried too: a whitelist silently dropped whatever
-  // it forgot, and nothing reported it.
+
+  // Every axis property is carried as written (vega reads each by name; a whitelist silently dropped whatever it forgot).
   for (const key of Object.keys(a)) {
     if (key === 'encode' || key === 'scale' || key === 'orient') continue
     if (a[key] !== undefined && !Object.hasOwn(out, key)) (out as unknown as Record<string, unknown>)[key] = a[key]
@@ -526,11 +609,8 @@ function compileAxis(a: Record<string, unknown>): CompiledAxis {
 
 function compileLegend(l: Record<string, unknown>): CompiledLegend {
   const out: CompiledLegend = {}
-  for (const key of ['fill', 'stroke', 'size', 'shape', 'opacity', 'strokeDash', 'disable', 'strokeWidth', 'orient', 'direction', 'columns', 'title', 'offset', 'padding', 'gradientLength', 'gradientThickness', 'gradientStrokeColor', 'gradientStrokeWidth', 'gradientOpacity', 'symbolSize', 'symbolType', 'zindex', 'type', 'tickCount', 'tickMinStep', 'symbolStrokeWidth', 'symbolOffset', 'symbolOpacity', 'symbolDash', 'symbolStrokeColor', 'labelAlign', 'labelBaseline', 'labelColor', 'labelOpacity', 'labelFontSize', 'labelFontWeight', 'labelFontStyle', 'labelFont', 'labelOffset', 'labelLimit', 'labelSeparation', 'rowPadding', 'columnPadding', 'titlePadding', 'titleFontSize', 'titleFontWeight', 'titleOpacity', 'titleColor', 'titleBaseline', 'titleAlign', 'titleAnchor', 'titleAngle', 'titleOrient', 'titleLimit', 'titleFont', 'titleLineHeight', 'gridAlign', 'clipHeight', 'cornerRadius', 'fillColor', 'strokeColor', 'labelOverlap', 'symbolLimit', 'legendX', 'legendY', 'format', 'formatType', 'labelExpr', 'values', 'aria', 'layout'] as const) {
-    if (l[key] !== undefined) (out as unknown as Record<string, unknown>)[key] = l[key]
-  }
-  // every other legend property vega defines is carried too (titleFontStyle, ...):
-  // a whitelist silently dropped whatever it forgot
+
+  // every legend property is carried as written (a whitelist silently dropped whatever it forgot)
   for (const key of Object.keys(l)) {
     if (key === 'encode') continue
     if (l[key] !== undefined && !Object.hasOwn(out, key)) (out as unknown as Record<string, unknown>)[key] = l[key]
@@ -553,14 +633,15 @@ function compileTitle(value: unknown, config?: Record<string, unknown>): Compile
   for (const n of styleNames) Object.assign(sty, ownGet(cfgStyle, n))
   // Defaults mirror vega's config.title block (orient top, anchor middle,
   // offset 4, subtitlePadding 3).
-  const rawText = spec.text
-  const text: CompiledTitle['text'] = rawText && typeof rawText === 'object' && 'signal' in (rawText as Record<string, unknown>)
-    ? { signal: String((rawText as { signal: unknown }).signal) }
-    : typeof rawText === 'string' ? rawText : Array.isArray(rawText) ? rawText.map(String) : String(rawText ?? '')
+  const textOf = (raw: unknown): CompiledTitle['text'] => (raw && typeof raw === 'object' && 'signal' in (raw as Record<string, unknown>)
+    ? { signal: String((raw as { signal: unknown }).signal) }
+    : typeof raw === 'string' ? raw : Array.isArray(raw) ? raw.map(String) : String(raw ?? ''))
+  const text = textOf(spec.text)
   const fontSize = (spec.fontSize as number | undefined) ?? (cfg.fontSize as number | undefined) ?? (sty.fontSize as number | undefined) ?? 11
   return {
     text,
-    subtitle: typeof spec.subtitle === 'string' ? spec.subtitle : spec.subtitle != null ? String(spec.subtitle) : undefined,
+    // (lines or a signal, as the text: not one string of them, `"line1,line2"` / `"[object Object]"`)
+    subtitle: spec.subtitle != null ? textOf(spec.subtitle) : undefined,
     orient: (spec.orient as CompiledTitle['orient']) ?? (cfg.orient as CompiledTitle['orient']) ?? 'top',
     anchor: (spec.anchor as CompiledTitle['anchor']) ?? (cfg.anchor as CompiledTitle['anchor']) ?? 'middle',
     offset: (spec.offset as number | undefined) ?? (cfg.offset as number | undefined) ?? 4,
@@ -589,7 +670,7 @@ function compileTitle(value: unknown, config?: Record<string, unknown>): Compile
 }
 
 /** Fill properties from a config block (e.g. config.axis) for keys the spec omits. */
-function applyConfigDefaults(o: Record<string, unknown>, defaults: Record<string, unknown>, scales?: CompiledScale[], isLegend = false): Record<string, unknown> {
+function applyConfigDefaults(o: Record<string, unknown>, defaults: Record<string, unknown>, isLegend = false): Record<string, unknown> {
   if (!defaults || typeof defaults !== 'object') return o
   const out: Record<string, unknown> = { ...defaults, ...o }
   // (a property the spec leaves null is as good as one it omits: the config's value stands in -- vega-parser's `lookup`)
@@ -626,106 +707,79 @@ function markRoleOf(m: Record<string, unknown>): string {
   return m.type === 'group' ? 'scope' : (typeof m.role === 'string' && m.role) || 'mark'
 }
 
+/** What a mark's encode sets are once its defaults are in them: the channels of vega's `enter` and `update` sets. */
+interface EncodeSets { enter: Set<string>; update: Set<string> }
+
+/** vega-parser encode/util.js `has`: the mark's own `enter` or `update` set gives the channel a (truthy) entry. */
+const hasOwnChannel = (enc: Record<string, Record<string, unknown> | undefined>, key: string): boolean =>
+  !!(enc.enter && Object.hasOwn(enc.enter, key) && enc.enter[key]) || !!(enc.update && Object.hasOwn(enc.update, key) && enc.update[key])
+
 /**
- * Apply config.style defaults (marktype style first, then named styles, last
- * wins) as encode channels the mark does not encode. This mirrors vega's style
- * lookup order (vega-parser/mark.js + vega-encode's style encoder).
+ * A mark's defaults, as vega-parser's encode/defaults.js gives them: a mark whose role is `mark` takes the channels of
+ * `config.mark` then `config[type]` (a mark the spec calls the `frame` takes `config.group`; a group, a guide's role or a role of its
+ * own takes none), each skipped where the mark encodes the channel and a solid paint skipped where it encodes either paint; then the
+ * channels of each style the mark NAMES (`style`, a name or a list; never its type), in order, each skipped where the mark encodes
+ * it. A later source overrides an earlier one. A default is a value that lands in the `enter` set, or a `{signal}` that lands in
+ * `update`; the mark's own channels win over them in each set.
+ *
+ * The mark's `update` becomes the merged set the runtime evaluates (enter under update); the channels of each set are returned, for
+ * the spatial adjustment vega makes per set (spatial.ts).
  */
-function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string, Record<string, unknown>>, cfgMarktype?: Record<string, Record<string, unknown>>): void {
-  const names = new Set<string>()
-  if (m.type) names.add(String(m.type))
-  const style = m.style
-  if (typeof style === 'string') names.add(style)
-  else if (Array.isArray(style)) for (const s of style) names.add(String(s))
+function applyStyleDefaults(m: Record<string, unknown>, cfgStyle: Record<string, Record<string, unknown>>, cfgMarktype?: Record<string, Record<string, unknown>>): EncodeSets {
   const enc = (m.encode ?? {}) as Record<string, Record<string, EncodeValue | EncodeValue[]>>
-  const update = { ...(enc.enter ?? {}), ...(enc.update ?? {}) }
-  m.encode = { ...enc, update }
-  // vega-parser defaults.js applies sources in precedence order (config
-  // blocks, then styles, last wins) with a per-source skip rule: the config
-  // phase guards the solid paints — a config fill/stroke default is skipped
-  // whenever EITHER paint is encoded (defaults.js: `(key === 'fill' || key
-  // === 'stroke') && (has('fill', encode) || has('stroke', encode))`), while
-  // style blocks only skip channels the mark itself encodes.
-  const sources: Array<{ props: Record<string, unknown>; pairGuard: boolean }> = []
-  const markProps: Record<string, unknown> = {}
-  // vega's generic mark block (config.mark) seeds every mark's defaults;
-  // the per-marktype block (config.arc etc.) then overrides.
-  // (only a mark whose role is `mark` takes them -- a group mark, a mark of a guide's role and one with a role of its own
-  // do not; a mark the spec calls the `frame` takes `config.group`, as the view's root group does)
+  const has = (key: string): boolean => hasOwnChannel(enc, key)
+  const defaults: Record<string, EncodeValue> = {}
+  const apply = (key: string, value: unknown): void => {
+    defaults[key] = (value && typeof value === 'object' && (value as { signal?: unknown }).signal ? { signal: (value as { signal: string }).signal } : { value }) as EncodeValue
+  }
+  // (a default is a channel of the mark's items like any other: it may not name the engine's own slots, item-slots.ts)
+  const refuseEngineSlot = (key: string): void => {
+    if (isEngineSlot(key)) throw new SpecParseError(engineSlotMessage(key, 'a config style or mark default'))
+  }
   const role = markRoleOf(m)
+  const props: Record<string, unknown> = {}
   if (cfgMarktype && role === 'mark') {
-    const gm = cfgMarktype['mark']
-    if (gm && typeof gm === 'object') Object.assign(markProps, gm)
-    const st = m.type ? ownGet(cfgMarktype, String(m.type)) : undefined
-    if (st && typeof st === 'object') Object.assign(markProps, st)
+    const gm = ownGet(cfgMarktype, 'mark')
+    if (gm && typeof gm === 'object') Object.assign(props, gm)
+    const st = ownGet(cfgMarktype, String(m.type))
+    if (st && typeof st === 'object') Object.assign(props, st)
   } else if (cfgMarktype && role === 'frame') {
     const st = ownGet(cfgMarktype, 'group')
-    if (st && typeof st === 'object') Object.assign(markProps, st)
+    if (st && typeof st === 'object') Object.assign(props, st)
   }
-  sources.push({ props: markProps, pairGuard: true })
-  for (const name of names) {
-    const st = ownGet(cfgStyle, name)
-    if (st && typeof st === 'object') sources.push({ props: st, pairGuard: false })
+  for (const key of Object.keys(props)) {
+    if (SKIPPED_DEFAULTS.has(key)) continue
+    refuseEngineSlot(key)
+    const skip = has(key) || ((key === 'fill' || key === 'stroke') && (has('fill') || has('stroke')))
+    if (!skip) apply(key, props[key])
   }
-  // rule marks have no xc/yc semantics in vega: config/style channels for
-  // them are silently ignored (only an explicit mark encode reaches them)
-  const isRule = String(m.type) === 'rule'
-  // A symbol mark has no rect/arc/text geometry channels: config blocks that
-  // carry them (e.g. config.point.width / x2 / startAngle) are inert in vega.
-  const isSymbol = String(m.type) === 'symbol'
-  const isRectLike = String(m.type) === 'rect' || String(m.type) === 'bar' || String(m.type) === 'tick'
-  // A rect understands x2/y2 (they override width/height) and the corner
-  // radii; only the non-rect geometry and text channels are inert.
-  const rectInert = new Set([
-    'startAngle', 'endAngle', 'innerRadius', 'outerRadius', 'radius',
-    'radius2', 'theta', 'theta2', 'padAngle', 'size', 'text', 'url',
-    'align', 'baseline', 'dx', 'dy', 'limit', 'lineHeight', 'font',
-    'fontSize', 'fontStyle', 'fontWeight',
-  ])
-  const symbolInert = new Set([
-    'width', 'height', 'x2', 'y2', 'startAngle', 'endAngle', 'innerRadius',
-    'outerRadius', 'radius', 'radius2', 'theta', 'theta2', 'padAngle',
-    'cornerRadius', 'cornerRadiusTopLeft', 'cornerRadiusTopRight',
-    'cornerRadiusBottomLeft', 'cornerRadiusBottomRight', 'text', 'url',
-    'align', 'baseline', 'dx', 'dy', 'limit', 'lineHeight', 'font',
-    'fontSize', 'fontStyle', 'fontWeight',
-  ])
-  // vega runs adjustSpatial on each encode block separately: a default that
-  // lands in `enter` (style/config defaults are plain values) is resolved
-  // against the enter positions only. An update-only mark therefore does not
-  // see a style x2/y2/width/height (it has no enter x to pair with), while an
-  // enter-encoded mark does — probed: config.style.rect.x2 affects a Vega
-  // enter mark but not a Vega-Lite update mark.
-  const updateOnly = enc.enter == null
-  const spatialKeys = new Set(['x', 'y', 'x2', 'y2', 'xc', 'yc', 'width', 'height'])
-  // Sources accumulate into `defaults` with increasing precedence (a later
-  // style overrides an earlier source's value); only the mark's OWN encode
-  // suppresses a default. Writing straight into `update` made the first source
-  // that set a channel (e.g. config.symbol.size) shadow every later style
-  // (style point's size), which vega's applyDefaults does not do.
-  const own = new Set(Object.keys(update))
-  const defaults: Record<string, EncodeValue | EncodeValue[]> = {}
-  for (const { props, pairGuard } of sources) {
-    for (const [k, v] of Object.entries(props)) {
-      if (k === 'name' || k === 'interactive' || k === 'zindex' || k === 'style') continue
-      if (updateOnly && spatialKeys.has(k)) continue
-      if (isRule && (k === 'xc' || k === 'yc')) continue
-      if (isSymbol && symbolInert.has(k)) continue
-      if (isRectLike && rectInert.has(k)) continue
-      let skip = own.has(k)
-      if (!skip && pairGuard && (k === 'fill' || k === 'stroke')) {
-        skip = own.has('fill') || own.has('stroke')
-      }
-      if (!skip) {
-        defaults[k] = (v && typeof v === 'object' && ('value' in v || 'signal' in v || 'field' in v))
-          ? (v as EncodeValue)
-          : { value: v }
-      }
+  // (vega-util `array(style)`: a name is a list of one)
+  const style = m.style
+  for (const name of style == null ? [] : Array.isArray(style) ? style : [style]) {
+    const block = ownGet(cfgStyle, String(name))
+    if (!block || typeof block !== 'object') continue
+    for (const key of Object.keys(block)) {
+      if (SKIPPED_DEFAULTS.has(key)) continue
+      refuseEngineSlot(key)
+      if (!has(key)) apply(key, block[key])
     }
   }
-  // (vega applies the defaults in the `enter` set, ahead of the mark's own channels: an encode that throws partway leaves the item with them)
-  m.encode = { ...enc, update: { ...defaults, ...update } }
+  const enterDefaults: Record<string, EncodeValue> = {}
+  const updateDefaults: Record<string, EncodeValue> = {}
+  for (const [key, v] of Object.entries(defaults)) ((v as { signal?: unknown }).signal ? updateDefaults : enterDefaults)[key] = v
+  const enter = { ...enterDefaults, ...(enc.enter ?? {}) }
+  const update = { ...updateDefaults, ...(enc.update ?? {}) }
+  // (vega skips a null channel: it is in neither set)
+  const keysOf = (set: Record<string, unknown>): Set<string> => new Set(Object.keys(set).filter((k) => set[k] != null))
+  m.encode = { ...enc, enter, update: { ...enter, ...update } }
+  return { enter: keysOf(enter), update: keysOf(update) }
 }
+
+/**
+ * Config keys that are properties of the mark, not channels of its items: Aster reads them from the mark itself (`interactive`,
+ * `zindex`, `name`, `style`), so a config block's copy is no channel.
+ */
+const SKIPPED_DEFAULTS = new Set(['name', 'interactive', 'zindex', 'style'])
 
 /**
  * vega reads `from.facet.groupby` through `array(...)`: a bare field name is a one-field
@@ -739,24 +793,53 @@ function normalizeFrom(from: CompiledMark['from']): CompiledMark['from'] {
   return { ...from, facet: { ...facet, groupby } } as CompiledMark['from']
 }
 
+/**
+ * A mark's type: one of the mark types vega draws, written as its name. Anything else (an unknown name, a Vega-Lite mark such as
+ * `circle`, `bar` or `geoshape`, another spelling, none) is refused, with the error vega's renderer fails with: never an empty or a
+ * guessed mark. A list holding one name (`['rect']`), which vega looks up by name and draws with quirks of its own (no scope for
+ * `['group']`, another ARIA role for `['text']`), is refused too: a documented deviation (docs/ARCHITECTURE.md).
+ */
+function markTypeOf(type: unknown): string {
+  if (typeof type !== 'string' || !VEGA_MARK_TYPES.has(type)) throw new SpecParseError("Cannot read properties of undefined (reading 'tag')")
+  return type
+}
+
 // (reset per chart: the same spec compiles to the same numbers, so scenes of equal charts are equal)
 let markSeq = 0
 
 function compileMark(m0: Record<string, unknown>, cfgStyle?: Record<string, Record<string, unknown>>, cfgMarktype?: Record<string, Record<string, unknown>>, scopeScales: CompiledScale[] = []): CompiledMark {
-  const m = { ...m0 }
-  if (cfgStyle || cfgMarktype) applyStyleDefaults(m, cfgStyle ?? {}, cfgMarktype)
+  const m: Record<string, unknown> = { ...m0, type: markTypeOf(m0.type) }
+  const sets = applyStyleDefaults(m, cfgStyle ?? {}, cfgMarktype)
   const out: CompiledMark = {
     type: m.type as string,
     name: (m.name as string) ?? 'marks',
     seq: markSeq++,
   }
+  // a named mark's triggers (vega parses them for a named mark only): the event loop runs them
+  if (m.name != null) out.userName = String(m.name)
+  if (m.name != null && Array.isArray(m.on) && m.on.length) out.on = m.on as Array<Record<string, unknown>>
   // Vega evaluates `enter` when an item is created and `update` on every
   // pulse; in static rendering every item is created, so the effective set is
   // `enter` overridden per-channel by `update`.
   if (m.encode !== undefined) {
     const enc = m.encode as Record<string, Record<string, EncodeValue | EncodeValue[]>>
-    const merged = { ...(enc.enter ?? {}), ...(enc.update ?? {}) }
+    const merged: Record<string, EncodeValue | EncodeValue[]> = { ...(enc.update ?? {}) }
+    // vega adjusts the spatial channels per set: where the sets split a dimension's edges, the merged set carries the enter set's
+    // own value of each channel the update set overrides, and the program that runs the two adjustments in order (spatial.ts)
+    const program = spatialProgramOf(String(m.type), sets.enter, sets.update)
+    if (program) {
+      for (const dim of [program.x, program.y]) {
+        for (const k of dim?.enter ?? []) if (dim!.update.includes(k)) merged[ENTER_COPY + k] = enc.enter![k]!
+      }
+      setSpatialProgram(merged, program)
+    }
     out.encode = { ...enc, update: merged }
+    // (a mark a signal handler can re-encode with a set of its own keeps the channels its spec's `update` writes: the channels a
+    // run of `update` takes back from such a set, encode-handlers.ts)
+    if (handlesItems(out)) {
+      const own = (m0.encode as { update?: unknown } | null | undefined)?.update
+      out.updateChannels = own !== null && typeof own === 'object' ? Object.keys(own) : []
+    }
   }
   if (m.role !== undefined) out.role = m.role as string
   // what the SVG container says about the mark (vega-scenegraph cssClass / ariaMarkAttributes): the name the SPEC gave it

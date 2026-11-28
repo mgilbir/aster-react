@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * `specNeeds(spec).parts` (what the React shells load before a chart's first render, @aster-charts/core/lean) never misses a part the
+ * `specNeeds(spec).parts` (what the React shells load before a chart's first render, @aster-charts/core/internal) never misses a part the
  * engine reads, and a chart drawn with just the parts it names is the chart drawn with all of them.
  *
  * The ground truth is the engine itself, as in addons-needed.test.ts: every corpus spec (Vega, and Vega-Lite through the pinned vega-lite
@@ -18,31 +18,72 @@ import * as vl from 'vega-lite'
 import '@aster-charts/core/geo'
 import '@aster-charts/core/transforms'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
-import { specNeeds } from '@aster-charts/core/lean'
+import { partLoaded, specNeeds, withdrawParts } from '@aster-charts/core/internal'
 import { compileChart, type SpecLimits, type VgSpec } from '@aster-charts/core'
-import { checkParts } from './parts-needed.testlib.js'
+import { checkLoad, checkParts } from './parts-needed.testlib.js'
 
 const CORPUS = join(dirname(fileURLToPath(import.meta.url)), '..', 'corpus')
 const CORPUS_VEGA_ONLY = join(dirname(fileURLToPath(import.meta.url)), '..', 'corpus-vega-only')
 /** Generous limits: the screen runs, nothing a corpus spec does is refused for its size. */
 const LIMITS: SpecLimits = { maxRows: 10_000_000, maxTimeMs: 600_000 }
 
+describe('the loader loads the calendar its date patterns read', () => {
+  const fetchOf = (body: string) => (async () => new Response(body, { status: 200, headers: { 'content-type': 'text/plain' } })) as unknown as typeof fetch
+  const specOf = (parse: unknown): VgSpec => ({ data: [{ name: 'd', url: 'https://example.com/d.csv', format: { type: 'csv', parse } }] }) as never
+
+  it.each([
+    ['a date: pattern', { when: 'date:%Y-%m-%d' }],
+    ['a utc: pattern', { when: 'utc:%Y-%m-%d' }],
+  ])('loads the time part for %s, from empty slots', async (_n, parse) => {
+    const restore = withdrawParts(['time'])
+    try {
+      const out = await loadSpecData(specOf(parse) as never, { fetch: fetchOf('when\n2020-03-04\n'), ...TRUSTED_LOAD_OPTIONS }) as unknown as { data: Array<{ values: Array<{ when: unknown }> }> }
+      expect(partLoaded('time')).toBe(true)
+      expect(new Date(out.data[0]!.values[0]!.when as number).toISOString().slice(0, 10)).toBe('2020-03-04')
+    } finally { restore() }
+  })
+
+  it('loads nothing for a parse that reads no date pattern', async () => {
+    const restore = withdrawParts(['time'])
+    try {
+      await loadSpecData(specOf({ n: 'number' }) as never, { fetch: fetchOf('n\n1\n'), ...TRUSTED_LOAD_OPTIONS })
+      expect(partLoaded('time')).toBe(false)
+    } finally { restore() }
+  })
+})
+
 describe('specNeeds names every part the engine reads, over the whole corpus', async () => {
   const specs: Array<{ name: string; spec: VgSpec }> = []
+  const raw: Array<{ name: string; spec: VgSpec }> = []
+  let files = 0
+  /** the corpus files that are not a case here, with why: none is allowed */
+  const lost: string[] = []
   for (const dir of [CORPUS, CORPUS_VEGA_ONLY]) {
     for (const f of readdirSync(dir).sort()) {
       const kind = f.endsWith('.vl.json') ? 'vl' : f.endsWith('.vg.json') ? 'vg' : null
       if (!kind) continue
+      files++
       const doc = JSON.parse(readFileSync(join(dir, f), 'utf8')) as VgSpec
       let spec = (doc.$schema ? doc : ((doc as { spec?: VgSpec }).spec ?? doc)) as VgSpec
       if (kind === 'vl') {
-        try { spec = vl.compile(spec as never).spec as unknown as VgSpec } catch { continue }
+        try { spec = vl.compile(spec as never).spec as unknown as VgSpec } catch (e) { lost.push(`${f}: vega-lite does not compile it: ${String(e).slice(0, 100)}`); continue }
       }
-      try { specs.push({ name: f, spec: await loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS) as VgSpec }) } catch { /* a spec whose data cannot load is not a rendering case */ }
+      raw.push({ name: f, spec })
+      try { specs.push({ name: f, spec: await loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS) as VgSpec }) } catch (e) { lost.push(`${f}: its data did not load: ${String(e).slice(0, 100)}`) }
     }
   }
 
-  it('covers the corpus', () => { expect(specs.length).toBeGreaterThan(900) })
+  it('covers the corpus: every file is a case', () => {
+    expect(lost, 'corpus files left out of every comparison below').toEqual([])
+    expect(files).toBeGreaterThan(1000)
+    expect(specs.length).toBe(files)
+  })
+
+  it('loads a spec\'s data with the parts the loader reads, whatever is already in the page', async () => {
+    const { wrong, loaded } = await checkLoad(raw, TRUSTED_LOAD_OPTIONS)
+    expect(wrong.slice(0, 20).join('\n'), `${wrong.length} wrong`).toBe('')
+    expect(loaded).toBeGreaterThan(900)
+  }, 600_000)
 
   it('names the signal loop for every chart an interactive shell binds it for, and for few others', () => {
     // (ChartCore binds the loop when the compiled view has a signal -- any `on` stream is a signal's -- or the host listens to signals,
@@ -68,10 +109,11 @@ describe('specNeeds names every part the engine reads, over the whole corpus', a
 
   for (const [mode, input] of [['without limits', {}], ['under limits', { limits: LIMITS }]] as const) {
     it(`${mode}: names every part the drawing reads, and draws with just those what it draws with all`, async () => {
-      const { wrong, compared, read: counts, named } = await checkParts(specs, () => ({ ...input }), { limits: 'limits' in input })
+      const { wrong, compared, dropped, read: counts, named } = await checkParts(specs, () => ({ ...input }), { limits: 'limits' in input })
       console.log(`[parts-needed] ${mode}: ${compared} specs; read ${JSON.stringify(counts)}; named ${JSON.stringify(named)}`)
       expect(wrong.slice(0, 12).join('\n'), `${wrong.length} wrong`).toBe('')
-      expect(compared).toBeGreaterThan(900)
+      expect(dropped, 'specs that do not draw with every part and were left out').toEqual([])
+      expect(compared).toBe(specs.length)
       // not vacuous: the parts a spec's drawing can read are read by some corpus specs, and most specs read none of them
       expect(counts.legend).toBeGreaterThan(50)
       expect(counts.layout).toBeGreaterThan(5)

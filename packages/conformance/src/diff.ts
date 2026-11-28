@@ -19,7 +19,16 @@
  * guide reading signals of its own (its labels' or its text's opacity, an axis's tick count, which moves what legends and titles are
  * placed against; see `withGuideProbes`), so a guide kept from the evaluation before is checked too.
  *
- * Run: pnpm conformance:diff
+ * Every comparison runs each side on its own: when one side throws and the other does not, that is a difference; when both
+ * throw, they must throw the same error (a refusal both make is agreement, as in every gate). Nothing is skipped. What a host
+ * reads of each render is compared: the canonical SVG's root and records, and its accessibility structure.
+ *
+ * The verdict is runGate's (scripts/lib/run-gate.mjs): the counters are what was COMPARED: `changesets` (specs whose changeset
+ * render was compared with a full re-derive), `row-specs`, `signal-steps` and `guide-steps`; each has a floor on a full run
+ * (today's numbers, they only ratchet up).
+ * `--plant-difference` adds a stray mark to the incremental render of every changeset.
+ *
+ * Run after `pnpm build`: pnpm conformance:diff [--filter=substr]
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -30,10 +39,15 @@ import '@aster-charts/core/transforms'
 import { compileChart, evaluateChart, renderSceneToSvg } from '@aster-charts/core'
 import { createChartSession } from '@aster-charts/core/dom'
 import { canonicalizeSvg } from './normalize.js'
+import { attempt, stepDifference } from './diff-compare.js'
 import { signalChangesMatch, withGuideProbes } from './diff-signals.js'
+import { plantSvg } from './gate-plant.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { GATE_FLAGS, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
 
-cli({ url: import.meta.url })
+cli({ url: import.meta.url, flags: { filter: 'eq', ...GATE_FLAGS } })
+/** `--filter=substr`: only the corpus files whose name contains it (a narrowed run: no floors, but zero specs fail). */
+const FILTER = process.argv.slice(2).find((a) => a.startsWith('--filter='))?.slice('--filter='.length) ?? ''
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CORPUS_DIR = join(THIS_DIR, '..', 'corpus')
@@ -113,32 +127,25 @@ function rowChanges(rand: () => number, text: string | null): Array<{ what: stri
 }
 
 /**
- * Whether the scene of each row change through one session renders as a fresh chart renders the same rows; null when a spec throws.
+ * Whether the scene of each row change through one session renders as a fresh chart renders the same rows (true), or what
+ * differs. When both throw, they must throw the same error: the sequence ends there, compared.
  *
  * An `identifier` numbers rows from the view's counter, so its numbers depend on how the view got there, in Vega as in Aster (the rows
  * a change adds take the next numbers and the others keep theirs, where a fresh view numbers every row from 1: ARCHITECTURE.md,
  * "Deviations from Vega"). A spec with one is compared with the incremental-oracle's reference instead: a chart of its own taken
  * through the same states, each evaluated with no hint of what changed but the rows edited where they stood.
  */
-function rowChangesMatch(spec: Record<string, unknown>, name: string, values: Rows, rand: () => number, keys: ReadonlySet<string>): string | true | null {
+function rowChangesMatch(spec: Record<string, unknown>, name: string, values: Rows, rand: () => number, keys: ReadonlySet<string>): string | true {
   const session = createChartSession()
   const history = numbersRows(spec) ? compileChart(spec as never) : undefined
-  // Each side is run on its own: a spec is skipped only when BOTH throw on the same rows. When only one does, the session and
-  // a fresh chart disagree (an incremental path that throws where a fresh evaluation does not, or the reverse): a mismatch.
-  const attempt = <T>(f: () => T): { ok: true; value: T } | { ok: false; error: string } => {
-    try {
-      return { ok: true, value: f() }
-    } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) }
-    }
-  }
-  const disagree = (what: string, inc: { ok: boolean; error?: string }, full: { ok: boolean; error?: string }): string =>
-    `${what}: only the ${inc.ok ? 'fresh chart' : 'session'} threw (${(inc.ok ? full.error : inc.error)?.slice(0, 120)})`
+  // Each side is run on its own (diff-compare.ts): when only one throws, the session and a fresh chart disagree; when both do,
+  // the errors are compared, and the sequence ends there.
   let rows = values
-  const first = attempt(() => session.evaluate(spec as never, { data: { [name]: rows } }))
-  const firstFull = attempt(() => (history !== undefined ? evaluateChart(history, { data: { [name]: rows } }) : evaluateChart(compileChart(spec as never), { data: { [name]: rows } })))
-  if (!first.ok && !firstFull.ok) return null
-  if (first.ok !== firstFull.ok) return disagree('the first evaluation', first, firstFull)
+  const first = attempt(() => canonicalizeSvg(renderSceneToSvg(session.evaluate(spec as never, { data: { [name]: rows } }))))
+  const firstFull = attempt(() => canonicalizeSvg(renderSceneToSvg(history !== undefined ? evaluateChart(history, { data: { [name]: rows } }) : evaluateChart(compileChart(spec as never), { data: { [name]: rows } }))))
+  const firstDiff = stepDifference('the first evaluation', first, firstFull)
+  if (firstDiff !== null) return firstDiff
+  if (!first.ok) return true
   for (const change of rowChanges(rand, firstTextField(values[0]!, keys))) {
     if (!rows.length) break
     const before = rows
@@ -148,34 +155,30 @@ function rowChangesMatch(spec: Record<string, unknown>, name: string, values: Ro
     const full = attempt(() => canonicalizeSvg(renderSceneToSvg(history !== undefined
       ? evaluateChart(history, { data: { [name]: rows }, ...(edited !== undefined ? { dataChanges: { [name]: edited } } : {}) })
       : evaluateChart(compileChart(spec as never), { data: { [name]: rows } }))))
-    if (!inc.ok && !full.ok) return null
-    if (!inc.ok || !full.ok) return disagree(change.what, inc, full)
-    if (inc.value.root !== full.value.root || inc.value.records.join('\u0000') !== full.value.records.join('\u0000')) return change.what
+    const diff = stepDifference(change.what, inc, full)
+    if (diff !== null) return diff
+    if (!inc.ok) return true
   }
   return true
 }
 
-async function main(): Promise<void> {
+async function main(gate: Gate): Promise<void> {
   const rand = mulberry32(0xBEAD)
   let ran = 0
   let failed = 0
-  let skipped = 0
   const failures: string[] = []
   const rowRand = mulberry32(0xCA7E)
   let rowRan = 0
-  let rowSkipped = 0
   const rowFailures: string[] = []
   const signalRand = mulberry32(0x5167)
   let signalSpecs = 0
   let signalSteps = 0
-  let signalSkipped = 0
   const guideRand = mulberry32(0x6D1D)
   let guideSpecs = 0
   let guideSteps = 0
-  let guideSkipped = 0
   const signalFailures: string[] = []
   for (const f of readdirSync(CORPUS_DIR).sort()) {
-    if (!f.endsWith('.json')) continue
+    if (!f.endsWith('.json') || (FILTER && !f.includes(FILTER))) continue
     const raw = JSON.parse(readFileSync(join(CORPUS_DIR, f), 'utf8'))
     const spec = f.endsWith('.vl.json') ? (vl.compile(raw as never).spec as Record<string, unknown>) : raw
     const data = (spec.data ?? []) as Array<{ name?: string; values?: unknown[] }>
@@ -185,8 +188,11 @@ async function main(): Promise<void> {
     if (signalsMatch !== null) {
       signalSpecs++
       signalSteps += signalsMatch.compared
-      signalSkipped += signalsMatch.skipped
-      if (signalsMatch.mismatch !== undefined) signalFailures.push(`${f} (${signalsMatch.mismatch})`)
+      gate.count('signal-steps', signalsMatch.compared)
+      if (signalsMatch.mismatch !== undefined) {
+        signalFailures.push(`${f} (${signalsMatch.mismatch})`)
+        gate.differ(`${f} signals`, signalsMatch.mismatch, 'signal-specs')
+      } else gate.agree(`${f} signals`, 'signal-specs')
     }
     // the same with every guide reading signals of its own, which the steps write too (see withGuideProbes)
     const probed = withGuideProbes(spec)
@@ -194,8 +200,11 @@ async function main(): Promise<void> {
     if (guidesMatch !== null) {
       guideSpecs++
       guideSteps += guidesMatch.compared
-      guideSkipped += guidesMatch.skipped
-      if (guidesMatch.mismatch !== undefined) signalFailures.push(`${f} with guide probes (${guidesMatch.mismatch})`)
+      gate.count('guide-steps', guidesMatch.compared)
+      if (guidesMatch.mismatch !== undefined) {
+        signalFailures.push(`${f} with guide probes (${guidesMatch.mismatch})`)
+        gate.differ(`${f} guides`, guidesMatch.mismatch, 'guide-specs')
+      } else gate.agree(`${f} guides`, 'guide-specs')
     }
     if (!dataset?.name || !dataset.values) continue
     const name = dataset.name
@@ -203,11 +212,11 @@ async function main(): Promise<void> {
     const keys = joinKeyNames(spec)
     // the row changes: every spec with inline rows, whatever their fields
     const rowsMatch = rowChangesMatch(spec, name, values, rowRand, keys)
-    if (rowsMatch === null) rowSkipped++
-    else {
-      rowRan++
-      if (rowsMatch !== true) rowFailures.push(`${f} (${rowsMatch})`)
-    }
+    rowRan++
+    if (rowsMatch !== true) {
+      rowFailures.push(`${f} (${rowsMatch})`)
+      gate.differ(`${f} rows`, rowsMatch, 'row-specs')
+    } else gate.agree(`${f} rows`, 'row-specs')
     const field = firstNumericField(values[0]!, keys)
     if (field == null) continue
     // random changeset over a same-length data replacement
@@ -223,31 +232,45 @@ async function main(): Promise<void> {
       next[i] = { ...values[i]!, [field]: (values[i]![field] as number) + 1 }
     }
     ran++
-    let inc: { records: string[]; root: string | null }
-    let full: { records: string[]; root: string | null }
-    try {
+    // Each side on its own chart (C193): the changeset, and the incremental oracle's reference -- a chart of its own taken through
+    // the same rows, then given the new rows with no hint of what changed (an `identifier` keeps counting across evaluations, in
+    // Vega as in Aster, so a FRESH chart is not the reference: ARCHITECTURE.md, "Deviations from Vega"). When only one throws, the
+    // changeset path and the reference disagree: a difference. When both throw, they must throw the same error.
+    const evaluatedOld = (): ReturnType<typeof compileChart> => {
       const chart = compileChart(spec as never)
       evaluateChart(chart, { data: { [name]: values } })
-      inc = canonicalizeSvg(renderSceneToSvg(evaluateChart(chart, { data: { [name]: next }, dataChanges: { [name]: changed } })))
-      full = canonicalizeSvg(renderSceneToSvg(evaluateChart(chart, { data: { [name]: next } })))
-    } catch {
-      // A mutated value can break a layout transform (e.g. pack) independent of
-      // the differential path; such specs aren't a differential signal, skip them (and count them: see the summary).
-      skipped++
-      continue
+      return chart
     }
-    if (inc.root !== full.root || inc.records.join('\u0000') !== full.records.join('\u0000')) {
+    const inc = attempt(() => {
+      const incSvg = renderSceneToSvg(evaluateChart(evaluatedOld(), { data: { [name]: next }, dataChanges: { [name]: changed } }))
+      return canonicalizeSvg(gate.plant ? plantSvg(incSvg) : incSvg)
+    })
+    const full = attempt(() => canonicalizeSvg(renderSceneToSvg(evaluateChart(evaluatedOld(), { data: { [name]: next } }))))
+    const diff = stepDifference('the changeset', inc, full)
+    if (diff !== null) {
       failed++
       failures.push(f)
-    }
+      gate.differ(`${f} changeset`, diff, 'changesets')
+    } else gate.agree(`${f} changeset`, 'changesets')
   }
-  console.log(`[conformance:diff] ${ran} corpus specs with inline values; ${failed} differential mismatches; ${skipped} skipped (the mutated data made the spec throw)`)
+  console.log(`[conformance:diff] ${ran} corpus specs with inline values; ${failed} differential mismatches (where both threw, the same error is agreement)`)
   for (const f of failures) console.log(`  ✗ ${f}`)
-  console.log(`[conformance:diff] row changes: ${rowRan} corpus specs; ${rowFailures.length} mismatches; ${rowSkipped} skipped (the changed rows made the spec throw)`)
+  console.log(`[conformance:diff] row changes: ${rowRan} corpus specs; ${rowFailures.length} mismatches`)
   for (const f of rowFailures) console.log(`  ✗ ${f}`)
-  console.log(`[conformance:diff] signal changes: ${signalSpecs} corpus specs, ${signalSteps} steps compared; ${guideSpecs} specs with guide probes, ${guideSteps} steps compared; ${signalFailures.length} mismatches; ${signalSkipped + guideSkipped} steps skipped (both threw)`)
+  console.log(`[conformance:diff] signal changes: ${signalSpecs} corpus specs, ${signalSteps} steps compared; ${guideSpecs} specs with guide probes, ${guideSteps} steps compared; ${signalFailures.length} mismatches`)
   for (const f of signalFailures) console.log(`  ✗ ${f}`)
-  if (failed > 0 || rowFailures.length > 0 || signalFailures.length > 0) process.exit(1)
 }
 
-main().catch((e) => { console.error(e); process.exit(1) })
+await runGate({
+  name: 'incremental-diff',
+  counters: {
+    changesets: { floor: 941, what: 'specs whose changeset render was compared with a full re-derive' },
+    'row-specs': { floor: 972, what: 'specs whose session row changes were compared with fresh evaluations' },
+    'signal-specs': { floor: 181, what: 'specs taken through signal and store writes' },
+    'signal-steps': { floor: 1255, what: 'signal/store steps compared with a fresh evaluation' },
+    'guide-specs': { floor: 871, what: 'specs taken through guide-probe signal writes' },
+    'guide-steps': { floor: 6083, what: 'guide-probe steps compared with a fresh evaluation' },
+  },
+  partial: Boolean(FILTER),
+  run: main,
+})

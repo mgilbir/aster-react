@@ -20,7 +20,8 @@
  *   node scripts/check-bundle-shaking.mjs --verbose        print each pattern's result object (first 600 characters)
  *   node scripts/check-bundle-shaking.mjs --outputs        print, per pattern with module assertions, each output file (ENTRY marks the app entry) and the add-on inputs it carries
  *
- * Exit codes: 0 every pattern passed, 1 a pattern failed, 2 bad usage (an unknown option) or a package whose dist is missing (run `pnpm build`).
+ * Exit codes: 0 every pattern passed, 1 a pattern failed, 2 bad usage (an unknown option, an unknown `--only` pattern or `--bundler`
+ * value, or no pattern selected) or a package whose dist is missing (run `pnpm build`).
  *
  * Needs `pnpm build` (it bundles the packages' dist, like a consumer does).
  */
@@ -35,12 +36,18 @@ import { cli } from './lib/cli.mjs'
 cli({ url: import.meta.url, flags: { 'blanket-false': 'bool', bundler: 'value', only: 'value', verbose: 'bool', outputs: 'bool' } })
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
-const TMP = join(ROOT, 'packages', 'react', '.tmp-shaking') // under packages/react so `react` and `react-dom` resolve
+// Under packages/react so `react` and `react-dom` resolve; one directory per process, so a run started by hand while `pnpm test` runs
+// this script does not delete the other run's files.
+const TMP = join(ROOT, 'packages', 'react', `.tmp-shaking-${process.pid}`)
 const CORPUS = join(ROOT, 'packages', 'conformance', 'corpus')
 const argv = process.argv.slice(2)
 const BLANKET_FALSE = argv.includes('--blanket-false')
 const BUNDLER = argv.includes('--bundler') ? argv[argv.indexOf('--bundler') + 1] : 'esbuild'
-const only = argv.includes('--only') ? new Set(argv[argv.indexOf('--only') + 1].split(',')) : null
+const only = argv.includes('--only') ? new Set((argv[argv.indexOf('--only') + 1] ?? '').split(',').filter(Boolean)) : null
+if (BUNDLER !== 'esbuild' && BUNDLER !== 'vite') {
+  console.error(`[bundle-shaking] --bundler must be esbuild or vite, got ${JSON.stringify(BUNDLER)}`)
+  process.exit(2)
+}
 
 for (const pkg of ['core', 'react', 'vl']) {
   if (!existsSync(join(ROOT, 'packages', pkg, 'dist', 'index.js'))) {
@@ -476,9 +483,9 @@ const PATTERNS = [
     why: "<Chart> with nothing imported: a plain spec imports no add-on; pie, a projection and csv text load theirs on demand, from chunks the entry does not contain, and render what the static path renders",
     split: true,
     dom: true,
-    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart } from '@aster-charts/react'\nimport { renderSpec, geoRegistry, transformRegistry, dataFormatRegistry } from '@aster-charts/core'`,
+    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart } from '@aster-charts/react'\nimport { renderSpec } from '@aster-charts/core'\nimport { isAddonLoaded } from '@aster-charts/core/addons'`,
     body: `
-      const registered = () => ({ geo: geoRegistry.buildProjection !== null, transforms: transformRegistry.size > 0, load: dataFormatRegistry.has('csv') })
+      const registered = () => ({ geo: isAddonLoaded('geo'), transforms: isAddonLoaded('transforms'), load: isAddonLoaded('load') })
       const mount = (spec) => {
         const host = document.createElement('div'); document.body.appendChild(host)
         flushSync(() => createRoot(host).render(React.createElement(React.Suspense, { fallback: React.createElement('i', { id: 'fb' }) }, React.createElement(Chart, { spec, width: 300, height: 200, a11y: false }))))
@@ -619,13 +626,32 @@ const PATTERNS = [
   },
   {
     name: 'react-novl',
-    why: 'without the vl import a Vega-Lite spec asks for it (the base entry carries no compiler)',
-    imports: `import * as React from 'react'\nimport { renderToString } from 'react-dom/server'\nimport { Chart, hasVegaLiteCompiler } from '@aster-charts/react'`,
+    why: 'without the vl import a Vega-Lite spec asks for it, through the error state and onError (nothing thrown from render), and the base entry carries no compiler',
+    dom: true,
+    imports: `import * as React from 'react'\nimport { renderToString } from 'react-dom/server'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart, hasVegaLiteCompiler } from '@aster-charts/react'`,
     body: `
-      let err = null
-      try { renderToString(React.createElement(Chart, { spec: ${lit(BAR_VL)}, width: 200, height: 100 })) } catch (e) { err = String(e.message) }
-      return { has: hasVegaLiteCompiler(), err }`,
-    check: (r) => [[r.has === false && /@aster-charts\/react\/vl/.test(r.err ?? ''), 'the error names the import to add']],
+      // (the React boundary's one error channel: a failure is the chart's error state and one onError call, never a throw)
+      const errors = []
+      const el = React.createElement(Chart, { spec: ${lit(BAR_VL)}, width: 200, height: 100, onError: (e) => errors.push(String(e.message)) })
+      let thrown = null
+      let html = ''
+      try { html = renderToString(el) } catch (e) { thrown = String(e.message) }
+      const host = document.createElement('div'); document.body.appendChild(host)
+      try { flushSync(() => createRoot(host).render(el)) } catch (e) { thrown = thrown ?? String(e.message) }
+      const alert = host.querySelector('[role="alert"]')
+      return { has: hasVegaLiteCompiler(), thrown, serverAlert: /role="alert"/.test(html), alert: alert ? alert.getAttribute('title') : null, svg: host.querySelector('svg') != null, errors }`,
+    check: (r) => [
+      [r.has === false, 'hasVegaLiteCompiler() is false'],
+      [r.thrown === null, 'nothing is thrown from render, on the server or the client'],
+      [r.serverAlert && r.alert != null && !r.svg, 'the server markup and the mounted chart are the error state'],
+      [r.errors.length === 1 && /@aster-charts\/react\/vl/.test(r.errors[0]), 'onError is called once, with an error that names the import to add'],
+      [/@aster-charts\/react\/vl/.test(r.alert ?? ''), 'the error state carries that error'],
+    ],
+    modules: (m) => [
+      [!m.parsed.some((f) => /packages\/vl\/dist\//.test(f)), 'no module of @aster-charts/vl (the compiler) is even read'],
+      [!hasModule(m.parsed, 'react', 'vl'), 'nor @aster-charts/react/vl, the entry that registers it'],
+      [hasModule(m.contributing, 'react', 'ChartCore'), 'and the module check sees what the bundle is made of (ChartCore)'],
+    ],
   },
   {
     name: 'react-ssr',
@@ -703,11 +729,11 @@ const PATTERNS = [
   },
   {
     name: 'react-lean',
-    why: "<Chart> in a browser build (`browser` condition: @aster-charts/core/lean): a plain chart loads no part of the engine; a legend, a custom path, a selection test, a canvas and a change of data load theirs on demand, from chunks the entry does not contain, and draw what the full engine draws",
+    why: "<Chart> in a browser build (`browser` condition: @aster-charts/core/internal): a plain chart loads no part of the engine; a legend, a custom path, a selection test, a canvas and a change of data load theirs on demand, from chunks the entry does not contain, and draw what the full engine draws",
     split: true,
     dom: true,
     browser: true,
-    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart } from '@aster-charts/react'\nimport { ENGINE_PARTS, createChartSession, partLoaded, renderSceneToSvg } from '@aster-charts/core/lean'`,
+    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart } from '@aster-charts/react'\nimport { ENGINE_PARTS, createChartSession, partLoaded, renderSceneToSvg } from '@aster-charts/core/internal'`,
     body: `
       const loaded = () => ENGINE_PARTS.filter(partLoaded).join()
       const roots = []
@@ -771,12 +797,51 @@ const PATTERNS = [
     }),
   },
   {
+    name: 'react-chartstream',
+    why: "import { ChartStream } from '@aster-charts/react' in a browser build: the stream shell keeps the on-demand engine <Chart> has (a legend part loads behind the Suspense wait, from a chunk the entry does not contain) and does not reach the worker hook, which needs the whole synchronous engine (C82)",
+    split: true,
+    dom: true,
+    browser: true,
+    imports: `import * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { ChartStream } from '@aster-charts/react'\nimport { ENGINE_PARTS, partLoaded } from '@aster-charts/core/internal'`,
+    body: `
+      const loaded = () => ENGINE_PARTS.filter(partLoaded).join()
+      const mount = (spec) => {
+        const host = document.createElement('div'); document.body.appendChild(host)
+        flushSync(() => createRoot(host).render(React.createElement(React.Suspense, { fallback: React.createElement('i', { id: 'fb' }) }, React.createElement(ChartStream, { width: 300, height: 200, a11y: false, spec }))))
+        return host
+      }
+      const until = async (f) => { for (let i = 0; i < 400 && !f(); i++) await new Promise((r) => setTimeout(r, 10)) }
+      const out = {}
+      const plain = mount(${lit(BAR_VG)})
+      await until(() => plain.querySelector('svg'))
+      out.plainDrawn = /class="mark-rect/.test(plain.innerHTML)
+      out.afterPlain = loaded()
+      const legend = mount(${lit(LEGEND_VG)})
+      out.legendFallback = !!legend.querySelector('#fb')
+      await until(() => legend.querySelector('svg'))
+      out.legendDrawn = !!legend.querySelector('svg')
+      out.afterLegend = loaded()
+      return out`,
+    check: (r) => [
+      [r.plainDrawn === true && r.afterPlain === 'pulse,signals', 'a plain stream chart draws and loads only the stream\'s pulse path and the signal loop (a streamed chart is interactive), no legend, aggregate, time or colour part'],
+      [r.legendFallback === true && r.legendDrawn === true && r.afterLegend === 'color,scales,legend,pulse,svgpath,signals', 'a legend: the fallback shows, then the legend part loads on demand and the chart draws'],
+    ],
+    modules: (m) => [
+      [!hasModule(m.contributing, 'react', 'worker') && !hasModule(m.contributing, 'react', 'useChartWorkerStream'), '<ChartStream> does not pull the worker hook (react/worker.js, react/useChartWorkerStream.js) and, through it, the synchronous engine'],
+      [!hasModule(m.contributing, 'core', 'index'), 'the @aster-charts/core barrel (which fills every slot as a side effect) is not in the bundle'],
+      ...PART_MODULES.filter((name) => name !== 'incremental-engine').map((name) => {
+        const outs = outputsWith(m, 'core', name)
+        return [outs.length > 0 && outs.every((o) => !o.initial), `${name}: only in chunks loaded on demand`]
+      }),
+    ],
+  },
+  {
     name: 'react-lean-all',
     why: "import '@aster-charts/react/all' in a browser build: every part of the engine is in the entry's bundle and in its slot before the first render, so no chart waits for one (the first commit is the chart)",
     split: true,
     dom: true,
     browser: true,
-    imports: `import '@aster-charts/react/all'\nimport * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart } from '@aster-charts/react'\nimport { ENGINE_PARTS, partLoaded } from '@aster-charts/core/lean'`,
+    imports: `import '@aster-charts/react/all'\nimport * as React from 'react'\nimport { flushSync } from 'react-dom'\nimport { createRoot } from 'react-dom/client'\nimport { Chart } from '@aster-charts/react'\nimport { ENGINE_PARTS, partLoaded } from '@aster-charts/core/internal'`,
     body: `
       const out = { missing: ENGINE_PARTS.filter((p) => !partLoaded(p)).join(), first: {} }
       for (const [name, spec, props] of [['legend', ${lit(LEGEND_VG)}, {}], ['parts', ${lit(PARTS_VG)}, {}], ['rare', ${lit(RARE_VG)}, {}], ['canvas', ${lit(RARE_VG)}, { renderer: 'canvas' }]]) {
@@ -820,7 +885,7 @@ async function esbuildBuild(p, entry, out) {
     treeShaking: true,
     format: 'esm',
     platform: 'node',
-    // a pattern of a browser app resolves the `browser` export condition, as a browser build does (`@aster-charts/core/lean`)
+    // a pattern of a browser app resolves the `browser` export condition, as a browser build does (`@aster-charts/core/internal`)
     ...(p.browser ? { conditions: ['browser'] } : {}),
     splitting: !!p.split,
     // React is a peer dependency of the consumer's app, not part of what is being shaken.
@@ -952,6 +1017,17 @@ const server = createServer((req, res) => {
 })
 await new Promise((r) => server.listen(0, '127.0.0.1', r))
 const env = { url: `http://127.0.0.1:${server.address().port}/data.csv` }
+
+if (only) {
+  // A name that matches no pattern selected nothing and "all patterns passed": refuse it, like scripts/gates.mjs refuses an unknown gate.
+  const known = new Set(PATTERNS.map((p) => p.name))
+  const unknown = [...only].filter((n) => !known.has(n))
+  if (only.size === 0 || unknown.length) {
+    console.error(`[bundle-shaking] unknown pattern${unknown.length === 1 ? '' : 's'} for --only: ${unknown.length ? unknown.join(', ') : '(none given)'}; known: ${[...known].join(', ')}`)
+    server.close()
+    process.exit(2)
+  }
+}
 
 rmSync(TMP, { recursive: true, force: true })
 mkdirSync(TMP, { recursive: true })

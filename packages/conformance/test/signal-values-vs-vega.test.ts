@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest'
 import { renderSpec, renderSceneToSvg, createChartStream } from '@aster-charts/core'
 import { createChartSession } from '@aster-charts/core/dom'
 import { renderWithVegaChecked } from '../src/render-vega.js'
-import { canonicalizeSvg, diffCanonical } from '../src/normalize.js'
+import { canonicalizeSvg, diffCanonical, type CanonicalResult } from '../src/normalize.js'
 
 const text = (y: string, t: string): any => ({ type: 'text', from: { data: 't' }, encode: { update: { x: { value: 5 }, y: { signal: y }, text: { signal: t }, fontSize: { value: 9 } } } })
 const spec = (values: unknown, marks: unknown[], extra: Record<string, unknown> = {}): any => ({
@@ -44,7 +44,7 @@ const CASES: Record<string, any> = {
 }
 
 const clean = (s: any): any => JSON.parse(JSON.stringify(s))
-async function oracle(s: any): Promise<string> {
+async function oracle(s: any): Promise<CanonicalResult> {
   const vega = await renderWithVegaChecked(clean(s))
   expect(vega.errors).toEqual([])
   return canonicalizeSvg(vega.svg)

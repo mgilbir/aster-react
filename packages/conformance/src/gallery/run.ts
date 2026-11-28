@@ -3,9 +3,10 @@
  * oracle is pinned to) against real vega, through the paths a user takes:
  *
  *   static  real vega vs `renderSpec` (+ @aster-charts/vl for Vega-Lite), canonical SVG compared exactly, in Node
- *   react   real vega vs <Chart> mounted as an app would (loadSpecData, add-ons, no size props unless the spec has numeric ones),
+ *   react   real vega vs <Chart> mounted as an app would (loadSpecData, add-ons, no size props: the spec's own size, as vega's),
  *           in headless Chromium
  *   swap    one mounted <Chart> that goes from spec A to spec B (the pairs in gallery/swap-pairs.txt), in headless Chromium
+ *   seeded  the Vega-Lite specs with a selection, their stores holding one tuple, drawn by both engines from scratch, in Node (stores.ts)
  *
  * Every outcome is one of pass / fail / error / unverifiable. `unverifiable` is the only non-failure that is not a pass: the
  * ORACLE is not a function of its inputs (random(), timers) or fails itself, so there is nothing to compare against; each one
@@ -16,11 +17,12 @@
  * only the local cache and fails, naming that command, when it is missing or does not match gallery/manifest.json.
  * The gate is a ratchet (gallery/floors.json, gallery/passing-<path>.txt):
  *   - the spec counts must equal the manifest (specs cannot be dropped to improve the numbers);
- *   - passing count >= floor, per path and grammar; unverifiable <= ceiling;
+ *   - passing count == floor, per path and grammar (more is a failure too: raise the floor, so the ratchet sits at reality); unverifiable <= ceiling;
  *   - every spec listed in passing-<path>.txt must still pass (a count floor alone lets one fix hide one regression).
- * When the numbers improve it says so: raise the floors and add the names (`--print-passing`), never lower them.
+ * When the numbers improve it fails and says so: raise the floors and add the names (`--print-passing`), never lower them. The files
+ * themselves are held against their history by ratchet.test.ts (the part of the ratchet that runs on every PR).
  *
- * Usage: tsx src/gallery/run.ts [--path=static|react|swap|all] [--filter=substr] [--json=file] [--print-passing] [--regenerate-swap-pairs]
+ * Usage: tsx src/gallery/run.ts [--path=static|react|swap|seeded|all] [--filter=substr] [--json=file] [--print-passing] [--regenerate-swap-pairs]
  */
 import { spawn } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -28,7 +30,8 @@ import { join } from 'node:path'
 import { FETCH_COMMAND, readManifest, verifyCache } from './cache.js'
 import type { SwapOutcome } from './react.js'
 import { planSwap, swapGateProblems, type SwapPlan } from './swap-plan.js'
-import { GALLERY_DIR, listGallery, type GallerySpec, type Kind, type Outcome } from './lib.js'
+import { duplicateSpecs } from './ratchet.js'
+import { GALLERY_DIR, PINNED_DATASETS, datasetVersionMismatches, listGallery, nextPassingList, readSpec, type GallerySpec, type Kind, type Outcome } from './lib.js'
 import { cli } from '../../../../scripts/lib/cli.mjs'
 
 cli({ url: import.meta.url, flags: { path: 'eq', filter: 'eq', json: 'eq', 'print-passing': 'bool', 'regenerate-swap-pairs': 'bool' } })
@@ -36,15 +39,15 @@ cli({ url: import.meta.url, flags: { path: 'eq', filter: 'eq', json: 'eq', 'prin
 const REPO_ROOT = join(GALLERY_DIR, '..', '..', '..')
 const argv = process.argv.slice(2)
 const arg = (n: string): string | undefined => argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3)
-const PATHS = (arg('path') ?? 'all') === 'all' ? (['static', 'react', 'swap'] as const) : ([arg('path')] as ('static' | 'react' | 'swap')[])
+const PATHS = (arg('path') ?? 'all') === 'all' ? (['static', 'react', 'swap', 'seeded'] as const) : ([arg('path')] as ('static' | 'react' | 'swap' | 'seeded')[])
 const FILTER = arg('filter')
 const JSON_OUT = arg('json')
 const PRINT_PASSING = argv.includes('--print-passing')
 const REGENERATE_SWAP = argv.includes('--regenerate-swap-pairs')
 
 interface Floors {
-  pass: Record<'static' | 'react', Record<Kind, number>>
-  maxUnverifiable: Record<'static' | 'react', Record<Kind, number>>
+  pass: Record<'static' | 'react' | 'seeded', Record<Kind, number>>
+  maxUnverifiable: Record<'static' | 'react' | 'seeded', Record<Kind, number>>
   /** the spec-swap path (one mounted <Chart>, spec A then B) over the committed gallery/swap-pairs.txt: every runnable pair must pass; at least minRunnable must be runnable (a pair whose B no longer passes fresh is skipped, visibly) */
   swap: { minRunnable: number; maxUnverifiable: number }
 }
@@ -70,6 +73,9 @@ if (!FILTER) {
     const m = Object.keys(manifest.sources[src]!.files).length
     if (n !== m) problem(`${k}: ${n} specs read, the manifest lists ${m}`)
   }
+  // (byte-identical files are two specs to the gate and one to the oracle: say how many the counts below are)
+  const dup = duplicateSpecs(manifest)
+  console.log(`[gallery] ${all.length} specs, ${all.length - dup.reduce((n, g) => n + g.length - 1, 0)} distinct (byte-identical: ${dup.map((g) => g.join(' = ')).join('; ') || 'none'})`)
 }
 if (!specs.length) { console.log('GATE FAIL: no specs selected'); process.exit(1) }
 
@@ -97,8 +103,13 @@ const t0 = Date.now()
 const results: Record<string, Outcome[]> = {}
 const swapResults: SwapOutcome[] = []
 let swapPlan: SwapPlan<GallerySpec> = { runnable: [], skipped: [] }
-const runPath = async (p: 'static' | 'react' | 'swap'): Promise<void> => {
-  if (p === 'static') {
+const runPath = async (p: 'static' | 'react' | 'swap' | 'seeded'): Promise<void> => {
+  if (p === 'seeded') {
+    const { runSeeded, hasSelection } = await import('./stores.js')
+    const out: Outcome[] = []
+    for (const g of specs.filter(hasSelection)) out.push(await runSeeded(g))
+    results.seeded = out
+  } else if (p === 'static') {
     const { runStatic } = await import('./static.js')
     const out: Outcome[] = []
     for (const g of specs) out.push(await runStatic(g))
@@ -114,9 +125,17 @@ const runPath = async (p: 'static' | 'react' | 'swap'): Promise<void> => {
     results.react = await runReact(specs, () => undefined, 4)
   }
 }
-await Promise.all(PATHS.filter((p) => p !== 'swap').map(runPath))
+await Promise.all(PATHS.filter((p) => p !== 'swap' && p !== 'seeded').map(runPath))
+// the seeded path reads what the oracle logged, in the same global lists the static path fills: it runs alone, not beside it
+if (PATHS.includes('seeded')) await runPath('seeded')
 // the swap path runs alone: it is the one that holds a chart across timers and a pointer drag, and the data loads of the other paths in flight would only add load-dependent timeouts to it
 if (PATHS.includes('swap')) await runPath('swap')
+
+// a spec that names another vega-datasets version than the pinned one is compared on the pinned bytes, in both engines: say so
+for (const g of specs) {
+  const other = datasetVersionMismatches(readSpec(g))
+  if (other.length) console.log(`DATA ${g.id}: asks for ${other.join(', ')}; both engines are given the pinned vega-datasets ${PINNED_DATASETS}`)
+}
 
 const kindOf = (id: string): Kind => (id.startsWith('vega/') ? 'vega' : 'vl')
 const dump: Record<string, Outcome[]> = {}
@@ -132,7 +151,7 @@ for (const p of PATHS) {
     console.log(`${k === 'vega' ? 'Vega     ' : 'Vega-Lite'} ${pass} pass, ${n('fail')} fail, ${n('error')} error, ${n('unverifiable')} unverifiable / ${mine.length}`)
     if (!FILTER) {
       if (pass < floors.pass[p][k]) problem(`${p}/${k}: ${pass} passing < floor ${floors.pass[p][k]}`)
-      else if (pass > floors.pass[p][k]) console.log(`  (improved: ${pass} > floor ${floors.pass[p][k]}; raise floors.json and add the names to passing-${p}.txt)`)
+      else if (pass > floors.pass[p][k]) problem(`${p}/${k}: ${pass} passing > floor ${floors.pass[p][k]}: the floor is below reality, so a regression back to it would pass; raise floors.json and add the names to passing-${p}.txt (--print-passing)`)
       if (n('unverifiable') > floors.maxUnverifiable[p][k]) problem(`${p}/${k}: ${n('unverifiable')} unverifiable > ceiling ${floors.maxUnverifiable[p][k]}`)
     }
   }
@@ -145,10 +164,12 @@ for (const p of PATHS) {
   console.log(`-- failing on the ${p} path (${bad.length}), first diff each:`)
   for (const o of bad) console.log(`  ${o.status.toUpperCase().padEnd(5)} ${o.id}: ${o.reason ? `[${o.reason}] ` : ''}${o.first ?? ''}${o.firstContent && o.firstContent !== o.first ? `\n        -> ${o.firstContent}` : ''}`)
   if (!FILTER) {
-    const passed = new Set(out.filter((o) => o.status === 'pass').map((o) => o.id))
-    const regressed = passingList(p).filter((id) => !passed.has(id))
+    const { regressed, write } = nextPassingList(passingList(p), new Set(out.filter((o) => o.status === 'pass').map((o) => o.id)))
     if (regressed.length) problem(`${p}: ${regressed.length} spec(s) that passed at the recorded baseline no longer do: ${regressed.join(', ')}`)
-    if (PRINT_PASSING) writeFileSync(join(GALLERY_DIR, `passing-${p}.txt`), [...passed].sort().join('\n') + '\n')
+    // (the baseline is rewritten only by a run that lost nothing: a run that regressed would otherwise record its own loss as the
+    // new baseline, and from then on one new pass would cover it)
+    if (PRINT_PASSING && write === null) console.log(`  (--print-passing: passing-${p}.txt NOT rewritten, ${regressed.length} spec(s) regressed)`)
+    else if (PRINT_PASSING && write !== null) writeFileSync(join(GALLERY_DIR, `passing-${p}.txt`), write.join('\n') + '\n')
   }
 }
 if (PATHS.includes('swap') && !FILTER) {

@@ -10,7 +10,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import * as vega from 'vega'
 import { compileExpr, type ExpressionRuntime } from '../../core/src/expression.ts'
-import { exact, quietLogger, withTz } from './differential-util.mts'
+import { exact, loggedThrow, quietLogger, withTz } from './differential-util.mts'
+import { expectSameOutcome } from './differential-outcome.mts'
 
 // each case sweeps hundreds of inputs through a real vega View: slower than a unit test, more so under a parallel run
 vi.setConfig({ testTimeout: 60_000 })
@@ -31,15 +32,15 @@ async function viaVega(code: string, args: unknown[]): Promise<unknown> {
   const view = new vega.View(vega.parse(spec(code)), { logger: quietLogger(errors) as never })
   args.forEach((v, i) => view.signal(NAMES[i]!, v))
   await view.runAsync()
-  if (errors.length) return { $: 'throw' }
+  if (errors.length) return loggedThrow(errors[0]![0])
   return exact(() => view.signal('out'))
 }
 function viaAster(code: string, args: unknown[]): unknown {
   const params: Record<string, unknown> = {}
   args.forEach((v, i) => { params[NAMES[i]!] = v })
   const got = exact(() => compileExpr(code, runtime)(undefined, params)) as { $?: string } | null
-  // the dataflow logs an operator error and keeps going; only that a call threw is compared
-  return got?.$ === 'throw' ? { $: 'throw' } : got
+  // the dataflow logs an operator error and keeps going: that a call threw, and vega's own words when it has them, are compared
+  return got
 }
 const call = (fn: string, n: number) => `${fn}(${NAMES.slice(0, n).join(', ')})`
 
@@ -68,7 +69,7 @@ describe('month/day name functions vs real vega (live)', () => {
   it('monthFormat, monthAbbrevFormat, dayFormat, dayAbbrevFormat', async () => {
     for (const fn of ['monthFormat', 'monthAbbrevFormat', 'dayFormat', 'dayAbbrevFormat']) {
       for (const v of [0, 1, 11, 12, -1, 6, 7, 1.5, NaN, null, undefined, '2', '', true, [3], {}, 31, 400]) {
-        expect(viaAster(call(fn, 1), [v]), `${fn}(${String(v)})`).toEqual(await viaVega(call(fn, 1), [v]))
+        expectSameOutcome(viaAster(call(fn, 1), [v]), await viaVega(call(fn, 1), [v]), `${fn}(${String(v)})`)
       }
     }
   })
@@ -80,7 +81,7 @@ describe('date expression functions vs real vega (live)', () => {
       for (const fn of UNARY) {
         it(`${fn}(x)`, () => withTz(tz, async () => {
           for (const v of DATES) {
-            expect(viaAster(call(fn, 1), [v]), `${fn}(${String(typeof v === 'object' ? JSON.stringify(v) : v)})`).toEqual(await viaVega(call(fn, 1), [v]))
+            expectSameOutcome(viaAster(call(fn, 1), [v]), await viaVega(call(fn, 1), [v]), `${fn}(${String(typeof v === 'object' ? JSON.stringify(v) : v)})`)
           }
         }))
       }
@@ -88,7 +89,7 @@ describe('date expression functions vs real vega (live)', () => {
         it(`${fn}(...)`, () => withTz(tz, async () => {
           for (const args of DT_ARGS) {
             const code = call(fn, args.length)
-            expect(viaAster(code, args), `${code} ${JSON.stringify(args)}`).toEqual(await viaVega(code, args))
+            expectSameOutcome(viaAster(code, args), await viaVega(code, args), `${code} ${JSON.stringify(args)}`)
           }
         }))
       }
@@ -98,7 +99,7 @@ describe('date expression functions vs real vega (live)', () => {
             for (const step of [undefined, 1, -2, 0, 1.5, null, '2']) {
               const args = step === undefined ? [unit, v] : [unit, v, step]
               const code = call(fn, args.length)
-              expect(viaAster(code, args), `${code} ${String(unit)} ${String(v)} ${String(step)}`).toEqual(await viaVega(code, args))
+              expectSameOutcome(viaAster(code, args), await viaVega(code, args), `${code} ${String(unit)} ${String(v)} ${String(step)}`)
             }
           }
         }))
@@ -113,7 +114,7 @@ describe('date expression functions vs real vega (live)', () => {
             for (const step of [undefined, 1, 2, 0, -1]) {
               const args = step === undefined ? [unit, a, b] : [unit, a, b, step]
               const code = call(fn, args.length)
-              expect(viaAster(code, args), `${code} ${unit}`).toEqual(await viaVega(code, args))
+              expectSameOutcome(viaAster(code, args), await viaVega(code, args), `${code} ${unit}`)
             }
           }
         }))
@@ -123,7 +124,7 @@ describe('date expression functions vs real vega (live)', () => {
           for (const v of [null, undefined, '', '2006-01-02', '02/01/2006', 'x', 20060102, true, new Date(TS), [], '2006-13-45']) {
             for (const f of ['%Y-%m-%d', '%d/%m/%Y', '%Y%m%d', '%H', '']) {
               const code = call(fn, 2)
-              expect(viaAster(code, [v, f]), `${code} ${String(v)} ${f}`).toEqual(await viaVega(code, [v, f]))
+              expectSameOutcome(viaAster(code, [v, f]), await viaVega(code, [v, f]), `${code} ${String(v)} ${f}`)
             }
           }
         }))
@@ -133,10 +134,20 @@ describe('date expression functions vs real vega (live)', () => {
           for (const v of DATES) for (const f of ['%Y-%m-%d', '%H:%M:%S.%L', '%b %e, %Y', '', ',.2f', 'bogus%', '$,d', undefined, null, 5, [], {}]) {
             const args = f === undefined ? [v] : [v, f]
             const code = call(fn, args.length)
-            expect(viaAster(code, args), `${code} ${String(v)} ${String(f)}`).toEqual(await viaVega(code, args))
+            expectSameOutcome(viaAster(code, args), await viaVega(code, args), `${code} ${String(v)} ${String(f)}`)
           }
         }))
       }
     })
   }
+})
+
+describe('the comparison of a refusal (planted differences it must see)', () => {
+  it('holds vega\'s own words, and only those', () => {
+    expect(() => expectSameOutcome({ $: 'throw', name: 'Error', message: '[aster] Invalid date: x' }, { $: 'throw', message: 'Invalid date: y' }, 'words')).toThrow()
+    expect(() => expectSameOutcome({ $: 'throw', name: 'Error', message: '[aster] Invalid date: x' }, { $: 'throw', message: 'Invalid date: x' }, 'same words')).not.toThrow()
+    // an engine error of vega's has no words to hold; one side not throwing is a difference whatever the other says
+    expect(() => expectSameOutcome({ $: 'throw', message: 'anything' }, loggedThrow(new TypeError('x')), 'engine')).not.toThrow()
+    expect(() => expectSameOutcome(1, { $: 'throw' }, 'answer vs refusal')).toThrow()
+  })
 })

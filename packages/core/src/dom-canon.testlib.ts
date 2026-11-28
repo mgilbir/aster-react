@@ -10,6 +10,11 @@ export function canon(el: Element): CanonEl {
   const kids = [...el.children].map(canon)
   const out: CanonEl = { tag: el.tagName, attrs, kids }
   if (kids.length === 0) out.text = el.textContent ?? ''
+  else {
+    // (text beside child elements: no renderer writes any, so a patch that leaves one behind is a difference -- C136)
+    const own = [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => (n as Text).data).join('')
+    if (own !== '') out.text = own
+  }
   return out
 }
 

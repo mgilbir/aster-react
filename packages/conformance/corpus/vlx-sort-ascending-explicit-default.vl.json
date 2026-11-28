@@ -1,0 +1,96 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "description": "sort ascending is the default order of a nominal axis, written out (descending and null are vlx-sort-descending and vlx-sort-null)",
+  "padding": 5,
+  "autosize": "none",
+  "width": 300,
+  "height": 200,
+  "data": {
+    "name": "table",
+    "values": [
+      {
+        "c": "C",
+        "x": 5,
+        "y": 3,
+        "v": 7,
+        "g": "p"
+      },
+      {
+        "c": "A",
+        "x": 6,
+        "y": 1,
+        "v": 7,
+        "g": "q"
+      },
+      {
+        "c": "A",
+        "x": 8,
+        "y": 10,
+        "v": 9,
+        "g": "p"
+      },
+      {
+        "c": "A",
+        "x": 2,
+        "y": 7,
+        "v": 10,
+        "g": "q"
+      },
+      {
+        "c": "D",
+        "x": 8,
+        "y": 2,
+        "v": 1,
+        "g": "p"
+      },
+      {
+        "c": "D",
+        "x": 10,
+        "y": 10,
+        "v": 11,
+        "g": "q"
+      },
+      {
+        "c": "B",
+        "x": 8,
+        "y": 7,
+        "v": 9,
+        "g": "p"
+      },
+      {
+        "c": "A",
+        "x": 2,
+        "y": 11,
+        "v": 8,
+        "g": "q"
+      },
+      {
+        "c": "B",
+        "x": 3,
+        "y": 11,
+        "v": 1,
+        "g": "p"
+      },
+      {
+        "c": "D",
+        "x": 1,
+        "y": 1,
+        "v": 11,
+        "g": "q"
+      }
+    ]
+  },
+  "mark": "bar",
+  "encoding": {
+    "x": {
+      "field": "c",
+      "type": "nominal",
+      "sort": "ascending"
+    },
+    "y": {
+      "field": "y",
+      "type": "quantitative",
+      "aggregate": "sum"
+    }
+  }
+}

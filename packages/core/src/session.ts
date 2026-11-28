@@ -15,17 +15,22 @@
  * - re-compiles the IR only when the structural skeleton actually changed
  *
  * Caveat (same as Vega's): dataset arrays are tracked by reference. Mutating
- * an array in place without replacing it is invisible to the cache.
+ * an array in place without replacing it is invisible to the cache. A spec is compared by content: a spec that is DEEP-FROZEN
+ * (checked once per object, remembered) cannot change, so evaluating it again reads none of it; any other spec is compared as before.
  */
+import { encodeLogOf } from './encode-handlers.js'
 import { compileChart } from './compiler.js'
-import { dict, ownGet } from './util.js'
+import { assertSpecObject } from './spec-guards.js'
+import { dict, ownGet, sameTuple } from './util.js'
 import { dataInputOf, valuesSignal } from './spec-structure.js'
-import { evaluateChartPending, type DataStability, type IncrementalEngine } from './runtime.js'
+import { checkHintShapes, evaluateChartPending, keepsTupleHistory, type DataStability, type IncrementalEngine } from './runtime.js'
 import { applyOneWithState } from './incremental-state.js'
 import { optionalPart } from './engine-parts.js'
 import { refId, valueKey } from './fingerprint.js'
 import { formatEnvironmentKey } from './locale.js'
-import { checkSpecLimits, checkSceneLimits, createLimitClock, withLimits, activeMeter } from './limits.js'
+import { getTextMetricsProvider } from './text-metrics.js'
+import { expressionRegistryEpoch } from './expression.js'
+import { assertSpecDepth, checkSpecLimits, checkSceneLimits, createLimitClock, withLimits, activeMeter } from './limits.js'
 import { diffRows, type DataPulse } from './pulse.js'
 import { checkChartRows } from './row-watch.js'
 import type { CompiledChart, RuntimeInput, SceneRoot, VgSpec } from './types.js'
@@ -56,6 +61,71 @@ function dataRefKey(v: unknown): string {
 
 /** What a top-level dataset's inline rows are reduced to in a skeleton. */
 const ROWS_MARKER = '\u0000rows'
+/** What a skeleton starts with when the spec cannot be written as text (a cycle, a function): it is different every time. */
+const UNCACHEABLE = '\u0000uncacheable'
+/** Makes each such skeleton its own (a clock would repeat inside one millisecond: two calls would then be answered alike). */
+let uncacheableCount = 0
+
+/**
+ * The values JSON writes alike that a spec built in code tells apart (a signal of `Infinity` draws otherwise than one of `-Infinity`,
+ * of `NaN` or of `null`; `-0` formats as `-0`; an `undefined` entry of a list is not a `null` one): each is written as a tag, a
+ * string that starts with a NUL, and a string of the spec that starts with one is written with a second one before it, so no
+ * string can stand for a tag. A missing key and one holding `undefined` stay alike, as they are to the engine.
+ */
+function keepDistinct(this: unknown, _key: string, value: unknown): unknown {
+  if (typeof value === 'number') return Number.isFinite(value) && !Object.is(value, -0) ? value : `\u0000n${Object.is(value, -0) ? '-0' : String(value)}`
+  if (typeof value === 'string') return value.charCodeAt(0) === 0 ? `\u0000s${value}` : value
+  if (value === undefined && Array.isArray(this)) return '\u0000u'
+  return value
+}
+
+/**
+ * The rows of a nested dataset (a group mark's `data`) that are many and deep-frozen: their text is made once per array (a frozen
+ * array cannot change). A spec rebuilt on each render around the same frozen rows is then not stringified again in its rows.
+ */
+const NESTED_ROWS_MIN = 32
+const NESTED_ROWS = new WeakMap<object, string>()
+
+/** Objects known to be deep-frozen: neither they nor anything they reach can change, so what was read of them stays true. */
+const DEEP_FROZEN = new WeakSet<object>()
+/**
+ * Record objects the caller has just frozen and knows reach nothing but data properties holding primitives and objects of the same
+ * set (a copy it made itself): `isDeepFrozen` then answers for them with one lookup instead of a walk of everything they hold.
+ */
+export function noteDeepFrozen(objects: Iterable<object>): void {
+  for (const o of objects) DEEP_FROZEN.add(o)
+}
+/** Whether `root` and everything it reaches is frozen (answered once per object: later calls are one lookup). */
+export function isDeepFrozen(root: unknown): boolean {
+  if (root === null || typeof root !== 'object') return false
+  if (DEEP_FROZEN.has(root)) return true
+  const seen = new Set<object>()
+  const stack: object[] = [root]
+  // bounded: each object is met once
+  while (stack.length) {
+    const o = stack.pop()!
+    if (seen.has(o) || DEEP_FROZEN.has(o)) continue
+    if (!Object.isFrozen(o)) return false
+    seen.add(o)
+    for (const k of Reflect.ownKeys(o)) {
+      const d = Object.getOwnPropertyDescriptor(o, k)
+      if (d === undefined) continue
+      if (!('value' in d)) return false // (a getter can answer anything)
+      const v = d.value as unknown
+      if (v !== null && (typeof v === 'object' || typeof v === 'function')) stack.push(v as object)
+    }
+  }
+  for (const o of seen) DEEP_FROZEN.add(o)
+  return true
+}
+function skeletonReplacer(this: unknown, key: string, value: unknown): unknown {
+  if (key === 'values' && Array.isArray(value) && value.length >= NESTED_ROWS_MIN && isDeepFrozen(value)) {
+    let text = NESTED_ROWS.get(value)
+    if (text === undefined) NESTED_ROWS.set(value, (text = `${ROWS_MARKER}:${JSON.stringify(value, keepDistinct)}`))
+    return text
+  }
+  return keepDistinct.call(this, key, value)
+}
 
 /**
  * Serialize the spec structure, leaving the top-level datasets' inline values out (they're tracked by identity).
@@ -64,6 +134,9 @@ const ROWS_MARKER = '\u0000rows'
  * live state for the first and starts it afresh for the second).
  */
 export function skeletonOf(spec: VgSpec): string {
+  // (the walk the compiler makes first, before a text of the spec is: a spec that shares sub-objects, built in code, would make
+  // the text exponential in the depth of the sharing; the walk refuses it past the spec-size ceiling, as compiling it would)
+  assertSpecDepth(spec)
   const data = (spec as { data?: unknown }).data
   let stripped: unknown = data
   // A dataset's rows are not part of the chart's shape, but whether it HAS rows is: without them it is the dataset's `url`
@@ -82,10 +155,10 @@ export function skeletonOf(spec: VgSpec): string {
   }
   const copy = { ...(spec as Record<string, unknown>), data: stripped }
   try {
-    return JSON.stringify(copy) ?? ''
+    return JSON.stringify(copy, skeletonReplacer) ?? ''
   } catch {
     // Non-serializable spec (cycles/functions): no caching, always re-evaluate.
-    return `\u0000uncacheable:${refId(spec as object)}:${Date.now()}`
+    return `${UNCACHEABLE}:${refId(spec as object)}:${++uncacheableCount}`
   }
 }
 
@@ -174,13 +247,14 @@ export interface ChartSession {
    * pass `{ data, dataChanges, signals, width, height }`; the session re-evaluates
    * the chart compiled by the most recent `evaluate`, reusing unchanged scene
    * items. Requires a prior `evaluate` (returns null otherwise).
+   *
+   * What `input` does not say is what the last accepted `evaluate` or `change` was given: its data (a dataset `data` names
+   * replaces that one), and every other input, each replaced as a whole by the one `input` gives: `width`, `height`, `signals`,
+   * `limits`, `urlPolicy`, `urlData`, `random`, `textMetrics`, `logger`, `domainRaw`, `containerSize`, `measuredSize`. A key
+   * given as `undefined` removes the setting. The change descriptions (`dataChanges`, `dataPulse`, `changedDatasets`,
+   * `autoChanges`) are this call's only.
    */
   change(input?: RuntimeInput): SceneRoot | null
-  /**
-   * Metadata for the last evaluation: the compiled chart (with signalDefs for
-   * the event loop) and the scene. Null before the first evaluate.
-   */
-  last: () => { chart: CompiledChart; scene: SceneRoot } | null
   /** Source/transform pulse inferred or supplied by the last evaluation. */
   pulse: () => DataPulse | null
 }
@@ -196,10 +270,14 @@ function metaKeyOf(skeleton: string, input: RuntimeInput): string {
   parts.push(`w=${valueKey(input.width)}`, `h=${valueKey(input.height)}`)
   // a scene made under another default locale or in another time zone formats its text and dates otherwise
   parts.push(`fmt=${formatEnvironmentKey()}`)
+  // a function registered (or replaced) since is called in its new form: the scene made with the old one is not this one
+  parts.push(`fx=${expressionRegistryEpoch()}`)
   // `containerSize()` is read by the spec's width / height signals: a resized container is a different view
   if (input.containerSize) parts.push(`cs=${valueKey(input.containerSize)}`)
   if (input.measuredSize) parts.push(`ms=${valueKey(input.measuredSize)}`)
-  if (input.textMetrics) parts.push(`tm=#${refId(input.textMetrics)}`)
+  // (what measures the text: the host's for this call, else the one set for every chart: a scene measured by another is another scene)
+  const measurer = input.textMetrics ?? getTextMetricsProvider()
+  if (measurer) parts.push(`tm=#${refId(measurer)}`)
   // another random source is another stream: the numbers a scene was drawn with belong to the one it was evaluated with
   if (input.random) parts.push(`rnd=#${refId(input.random)}`)
   if (input.limits) parts.push(`lim=${valueKey(input.limits)}`)
@@ -213,6 +291,9 @@ function metaKeyOf(skeleton: string, input: RuntimeInput): string {
   for (const name of Object.keys(input.signals ?? {}).sort()) {
     parts.push(`s ${name}=${valueKey(input.signals![name])}`)
   }
+  // (the items the event loop asked to be encoded again, under a symbol key of the signals: another request is another scene)
+  const log = encodeLogOf(input.signals)
+  if (log !== undefined) parts.push(`enc=#${refId(log.session)}:${log.rev}`)
   return `${skeleton}\u0000${parts.join('\u0001')}`
 }
 
@@ -223,22 +304,92 @@ function fingerprint(spec: VgSpec, input: RuntimeInput, skeleton: string = skele
   return `${metaKeyOf(skeleton, input)}\u0000${parts.join('\u0001')}`
 }
 
+/** The inputs that describe one call's changes, or its data: a `change` does not carry them over from the last evaluation. */
+const PER_CALL: ReadonlySet<string> = new Set<keyof RuntimeInput>(['data', 'dataChanges', 'dataPulse', 'changedDatasets', 'autoChanges'])
+
+/** What an evaluation was given besides its data and its change descriptions. */
+function settingsOf(input: RuntimeInput): RuntimeInput {
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(input)) if (!PER_CALL.has(key)) out[key] = (input as Record<string, unknown>)[key]
+  return out as RuntimeInput
+}
+
+/** `given` over the settings of the last evaluation, key by key (an `undefined` it gives removes one). */
+function withSettings(last: RuntimeInput, given: RuntimeInput): RuntimeInput {
+  return { ...last, ...given }
+}
+
+/**
+ * Whether a signal was given another object than it was given last (vega's dataflow takes a value set to another object for a change,
+ * whatever it holds: `Operator.set` compares by reference), the same tuple excepted whichever of the engine's copies of it it is.
+ */
+function setAgain(before: Record<string, unknown> | undefined, now: Record<string, unknown> | undefined): boolean {
+  for (const k of Object.keys(now ?? {})) {
+    const v = now![k]
+    const was = before === undefined ? undefined : ownGet(before, k)
+    if (v !== null && typeof v === 'object' && !Object.is(v, was) && !sameTuple(v, was)) return true
+  }
+  return false
+}
+
 /** Union of the pulse's structural datasets and the host's own `changedDatasets` hint. */
 function mergeNames(a: Iterable<string>, b: readonly string[] | undefined): string[] {
   return [...new Set<string>([...a, ...(b ?? [])])]
 }
 
-export function createChartSession(): ChartSession {
+/** Options of {@link createChartSession}. */
+export interface ChartSessionOptions {
+  /**
+   * The session is one running view of its chart, as a vega `View` is: every evaluation of the same compiled chart continues from
+   * the last scene the session accepted (`RuntimeInput.retainFrom`, unless the input gives one), so an axis keeps the ticks it still
+   * shows in the order it showed them, as vega's does across a signal write or a data change. A new chart (another spec) starts
+   * afresh. Default false: every evaluation is the first render of its input. `<Chart>` makes its session with it on.
+   */
+  runningView?: boolean
+}
+
+/** What each session's last evaluation compiled and drew (see `lastEvaluation`). */
+const lastOfSession = new WeakMap<ChartSession, () => { chart: CompiledChart; scene: SceneRoot } | null>()
+
+/**
+ * The compiled chart (with its signalDefs) and the scene of a session's last evaluation, or `null` before the first. Not on the session
+ * (a session's surface is `evaluate`, `change` and `pulse`): the engine's own tests read it by this function, which is on no entry.
+ * @internal
+ */
+export function lastEvaluation(session: ChartSession): { chart: CompiledChart; scene: SceneRoot } | null {
+  return lastOfSession.get(session)?.() ?? null
+}
+
+export function createChartSession(options: ChartSessionOptions = {}): ChartSession {
+  const running = options.runningView === true
   let lastKey = ''
+  /**
+   * A running view continues from the last scene it accepted, unless the input names the scene it continues itself, or the host
+   * sized it otherwise (`width`, `height`, a measured or container size): a host that measures its element renders first at no
+   * size, which no vega view ever showed, so a view at a size the host gives anew starts as a view mounted at that size.
+   */
+  let lastSize = ''
+  const continued = (scene: SceneRoot | null, input: RuntimeInput): Partial<RuntimeInput> => {
+    const size = `${valueKey(input.width)}|${valueKey(input.height)}|${valueKey(input.measuredSize)}|${valueKey(input.containerSize)}`
+    const same = size === lastSize
+    lastSize = size
+    return running && same && scene !== null && input.retainFrom === undefined ? { retainFrom: scene } : {}
+  }
   let lastMetaKey = ''
   let lastSkeleton = ''
   let lastChart: CompiledChart | null = null
   let lastScene: SceneRoot | null = null
   let lastSpec: VgSpec | null = null
   let lastRaw: Map<string, unknown> | null = null
-  // the datasets the engine's committed state was made from (`lastRaw` also follows evaluations that found nothing to do)
+  // the datasets the engine's committed state was made from (`lastRaw` also follows evaluations that found nothing to do, whose rows
+  // are equal to these: so a pulse relative to `lastRaw` is relative to these too, and they are what the session hands the engine as
+  // the rows its pulses are relative to, compared by identity)
   let engineRaw: Map<string, unknown> | null = null
   let lastPulse: DataPulse | null = null
+  // what the last accepted evaluation was given besides its data and its change descriptions: a `change` goes on from there
+  let lastSettings: RuntimeInput = {}
+  // the signal values the session was last given (see `setAgain`)
+  let lastSignals: Record<string, unknown> | undefined
 
   /**
    * The datasets whose rows are equal to the ones the engine's state was made from, so the steps made from them need not run: every
@@ -259,7 +410,9 @@ export function createChartSession(): ChartSession {
     return out ?? new Map()
   }
 
-  const withAutoPulse = (spec: VgSpec, input: RuntimeInput, currentRaw: Map<string, unknown>): { input: RuntimeInput; pulse: DataPulse } => {
+  const withAutoPulse = (input: RuntimeInput, currentRaw: Map<string, unknown>): { input: RuntimeInput; pulse: DataPulse } => {
+    // (a hint that cannot be what it says is refused before it is read, as the evaluation refuses it)
+    checkHintShapes(input)
     if (input.dataPulse) {
       const datasets = new Map<string, never>()
       const structural = new Set<string>()
@@ -342,7 +495,6 @@ export function createChartSession(): ChartSession {
 
   const evaluateOnce = (spec: VgSpec, input: RuntimeInput = {}): SceneRoot => {
     const clock = activeMeter()?.clock ?? createLimitClock(input.limits)
-    if (input.limits) checkSpecLimits(spec as unknown as Record<string, unknown>, input.limits, input)
     // (development builds: rows changed in place since the last evaluation are warned about, see row-watch.ts)
     try {
       if (process.env.NODE_ENV !== 'production') checkChartRows(session, spec, input as never)
@@ -350,29 +502,43 @@ export function createChartSession(): ChartSession {
       if (typeof process !== 'undefined') throw e
     }
     clock.check('compile')
-    const skeleton = skeletonOf(spec)
+    // The spec this session evaluated last, when it is deep-frozen: it cannot have changed, so its skeleton is the one made then (the
+    // walk that bounds its depth and the text of all of it are made for it once). Any other spec is read each time.
+    // (a spec that cannot be written as text is never cached: its skeleton is made anew each time, see `skeletonOf`)
+    const again = lastSpec !== null && spec === lastSpec && !lastSkeleton.startsWith(UNCACHEABLE) && isDeepFrozen(spec)
+    const skeleton = again ? lastSkeleton : skeletonOf(spec)
     const metaKey = metaKeyOf(skeleton, input)
     const key = fingerprint(spec, input, skeleton)
     const currentRaw = rawDatasets(spec, input)
-    const { input: effectiveInput, pulse } = withAutoPulse(spec, input, currentRaw)
+    const { input: effectiveInput, pulse } = withAutoPulse(input, currentRaw)
     // An explicit change description (per-datum changeset, pulse, or a named
     // changed dataset) means the data values changed — often in place, so the
     // array identity and thus the fingerprint is unchanged — so the no-op
     // cache must not short-circuit the re-evaluation.
     const hinted = !!input.dataChanges || !!input.dataPulse || !!input.changedDatasets?.length
-    if (!hinted && key === lastKey && lastScene) {
+    // (a chart whose tuples carry what the run before wrote -- runtime.ts `historyRun` -- is not a function of its inputs: a signal set
+    // again to another object is a run of vega's dataflow even when the object holds what the one before held)
+    const signalSetAgain = lastChart !== null && skeleton === lastSkeleton && keepsTupleHistory(lastChart) && setAgain(lastSignals, input.signals)
+    lastSignals = input.signals
+    if (!hinted && !signalSetAgain && key === lastKey && lastScene) {
       lastRaw = currentRaw
       lastPulse = pulse
+      lastSettings = settingsOf(input)
       return lastScene
     }
     // New row arrays with identical values are a no-op for the scene: the
     // inferred pulse is empty and everything else matches the previous run.
-    if (input.autoChanges !== false && !hinted && !pulse.datasets.size && !pulse.structural.size && metaKey === lastMetaKey && lastScene) {
+    if (input.autoChanges !== false && !hinted && !signalSetAgain && !pulse.datasets.size && !pulse.structural.size && metaKey === lastMetaKey && lastScene) {
       lastRaw = currentRaw
       lastPulse = pulse
+      lastSettings = settingsOf(input)
       lastKey = key
       return lastScene
     }
+
+    // The pre-flight walks the whole spec: it is for what is about to be evaluated, so a call answered from the cache above (the
+    // same spec content, data arrays and limits as the scene it returns was accepted under) is not walked again.
+    if (input.limits) checkSpecLimits(spec as unknown as Record<string, unknown>, input.limits, input)
 
     // Compute everything into locals and commit only after every check has
     // passed: a limit that throws must leave the session — and the
@@ -382,11 +548,12 @@ export function createChartSession(): ChartSession {
     const chart = recompile ? compileChart(spec) : lastChart!
     clock.check('compile')
     // (a chart compiled anew has no state to keep steps from)
-    const pending = evaluateChartPending(sessionEngine(), chart, { ...effectiveInput, data: dataInput(currentRaw) }, recompile ? undefined : stableData(input, currentRaw, pulse))
+    const pending = evaluateChartPending(sessionEngine(), chart, { ...effectiveInput, ...continued(recompile ? null : lastScene, effectiveInput), data: dataInput(currentRaw) }, recompile ? undefined : stableData(input, currentRaw, pulse), engineRaw ?? undefined)
     clock.check('evaluate')
     if (input.limits) checkSceneLimits(pending.scene, input.limits)
     pending.commit()
     engineRaw = currentRaw
+    lastSettings = settingsOf(input)
     lastChart = chart
     lastSkeleton = skeleton
     lastSpec = spec
@@ -398,7 +565,7 @@ export function createChartSession(): ChartSession {
     return lastScene
   }
 
-  const changeOnce = (input: RuntimeInput = {}): SceneRoot | null => {
+  const changeOnce = (input: RuntimeInput): SceneRoot | null => {
     // Imperative per-datum update of the last compiled chart. No spec re-pass:
     // the host drives changes via data/dataChanges/signals. Requires a prior
     // evaluate (we need a compiled chart + spec to fingerprint against).
@@ -414,12 +581,14 @@ export function createChartSession(): ChartSession {
     }
     const currentRaw = new Map(lastRaw)
     for (const [name, rows] of Object.entries(input.data ?? {})) currentRaw.set(name, rows)
-    const { input: effectiveInput, pulse } = withAutoPulse(lastSpec, input, currentRaw)
-    const pending = evaluateChartPending(sessionEngine(), lastChart, { ...effectiveInput, data: dataInput(currentRaw) }, stableData(input, currentRaw, pulse))
+    const { input: effectiveInput, pulse } = withAutoPulse(input, currentRaw)
+    const pending = evaluateChartPending(sessionEngine(), lastChart, { ...effectiveInput, ...continued(lastScene, effectiveInput), data: dataInput(currentRaw) }, stableData(input, currentRaw, pulse), engineRaw ?? undefined)
     clock.check('change')
     if (input.limits) checkSceneLimits(pending.scene, input.limits)
     pending.commit()
     engineRaw = currentRaw
+    lastSettings = settingsOf(input)
+    lastSignals = input.signals
     lastScene = pending.scene
     // Every key follows the state that was just committed, or the no-op cache
     // would serve a scene built for different inputs.
@@ -431,10 +600,14 @@ export function createChartSession(): ChartSession {
   }
 
   const session: ChartSession = {
-    evaluate: (spec, input = {}) => withLimits(input.limits, () => evaluateOnce(spec, input)),
-    change: (input = {}) => withLimits(input.limits, () => changeOnce(input)),
-    last: () => (lastChart && lastScene ? { chart: lastChart, scene: lastScene } : null),
+    evaluate: (spec, input = {}) => { assertSpecObject(spec, 'ChartSession.evaluate'); return withLimits(input.limits, () => evaluateOnce(spec, input)) },
+    change: (given = {}) => {
+      // (the limits too: a change after an evaluation under limits runs under them, unless it gives its own)
+      const input = withSettings(lastSettings, given)
+      return withLimits(input.limits, () => changeOnce(input))
+    },
     pulse: () => lastPulse,
   }
+  lastOfSession.set(session, () => (lastChart && lastScene ? { chart: lastChart, scene: lastScene } : null))
   return session
 }

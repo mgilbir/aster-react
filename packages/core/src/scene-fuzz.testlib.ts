@@ -99,7 +99,8 @@ export function markSpec(r: Rnd, kind: MarkKind, from: string): Record<string, u
       paint()
       break
   }
-  return { type: kind === 'path' ? 'path' : kind, from: { data: from }, encode: { update: upd } }
+  // (`circle` is the generator's name for a plain circle: a `symbol` mark, as vega has no `circle` mark type)
+  return { type: kind === 'circle' ? 'symbol' : kind, from: { data: from }, encode: { update: upd } }
 }
 
 export interface GenOptions {

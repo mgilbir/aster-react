@@ -13,15 +13,15 @@ it what to import, and the engine itself is synchronous, so it cannot wait for a
 ## Decision
 
 1. `@aster-charts/core/addons` reads a spec's structure (no evaluation) and says which add-ons it needs
-   (`addonsNeeded`); `loadAddons` imports exactly those, each at most once. An add-on the app
+   (`addonsNeeded`); `loadAddonsFor(spec)` imports exactly those (`loadAddons(names)` takes the names), each at most once. An add-on the app
    already imported is recognised by what it registered and not imported again.
 2. In React the wait is a Suspense wait (`React.use`), the same one an async `spec` and
    `useSpecData` use. `<Chart>`, `<SvgChart>`, `useChart`, the stream components and the worker
    hooks suspend until the add-ons are there. There is no intermediate render, so no flash of an
    error or of a half-drawn chart. A spec that needs nothing, and an app that imported the add-on
    itself, never suspend.
-3. A failed import is an ordinary chart error, reported through `onError`, and is remembered for
-   the page's lifetime so that React's retry asks for a promise that settles.
+3. A failed import is an ordinary chart error, reported through `onError`, and the React layer remembers it for
+   the page's lifetime so that React's retry asks for a promise that settles (`loadAddonsFor` itself rejects each time it is asked).
 4. The synchronous entry points (`renderSpec`, `renderChartToStaticMarkup`, `hydrateChart`) cannot
    wait and keep the actionable error; `loadAddonsFor(spec)` is the awaitable step for them.
 5. Data is never fetched on its own. A `url` dataset is resolved by `loadSpecData` or
@@ -50,3 +50,11 @@ it what to import, and the engine itself is synchronous, so it cannot wait for a
   `useChart.autoload.test.tsx`, `worker.autoload.test.tsx`: the React, SSR and worker behaviour
   above.
 - How it works in detail: [ARCHITECTURE.md](../ARCHITECTURE.md#geo-projections--the-add-on-boundary).
+
+## Amendments
+
+*2026-11-25, to match the code (audit C84, C451).*
+
+- "A spec that needs nothing ... never suspends" is about the add-ons. In a browser build a spec may also need a *part of the engine*
+  (a legend, a time scale, an aggregate...), which loads through the same Suspense wait; `specNeeds(spec)` reads both
+  ([ADR 0011](0011-engine-parts-load-on-demand-in-browser-builds.md)).

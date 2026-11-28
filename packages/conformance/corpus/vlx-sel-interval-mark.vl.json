@@ -54,6 +54,16 @@
      "strokeWidth": 2,
      "cursor": "crosshair"
     }
+   },
+   "value": {
+    "x": [
+     2,
+     4
+    ],
+    "y": [
+     3,
+     6
+    ]
    }
   }
  ],

@@ -69,7 +69,9 @@ function genStep(r: () => number, shape: Shape, dataset: string, index: number, 
     case 'sample': return { t: { type: 'sample', size: pick(r, [5, 12]) }, shape, draws: true }
     case 'impute': { const f = num(); return { t: { type: 'impute', field: f, key: pick(r, shape.any), value: 0 }, shape } }
     // (a signal that reads a dataset resolves after it is built: the datasets build again under it)
-    case 'filterCount': return { t: { type: 'filter', expr: `datum.${num()} >= (cnt > 20 ? 1 : 0)` }, shape }
+    // (`cnt` reads the dataset `t`, so `t` itself may not read it: that is a cycle in the dataflow, which vega refuses, and so does the
+    // engine; a dataset made from `t`, or a group's, may)
+    case 'filterCount': return { t: { type: 'filter', expr: dataset === 't' ? `datum.${num()} >= thr` : `datum.${num()} >= (cnt > 20 ? 1 : 0)` }, shape }
     // (fields from a small pool, so steps read and write each other's: a chain of them is where running steps as one could go wrong)
     case 'formulaPool': { const as = pick(r, ['p', 'q', 'x']); return { t: { type: 'formula', as, expr: `datum.${pick(r, ['p', 'q', 'x', 'v'])} + ${pick(r, ['1', 'datum.q', 'sigA', 'datum.p * 2'])}` }, shape: { numeric: [...shape.numeric, as], any: [...keep, as] } } }
     case 'binPool': { const a = pick(r, ['p', 'q']); return { t: { type: 'bin', field: pick(r, ['p', 'q', 'x', 'v']), ...(r() < 0.5 ? { extent: [0, 14], step: pick(r, [1, 2]) } : { maxbins: pick(r, [4, 8]) }), as: [a, pick(r, ['q', 'x', 'p'])] }, shape: { numeric: [...shape.numeric, a], any: [...keep, a] } } }

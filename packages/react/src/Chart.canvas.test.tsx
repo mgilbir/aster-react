@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { forEachVariant } from './testing/variants'
 import { chartTooltip } from './testing/tooltip'
 
 // The matrix runs every test below on <Chart>, <SvgChart> and <SvgChart interaction={interaction}>;
 // `Chart` is the variant's component (see testing/variants.tsx).
-forEachVariant(['svg', 'canvas'], (Chart, variant) => {
+forEachVariant(['svg', 'canvas'], (Chart) => {
   function makeSpec() {
     return {
       $schema: 'https://vega.github.io/schema/vega/v6.json',
@@ -93,24 +93,61 @@ forEachVariant(['svg', 'canvas'], (Chart, variant) => {
       })
     })
 
-    it('redraws without leaking elements when the spec changes', async () => {
-      const container = document.createElement('div')
-      document.body.appendChild(container)
-      const root = createRoot(container)
-      await act(async () => {
-        root.render(<Chart spec={makeSpec()} width={200} height={100} renderer="canvas" />)
+    it('redraws without leaking elements when the spec changes: the new picture is painted, and it is the one a fresh mount paints', async () => {
+      // jsdom has no 2D context (getContext returns null): a recording one stands in, so what is painted can be read
+      const painted: string[] = []
+      const ctx = new Proxy({}, {
+        get: (_t, p) => (p === 'canvas' ? {} : (...args: unknown[]) => { painted.push(`${String(p)}(${args.join(',')})`) }),
+        set: () => true,
       })
-      const spec2 = makeSpec()
-      ;(spec2.data![0]! as { values: unknown[] }).values = [{ x: 0, y: 5 }, { x: 1, y: 9 }, { x: 2, y: 1 }]
-      await act(async () => {
-        root.render(<Chart spec={spec2} renderer="canvas" />)
-      })
-      // Still exactly one canvas, no stray SVG nodes.
-      expect(container.querySelectorAll('canvas').length).toBe(1)
-      expect(container.querySelector('svg')).toBeNull()
-      await act(async () => {
-        root.unmount()
-      })
+      const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as never)
+      vi.stubGlobal('requestAnimationFrame', (cb: () => void) => { cb(); return 1 })
+      vi.stubGlobal('cancelAnimationFrame', () => {})
+      try {
+        const lineTo = (): string[] => painted.filter((c) => c.startsWith('lineTo(') || c.startsWith('moveTo('))
+        const mountFresh = async (spec: ReturnType<typeof makeSpec>): Promise<string[]> => {
+          const el = document.createElement('div')
+          document.body.appendChild(el)
+          const r = createRoot(el)
+          painted.length = 0
+          await act(async () => { r.render(<Chart spec={spec} width={200} height={100} renderer="canvas" />) })
+          const out = lineTo()
+          await act(async () => { r.unmount() })
+          el.remove()
+          return out
+        }
+        const spec2 = makeSpec()
+        ;(spec2.data![0]! as { values: unknown[] }).values = [{ x: 0, y: 5 }, { x: 1, y: 9 }, { x: 2, y: 1 }]
+        const expectedFirst = await mountFresh(makeSpec())
+        const expectedSecond = await mountFresh(spec2)
+        expect(expectedFirst.length).toBeGreaterThan(0)
+        expect(expectedSecond).not.toEqual(expectedFirst)
+
+        const container = document.createElement('div')
+        document.body.appendChild(container)
+        const root = createRoot(container)
+        painted.length = 0
+        await act(async () => {
+          root.render(<Chart spec={makeSpec()} width={200} height={100} renderer="canvas" />)
+        })
+        expect(lineTo()).toEqual(expectedFirst)
+        painted.length = 0
+        await act(async () => {
+          root.render(<Chart spec={spec2} renderer="canvas" />)
+        })
+        // the canvas was repainted with the new scene: cleared, then the new line (a canvas that never repainted paints nothing here)
+        expect(painted.some((c) => c.startsWith('clearRect(') || c.startsWith('fillRect('))).toBe(true)
+        expect(lineTo()).toEqual(expectedSecond)
+        // Still exactly one canvas, no stray SVG nodes.
+        expect(container.querySelectorAll('canvas').length).toBe(1)
+        expect(container.querySelector('svg')).toBeNull()
+        await act(async () => {
+          root.unmount()
+        })
+      } finally {
+        getContext.mockRestore()
+        vi.unstubAllGlobals()
+      }
     })
 
     it('shows a tooltip via the scene hit index in canvas mode', async () => {
@@ -162,6 +199,29 @@ forEachVariant(['svg', 'canvas'], (Chart, variant) => {
       const html = renderToString(<Chart spec={makeSpec()} renderer="canvas" />)
       expect(html).toContain('<canvas')
       expect(html).not.toContain('<svg')
+    })
+  })
+})
+
+// A renderer name that is none of ours ("webgl", a typo) drew SVG with no word, where `renderer="canvas"` without the capability is
+// reported (C645): every variant now reports it once, through `onError`, and draws SVG.
+forEachVariant(['svg'], (_Chart, variant) => {
+  describe('renderer that is no renderer', () => {
+    it('draws SVG and reports the name once', async () => {
+      const container = document.createElement('div')
+      document.body.appendChild(container)
+      const root = createRoot(container)
+      const errors: Error[] = []
+      const spec = { width: 40, height: 30, padding: 0, autosize: 'none', data: [{ name: 't', values: [{ x: 1 }] }], marks: [{ type: 'rect', from: { data: 't' }, encode: { update: { x: { value: 0 }, y: { value: 0 }, width: { value: 10 }, height: { value: 10 } } } }] }
+      const props = { spec, renderer: 'webgl' as never, onError: (e: Error) => { errors.push(e) } }
+      // (the raw component of the variant: the matrix wrapper drops a `renderer` it has no canvas for)
+      await act(async () => { root.render(variant.element(props)) })
+      await act(async () => { root.render(variant.element(props)) })
+      expect(container.querySelector('canvas')).toBeNull()
+      expect(container.querySelector('svg')).not.toBeNull()
+      expect(errors.map((e) => e.message)).toEqual(['[aster] renderer="webgl" is no renderer ("svg" or "canvas"), so it renders SVG'])
+      await act(async () => { root.unmount() })
+      container.remove()
     })
   })
 })

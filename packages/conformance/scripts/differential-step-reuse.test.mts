@@ -12,8 +12,9 @@
  *
  * Not generated: steps that draw (vega's stream is global, `differential-random` covers it), and `aggregate` / `collect` (vega keeps a
  * running sum, so its floating-point sums differ in the last bit from a fresh sum; a `collect` of a dataset another derives from
- * sorts the rows both hold; those steps have their own differentials). The rows of a dataset are compared as a set: vega adds the
- * rows a filter lets through later after the ones it let through before.
+ * sorts the rows both hold; those steps have their own differentials). The rows of a dataset are compared IN ORDER after the first
+ * evaluation, and as a set after any step (a resize included, which a filter that reads `width` follows): vega adds the rows a filter
+ * lets through later after the ones it let through before.
  */
 import { describe, expect, it } from 'vitest'
 import * as vega from 'vega'
@@ -106,14 +107,15 @@ const specOf = (p: Program): Spec => ({
   data: p.datasets.map((d) => ({ name: d.name, ...(d.values ? { values: structuredClone(d.values) } : {}), ...(d.source ? { source: d.source } : {}), transform: structuredClone(d.transform) })),
 })
 
-/** The datasets and published signals as text. After a step the rows are a set (see the header). */
+/** The datasets and published signals as text: in order after the first evaluation, as a set after a step (see the header). */
 function image(p: Program, rows: (name: string) => readonly unknown[] | null | undefined, signal: (name: string) => unknown, ordered: boolean): string {
   const sets = p.datasets.map((d) => {
     const list = (rows(d.name) ?? []).map((r) => JSON.stringify(enc(r)))
     return `${d.name}: ${(ordered ? list : [...list].sort()).join('|')}`
   })
-  // (vega publishes a bin's grid as a function carrying `start`, `stop` and `step`; Aster as an object with them)
-  const grid = (v: unknown): unknown => (typeof v === 'function' ? { start: (v as Record<string, unknown>).start, stop: (v as Record<string, unknown>).stop, step: (v as Record<string, unknown>).step } : v)
+  // (vega publishes a bin as its binning accessor, a function carrying `start`, `stop`, `step`, its `fields` and its name `fname`;
+  // Aster as an object with the same data)
+  const grid = (v: unknown): unknown => (typeof v === 'function' ? { ...(v as unknown as Record<string, unknown>) } : v)
   return [...sets, ...p.published.map((s) => `${s}: ${JSON.stringify(enc(grid(signal(s))))}`)].join('\n')
 }
 
@@ -123,7 +125,7 @@ async function runVega(p: Program): Promise<string[]> {
   const out: string[] = []
   try {
     await view.runAsync()
-    out.push(look(false))
+    out.push(look(true))
     for (const s of p.steps) {
       if (s.op === 'width') view.width(s.to)
       else if (s.op === 'signal') view.signal(s.name, s.to)
@@ -152,7 +154,7 @@ function runAster(p: Program): string[] {
     const params = (scene as unknown as { signalParams: Record<string, unknown> }).signalParams
     return image(p, (n) => sets.get(n), (s) => params[s], ordered)
   }
-  const out = [look(false)]
+  const out = [look(true)]
   for (const s of p.steps) {
     if (s.op === 'width') width = s.to
     else if (s.op === 'signal') signals = { ...signals, [s.name]: s.to }

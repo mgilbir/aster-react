@@ -10,19 +10,28 @@
  *
  * Every box is in the rendered viewport: the top-left of the chart's SVG (or canvas) is (0, 0), and the view's padding and
  * the frame's offset inside it are part of the numbers. That is the space of a pointer event mapped into the chart and of
- * `buildHitIndex`, so a node lies exactly over the mark the pointer would pick there, and a host overlays a node at its
- * own (x, y) with no knowledge of the padding.
+ * `buildHitIndex`, and a host overlays a node at its own (x, y) with no knowledge of the padding. A mark item's box is its
+ * bounds as the hit index measures them (bounds.ts `boundItemOfKind`: a text's measured width, alignment, offsets and angle, a
+ * symbol's shape, a rect's size); the item of a line, area or trail mark -- one point of the mark's one path -- is the point
+ * it stands for. A box is never smaller than 2 x 2, nor anything but finite numbers (an item whose bounds are not, a NaN
+ * width, stands at its position).
+ *
+ * The tree is bounded, whatever the data: above `summaryThreshold` mark items in the whole chart, every mark is one summary
+ * node, and no more than `summaryThreshold` mark nodes are made in all (the marks past them are one last summary); a legend
+ * gives no more than `summaryThreshold` entry nodes. Node ids are unique in a tree, and a mark item's id is its mark's and its
+ * datum's (not its position), so a row inserted before it does not rename it.
  *
  * Captions deliberately follow vega-scenegraph's wording where it has one
  * ("X-axis titled '…' for a linear scale with values from … to …", "Symbol
  * legend titled '…' for color with N values: …") so a screen-reader user sees
  * the same description they would get from upstream Vega.
  */
-import { SYMBOL_DEFAULT_SIZE } from './util.js'
-import { textAnchor } from './text-metrics.js'
+import { Bounds as Box, boundItemOfKind } from './bounds.js'
+import { Hash53Stream, hash53 } from './svg-defs.js'
+import { withSceneOutput } from './scene-output.js'
 import type { SceneGroup, SceneItem, SceneNode, SceneRoot } from './types.js'
 import { axisLabel, guideTitleText, legendLabel, scalesFromSnapshots } from './guide-caption.js'
-import { pushAll } from './util.js'
+import { drawnOffset, pushAll } from './util.js'
 import { isEngineNode, keptInto } from './scene-registry.js'
 
 export type A11yKind = 'mark' | 'axis' | 'legend' | 'legend-entry' | 'title' | 'group'
@@ -74,8 +83,9 @@ export interface A11yOptions {
   label?: string
   description?: string
   /**
-   * Above this many mark items the tree collapses to one summary node per mark
-   * (Aster's own option; vega-embed has no equivalent). Default 150.
+   * The tree's bound (Aster's own option; vega-embed has no equivalent). Default 150. Above this many mark items in the whole
+   * scene every mark collapses to one summary node; no more than this many mark nodes are made in all, nor legend entries per
+   * legend (see the module comment).
    */
   summaryThreshold?: number
   /** IDs / predicates marked as selected (`aria-selected`). */
@@ -86,44 +96,32 @@ export interface A11yOptions {
 
 interface Bounds { x1: number; y1: number; x2: number; y2: number }
 
-function itemBounds(it: SceneItem, tx: number, ty: number): Bounds {
-  // (a text item is anchored `radius` out from its x/y along `theta`, and that radius is not a symbol's)
-  const [ax, ay] = it.text != null ? textAnchor(it) : [it.x ?? 0, it.y ?? 0]
-  const x = tx + ax
-  const y = ty + ay
-  const x2 = tx + (it.x2 ?? it.x ?? 0)
-  const y2 = ty + (it.y2 ?? it.y ?? 0)
-  let x1 = Math.min(x, x2)
-  let y1 = Math.min(y, y2)
-  let x2b = Math.max(x, x2)
-  let y2b = Math.max(y, y2)
-  if (it.width != null) x2b = x1 + Math.abs(it.width)
-  if (it.height != null) y2b = y1 + Math.abs(it.height)
-  if (it.radius != null) {
-    x1 -= it.radius
-    y1 -= it.radius
-    x2b += it.radius
-    y2b += it.radius
+/** The box an item is measured into (one per module: `itemBounds` reads its four numbers at once, and does not recurse). */
+const SCRATCH = new Box()
+
+/** The marks whose items are the points of one path: an item's node is the point it stands for. */
+const PATH_MARKS = new Set(['line', 'area', 'trail'])
+
+/**
+ * The box of an item at (tx, ty) (see the module comment): its bounds as the hit index measures an item of a mark of `kind`
+ * (`leaf` for a guide's part), the point of a path mark's item, never smaller than 2 x 2 and always finite.
+ */
+function itemBounds(it: SceneItem, tx: number, ty: number, kind: string): Bounds {
+  const px = +(it.x as number) || 0
+  const py = +(it.y as number) || 0
+  let x1 = px, y1 = py, x2 = px, y2 = py
+  if (!PATH_MARKS.has(kind)) {
+    const b = SCRATCH.clear()
+    // (a value the bounds reader refuses -- a pass vega stops at -- leaves the item at its position: the tree never throws)
+    try { boundItemOfKind(b, it, kind) } catch { b.clear() }
+    if (!b.empty() && Number.isFinite(b.x1) && Number.isFinite(b.y1) && Number.isFinite(b.x2) && Number.isFinite(b.y2)) {
+      x1 = b.x1; y1 = b.y1; x2 = b.x2; y2 = b.y2
+    }
   }
-  const r = it.outerRadius ?? Math.sqrt((it.size as number) ?? SYMBOL_DEFAULT_SIZE) / 2
-  if (it.size != null || it.outerRadius != null || it.shape != null) {
-    x1 -= r
-    y1 -= r
-    x2b += r
-    y2b += r
-  }
-  if (it.text != null) {
-    const fs = it.fontSize ?? 11
-    const w = String(it.text).length * fs * 0.6
-    const align = it.align ?? 'center'
-    x1 = align === 'left' ? x : align === 'right' ? x - w : x - w / 2
-    x2b = x1 + w
-    y1 = y - fs
-    y2b = y + fs * 0.3
-  }
-  if (x2b - x1 < 2) x2b = x1 + 2
-  if (y2b - y1 < 2) y2b = y1 + 2
-  return { x1, y1, x2: x2b, y2: y2b }
+  // (at least 2 x 2, about its centre)
+  if (x2 - x1 < 2) { const c = (x1 + x2) / 2; x1 = c - 1; x2 = c + 1 }
+  if (y2 - y1 < 2) { const c = (y1 + y2) / 2; y1 = c - 1; y2 = c + 1 }
+  return { x1: tx + x1, y1: ty + y1, x2: tx + x2, y2: ty + y2 }
 }
 
 function union(b: Bounds[]): Bounds | null {
@@ -155,18 +153,57 @@ let reading: object = {}
 
 /** The box of a mark summarised as one node: the union of its items' boxes (kept with an engine node, see `kept`). */
 function summaryBox(group: SceneGroup, items: SceneItem[], gx: number, gy: number): Bounds {
-  return kept(SUMMARY_BOXES, group, gx, gy, () => union(items.map((it) => itemBounds(it, gx, gy))) ?? { x1: gx, y1: gy, x2: gx + 2, y2: gy + 2 })
+  const kind = String(group.marktype)
+  return kept(SUMMARY_BOXES, group, gx, gy, () => union(items.map((it) => itemBounds(it, gx, gy, kind))) ?? { x1: gx, y1: gy, x2: gx + 2, y2: gy + 2 })
+}
+
+/**
+ * The part of a mark item's id that is its datum's (see `markIds`): the datum's own primitive fields, hashed; nothing when it has
+ * none (or cannot be read), in which case the item's position stands in.
+ */
+function datumKey(datum: unknown): string | undefined {
+  if (datum == null || typeof datum !== 'object') return datum == null ? undefined : `v${hash53(typeof datum + ':' + String(datum))}`
+  // (the text `<k.length>:<k>=<typeof v>:<String(v)>;` of each primitive field, hashed as it is read: no text of the datum is made)
+  const h = new Hash53Stream()
+  let any = false
+  const rec = datum as Record<string, unknown>
+  for (const k of Object.keys(rec)) {
+    const v = rec[k]
+    if (v === null || (typeof v !== 'object' && typeof v !== 'function')) {
+      any = true
+      h.add(String(k.length)).add(':').add(k).add('=').add(typeof v).add(':').add(String(v)).add(';')
+    }
+  }
+  return any ? `d${h.digest()}` : undefined
+}
+
+/**
+ * The ids of a mark's item nodes: `mark-<mark>-<datum key>`, a repeated key (two items of equal data) told apart by its
+ * occurrence; an item with no datum key by its position (`mark-<mark>-i<index>`).
+ */
+function markIds(markId: string, items: readonly SceneItem[]): string[] {
+  const seen = new Map<string, number>()
+  return items.map((it, i) => {
+    const key = datumKey(it.datum)
+    if (key === undefined) return `${markId}-i${i}`
+    const n = seen.get(key) ?? 0
+    seen.set(key, n + 1)
+    return n === 0 ? `${markId}-${key}` : `${markId}-${key}_${n}`
+  })
 }
 
 function primitiveDatumLabel(datum: unknown): string | undefined {
   if (datum == null || typeof datum !== 'object') return undefined
-  const parts: string[] = []
-  for (const [k, v] of Object.entries(datum as Record<string, unknown>)) {
+  const rec = datum as Record<string, unknown>
+  let out: string | undefined
+  let n = 0
+  for (const k of Object.keys(rec)) {
+    const v = rec[k]
     if (k.startsWith('__') || v == null || typeof v === 'object') continue
-    parts.push(`${k}: ${String(v)}`)
-    if (parts.length >= 4) break
+    out = out === undefined ? `${k}: ${String(v)}` : `${out}, ${k}: ${String(v)}`
+    if (++n >= 4) break
   }
-  return parts.length ? parts.join(', ') : undefined
+  return out
 }
 
 function textOf(items: SceneItem[] | undefined): string | undefined {
@@ -180,11 +217,11 @@ function textOf(items: SceneItem[] | undefined): string | undefined {
 
 function markNode(it: SceneItem, group: SceneGroup, id: string, tx: number, ty: number, opts: A11yOptions): A11yNode | null {
   if (it.aria === false) return null
-  const b = itemBounds(it, tx, ty)
   const marktype = group.marktype ?? 'mark'
+  const b = itemBounds(it, tx, ty, marktype)
   const datumLabel = it.description ?? (it.datum != null ? primitiveDatumLabel(it.datum) : undefined)
-  const label = it.ariaLabel ?? datumLabel ?? (it.text != null ? String(it.text) : `${marktype} mark`)
-  const node: Omit<A11yNode, 'selected'> = {
+  const label = datumLabel ?? (it.text != null ? String(it.text) : `${marktype} mark`)
+  const node: A11yNode = {
     id,
     kind: 'mark',
     marktype,
@@ -194,11 +231,14 @@ function markNode(it: SceneItem, group: SceneGroup, id: string, tx: number, ty: 
     description: datumLabel,
     x: b.x1, y: b.y1, width: b.x2 - b.x1, height: b.y2 - b.y1,
     datum: it.datum,
+    selected: undefined,
   }
-  return { ...node, selected: opts.isSelected?.(node) }
+  // (the predicate is given the node with `selected` still unset, as it always was)
+  node.selected = opts.isSelected?.(node)
+  return node
 }
 
-function guideNode(group: SceneGroup, id: string, tx: number, ty: number, scales: Map<string, unknown>): A11yNode | null {
+function guideNode(group: SceneGroup, id: string, tx: number, ty: number, scales: Map<string, unknown>, locale: SceneRoot['__locale']): A11yNode | null {
   const role = group.role
   if ((group as unknown as { aria?: boolean }).aria === false) return null
   if (role !== 'axis' && role !== 'legend' && role !== 'title') return null
@@ -213,7 +253,7 @@ function guideNode(group: SceneGroup, id: string, tx: number, ty: number, scales
       for (const c of kids) collect(c, ax + (n.x ?? 0), ay + (n.y ?? 0))
       return
     }
-    absolute.push(itemBounds(node as SceneItem, ax, ay))
+    absolute.push(itemBounds(node as SceneItem, ax, ay, 'leaf'))
   }
   // (the box of a node of a scene the engine returned, at the same place, is the box it had: see `kept`)
   const b = kept(GUIDE_BOXES, group, tx, ty, () => {
@@ -240,7 +280,7 @@ function guideNode(group: SceneGroup, id: string, tx: number, ty: number, scales
         : undefined
     const gm = group as unknown as { format?: unknown; formatType?: unknown }
     // (a caption vega cannot make -- the scale's label format refuses the axis's format -- leaves the node its role's name)
-    const label = group.description ? String(group.description) : axisLabel({ orient, title, scale: scaleName, format: gm.format, formatType: gm.formatType }, scales) ?? 'axis'
+    const label = group.description ? String(group.description) : axisLabel({ orient, title, scale: scaleName, format: gm.format, formatType: gm.formatType }, scales, locale) ?? 'axis'
     const dom = (scales.get(scaleName ?? '') as { domain?: () => unknown[] } | undefined)?.domain?.()
     const numeric = dom && dom.length >= 2 && typeof dom[0] === 'number' && typeof dom[dom.length - 1] === 'number'
     return {
@@ -255,7 +295,7 @@ function guideNode(group: SceneGroup, id: string, tx: number, ty: number, scales
     }
   }
   const gm = group as unknown as { legendType?: string; legendScale?: string; legendChannels?: string[]; legendFormat?: unknown; legendFormatType?: unknown }
-  const label = group.description ? String(group.description) : legendLabel({ ...gm, title }, scales, typeof datum.type === 'string' ? datum.type : 'symbol') ?? 'legend'
+  const label = group.description ? String(group.description) : legendLabel({ ...gm, title }, scales, typeof datum.type === 'string' ? datum.type : 'symbol', locale) ?? 'legend'
   return {
     id, kind: 'legend', marktype: 'group', role: 'graphics-symbol', roleDescription: 'legend',
     label, x: b.x1, y: b.y1, width: b.x2 - b.x1, height: b.y2 - b.y1,
@@ -264,9 +304,11 @@ function guideNode(group: SceneGroup, id: string, tx: number, ty: number, scales
 
 function legendEntryNodes(
   group: SceneGroup,
+  guideId: string,
   tx: number,
   ty: number,
   options: A11yOptions,
+  limit: number,
 ): A11yNode[] {
   const out: A11yNode[] = []
   const gm = group as unknown as { legendScale?: string; legendChannels?: string[] }
@@ -295,14 +337,14 @@ function legendEntryNodes(
       for (const c of kids) collectLeaves(c, nx, ny, leaves)
       const text = leaves.find((l) => l.it.text != null && String(l.it.text).length)
       const symbol = leaves.find((l) => l.it.shape != null || l.it.radius != null)
-      if (text) {
+      if (text && out.length < limit) {
         const value = String(text.it.text)
         const key = `${gm.legendScale ?? 'legend'}:${value}`
-        const b = union(leaves.map((l) => itemBounds(l.it, l.x, l.y))) ?? { x1: nx, y1: ny, x2: nx + 2, y2: ny + 2 }
+        const b = union(leaves.map((l) => itemBounds(l.it, l.x, l.y, 'leaf'))) ?? { x1: nx, y1: ny, x2: nx + 2, y2: ny + 2 }
         const fill = typeof symbol?.it.fill === 'string' && symbol.it.fill !== 'transparent' ? symbol.it.fill : undefined
         const stroke = typeof symbol?.it.stroke === 'string' ? symbol.it.stroke : undefined
         out.push({
-          id: `legend-entry-${gm.legendScale ?? 'legend'}-${seq++}`,
+          id: `${guideId}-entry-${seq++}`,
           kind: 'legend-entry',
           marktype: 'group',
           role: 'button',
@@ -332,14 +374,14 @@ function legendEntryNodes(
       const it = leaf.it
       if (it.text != null && String(it.text).length) {
         const isTitle = it.fontWeight === 'bold' || (leaf.x === tx && leaf.y === ty)
-        if (!isTitle && symbol) {
+        if (!isTitle && symbol && out.length < limit) {
           const value = String(it.text)
           const key = `${gm.legendScale ?? 'legend'}:${value}`
           const fill = typeof symbol.it.fill === 'string' && symbol.it.fill !== 'transparent' ? symbol.it.fill : undefined
           const stroke = typeof symbol.it.stroke === 'string' ? symbol.it.stroke : undefined
-          const b = union([itemBounds(symbol.it, symbol.x, symbol.y), itemBounds(it, leaf.x, leaf.y)]) ?? { x1: leaf.x, y1: leaf.y, x2: leaf.x + 2, y2: leaf.y + 2 }
+          const b = union([itemBounds(symbol.it, symbol.x, symbol.y, 'leaf'), itemBounds(it, leaf.x, leaf.y, 'leaf')]) ?? { x1: leaf.x, y1: leaf.y, x2: leaf.x + 2, y2: leaf.y + 2 }
           out.push({
-            id: `legend-entry-${gm.legendScale ?? 'legend'}-${seq++}`, kind: 'legend-entry', marktype: 'group', role: 'button',
+            id: `${guideId}-entry-${seq++}`, kind: 'legend-entry', marktype: 'group', role: 'button',
             roleDescription: 'legend entry', label: value,
             x: b.x1, y: b.y1, width: b.x2 - b.x1, height: b.y2 - b.y1,
             legendKey: key, legendValue: value,
@@ -366,7 +408,12 @@ export function buildA11yTree(
   scales: Map<string, unknown> = new Map(),
   options: A11yOptions = {},
 ): A11yTree {
-  const threshold = options.summaryThreshold ?? 150
+  // (a text's box is measured with the measurer the scene was laid out with, as the hit index measures it: scene-output.ts)
+  return withSceneOutput(scene, () => treeOf(scene, scales, options))
+}
+
+function treeOf(scene: SceneRoot, scales: Map<string, unknown>, options: A11yOptions): A11yTree {
+  const threshold = Math.max(1, Math.floor(options.summaryThreshold ?? 150))
   reading = scene
   let total = 0
   const count = (node: SceneNode): void => {
@@ -381,26 +428,35 @@ export function buildA11yTree(
 
   const nodes: A11yNode[] = []
   let seq = 0
+  // the bound (module comment): over the threshold in all, every mark is one summary node; at most `threshold` mark nodes, the
+  // marks past them folded into one last summary
+  const summarise = total > threshold
+  let markNodes = 0
+  const rest: { count: number; marks: number; box: Bounds | null } = { count: 0, marks: 0, box: null }
   const walk = (node: SceneNode, tx: number, ty: number, scopeScales: Map<string, unknown>): void => {
     const group = node as SceneGroup
-    const gx = tx + (group.x ?? 0)
-    const gy = ty + (group.y ?? 0)
+    // (where the renderers draw the group's content: a group item's position is the value its encode wrote, see `drawnOffset`)
+    const [ox, oy] = drawnOffset(group)
+    const gx = tx + ox
+    const gy = ty + oy
     const role = group.role
     if (role === 'axis' || role === 'legend' || role === 'title') {
-      const n = guideNode(group, `guide-${seq++}`, tx, ty, scopeScales)
+      const n = guideNode(group, `guide-${seq++}`, tx, ty, scopeScales, scene.__locale)
       if (n) nodes.push(n)
-      if (role === 'legend') pushAll(nodes, legendEntryNodes(group, tx, ty, options))
+      if (role === 'legend' && n) pushAll(nodes, legendEntryNodes(group, n.id, tx, ty, options, threshold))
       return
     }
     const kids = group.items
     if (!Array.isArray(kids)) return
-    const local = group.__scales ? new Map([...scopeScales, ...scalesFromSnapshots(group.__scales)]) : scopeScales
+    const local = group.__scales ? new Map([...scopeScales, ...scalesFromSnapshots(group.__scales, scene.__locale)]) : scopeScales
     const marktype = group.marktype
     // vega-scenegraph: `aria: false` (the mark's, or a group item's own) puts `aria-hidden` on the element, which hides
     // everything inside it; a group item that carries a `description` is described by its own role and role description
     if (group.aria === false || group.itemAria?.aria === false) return
     const own = group.itemAria
-    if (own && own.description != null) {
+    // (a described group item is a node like a mark's, under the same bound: facet cells are as many as the data makes)
+    if (own && own.description != null && markNodes < threshold) {
+      markNodes++
       const w = Math.max(2, group.width ?? 0)
       const h = Math.max(2, group.height ?? 0)
       nodes.push({
@@ -412,19 +468,31 @@ export function buildA11yTree(
       })
     }
     if (role === 'mark' && marktype && marktype !== 'group') {
-      const items = kids as SceneItem[]
-      if (items.length > threshold) {
+      // (the items a pass stopped at were never measured, nor drawn: none takes the pointer, none is a node -- as the hit index)
+      const from = group.unmeasuredFrom
+      const items = from === undefined ? kids as SceneItem[] : (kids as SceneItem[]).slice(0, from)
+      const markId = `mark-${seq++}`
+      if (summarise || items.length > threshold || markNodes + items.length > threshold) {
         const b = summaryBox(group, items, gx, gy)
+        if (markNodes >= threshold) {
+          // (past the bound: folded into the one last summary)
+          rest.count += items.length
+          rest.marks++
+          rest.box = rest.box === null ? b : union([rest.box, b])
+          return
+        }
+        markNodes++
         nodes.push({
-          id: `mark-${seq++}`, kind: 'mark', marktype, role: 'graphics-symbol',
+          id: markId, kind: 'mark', marktype, role: 'graphics-symbol',
           roleDescription: `${marktype} mark container`,
           label: group.description ?? `${marktype} mark with ${items.length} items`,
           x: b.x1, y: b.y1, width: b.x2 - b.x1, height: b.y2 - b.y1, count: items.length,
         })
       } else {
-        for (const it of items) {
-          const n = markNode(it, group, `mark-${seq++}`, gx, gy, options)
-          if (n) nodes.push(n)
+        const ids = markIds(markId, items)
+        for (let i = 0; i < items.length; i++) {
+          const n = markNode(items[i]!, group, ids[i]!, gx, gy, options)
+          if (n) { nodes.push(n); markNodes++ }
         }
       }
       return
@@ -437,7 +505,7 @@ export function buildA11yTree(
       if (live && snap.labelValues) live.labelValues = snap.labelValues
     }
   }
-  const rootScales = scales.size ? scales : scene.__scales ? scalesFromSnapshots(scene.__scales) : scales
+  const rootScales = scales.size ? scales : scene.__scales ? scalesFromSnapshots(scene.__scales, scene.__locale) : scales
   // where the root group is in the viewport: inside the padding, at the frame's offset (the origin the scene's items are in)
   const originX = (scene.padding?.left ?? 0) + (scene.frameX ?? 0)
   const originY = (scene.padding?.top ?? 0) + (scene.frameY ?? 0)
@@ -455,11 +523,20 @@ export function buildA11yTree(
     }
     for (const n of scene.items) walk(n, originX, originY, rootScales)
   }
+  if (rest.marks > 0) {
+    const b = rest.box ?? { x1: originX, y1: originY, x2: originX + 2, y2: originY + 2 }
+    nodes.push({
+      id: 'mark-rest', kind: 'mark', marktype: 'group', role: 'graphics-symbol', roleDescription: 'mark containers',
+      label: `${rest.marks} more marks with ${rest.count} items`,
+      x: b.x1, y: b.y1, width: b.x2 - b.x1, height: b.y2 - b.y1, count: rest.count,
+    })
+  }
 
   const summary = total > threshold ? `${total} marks in this chart. Zoom in or filter the data to explore individual marks.` : undefined
   return {
-    label: options.label ?? scene.ariaLabel ?? 'Data visualization',
-    description: options.description ?? scene.ariaRole ?? undefined,
+    // (vega-view writes the spec's `description` as the container's aria-label)
+    label: options.label ?? scene.description ?? 'Vega visualization',
+    description: options.description,
     nodes,
     summary,
     totalItems: total,

@@ -1,8 +1,14 @@
 /**
  * Guide-caption parity: compare the accessible axis/legend captions emitted by
  * buildA11yTree with the aria-label values vega-scenegraph puts on the same
- * guides. Mark labels are compared only for existence (data descriptions are
- * host-authored).
+ * guides, as sorted lists per spec. Mark nodes are not compared (vega labels a mark item only from a host-authored
+ * `description`; Aster's mark nodes are its own keyboard model).
+ *
+ * The verdict is runGate's (scripts/lib/run-gate.mjs): `specs` counts the specs whose captions were compared, `captions` the
+ * captions vega emitted that were compared (two empty lists agree, so a spec with no guide adds nothing to it); both have
+ * floors on a full run, and a `--filter` that matches nothing fails. `--plant-difference` changes Aster's first caption.
+ *
+ * Run after `pnpm build`: npx tsx scripts/a11y-parity.mts [--filter substr]
  */
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -13,10 +19,12 @@ import '@aster-charts/core/transforms'
 import { buildA11yTree, compileChart, evaluateChart, getChartInfo } from '@aster-charts/core'
 import { loadSpecData, TRUSTED_LOAD_OPTIONS } from '@aster-charts/core/load'
 import { renderWithVega } from '../src/render-vega.js'
+import { forEngines } from '../src/engines.js'
 import { parseSvg, type XmlEl } from '../src/svg-parse.js'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { GATE_FLAGS, runGate, type Gate } from '../../../scripts/lib/run-gate.mjs'
 
-cli({ url: import.meta.url, flags: { filter: 'value' } })
+cli({ url: import.meta.url, flags: { filter: 'value', ...GATE_FLAGS } })
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const CORPUS = join(HERE, '..', 'corpus')
@@ -44,33 +52,43 @@ function realCaptions(svg: string): { axes: string[]; legends: string[] } {
   return { axes, legends }
 }
 
-async function main(): Promise<boolean> {
-  if (!existsSync(CORPUS)) return false
-  const argv = process.argv.slice(2)
-  const filterIdx = argv.indexOf('--filter')
-  const filter = filterIdx >= 0 ? argv[filterIdx + 1]! : ''
+const argv = process.argv.slice(2)
+const filterIdx = argv.indexOf('--filter')
+const filter = filterIdx >= 0 ? argv[filterIdx + 1]! : ''
+
+async function main(gate: Gate): Promise<void> {
+  if (!existsSync(CORPUS)) throw new Error(`corpus directory not found: ${CORPUS}`)
   const files = readdirSync(CORPUS).filter((f) => f.endsWith('.vg.json') || f.endsWith('.vl.json')).sort()
   let pass = 0
-  const failures: string[] = []
+  let total = 0
   for (const f of files) {
     if (filter && !f.includes(filter)) continue
-    const raw = JSON.parse(readFileSync(join(CORPUS, f), 'utf8')) as Record<string, unknown>
-    const spec = f.endsWith('.vl.json')
-      ? (vl.compile(raw as never).spec as unknown as Record<string, unknown>)
-      : raw
+    total++
     try {
+      const raw = JSON.parse(readFileSync(join(CORPUS, f), 'utf8')) as Record<string, unknown>
+      const spec = f.endsWith('.vl.json')
+        ? (vl.compile(raw as never).spec as unknown as Record<string, unknown>)
+        : raw
       const loaded = await loadSpecData(spec as never, TRUSTED_LOAD_OPTIONS) as Record<string, unknown>
-      const [svg, scene] = await Promise.all([renderWithVega(loaded as never), Promise.resolve(evaluateChart(compileChart(loaded as never)))])
+      // (each engine its own copy: vega writes onto the rows it ingests)
+      const [svg, scene] = await forEngines(loaded, (oracle, aster) => Promise.all([renderWithVega(oracle as never), Promise.resolve(evaluateChart(compileChart(aster as never)))]))
       const real = realCaptions(svg)
       const info = getChartInfo(loaded as never)
       const tree = buildA11yTree(scene, info.scales)
       const oursAxes = tree.nodes.filter((n) => n.kind === 'axis').map((n) => n.label).sort()
       const oursLegends = tree.nodes.filter((n) => n.kind === 'legend').map((n) => n.label).sort()
+      if (gate.plant) {
+        const first = oursAxes.length ? oursAxes : oursLegends
+        if (first.length) first[0] = `${first[0]} (planted)`
+      }
+      gate.count('captions', real.axes.length + real.legends.length)
       const okAxes = JSON.stringify(real.axes.sort()) === JSON.stringify(oursAxes)
       const okLegends = JSON.stringify(real.legends.sort()) === JSON.stringify(oursLegends)
-      if (okAxes && okLegends) pass++
-      else {
-        failures.push(f)
+      if (okAxes && okLegends) {
+        pass++
+        gate.agree(f)
+      } else {
+        gate.differ(f, okAxes ? `legends ${JSON.stringify(real.legends)} vs ${JSON.stringify(oursLegends)}` : `axes ${JSON.stringify(real.axes)} vs ${JSON.stringify(oursAxes)}`)
         console.log(`FAIL  ${f}`)
         if (!okAxes) {
           console.log(`  axes oracle: ${JSON.stringify(real.axes)}`)
@@ -82,15 +100,18 @@ async function main(): Promise<boolean> {
         }
       }
     } catch (e) {
-      failures.push(f)
-      console.log(`FAIL  ${f}  (${e instanceof Error ? e.message : String(e)})`)
+      gate.error(f, e instanceof Error ? e.message : String(e))
     }
   }
-  const total = files.filter((f) => !filter || f.includes(filter)).length
   console.log(`\n[a11y] ${pass}/${total} guide caption sets match`)
-  if (failures.length) console.log(`[a11y] failing: ${failures.slice(0, 30).join(', ')}${failures.length > 30 ? ', …' : ''}`)
-  return failures.length === 0
 }
 
-const ok = await main()
-process.exit(ok ? 0 : 1)
+await runGate({
+  name: 'a11y-parity',
+  counters: {
+    specs: { floor: 1071, what: 'corpus specs whose guide captions were compared' },
+    captions: { floor: 2076, what: 'guide captions of vega compared' },
+  },
+  partial: Boolean(filter),
+  run: main,
+})

@@ -7,15 +7,15 @@ import embed from 'vega-embed'
  * even downloaded — the load delay you see on the left panes is the official
  * toolchain arriving, not aster.
  *
- * The same spec object the aster column receives (after @aster-charts/vl compilation
- * for Vega-Lite inputs) is handed to vega-embed verbatim.
+ * The spec the card was written as (Vega or Vega-Lite) is handed to vega-embed verbatim, so a Vega-Lite spec is compiled here by the
+ * official vega-lite, the oracle; the aster column compiles the same input with @aster-charts/vl.
  *
  * Specs with signal-based width/height (e.g. `{ signal: 'width' }`) render at
  * vega's 10x10 minimum viewport unless driven by the container — so for those,
  * this pane implements the documented vega recipe: a ResizeObserver feeds the
  * container size into view.width()/height().
  */
-export function VegaPane({ spec, width, height, responsiveHeight, ariaLabel }: {
+function VegaPane({ spec, width, height, responsiveHeight, ariaLabel }: {
   spec: Record<string, unknown>
   width?: number
   height?: number

@@ -42,11 +42,13 @@ function snapshot(v: unknown, seen = new Map<object, string>(), path = 'scene'):
   }
   if (seen.has(v)) return `[ref ${seen.get(v)}]`
   seen.set(v, path)
-  if (v instanceof Map || v instanceof Set) return '[collection]'
+  // (a Map or a Set is read by its entries: a write into one is a write into the scene)
+  if (v instanceof Map) return { '#': idOf(v), map: [...v.entries()].map(([k, x], i) => [snapshot(k, seen, `${path}.k${i}`), snapshot(x, seen, `${path}.v${i}`)]) }
+  if (v instanceof Set) return { '#': idOf(v), set: [...v.values()].map((x, i) => snapshot(x, seen, `${path}.${i}`)) }
   if (Array.isArray(v)) return v.map((x, i) => snapshot(x, seen, `${path}.${i}`))
   const out: Record<string, unknown> = { '#': idOf(v) }
   for (const k of Object.keys(v)) {
-    if (RENDERER_CACHES.has(k) || k === 'runtime' || k === 'compiled' || k === '__scaleMap' || k === 'signalParams') continue
+    if (RENDERER_CACHES.has(k)) continue
     out[k] = snapshot((v as Row)[k], seen, `${path}.${k}`)
   }
   return out

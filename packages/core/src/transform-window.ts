@@ -7,7 +7,7 @@
  */
 import { accessorName, array, error } from './util.js'
 import { orderOf } from './tuple-order.js'
-import { meterTick } from './limits.js'
+import { copiedRows, meterTick } from './limits.js'
 import {
   compareOf, fieldOf, lcg, MeasureGroup, outputName, partitionRows, planMeasures, SEED, stableSortBy,
   type Compare, type MeasureSet, type Row,
@@ -42,6 +42,7 @@ function cumulativeShare(): (at: Position) => number {
   return ({ rows, index, compare }) => {
     let i = index
     if (last < i) {
+      // bounded: `last` only moves forward: one pass over the partition in all
       while (i + 1 < rows.length && !compare(rows[i], rows[i + 1])) ++i
       last = i
     }
@@ -82,8 +83,10 @@ const WINDOW_FUNCTIONS: Record<string, (get: Get | undefined, param: unknown) =>
     const ahead = +(param as number) || 1
     return () => ({ rows, index }) => (index + ahead < rows.length ? get!(rows[index + ahead]) : null)
   },
-  first_value: (get) => () => ({ rows, lo }) => get!(rows[lo]),
-  last_value: (get) => () => ({ rows, hi }) => get!(rows[hi - 1]),
+  // (a frame that lies outside its partition has no row at its end: vega reads one that is not there and fails with a TypeError;
+  // here the value is `null`, as `nth_value` of a frame too short is)
+  first_value: (get) => () => ({ rows, lo }) => (lo >= 0 && lo < rows.length ? get!(rows[lo]) : null),
+  last_value: (get) => () => ({ rows, hi }) => (hi >= 1 && hi <= rows.length ? get!(rows[hi - 1]) : null),
   nth_value: (get, param) => {
     const nth = positive('nth_value', param, 'nth')
     return () => ({ rows, lo, hi }) => (lo + (nth - 1) < hi ? get!(rows[lo + (nth - 1)]) : null)
@@ -162,6 +165,7 @@ const clamp = (x: number, lo: number, hi: number): number => (x < lo ? lo : x > 
 function lowerBound(rows: Row[], target: Row, compare: Compare): number {
   let lo = 0
   let hi = rows.length
+  // bounded: binary search: log2 of the rows
   while (lo < hi) {
     const mid = (lo + hi) >>> 1
     if (compare(rows[mid], target) < 0) lo = mid + 1
@@ -174,6 +178,7 @@ function lowerBound(rows: Row[], target: Row, compare: Compare): number {
 function upperBound(rows: Row[], target: Row, compare: Compare): number {
   let lo = 0
   let hi = rows.length
+  // bounded: binary search: log2 of the rows
   while (lo < hi) {
     const mid = (lo + hi) >>> 1
     if (compare(rows[mid], target) <= 0) lo = mid + 1
@@ -185,11 +190,14 @@ function upperBound(rows: Row[], target: Row, compare: Compare): number {
 /**
  * vega `window`. The rows written are copies of the input rows (or the rows themselves when the pipeline owns them), in input order.
  *
- * Deviation: where a frame lies wholly outside its partition (it starts after the last row, or ends before the first) Vega's peer
- * stretch reads a row that is not there and the transform fails with a TypeError; here the frame is simply left as the offsets put it.
+ * Deviation: where a frame lies wholly outside its partition (it starts after the last row, or ends before the first) or ends before
+ * it starts, Vega's peer stretch and its `first_value` / `last_value` read a row that is not there and the transform fails with a
+ * TypeError; here the frame is left as the offsets put it, an aggregate reads the rows it holds, and a first or last value with no
+ * row at that end is `null`. (A raw engine error is never an outcome: transform-frame-outside.test.ts, and the live count of the
+ * cases on which vega crashes, differential-transforms-generated.test.mts.)
  */
 export function windowRows(rows: readonly Row[], p: WindowParams, random: () => number = lcg(SEED), owned = false): Row[] {
-  const out = owned ? rows.slice() : rows.map((r) => ({ ...r }))
+  const out = owned ? rows.slice() : copiedRows(rows, 'window', true)
   const sort = compareOf(p.sort) as Compare | null
   const plan = planWindow(p)
   const [from, to] = (Array.isArray(p.frame) ? p.frame : [null, 0]) as [number | null, number | null]
@@ -204,6 +212,7 @@ export function windowRows(rows: readonly Row[], p: WindowParams, random: () => 
     const sorted = sort ? stableSortBy(partition, sort, made[part]) : partition
     const n = sorted.length
     const at: Position = { rows: sorted, index: 0, lo: 0, hi: 0, compare: sort || noOrder }
+    // bounded: the spec's window functions
     const functions = plan.functions.map((f) => f.make())
     measures?.reset()
     for (let i = 0; i < n; ++i) {
@@ -222,10 +231,13 @@ export function windowRows(rows: readonly Row[], p: WindowParams, random: () => 
       at.hi = hi
       const row = sorted[i]!
       if (measures) {
+        // bounded: the frame's ends only move forward: each row leaves the frame once per partition; the row loop ticks
         for (let j = prevLo; j < lo; ++j) measures.remove(sorted[j]!)
+        // bounded: the frame's ends only move forward: each row enters the frame once per partition; the row loop ticks
         for (let j = prevHi; j < hi; ++j) measures.add(sorted[j]!)
         measures.writeTo(row)
       }
+      // bounded: the spec's window functions
       for (let j = 0; j < functions.length; ++j) row[plan.functions[j]!.out] = functions[j]!(at)
       meterTick('window', 1)
     }

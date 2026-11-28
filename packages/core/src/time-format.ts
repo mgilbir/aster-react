@@ -410,19 +410,15 @@ const EN_US: Required<TimeLocaleDefinition> = {
   shortMonths: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
 }
 
-export let timeFormat: TimeFormatLocale['format']
-export let timeParse: TimeFormatLocale['parse']
-export let utcFormat: TimeFormatLocale['utcFormat']
-export let utcParse: TimeFormatLocale['utcParse']
-
-timeFormatDefaultLocale(EN_US)
-
-/** Replace the default locale behind `timeFormat`, `timeParse`, `utcFormat` and `utcParse`. */
-export function timeFormatDefaultLocale(definition: TimeLocaleDefinition): TimeFormatLocale {
-  const locale = timeFormatLocale(definition)
-  ;({ format: timeFormat, parse: timeParse, utcFormat, utcParse } = locale)
-  return locale
-}
+/**
+ * The module-level formatters (d3-time-format's default: en-US): what a time scale's `tickFormat` captures. They have no setter, as
+ * vega never sets d3-time-format's: the default locale a host sets is `defaultLocale` of locale.ts.
+ */
+const enUs: TimeFormatLocale = /* @__PURE__ */ timeFormatLocale(EN_US)
+export const timeFormat: TimeFormatLocale['format'] = enUs.format
+export const timeParse: TimeFormatLocale['parse'] = enUs.parse
+export const utcFormat: TimeFormatLocale['utcFormat'] = enUs.utcFormat
+export const utcParse: TimeFormatLocale['utcParse'] = enUs.utcParse
 
 // --- ISO 8601 ----------------------------------------------------------------------------------------------------------
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { compileChart, evaluateChart, renderSceneToSvg, type VgSpec } from './index.js'
+import { compileChart, datasetsOfScene, evaluateChart, renderSceneToSvg, type VgSpec } from './index.js'
 import { createChartSession } from './session.js'
-import { buildPulseGraph, diffRows, propagatePulse } from './pulse.js'
+import { diffRows } from './pulse.js'
 
 const spec = {
   width: 200, height: 100, padding: 0, autosize: 'none',
@@ -22,23 +22,9 @@ describe('pulse graph', () => {
     expect(diffRows([{ a: 1 }], [{ a: 2 }, { a: 3 }])?.sameLength).toBe(false)
   })
 
-  it('builds source/target edges and propagates to marks', () => {
-    const chart = compileChart({
-      ...spec,
-      // the scale must not name the data set this spec no longer declares (vega.parse refuses that)
-      scales: [{ name: 'x', type: 'band', domain: ['a', 'b', 'c'], range: [0, 200] }, { name: 'y', type: 'linear', domain: [0, 4], range: [100, 0] }],
-      data: [
-        { name: 'src', values: [{ g: 'a', v: 1 }] },
-        { name: 'filtered', source: 'src', transform: [{ type: 'filter', expr: 'datum.v > 0' }] },
-      ],
-      marks: [{ type: 'symbol', from: { data: 'filtered' }, encode: { update: { x: { value: 1 }, y: { value: 1 } } } }],
-    } as unknown as VgSpec)
-    const graph = buildPulseGraph(chart)
-    expect(graph.nodes.get('src')?.downstream).toEqual(['filtered'])
-    expect(graph.nodes.get('filtered')?.marks).toEqual(['marks'])
-    const p = propagatePulse(graph, ['src'])
-    expect([...p.datasets].sort()).toEqual(['filtered', 'src'])
-    expect([...p.marks]).toEqual(['marks'])
+  it('the structural pulse graph is not public: it never was the engine\'s dataflow (C283)', async () => {
+    const core = await import('./index.js') as Record<string, unknown>
+    for (const name of ['buildPulseGraph', 'propagatePulse', 'transformNeedsFullRederive']) expect(name in core, name).toBe(false)
   })
 })
 
@@ -85,25 +71,49 @@ describe('session auto changes', () => {
 })
 
 describe('sorted grouped transforms', () => {
-  it('incremental sorted window/stack matches a full re-derive', () => {
-    const base = {
-      width: 200, height: 100, padding: 0, autosize: 'none',
-      data: [{
-        name: 't',
-        values: [{ g: 'a', v: 1 }, { g: 'a', v: 3 }, { g: 'b', v: 2 }, { g: 'b', v: 4 }],
-        transform: [{ type: 'window', groupby: ['g'], sort: { field: 'v', order: 'descending' }, ops: ['rank'], as: ['r'] }],
-      }],
-      scales: [{ name: 'y', type: 'linear', domain: [0, 5], range: [100, 0] }],
-      marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { value: 50 }, y: { scale: 'y', field: 'v' }, size: { value: 30 } } } }],
-    } as unknown as VgSpec
-    const chart = compileChart(base)
-    const rows = [{ g: 'a', v: 1 }, { g: 'a', v: 3 }, { g: 'b', v: 2 }, { g: 'b', v: 4 }]
-    evaluateChart(chart, { data: { t: rows } })
-    const next = [{ g: 'a', v: 2 }, { g: 'a', v: 3 }, { g: 'b', v: 2 }, { g: 'b', v: 4 }]
-    const inc = evaluateChart(chart, { data: { t: next }, dataChanges: { t: [0] } })
-    const full = evaluateChart(chart, { data: { t: next } })
-    expect(renderSceneToSvg(inc)).toBe(renderSceneToSvg(full))
-  })
+  // The transforms whose output depends on the ORDER of a group (a window rank, a sorted stack): an evaluation told which rows
+  // changed must write the same values as a chart compiled afresh and evaluated from scratch. The values are compared on the
+  // rows, not on a rendering (a mark that does not encode the window's or the stack's output would show nothing), over generated
+  // changes that move a row past others in its group (C456).
+  const transforms = {
+    'window rank': [{ type: 'window', groupby: ['g'], sort: { field: 'v', order: 'descending' }, ops: ['rank', 'row_number'], as: ['r', 'n'] }],
+    'stack sorted': [{ type: 'stack', groupby: ['g'], field: 'v', sort: { field: 'v' }, as: ['y0', 'y1'] }],
+    'stack, then window over its output': [
+      { type: 'stack', groupby: ['g'], field: 'v', sort: { field: ['v'], order: ['descending'] }, as: ['y0', 'y1'] },
+      { type: 'window', groupby: ['g'], sort: { field: 'y0' }, ops: ['rank'], as: ['r'] },
+    ],
+  }
+  const specOf = (transform: unknown): VgSpec => ({
+    width: 200, height: 100, padding: 0, autosize: 'none',
+    data: [{ name: 't', transform }],
+    scales: [{ name: 'y', type: 'linear', domain: [0, 30], range: [100, 0] }],
+    marks: [{ type: 'symbol', from: { data: 't' }, encode: { update: { x: { value: 50 }, y: { scale: 'y', field: 'v' }, size: { value: 30 } } } }],
+  } as unknown as VgSpec)
+  const rowsOf = (scene: ReturnType<typeof evaluateChart>): unknown => datasetsOfScene(scene).get('t')
+
+  for (const [name, transform] of Object.entries(transforms)) {
+    it(`${name}: an incremental evaluation writes what a fresh one writes, over generated changes`, () => {
+      let seed = 7
+      const random = (): number => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646
+      let swapped = 0
+      for (let trial = 0; trial < 60; trial++) {
+        const spec = specOf(transform)
+        const chart = compileChart(spec)
+        const rows = Array.from({ length: 8 }, (_, i) => ({ g: 'ab'[i % 2]!, v: 1 + Math.floor(random() * 20) }))
+        evaluateChart(chart, { data: { t: rows } })
+        const changed = [Math.floor(random() * rows.length)]
+        if (random() < 0.5) changed.push((changed[0]! + 1 + Math.floor(random() * (rows.length - 1))) % rows.length)
+        const next = rows.map((r, i) => (changed.includes(i) ? { ...r, v: 1 + Math.floor(random() * 20) } : r))
+        const before = rowsOf(evaluateChart(compileChart(spec), { data: { t: rows } }))
+        const inc = rowsOf(evaluateChart(chart, { data: { t: next }, dataChanges: { t: changed } }))
+        const fresh = rowsOf(evaluateChart(compileChart(spec), { data: { t: next } }))
+        expect(inc, `trial ${trial}: ${JSON.stringify(rows)} -> ${JSON.stringify(next)}`).toEqual(fresh)
+        if (JSON.stringify(before) !== JSON.stringify(fresh)) swapped++
+      }
+      // the changes did move the transform's output (ranks or stack offsets), most of the time
+      expect(swapped).toBeGreaterThan(40)
+    })
+  }
 })
 
 describe('a row diff sees values as the scene does', () => {
@@ -146,5 +156,34 @@ describe('a row diff sees values as the scene does', () => {
     session.evaluate(signed, { data: { t: rows }, signals: { k: 1 } })
     const input = { data: { t: rows }, signals: { k: -1 } }
     expect(renderSceneToSvg(session.evaluate(signed, input))).toBe(renderSceneToSvg(evaluateChart(compileChart(signed), input)))
+  })
+})
+
+describe('a dataset with a row that is not an object is not diffed, wherever the row is (C122)', () => {
+  const o = (v: number): Record<string, number> => ({ v })
+  // each shape of diffRows looks at every row through one of its loops: the same-length one, the prefix, the suffix, the paired
+  // middle, the added rows, the removed ones. A primitive (or null) in any of those places refuses the diff.
+  const cases: Array<[string, unknown[], unknown[]]> = [
+    ['same length, in the previous', [o(1), 2, o(3)], [o(1), o(2), o(3)]],
+    ['same length, in the next', [o(1), o(2), o(3)], [o(1), 'x', o(3)]],
+    ['same length, null', [o(1), o(2)], [o(1), null]],
+    ['in the common prefix, changed', [3, o(1), o(2)], [4, o(1), o(2), o(3)]],
+    ['in the common suffix, changed', [o(1), o(2), 5], [o(0), o(1), o(2), 6]],
+    ['in a paired middle row', [o(1), o(2), o(9)], [o(1), true, o(3), o(9)]],
+    ['in an added row', [o(1), o(2)], [o(1), o(2), 7]],
+    ['in an added row, in the middle', [o(1), o(9)], [o(1), 7, o(9)]],
+    ['in a removed row', [o(1), 7, o(9)], [o(1), o(9)]],
+  ]
+  for (const [name, a, b] of cases) {
+    it(name, () => {
+      expect(diffRows(a, b)).toBeNull()
+    })
+  }
+  it('the same primitive at the same index is the same row; 0 and -0 are not looked at as equal', () => {
+    // (a primitive row that is identical in both is nothing to compare; a changed one refuses the diff)
+    expect(diffRows([5, o(1)], [5, o(2)])?.changed).toEqual([1])
+    expect(diffRows([5, o(1)], [6, o(1)])).toBeNull()
+    expect(diffRows([0], [-0])).toBeNull()
+    expect(diffRows([o(1), o(2)], [o(1), o(2)])?.changed).toEqual([])
   })
 })

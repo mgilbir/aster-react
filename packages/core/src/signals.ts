@@ -12,9 +12,14 @@
  * Semantics worth knowing (all verified against the pinned vega in the
  * real-browser parity test, packages/conformance/scripts/browser-signals.mts):
  *
- * - `event` in an update/filter expression is the NATIVE event, extended with
- *   `item`, `vega` and `dataflow` exactly as vega-view does -- `event.deltaY`,
- *   `event.shiftKey`, ... are the browser's own values.
+ * - `event` in an update/filter expression is a read-only FACADE of the event (DECISIONS Q1; see `eventFacade`): the values
+ *   vega expressions observe (`event.deltaY`, `event.shiftKey`, the coordinates, the keys, the touches ...) copied from the
+ *   native event, with `item`, `vega` and `dataflow` as vega-view extends it, and nothing that reaches the page (no target,
+ *   no view, no window, no method). The native event stays inside the loop.
+ * - Event sources are the chart's: `view` events and timers, as `config.events` allows them (vega's `permit`); `window` and
+ *   CSS-selector sources only as far as the host allows (`SignalBindOptions.eventSources`; by default the window's pointer
+ *   moves, ends and resize, which Vega-Lite's drags and container sizing listen to, and no selector) and `config.events`
+ *   permits.
  * - `datum` in an update is `event.item.datum`.
  * - A handler runs only when ITS stream matched. A signal's static `update`
  *   re-runs only when a signal it references changed (not on every event).
@@ -39,37 +44,22 @@
  * no element per item, and its renderer (`createCanvasEvents` from `@aster-charts/core/canvas`)
  * resolves events as vega's canvas handler does (`ViewEvents`).
  */
-import type { CompiledChart, CompiledData, CompiledSignalDef, SceneGroup, SceneItem, SceneNode, SceneRoot, SignalOnDef } from './types.js'
-import { isEngineNode, keptInto } from './scene-registry.js'
-import { compileExpr, type CompiledExpr, type ExpressionRuntime } from './expression.js'
+import type { HostElement, HostEvent, HostEventTarget } from './host-types.js'
+import type { CompiledChart, CompiledData, CompiledMark, CompiledSignalDef, SceneGroup, SceneItem, SceneNode, SceneRoot, SignalOnDef } from './types.js'
+import { isEngineNode, isRootItem, keptInto, rootItemOf } from './scene-registry.js'
+import { compileExpr, evalSignal, type CompiledExpr, type ExpressionRuntime } from './expression.js'
 import type { Changeset } from './modify.js'
-import { parseExpression, type AstNode } from './expr-parser.js'
 import { normalizeEvents, filterCode } from './stream-defs.js'
 import { parseEventSelectorString, type StreamDef } from './event-selector.js'
-import { array, dict, heldSignalName, ownGet, setOwn, markTupleAlways, MARK_NODE, scopedSignalName } from './util.js'
+import { array, dict, heldSignalName, ownGet, setOwn, markTupleAlways, MARK_NODE, ROOT_MARK_NODE, scopedSignalName } from './util.js'
+import { dataKey, expressionReads, testedStoresIn } from './expr-reads.js'
 import { follow, node, Propagation, type SignalNode } from './signal-propagation.js'
 import { consoleLogger, type Logger } from './logger.js'
-import { AsterLimitError, withLimits, type SpecLimits } from './limits.js'
+import { activeMeter, AsterLimitError, checkRowCount, withLimits, type SpecLimits } from './limits.js'
 import type { Timer } from './timer.js'
 import { part } from './engine-parts.js'
 import { clientToSvg } from './pointer.js'
-
-export interface BoundEvent {
-  event: string
-  handler: (evt: Event) => void
-  el: EventTarget
-}
-
-/** The vega-style event context: view coords + the targeted mark's datum. */
-export interface EventContext {
-  /** x/y in view coordinates (page coords minus the chart origin). */
-  x: number
-  y: number
-  /** The raw DOM event. */
-  native: Event
-  /** The mark datum under the pointer, if any. */
-  datum?: Record<string, unknown>
-}
+import { datumText, ENCODE_LOG, encodeIdentOf, encodeLogOf, encodeSetsOf, hasSetIn, itemMarkNameOf, withRequest, withWrites } from './encode-handlers.js'
 
 /** What `pick` / the DOM fallback resolve an event position to: a scene item and where it sits. */
 export interface PickedItem {
@@ -119,7 +109,7 @@ export interface ViewEventConnection {
    * resolved it, or undefined to leave it to the loop (the item under the event's point); and the `event.vegaType` the handlers
    * see (default: `type`).
    */
-  on(type: string, send: (event: Event, item: PickedItem | null | undefined, vegaType?: string) => void): void
+  on(type: string, send: (event: HostEvent, item: PickedItem | null | undefined, vegaType?: string) => void): void
   /** The binding is over: deliver nothing more to it. */
   disconnect(): void
 }
@@ -127,6 +117,13 @@ export interface ViewEventConnection {
 export interface SignalEventHooks {
   /** Called once per signal that changed while an event (or `setSignal`) was processed. */
   onSignal?: (name: string, value: unknown, all: Record<string, unknown>) => void
+  /**
+   * Called once after an event asked for an item to be encoded again with a set of its mark (a handler's `encode: <set>`, or the
+   * view's hover: see `SignalBindOptions.hover`), with the signal set that now holds the request (under a symbol key, carried by
+   * every copy of it). The host evaluates again from that set, as it does on `onSignal`, also when no signal changed (vega's
+   * `encode` pulses the mark whatever the signal it writes).
+   */
+  onEncode?: (all: Record<string, unknown>) => void
   /**
    * Called once per dataset that `modify(...)` edited while an event (or `setSignal`) was processed, with the
    * dataset's input rows afterwards. The host keeps them and hands them back as `data[name]` to the next
@@ -160,9 +157,10 @@ export interface SignalBindOptions {
    */
   limits?: SpecLimits
   /**
-   * Resolve a view-space position (page coords minus the svg origin, padding
-   * included) to the scene item under it -- `buildHitIndex(scene).query` from
-   * `@aster-charts/core/hit` fits. Without it `event.item` is recovered from the DOM
+   * Resolve a view-space position (page coords minus the element's origin, the svg's or the canvas's, padding included) to the
+   * scene item the event is about, as vega's `event.item` -- `buildHitIndex(scene).pick` from `@aster-charts/core/hit` is that
+   * (`<Chart>` passes it). Not `.query`: that answers what a pointer is over for a tooltip or a selection, and reports a mark the
+   * spec made `interactive: false` and the parts of an axis, where `event.item` is `null`. Without it `event.item` is recovered from the DOM
    * (the `mark-*`/`role-*` classes, and the `data-datum` stamp when `stampDatumAttrs` was called).
    */
   pick?: (x: number, y: number) => { item: object; marktype?: string } | null
@@ -186,7 +184,22 @@ export interface SignalBindOptions {
    * a host that patches its DOM keeps; a host that REPLACES the element on every render passes its container (or any
    * stable object), or each render would restart its timers.
    */
-  owner?: EventTarget
+  owner?: HostEventTarget
+  /**
+   * Which `window` and CSS-selector event sources a spec may listen to (DECISIONS Q1: a spec is confined to its chart). `true` allows
+   * every type, `false` none, a list those types. Default: `window` for the pointer moves, ends and cancels and `resize` (what
+   * Vega-Lite's drags and `width: "container"` listen to: {@link DEFAULT_EVENT_SOURCES}), and no selector source, so a spec cannot
+   * read the page's keystrokes or listen to elements outside the chart. A spec's own `config.events` can only narrow this (vega's
+   * `permit`); a host that renders trusted specs only may widen it.
+   */
+  eventSources?: EventSourcePolicy
+  /**
+   * vega's `view.hover()` (default on, as vega-embed turns it on for a Vega spec; a Vega-Lite spec has no `hover` set, so it is the
+   * same there): a pointer that enters an item of a mark with a `hover` encode set encodes the item with that set, and leaving it
+   * encodes it with the mark's `update` set (the channels the spec's update writes; what only `hover` writes stays). `false` turns
+   * it off; `{hoverSet, updateSet}` names other sets, as vega's `hover(hoverSet, leaveSet)` does.
+   */
+  hover?: boolean | { hoverSet?: string; updateSet?: string }
   /**
    * `containerSize()` for the handlers' expressions, read when an event fires (vega: the view container's live
    * `clientWidth` / `clientHeight`). Without it they read the size the scene was evaluated with, which a
@@ -194,6 +207,22 @@ export interface SignalBindOptions {
    */
   containerSize?: () => [number | undefined, number | undefined]
 }
+
+/** Which `window` and CSS-selector event sources the host lets a spec listen to (see `SignalBindOptions.eventSources`). */
+export interface EventSourcePolicy {
+  window?: boolean | readonly string[]
+  selector?: boolean | readonly string[]
+}
+
+/**
+ * The event sources a binding allows unless its host says otherwise: the window's pointer moves, ends and cancels and its resize
+ * (Vega-Lite drags an interval with `[pointerdown, window:pointerup] > window:pointermove` and follows a `container` size on
+ * `window:resize`); no key, input, clipboard or focus event of the page, and no CSS-selector source.
+ */
+export const DEFAULT_EVENT_SOURCES: Readonly<{ window: readonly string[]; selector: false }> = Object.freeze({
+  window: Object.freeze(['mousemove', 'mouseup', 'pointermove', 'pointerup', 'pointercancel', 'touchmove', 'touchend', 'touchcancel', 'resize']),
+  selector: false,
+})
 
 export interface SignalBinding {
   /**
@@ -208,8 +237,11 @@ export interface SignalBinding {
    * at its next tick even if the host never gets here.
    */
   release: () => void
-  /** Manually set a signal (the imperative path, e.g. brush props). */
-  setSignal: (name: string, value: unknown) => void
+  /**
+   * Set a signal, as vega's `view.signal(name, value)`: the value is stored and its dependents run when it differs from the current
+   * one (`!==`), or always with `{force: true}`. A name the chart does not declare throws `Unrecognized signal name`.
+   */
+  setSignal: (name: string, value: unknown, options?: { force?: boolean }) => void
 }
 
 /**
@@ -251,15 +283,16 @@ interface StreamState {
   deliver: ((e: ExtEvent) => void) | null
 }
 
-const persisted = new WeakMap<EventTarget, Map<string, StreamState>>()
-
 /** A timer stream of one owner: it outlives the bindings (a host re-binds after every render) until `release`. */
 interface TimerState {
   timer: Timer
   /** Delivers a tick into the CURRENT binding (null while unbound). */
   deliver: ((e: ExtEvent) => void) | null
+  /** The element of the binding that last took the timer: whether the chart is still shown, when the owner is not a node. */
+  el: Element
+  /** Whether that element (or the owner) has been in the document. */
+  wasConnected: boolean
 }
-const persistedTimers = new WeakMap<EventTarget, Map<string, TimerState>>()
 
 /**
  * What a `{signal}`-source handler remembers between runs (vega: the handler operator `onOperator` makes): the last value its update
@@ -267,29 +300,66 @@ const persistedTimers = new WeakMap<EventTarget, Map<string, TimerState>>()
  * invocation. It outlives a binding as the operator outlives a render.
  */
 interface HandlerState { value: unknown; skip: boolean }
-const persistedHandlers = new WeakMap<EventTarget, Map<string, HandlerState>>()
 
-/** Stop every timer stream and pending debounce the owner keeps running between bindings. */
+/**
+ * What outlives a binding, for one owner (see `SignalBindOptions.owner`) and ONE chart: the state of its streams (between,
+ * throttle, debounce), its timers, its `{signal}` handlers' memory, what its `{scale}` sources last saw, the warnings already given
+ * and the compiled shell. vega keeps these in the view: a different chart bound to the same owner is a different view, which
+ * starts afresh, and the previous chart's record is released (C40). The chart is the compiled chart object, never its text: two
+ * charts of the same spec are two views.
+ */
+interface OwnerState {
+  chart: object
+  streams: Map<string, StreamState>
+  timers: Map<string, TimerState>
+  handlers: Map<string, HandlerState>
+  scales: Map<string, string>
+  warned: Set<string>
+  shell: BindingShell | undefined
+  /** whether the data triggers have had the run vega gives them when the view is built */
+  triggered: boolean
+}
+const owners = new WeakMap<EventTarget, OwnerState>()
+
+/** The record of `chart` on `owner`: kept across its bindings; a different chart's is released first. */
+function ownerStateFor(owner: EventTarget, chart: object): OwnerState {
+  let st = owners.get(owner)
+  if (st !== undefined && st.chart !== chart) {
+    releaseState(st)
+    st = undefined
+  }
+  if (st === undefined) {
+    st = { chart, streams: new Map(), timers: new Map(), handlers: new Map(), scales: new Map(), warned: new Set(), shell: undefined, triggered: false }
+    owners.set(owner, st)
+  }
+  return st
+}
+
+/** Stop everything a record keeps running: timers, pending debounces, and forget the rest. */
+function releaseState(st: OwnerState): void {
+  for (const t of st.timers.values()) {
+    t.deliver = null
+    t.timer.stop()
+  }
+  st.timers.clear()
+  for (const s of st.streams.values()) {
+    if (s.tid) clearTimeout(s.tid)
+    s.tid = null
+    s.evt = null
+    s.deliver = null
+  }
+  st.streams.clear()
+  st.handlers.clear()
+  st.scales.clear()
+  st.shell = undefined
+}
+
+/** Stop every timer stream and pending debounce the owner keeps running between bindings, and forget all it kept. */
 function releaseOwner(owner: EventTarget): void {
-  const timersOf = persistedTimers.get(owner)
-  if (timersOf) {
-    for (const st of timersOf.values()) {
-      st.deliver = null
-      st.timer.stop()
-    }
-    persistedTimers.delete(owner)
-  }
-  persistedHandlers.delete(owner)
-  shells.delete(owner)
-  const streams = persisted.get(owner)
-  if (streams) {
-    for (const st of streams.values()) {
-      if (st.tid) clearTimeout(st.tid)
-      st.tid = null
-      st.evt = null
-      st.deliver = null
-    }
-  }
+  const st = owners.get(owner)
+  if (st === undefined) return
+  releaseState(st)
+  owners.delete(owner)
 }
 type EventDefaults = { prevent?: unknown; allow?: unknown }
 
@@ -317,12 +387,11 @@ interface BindingShell {
   forwarders: Map<string, ExpressionRuntime>
   compiled: Map<string, Map<string, CompiledExpr>>
 }
-const shells = new WeakMap<EventTarget, BindingShell>()
 
 /** Every member an expression runtime may have (the type checks the list is complete). */
 const RUNTIME_KEYS = Object.keys({
   scale: true, data: true, expr: true, projection: true, tree: true, modify: true, transformed: true, inScope: true, containerSize: true,
-  random: true, setdata: true, intersect: true,
+  random: true, setdata: true, intersect: true, locale: true, unitIndexed: true, encode: true,
 } satisfies Record<keyof ExpressionRuntime, true>) as Array<keyof ExpressionRuntime>
 
 /** The key of a scope's runtime in a shell (`''` is the view's, which no scope id can collide with). */
@@ -367,8 +436,6 @@ function preventsEvent(d: EventDefaults, viewPreventDefault: boolean, type: stri
     : viewPreventDefault
 }
 
-/** What a binding last saw of each scale named by a `{scale}` event source, per surface (it survives a re-bind). */
-const scaleSnapshots = new WeakMap<EventTarget, Map<string, string>>()
 
 /** A scale's domain and range as one comparable string (Dates by time); `''` for no scale. */
 function scaleImage(scale: unknown): string {
@@ -381,11 +448,9 @@ function scaleImage(scale: unknown): string {
   }
 }
 
-function stateFor(owner: EventTarget, key: string): StreamState {
-  let m = persisted.get(owner)
-  if (!m) persisted.set(owner, (m = new Map()))
-  let st = m.get(key)
-  if (!st) m.set(key, (st = { active: false, last: -1, tid: null, evt: null, deliver: null }))
+function stateFor(state: OwnerState, key: string): StreamState {
+  let st = state.streams.get(key)
+  if (!st) state.streams.set(key, (st = { active: false, last: -1, tid: null, evt: null, deliver: null }))
   return st
 }
 
@@ -424,52 +489,8 @@ function mergeStreams(first: Stream, rest: Stream[]): Stream {
 
 // --- expression helpers ------------------------------------------------------
 
-/** The functions that read a dataset by the name in their first argument (vega-functions' dataVisitor / selectionVisitor). */
-const DATA_READERS = new Set(['data', 'indata', 'vlSelectionTest', 'vlSelectionIdTest', 'vlSelectionResolve'])
-
-/** The key under which an expression's dependence on the dataset `name` is tracked next to its signal names. */
-const dataKey = (name: string): string => `data:${name}`
-
-/** The identifiers an expression reads (signal references, among them), and `data:NAME` for every dataset it reads. */
-const identifiers = new Map<string, Set<string>>()
-function identifiersOf(code: string): Set<string> {
-  // (a host binds again after every render, to the same expressions)
-  let have = identifiers.get(code)
-  if (have === undefined) {
-    if (identifiers.size >= 2048) identifiers.clear()
-    identifiers.set(code, (have = parseIdentifiers(code)))
-  }
-  return have
-}
-function parseIdentifiers(code: string): Set<string> {
-  const out = new Set<string>()
-  const visit = (n: unknown): void => {
-    if (n == null || typeof n !== 'object') return
-    if (Array.isArray(n)) { n.forEach(visit); return }
-    const node = n as AstNode
-    switch (node.type) {
-      case 'Identifier': out.add(node.name as string); return
-      case 'MemberExpression':
-        visit(node.object)
-        if (node.computed) visit(node.property)
-        return
-      case 'CallExpression': {
-        const callee = node.callee as AstNode | undefined
-        const first = (node.arguments as AstNode[])[0]
-        if (callee?.type === 'Identifier' && DATA_READERS.has(callee.name as string) && first?.type === 'Literal' && typeof first.value === 'string') {
-          out.add(dataKey(first.value))
-        }
-        visit(node.arguments)
-        return
-      }
-      case 'Property': visit(node.value); return
-      default:
-        for (const k of Object.keys(node)) if (k !== 'type') visit(node[k])
-    }
-  }
-  visit(parseExpression(code))
-  return out
-}
+/** The identifiers an expression reads, and `data:NAME` for every dataset it reads (expr-reads.ts, shared with the compile walk). */
+const identifiersOf = expressionReads
 
 // --- the binding -------------------------------------------------------------
 
@@ -540,7 +561,7 @@ function updateOf(on: SignalOnDef): Update {
  * semantics. Returns a binding with `detach` + an imperative `setSignal`.
  */
 export function bindSignalEvents(
-  el: Element,
+  el: HostElement,
   chart: CompiledChart,
   runtime: ExpressionRuntime,
   signalParams: Record<string, unknown>,
@@ -548,8 +569,10 @@ export function bindSignalEvents(
   hooks: SignalEventHooks = {},
   opts: SignalBindOptions = {},
 ): SignalBinding {
-  return bindSignalEventsDefs(el, chart.signalDefs ?? [], chart.data ?? [], runtime, signalParams, signals, hooks, opts, chart.eventConfig)
+  return bindSignalEventsDefs(el, chart, chart.signalDefs ?? NO_DEFS, chart.data ?? NO_DATA, runtime, signalParams, signals, hooks, opts, chart.eventConfig)
 }
+const NO_DEFS: CompiledSignalDef[] = []
+const NO_DATA: CompiledData[] = []
 
 /** One `{signal}` event source of a `signal.on` entry, as parsed. */
 interface HandlerSpec {
@@ -570,6 +593,7 @@ interface HandlerSpec {
 
 function bindSignalEventsDefs(
   el: Element,
+  chart: object,
   defs: CompiledSignalDef[],
   dataDefs: CompiledData[],
   sceneRuntime: ExpressionRuntime,
@@ -591,15 +615,33 @@ function bindSignalEventsDefs(
     return null
   }
   const keyOf = (owner: Scope | null, name: string): string => (owner ? scopedSignalName(owner.id, name) : name)
+  // vega evaluates a signal's `init` once, when the view is built (initonly), and never again whatever it read changes. A host
+  // evaluates the scene afresh after every event, from the store: the value the first evaluation gave is written there, so every
+  // later evaluation takes it as a value already set (runtime.ts never runs an `init` over one) and the host gets it back with the
+  // store in `onSignal` (C143).
+  for (const d of defs) {
+    if (typeof d.init === 'string' && d.update === undefined && d.push !== 'outer' && !Object.hasOwn(signals, d.name) && Object.hasOwn(signalParams, d.name)) {
+      setOwn(signals, d.name, signalParams[d.name])
+    }
+  }
+  for (const sc of scopes) {
+    for (const d of sc.defs) {
+      const key = scopedSignalName(sc.id, d.name)
+      if (typeof d.init === 'string' && d.update === undefined && d.push !== 'outer' && !Object.hasOwn(signals, key) && Object.hasOwn(sc.values, d.name)) {
+        setOwn(signals, key, sc.values[d.name])
+      }
+    }
+  }
   const originX = opts.originX ?? 0
   const originY = opts.originY ?? 0
   const detachFns: Array<() => void> = []
-  /** what outlives a binding is kept per owner (see SignalBindOptions.owner) */
+  /** what outlives a binding is kept per owner (see SignalBindOptions.owner) and chart */
   const owner: EventTarget = opts.owner ?? el
-  let shell = shells.get(owner)
+  const state = ownerStateFor(owner, chart)
+  let shell = state.shell
   if (shell === undefined || shell.live !== null || shell.el !== el || shell.defs !== defs || shell.dataDefs !== dataDefs) {
     shell = { el, defs, dataDefs, live: null, current: new Map(), forwarders: new Map(), compiled: new Map() }
-    shells.set(owner, shell)
+    state.shell = shell
   }
   const liveToken = {}
   const myShell = shell
@@ -618,11 +660,27 @@ function bindSignalEventsDefs(
     }
     logger.error(`signal event handler${what}: ${e instanceof Error ? e.message : String(e)}`)
   }
+  /** A problem of the chart itself (a blocked or unresolvable source, a bad handler): told once per chart and owner, as vega tells it once per view. */
+  const once = (kind: 'warn' | 'error', message: string): void => {
+    if (state.warned.has(message)) return
+    state.warned.add(message)
+    if (kind === 'warn') logger.warn(message)
+    else logger.error(message)
+  }
 
   // ---- datasets the handlers edit (`modify`) -------------------------------------------------
   // A dataset an event handler modifies lives here, as its input rows; the rest of the datasets are the
   // scene's. The transformed rows are what `data()` shows the handlers meanwhile.
   const datasets = new Map(dataDefs.map((d) => [d.name, d]))
+  /** the stores a dataset's filter or formula tests with `vlSelectionTest`, known from the compiled spec, and the datasets that test each */
+  const testedStores = new Map<string, string[]>()
+  for (const d of dataDefs) {
+    for (const t of d.transform) {
+      const code = (t.type === 'filter' || t.type === 'formula') ? t.expr : undefined
+      if (typeof code !== 'string') continue
+      try { for (const store of testedStoresIn(code)) testedStores.set(store, [...(testedStores.get(store) ?? []), d.name]) } catch { /* refused when the spec was compiled */ }
+    }
+  }
   const inputRows = new Map<string, Array<Record<string, unknown>>>()
   const liveRows = new Map<string, unknown[]>()
   // The rows a dataset starts from are the spec's or the host's: a modified tuple is written to a copy the loop owns, and a
@@ -648,10 +706,46 @@ function bindSignalEventsDefs(
     return rows
   }
 
+  /**
+   * Run the pipelines of the datasets that test the selection store `store` (as `{store: rows}` has just been written), against the
+   * tuples the store holds, as vega's dataflow does when the store changes: the filters (and formulas) that read it evaluate their
+   * expressions row by row, and each test rewrites the Date values of the tuples it reaches (see selections.ts). The rows a filter
+   * meets are those its dataset's pipeline gives it, from the rows of the datasets it is drawn from: the store as it is now, the
+   * others as the loop holds them. What is tested, field by field and tuple by tuple, is the expression's own business.
+   */
+  const testStore = (store: string, tuples: Array<Record<string, unknown>>, testers: readonly string[]): void => {
+    if (!sceneRuntime.transformed) return
+    const transformed = sceneRuntime.transformed
+    const sim: ExpressionRuntime = {
+      ...bindRuntime,
+      data: (n) => (n === store ? tuples : dataOf(n)),
+      expr: (code) => compileExpr(code, sim),
+    }
+    const made = new Map<string, unknown[]>()
+    const output = (n: string, depth: number): unknown[] => {
+      const have = made.get(n)
+      if (have !== undefined) return have
+      const d = datasets.get(n)
+      if (d === undefined || depth > datasets.size) return []
+      // (a dataset drawn from others starts from their rows; any other from its own, as the host gave them)
+      const rows = d.source !== undefined ? array(d.source).flatMap((s) => output(String(s), depth + 1)) : rawOf(n)
+      const out = transformed(n, rows, sim)
+      made.set(n, out)
+      return out
+    }
+    for (const n of testers) {
+      try { output(n, 0) } catch (e) { fail(` (test of selection "${store}" by data "${n}")`, e) }
+    }
+  }
+
   // ---- the dataflow: one native event (or setSignal) is one run of it ---------------------------
   // The graph the handlers run in (see signal-propagation.ts): a delivery runs the event handlers (they set their signals
   // and touch them), then the touched nodes, and what they reach, are evaluated in order, once each.
-  const flow = new Propagation((e) => { if (!(e instanceof Logged)) fail('', e) })
+  const flow = new Propagation((e) => { if (!(e instanceof Logged)) fail('', e) }, () => {
+    // every propagation of a delivery after its first (a `modify` pulses its dataset in a run of its own) meets the delivery's
+    // clock: a chain that feeds itself ends at `maxTimeMs`, or at the built-in bound on propagations (signal-propagation.ts)
+    activeMeter()?.clock.check('signal event loop')
+  })
   /** an error already reported by the operator that raised it: the run is abandoned, the report is not repeated */
   class Logged extends Error {}
   /** the signal operators by store key, the dataset operators by name */
@@ -669,6 +763,8 @@ function bindSignalEventsDefs(
   const evaluatedAt = new Map<string, number>()
   /** handling an event (or `setSignal`): `modify` is available */
   let handling = 0
+  /** the operators of the data sets' triggers (vega-parser parseTrigger) */
+  const triggerOps: SignalNode[] = []
   /** the edits `setdata` / `modify` pulse into a dataset, applied when its operator runs */
   const pulsed = new Map<string, Changeset>()
   /** vega-functions modify.js `data.changes`: the changeset of the stamp a dataset is being modified in */
@@ -676,7 +772,10 @@ function bindSignalEventsDefs(
 
   /** vega-functions modify.js: queue the edit; the dataset is pulsed in a run of its own once the one that asked has finished. */
   const modifyData = (name: string, insert: unknown, remove: unknown, toggle: unknown, modifyTuple: unknown, values: unknown): number => {
-    if (!datasets.has(name)) throw new Error(`Cannot modify the unknown data set "${name}"`)
+    if (!datasets.has(name)) {
+      if (markNames.has(name)) return modifyMark(name, insert, remove, toggle, modifyTuple, values)
+      throw new Error(`Cannot modify the unknown data set "${name}"`)
+    }
     if (!handling) throw new Error('modify() is only available while an event is being handled')
     const { planModify, newChangeset } = part('modify')
     return planModify(rawOf(name), () => {
@@ -692,6 +791,64 @@ function bindSignalEventsDefs(
       }
       return m.cs
     }, currentAll(insert), currentAll(remove), toggle, current(modifyTuple), values)
+  }
+  /** The names of the chart's named marks (vega: a named mark is a data set of its items: `modify` takes it). */
+  const markNames = new Set<string>()
+  const triggerSites: Array<{ name: string; on: Array<Record<string, unknown>>; scopeDefs: CompiledSignalDef[] | null }> = []
+  const markSitesOf = (marks: readonly CompiledMark[] | undefined, scopeDefs: CompiledSignalDef[] | null): void => {
+    for (const m of marks ?? []) {
+      if (m.userName !== undefined) {
+        markNames.add(m.userName)
+        if (m.on?.length) triggerSites.push({ name: m.userName, on: m.on, scopeDefs })
+      }
+      markSitesOf(m.marks, m.signalDefs?.length ? m.signalDefs : scopeDefs)
+    }
+  }
+  markSitesOf((chart as { marks?: readonly CompiledMark[] }).marks, null)
+  /** vega-functions modify.js `data.changes` for a mark: the edits of the stamp the mark's items are being modified in */
+  const modifyingMarks = new Map<string, { stamp: number; mods: Array<{ tuple: object; field: string; value: unknown }> }>()
+  /**
+   * vega-functions modify.js over a named mark: its input is the collector of the mark's items, and `modify(tuple, values)` sets each
+   * property of `values` on the item (a tuple that is not one of the mark's items is left alone), then pulses the items: the mark's
+   * `update` set runs on the modified item again and its transforms (a `force` reads `fx` and `fy`) with it. The writes are asked of the
+   * evaluation the host makes next (encode-handlers.ts), as the re-encoding of an item is.
+   */
+  const modifyMark = (name: string, insert: unknown, remove: unknown, toggle: unknown, modifyTuple: unknown, values: unknown): number => {
+    if (!handling) throw new Error('modify() is only available while an event is being handled')
+    const items = sceneRuntime.data(name) as unknown[] | undefined
+    // (vega: `!(input.value.length || insert || toggle)`: nothing to do)
+    if (!(items?.length || insert || toggle)) return 0
+    // (a mark's `on` takes `modify` only -- vega-parser says so; `insert`, `remove` and `toggle` of a call are for data sets)
+    if (insert || remove || toggle) throw new Error('Marks only support modify triggers.')
+    let m = modifyingMarks.get(name)
+    if (!m || m.stamp < flow.clock) {
+      const mine = (m = { stamp: flow.clock, mods: [] })
+      modifyingMarks.set(name, mine)
+      flow.runAfter(() => {
+        modifyingMarks.delete(name)
+        writeItems(name, mine.mods)
+      }, 1)
+    }
+    if (modifyTuple) {
+      if (typeof modifyTuple === 'function') throw new Error('modify parameter must be a data tuple, not a function')
+      if (typeof modifyTuple === 'object') for (const key in values as object) m.mods.push({ tuple: modifyTuple, field: key, value: (values as Record<string, unknown>)[key] })
+    }
+    return 1
+  }
+  /** Record the property writes of a mark's `modify` for the host's next evaluation (see `modifyMark`); a tuple that is not an item of the mark is skipped. */
+  const writeItems = (name: string, mods: ReadonlyArray<{ tuple: object; field: string; value: unknown }>): void => {
+    const byItem = new Map<string, { datum: string; props: Array<readonly [string, unknown]> }>()
+    for (const mod of mods) {
+      const ident = encodeIdentOf(mod.tuple)
+      if (ident === undefined || itemMarkNameOf(mod.tuple) !== name) continue
+      let w = byItem.get(ident)
+      if (w === undefined) byItem.set(ident, (w = { datum: datumText((mod.tuple as { datum?: unknown }).datum), props: [] }))
+      w.props.push([mod.field, mod.value])
+    }
+    for (const [ident, w] of byItem) {
+      ;(signals as Record<symbol, unknown>)[ENCODE_LOG] = withWrites(encodeLogOf(signals), state, ident, w.datum, w.props)
+      encodeAsked = true
+    }
   }
   /** vega-functions data.js setdata: `df.pulse(input, changeset().remove(truthy).insert(tuples))`, applied when the dataset's operator runs. */
   const setData = (name: string, tuples: unknown): number => {
@@ -715,6 +872,14 @@ function bindSignalEventsDefs(
     ...(opts.containerSize ? { containerSize: opts.containerSize } : {}),
     intersect: (box, opt, group) => part('intersect').sceneIntersect(opts.scene, box, opt, group),
     expr: (code) => compileIn('', code),
+    // vega-functions encode: the item is encoded again with its mark's set, by the evaluation the host makes next, which reads the
+    // request in the store (a mark without that set, or an item no mark names, asks nothing)
+    encode: (item, set) => {
+      const ident = encodeIdentOf(item)
+      if (ident === undefined) return
+      ;(signals as Record<symbol, unknown>)[ENCODE_LOG] = withRequest(encodeLogOf(signals), state, ident, set)
+      encodeAsked = true
+    },
   }
   myShell.current.set('', bindRuntime)
   /** An expression of the scope `key` (`''`: the view's), compiled once per shell against the shell's runtime of that scope. */
@@ -833,7 +998,7 @@ function bindSignalEventsDefs(
         if ((evaluatedAt.get(entry.key) ?? -1) >= (wroteAt.get(target) ?? 0)) continue
         const { key, def } = entry
         let fresh: unknown
-        try { fresh = runtimeFor(null).expr(def.update!)(undefined, params(null)) } catch { continue }
+        try { fresh = evalSignal(runtimeFor(null).expr(def.update!), params(null)) } catch { continue }
         const held = Object.hasOwn(signals, heldSignalName(key))
         const current = read(def.name, null)
         if (fresh !== current) {
@@ -874,6 +1039,8 @@ function bindSignalEventsDefs(
   // What the runs of one DOM event changed is told to the host once the event has been delivered to every scope that listens:
   // the host re-renders (and binds again) on being told, which must not happen between two scopes' runs of the same event.
   const notified = { changed: new Set<string>(), edited: new Set<string>() }
+  /** An item was asked to be encoded again during the delivery (`encode`): the host is told once, after the signals. */
+  let encodeAsked = false
   let batching = 0
   /** A `timer` stream's tick is being delivered (what it edits is told to the host as the timer's). */
   let timerTick = false
@@ -884,14 +1051,18 @@ function bindSignalEventsDefs(
     notified.changed.clear()
     for (const name of edited) hooks.onData?.(name, inputRows.get(name)!, timerTick)
     for (const key of changed) hooks.onSignal?.(key, readKey(key), signals)
+    if (encodeAsked) {
+      encodeAsked = false
+      hooks.onEncode?.(signals)
+    }
   }
 
   // ---- event extension (vega-view events-extend.js) ----------------------------
-  const viewFacade = {
+  const viewFacade = Object.freeze({
     signal: (name: string) => read(name),
     width: () => el.clientWidth,
     height: () => el.clientHeight,
-  }
+  })
   /** A client point in view coordinates (the view's origin, inside its padding). */
   const viewPoint = (src: { clientX: number; clientY: number }): [number, number] => {
     const [x, y] = clientToSvg(el, src.clientX, src.clientY)
@@ -915,7 +1086,8 @@ function bindSignalEventsDefs(
       picked = hit ? { marktype: hit.marktype, ...hit } as PickedItem : null
       if (picked && sceneInfo) picked = describeIn(sceneInfo, picked)
     }
-    picked ??= frameAt(p)
+    // (the scene hit index holds the view's frame -- the root group item -- as it holds every other item: it is not asked again here)
+    if (!opts.pick) picked ??= frameAt(p)
     if (picked && opts.scene) pickedFrom.set(picked, opts.scene)
     return picked
   }
@@ -925,7 +1097,13 @@ function bindSignalEventsDefs(
     if (!sc || !sceneInfo || !(sc.frameFill || sc.frameStroke || sc.frameFillTransparent)) return null
     const w = sc.plotWidth ?? sc.width
     const h = sc.plotHeight ?? sc.height
-    return p[0] >= 0 && p[1] >= 0 && p[0] <= w && p[1] <= h ? sceneInfo.root() : null
+    const inside = p[0] >= 0 && p[1] >= 0 && p[0] <= w && p[1] <= h
+    if (sc.frameFill || sc.frameFillTransparent) return inside ? sceneInfo.root() : null
+    // (a frame that is only stroked is found along its stroke, as vega's pick finds it)
+    const hw = (sc.frameStrokeWidth ?? 1) / 2
+    if (!(hw > 0)) return null
+    const near = p[0] >= -hw && p[1] >= -hw && p[0] <= w + hw && p[1] <= h + hw
+    return near && !(p[0] > hw && p[1] > hw && p[0] < w - hw && p[1] < h - hw) ? sceneInfo.root() : null
   }
 
   /** `event.item` of an event the renderer left to the loop: the item under its point (no picker: what the DOM under it says). */
@@ -944,10 +1122,12 @@ function bindSignalEventsDefs(
    * pointerout of the item it leaves and the pointerover of the one it enters), each time about its own item: vega extends
    * it again each time.
    */
-  const extendedEvents = new WeakMap<object, PickedItem | null | undefined>()
+  const extendedEvents = new WeakMap<object, { given: PickedItem | null | undefined; facade?: object }>()
   const extend = (e: ExtEvent, withItem: boolean, given?: PickedItem | null): ExtEvent => {
-    if (extendedEvents.has(e) && extendedEvents.get(e) === given) return e
-    extendedEvents.set(e, given)
+    const was = extendedEvents.get(e)
+    if (was !== undefined && was.given === given) return e
+    // (extended again, about another item: the facade is made anew when an expression first asks for it)
+    extendedEvents.set(e, { given })
     const point = pointOf(e)
     const picked = withItem ? (given !== undefined ? given : resolveItem(e)) : undefined
     // (vega hands its handlers the renderer's answer as it is: a canvas that picked nothing says `null`, an svg element without
@@ -983,6 +1163,18 @@ function bindSignalEventsDefs(
     defineExt(e, 'vega', vega)
     return e
   }
+  /**
+   * What an expression sees of a delivered event (`eventFacade`), with the extension above when the event has it; made when an
+   * expression first asks for it, so a delivery no handler reads the event of pays nothing for it.
+   */
+  const facades = new WeakMap<object, object>()
+  const facadeOf = (e: ExtEvent): object => {
+    const ext = extendedEvents.get(e)
+    if (ext !== undefined) return (ext.facade ??= eventFacade(e, (e as { item?: unknown }).item, (e as { vega?: object }).vega, viewFacade))
+    let f = facades.get(e)
+    if (f === undefined) facades.set(e, (f = eventFacade(e, undefined, undefined, viewFacade)))
+    return f
+  }
 
   // The view's events, as the renderer hands them over (the SVG's by default: each about the item under its point).
   const viewEvents = (opts.events ?? domViewEvents(el, opts.pick != null)).connect({
@@ -994,7 +1186,7 @@ function bindSignalEventsDefs(
   // ---- stream construction (vega-parser parseStream + vega-runtime stream.js) ---
   const filterFn = (code: string, scope: Scope | null): ((e: ExtEvent) => boolean) => {
     const f = runtimeFor(scope).expr(code)
-    return (e) => Boolean(f(undefined, params(scope), e))
+    return (e) => Boolean(f(undefined, params(scope), facadeOf(e)))
   }
 
   const addListener = (target: EventTarget, type: string, send: (e: Event) => void): void => {
@@ -1009,6 +1201,27 @@ function bindSignalEventsDefs(
    * stream a scope makes is its own and its inner scopes', and a sibling scope makes another. Each stream has one DOM
    * listener (a delivery is one dataflow run), and they fire in the order they were made.
    */
+  /**
+   * vega-view `permit(view, key, type)` over `config.events[key]` (`false`: none; a list or an object: the types it names), and for
+   * `window` and selector sources the host's policy (`SignalBindOptions.eventSources`) first. A blocked listener is told once.
+   */
+  const permitted = (key: 'view' | 'window' | 'selector' | 'timer', type: string | number | undefined): boolean => {
+    if (key === 'window' || key === 'selector') {
+      const policy = opts.eventSources?.[key] ?? DEFAULT_EVENT_SOURCES[key]
+      if (policy === false || (Array.isArray(policy) && !policy.includes(String(type)))) {
+        once('warn', `Blocked ${key} ${String(type)} event listener (the host allows ${key === 'window' ? 'window sources for pointer moves, ends and resize only' : 'no CSS-selector source'}: see SignalBindOptions.eventSources).`)
+        return false
+      }
+    }
+    const rule = (eventConfig as Record<string, unknown> | undefined)?.[key]
+    const allowed = rule === false ? false
+      : rule === null || typeof rule !== 'object' ? true
+      : Array.isArray(rule) && key !== 'timer' ? rule.includes(type as never)
+      : !!(rule as Record<string, unknown>)[String(type)]
+    if (!allowed) once('warn', `Blocked ${key} ${String(type)} event listener.`)
+    return allowed
+  }
+
   const rootFor = (scope: Scope | null, source: string, type: string | number | undefined): Stream => {
     const suffix = '\u0000' + source + ':' + type
     for (let sc: Scope | null = scope; ; sc = sc.parent) {
@@ -1027,19 +1240,19 @@ function bindSignalEventsDefs(
       })
     }
     if (source === 'timer') {
+      if (!permitted('timer', type)) return s
       // vega-view `view.timer(send, delay)`: d3-timer's `interval(tick, delay)` (no delay: every frame), whose tick hands
-      // the stream `{timestamp, elapsed}`. One timer per owner, scope and delay, alive across re-bindings.
-      let byDelay = persistedTimers.get(owner)
-      if (!byDelay) persistedTimers.set(owner, (byDelay = new Map()))
+      // the stream `{timestamp, elapsed}`. One timer per owner, chart, scope and delay, alive across re-bindings.
+      const byDelay = state.timers
       let st = byDelay.get(key)
       if (!st) {
-        const fresh: TimerState = { timer: undefined as unknown as Timer, deliver: null }
-        let wasConnected = false
+        const fresh: TimerState = { timer: undefined as unknown as Timer, deliver: null, el, wasConnected: false }
         fresh.timer = part('timer').timers.interval((elapsed) => {
-          // an owner that has left the document no longer ticks (a host that forgot `release`)
-          const connected = (owner as Partial<Node>).isConnected ?? el.isConnected
-          if (connected) wasConnected = true
-          else if (wasConnected) {
+          // A chart that is no longer shown no longer ticks (a host that forgot `release`): the owner when it is a node, else the
+          // element of the binding that last took the timer, has left the document; or it was never in it and nothing is bound.
+          const shown = typeof (owner as Partial<Node>).isConnected === 'boolean' ? (owner as Node).isConnected : fresh.el.isConnected
+          if (shown) fresh.wasConnected = true
+          else if (fresh.wasConnected || fresh.deliver === null) {
             releaseOwner(owner)
             return
           }
@@ -1055,6 +1268,7 @@ function bindSignalEventsDefs(
         try { deliverTo(s, e, false, {} as Event) } finally { timerTick = false }
       }
       st.deliver = mine
+      st.el = el
       const owned = st
       detachFns.push(() => { if (owned.deliver === mine) owned.deliver = null })
       return s
@@ -1072,14 +1286,22 @@ function bindSignalEventsDefs(
       }
       if (source === 'view') {
         // (vega's handlers say which of the types they listen to an event was handed over as: `event.vegaType`)
-        viewEvents.on(String(type), (e, item, vegaType) => { defineExt(e, 'vegaType', vegaType ?? String(type)); deliver(e as ExtEvent, true, e, item) })
-      } else if (source === 'window') {
-        if (typeof window !== 'undefined') addListener(window, String(type), (e) => deliver(e as ExtEvent, false, e))
-        else logger.warn('Can not resolve event source: window')
-      } else if (typeof document !== 'undefined') {
-        for (const el of Array.from(document.querySelectorAll(source))) addListener(el, String(type), (e) => deliver(e as ExtEvent, false, e))
+        if (permitted('view', type)) viewEvents.on(String(type), (e, item, vegaType) => { defineExt(e, 'vegaType', vegaType ?? String(type)); deliver(e as ExtEvent, true, e, item) })
       } else {
-        logger.warn('Can not resolve event source: ' + source)
+        // vega-view events.js: a window or selector source the config does not permit is not resolved
+        let targets: EventTarget[] | null = null
+        if (source === 'window') {
+          if (permitted('window', type) && typeof window !== 'undefined') targets = [window]
+        } else if (typeof document !== 'undefined' && permitted('selector', type)) {
+          try {
+            targets = Array.from(document.querySelectorAll(source))
+          } catch (e) {
+            // (an invalid selector: vega's view fails to build; here the chart is told once and the source is not bound)
+            once('error', `signal event handler: ${e instanceof Error ? e.message : String(e)}`)
+          }
+        }
+        if (targets === null) once('warn', 'Can not resolve event source: ' + source)
+        else for (const t of targets) addListener(t, String(type), (e) => deliver(e as ExtEvent, false, e))
       }
     }
     streams.push(s)
@@ -1116,7 +1338,7 @@ function bindSignalEventsDefs(
       if (def.between.length !== 2) throw new Error('Stream "between" parameter must have 2 entries: ' + JSON.stringify(def))
       const a = buildStream(def.between[0]!, keyBase, scope)
       const b = buildStream(def.between[1]!, keyBase, scope)
-      const st = stateFor(owner, `${keyBase}|between${id}`)
+      const st = stateFor(state, `${keyBase}|between${id}`)
       const on = new Stream(); on.recv = () => { st.active = true }
       const off = new Stream(); off.recv = () => { st.active = false }
       a.targets.push(on)
@@ -1131,7 +1353,7 @@ function bindSignalEventsDefs(
     }
     if (def.throttle != null) {
       const pause = +def.throttle
-      const st = stateFor(owner, `${keyBase}|throttle${id}`)
+      const st = stateFor(state, `${keyBase}|throttle${id}`)
       s = filtered(s, () => {
         const now = Date.now()
         if (now - st.last > pause) { st.last = now; return true }
@@ -1141,7 +1363,7 @@ function bindSignalEventsDefs(
     if (def.debounce != null) {
       const delay = +def.debounce
       const out = new Stream()
-      const st = stateFor(owner, `${keyBase}|debounce${id}`)
+      const st = stateFor(state, `${keyBase}|debounce${id}`)
       const mine = (e: ExtEvent): void => run(() => out.receive(e))
       st.deliver = mine
       detachFns.push(() => { if (st.deliver === mine) st.deliver = null })
@@ -1175,7 +1397,6 @@ function bindSignalEventsDefs(
       (signal.on ?? []).forEach((on, oi) => {
         const where = ` (signal "${signal.name}"${scope ? ` of scope "${scope.id}"` : ''}, on[${oi}])`
         try {
-          if (on.encode != null) throw new Error('`encode` updates (mark re-encode on event) are not supported; use `update`')
           // the signal this handler writes: its own, or the enclosing scope's for `push: "outer"`
           let target: Scope | null = scope
           if (signal.push === 'outer') {
@@ -1183,7 +1404,8 @@ function bindSignalEventsDefs(
             target = ownerOf(scope.parent, signal.name)
             if (!target && !rootNames.has(signal.name)) throw new Error(`No prior signal definition for "outer" push: "${signal.name}"`)
           }
-          const upd = updateOf(on)
+          // vega-parser update.js: a handler's `encode: <set>` is the update `encode(item(), <set>)` (encode-handlers.ts)
+          const upd: Update = on.encode != null ? { kind: 'expr', code: `encode(item(),${JSON.stringify(on.encode)})` } : updateOf(on)
           const { streams, sources } = eventsOf(on, scope ? 'scope' : 'view')
           const force = on.force === true
           const keyBase = `${scope ? scope.id : ''}|${si}:${signal.name}:${oi}:${JSON.stringify(on.events)}`
@@ -1195,7 +1417,7 @@ function bindSignalEventsDefs(
           else if (upd.kind === 'signal' && !ownerOf(scope, upd.name) && !Object.hasOwn(signals, upd.name) && !Object.hasOwn(signalParams, upd.name)) compiled = rt.expr(upd.name)
           const evaluate = (e: unknown): unknown =>
             compiled ? compiled(undefined, params(scope), e) : upd.kind === 'value' ? upd.value : read((upd as { name: string }).name, scope)
-          const terminal = (e: ExtEvent): void => update(target, signal.name, evaluate(e), force)
+          const terminal = (e: ExtEvent): void => update(target, signal.name, evaluate(facadeOf(e)), force)
           for (const def of streams) {
             const stream = buildStream(def as StreamDef, keyBase, scope)
             const sink = new Stream()
@@ -1223,6 +1445,25 @@ function bindSignalEventsDefs(
     })
   }
 
+  // ---- vega's view.hover() (vega-view hover.js) -----------------------------------------------------------------------
+  // pointerover / pointerout of the view with an item: `encode(item, [hoverSet])`, and `encode(item, [updateSet, hoverSet])` on the way
+  // out -- vega's Encode runs the first set only when the item's mark has every set named, so a mark without a hover set is left alone
+  const hover = opts.hover === false ? null : typeof opts.hover === 'object' ? opts.hover : {}
+  const hoverSet = hover?.hoverSet || 'hover'
+  const leaveSet = hover?.updateSet || 'update'
+  if (hover !== null && hasSetIn((chart as { marks?: Parameters<typeof hasSetIn>[0] }).marks, hoverSet)) {
+    const itemOf = runtimeFor(null).expr('item()')
+    for (const [type, sets] of [['pointerover', [hoverSet]], ['pointerout', [leaveSet, hoverSet]]] as const) {
+      const sink = new Stream()
+      sink.recv = (e) => {
+        const item = itemOf(undefined, params(null), facadeOf(e))
+        const has = encodeSetsOf(item)
+        if (item && has !== undefined && sets.every((set) => has.includes(set))) bindRuntime.encode?.(item, sets[0])
+      }
+      rootFor(null, 'view', type).targets.push(sink)
+    }
+  }
+
   // ---- the graph (vega-parser's operators, vega-runtime's connections, in the order the dataflow ranks them) ----------
   // Created in the order vega-parser emits them: the view's signals, the datasets, the expression sources of the entries
   // (`signalRef` makes one for an expression), then each group scope's signals (a subflow is built after the view's first run).
@@ -1248,11 +1489,12 @@ function bindSignalEventsDefs(
         // vega Operator.evaluate: the update's value replaces the operator's when it differs (reference); else nothing pulses
         op.run = () => {
           let v: unknown
-          try { v = runtimeFor(scope).expr(code)(undefined, params(scope)) } catch (e) { fail(` (update of "${d.name}")`, e); throw new Logged() }
+          try { v = evalSignal(runtimeFor(scope).expr(code), params(scope)) } catch (e) { fail(` (update of "${d.name}")`, e); throw new Logged() }
           if (scope === null && Object.hasOwn(signals, heldSignalName(key))) { delete signals[heldSignalName(key)]; writes++ }
           evaluatedAt.set(key, writes)
           if (v !== read(d.name, scope)) markChanged(store(scope, d.name, v))
           else if (!op.forced) return false
+          return true
         }
         if (scope === null && !d.on?.length) {
           for (const dep of deps) {
@@ -1268,6 +1510,7 @@ function bindSignalEventsDefs(
       make(op, deps, d.react !== false && typeof d.update === 'string')
     }
     for (const d of defs) signalOp(null, d)
+    const declaredBefore = new Set<string>()
     for (const d of dataDefs) {
       if (dataOps.has(d.name)) continue
       const name = d.name
@@ -1275,12 +1518,37 @@ function bindSignalEventsDefs(
         const cs = pulsed.get(name)
         if (!cs) return
         pulsed.delete(name)
-        inputRows.set(name, part('modify').applyChangeset(rawOf(name), cs, writable))
+        const rows = part('modify').applyChangeset(rawOf(name), cs, writable)
+        // vega's dataflow runs a dataset whose filter tests this store as soon as the store changes, and testing a tuple turns its Date
+        // values into numbers in the tuple itself (field by field, up to the first field that fails: vega-selections `testPoint`),
+        // which a signal holding it then shows: the same tests, run here at the write over the rows the filters meet
+        const testers = testedStores.get(name)
+        if (testers !== undefined) testStore(name, rows, testers)
+        // (under limits a dataset an event edits stays within `maxRows`, as any dataset does)
+        checkRowCount(rows.length, `dataset "${name}" edited by an event`)
+        inputRows.set(name, rows)
         liveRows.delete(name)
         notified.edited.add(name)
       })
       dataOps.set(name, op)
       make(op, new Set(), false)
+      // vega-parser parseTrigger: each trigger of the data set is an operator that runs, as vega's runs, when what it reads changes
+      // (and once when the view is built, see below), and edits the data set through `modify`
+      for (const on of d.on ?? []) {
+        const arg = (v: unknown): string => (v == null ? 'null' : `${v as string}`)
+        const text = 'if(' + `${on.trigger as string}` + ',modify(' + JSON.stringify(name) + ',' + [on.insert, on.remove, on.toggle, on.modify, on.values].map(arg).join(',') + '),0)'
+        let deps = new Set<string>()
+        try { deps = depKeys(null, text) } catch { /* refused when the spec was compiled */ }
+        // (vega parses a trigger before its data set is registered, and vega-functions' dataVisitor tracks only data sets that
+        // exist: a read of its own data set, or of one declared after it, does not make the trigger run again)
+        for (const k of [...deps]) if (k.startsWith('data:') && !declaredBefore.has(k.slice(5))) deps.delete(k)
+        const trigger = node(`trigger of data "${name}"`, () => {
+          try { evalSignal(runtimeFor(null).expr(text), params(null)) } catch (e) { fail(` (trigger of data "${name}")`, e); throw new Logged() }
+        })
+        triggerOps.push(trigger)
+        make(trigger, deps, true)
+      }
+      declaredBefore.add(name)
     }
 
     // the source operator of each entry, and the handler that follows it
@@ -1313,6 +1581,7 @@ function bindSignalEventsDefs(
           try { v = f(undefined, params(scope)) } catch (e) { fail(spec.where, e); throw new Logged() }
           if (v !== value) value = v
           else if (!lambda.forced) return false
+          return true
         }
         made = { op: lambda, first: value }
         lambdas.set(lambdaKey, made)
@@ -1333,6 +1602,25 @@ function bindSignalEventsDefs(
       for (const d of sc.defs) if (d.push !== 'outer') signalOp(sc, d)
       lambdasOf(sc)
     }
+    // vega-parser parseMark: each trigger of a named mark is an operator of the mark's scope (a group item's, for a mark in a group that
+    // declares signals: one per item), as a data set's is, and edits the mark's items through `modify`. It is first run when what it
+    // reads changes: when the view is built the mark's items are not there yet (its collector is ranked after the signals), and `modify`
+    // of no items does nothing.
+    for (const site of triggerSites) {
+      const inScopes = site.scopeDefs === null ? [null] : scopes.filter((sc) => sc.defs === site.scopeDefs)
+      for (const scope of inScopes) {
+        for (const on of site.on) {
+          const arg = (v: unknown): string => (v == null ? 'null' : `${v as string}`)
+          const text = 'if(' + `${on.trigger as string}` + ',modify(' + JSON.stringify(site.name) + ',' + [on.insert, on.remove, on.toggle, on.modify, on.values].map(arg).join(',') + '),0)'
+          let deps = new Set<string>()
+          try { deps = depKeys(scope, text) } catch { /* refused when the spec was compiled */ }
+          const trigger = node(`trigger of mark "${site.name}"`, () => {
+            try { evalSignal(runtimeFor(scope).expr(text), params(scope)) } catch (e) { fail(` (trigger of mark "${site.name}")`, e); throw new Logged() }
+          })
+          make(trigger, deps, true)
+        }
+      }
+    }
 
     for (const { op, deps, react } of created) {
       const sources: SignalNode[] = []
@@ -1342,12 +1630,12 @@ function bindSignalEventsDefs(
         sources.push(s)
         if (react) follow(s, op)
       }
-      guarded(() => flow.connect(op, sources), '')
+      // (a cycle of a group's scope: vega logs it once, when the subflow is built; the view's own are refused when it is compiled)
+      try { flow.connect(op, sources) } catch (e) { once('error', `signal event handler (signal "${op.name}"): ${e instanceof Error ? e.message : String(e)}`) }
     }
 
     // vega-dataflow `on(operator, target, update, params, options)`
-    let states = persistedHandlers.get(owner)
-    if (!states) persistedHandlers.set(owner, (states = new Map()))
+    const states = state.handlers
     for (const { spec, source, consumedAtInit } of built) {
       const targetKey = keyOf(spec.target, spec.targetName)
       const targetOp = signalOps.get(targetKey)
@@ -1369,21 +1657,29 @@ function bindSignalEventsDefs(
         }
         if (value !== hs.value) hs.value = value
         else if (!h.forced) return false
+        return true
       }
       h.order = source.order // immediately follows its source
       follow(source, h)
       h.skip = hs.skip
       follow(h, targetOp)
-      guarded(() => flow.connect(targetOp, [h]), '')
+      try { flow.connect(targetOp, [h]) } catch (e) { once('error', `signal event handler${spec.where}: ${e instanceof Error ? e.message : String(e)}`) }
       handlerOps.push({ op: h, state: hs })
     }
+  }
+
+  // vega runs every operator once when the view is built: a data trigger whose trigger is already true edits its data set then
+  // (the gallery's global-development tracks a country from the start). Here that is the first binding of the chart on its owner.
+  if (triggerOps.length && !state.triggered) {
+    state.triggered = true
+    run(() => { for (const t of triggerOps) flow.touch(t) })
   }
 
   // A scale event is a scale that was recomputed. The host binds again after every render, so the scales of this
   // scene are compared with those the loop saw last: a scale that differs fires its handlers, as one run.
   if (scaleHandlers.length) {
-    const seen = scaleSnapshots.get(el) ?? new Map<string, string>()
-    scaleSnapshots.set(el, seen)
+    // (per owner and chart, as everything that outlives a binding: a host that replaces its element still has its scales)
+    const seen = state.scales
     const changed = new Set<string>()
     for (const name of new Set(scaleHandlers.flatMap((h) => [...h.scales]))) {
       const now = scaleImage(sceneRuntime.scale(name))
@@ -1399,10 +1695,13 @@ function bindSignalEventsDefs(
   }
 
   // Debounced deliveries re-enter the current binding; a re-bind reclaims them.
-  const setSignal = (name: string, value: unknown): void => {
+  const setSignal = (name: string, value: unknown, options?: { force?: boolean }): void => {
     if (name == null) return
     const hit = scopeByKey.get(name)
-    run(() => (hit ? update(hit.scope, hit.name, value, true) : update(null, name, value, true)))
+    // vega-view `signal(name, value)`: an undeclared name throws; a value equal to the current one changes nothing unless forced
+    if (!hit && !rootNames.has(name) && !Object.hasOwn(signalParams, name)) throw new Error(`Unrecognized signal name: "${name}"`)
+    const force = options?.force === true
+    run(() => (hit ? update(hit.scope, hit.name, value, force) : update(null, name, value, force)))
   }
 
   return {
@@ -1415,6 +1714,98 @@ function bindSignalEventsDefs(
     },
     setSignal,
   }
+}
+
+/**
+ * The values of an event an expression may observe (DECISIONS Q1): what a pointer, a wheel, a key, a touch or a timer tick says,
+ * read off the native event when it is delivered. Nothing else of it is handed over: no target or current target node, no view
+ * (window), no path, no method (`preventDefault` is the spec's `consume` and the event config's, not an expression's).
+ */
+export const EVENT_FACADE_FIELDS: readonly string[] = Object.freeze([
+  'type', 'vegaType', 'timeStamp', 'detail', 'defaultPrevented', 'isTrusted',
+  'button', 'buttons', 'clientX', 'clientY', 'pageX', 'pageY', 'screenX', 'screenY', 'offsetX', 'offsetY', 'x', 'y', 'movementX', 'movementY',
+  'altKey', 'ctrlKey', 'metaKey', 'shiftKey', 'key', 'code', 'keyCode', 'which', 'charCode', 'location', 'repeat', 'isComposing',
+  'deltaX', 'deltaY', 'deltaZ', 'deltaMode',
+  'pointerId', 'pointerType', 'pressure', 'tangentialPressure', 'tiltX', 'tiltY', 'twist', 'width', 'height', 'isPrimary',
+  'scale', 'rotation',
+  // a timer tick (vega-view's `{timestamp, elapsed}`)
+  'timestamp', 'elapsed',
+])
+/** What a touch of `touches` / `changedTouches` / `targetTouches` says (`pinchDistance` reads `clientX` / `clientY`). */
+const TOUCH_FIELDS = ['identifier', 'clientX', 'clientY', 'pageX', 'pageY', 'screenX', 'screenY', 'radiusX', 'radiusY', 'rotationAngle', 'force']
+const TOUCH_LISTS = ['touches', 'changedTouches', 'targetTouches']
+
+/** The native event behind a facade (a symbol key: an expression's member read coerces its key to a string, it cannot name it). */
+const NATIVE: unique symbol = Symbol('native event')
+/** The touch lists of a facade, copied when first read. */
+const TOUCH_COPIES = new WeakMap<object, Map<string, readonly object[] | undefined>>()
+const primitive = (v: unknown): unknown => (typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean' ? v : undefined)
+
+/**
+ * What every facade shares: a frozen object with no prototype whose getters read the fields above off the native event when an
+ * expression reads them (vega's expressions read the event itself, so a type queued behind another sees `vegaType` as the event
+ * was handed over last, canvas-events.ts), answering only a number, a string or a boolean; the touches as frozen copies.
+ * Reading them when asked, rather than copying them all when the event is delivered, keeps a delivery from paying for the fields
+ * no handler reads.
+ */
+const FACADE_PROTO: object = (() => {
+  const proto = Object.create(null) as object
+  const nativeOf = (self: unknown): Record<string, unknown> | undefined => (self as { [NATIVE]?: Record<string, unknown> } | null)?.[NATIVE]
+  for (const f of EVENT_FACADE_FIELDS) {
+    Object.defineProperty(proto, f, {
+      enumerable: true,
+      get(this: unknown) {
+        const e = nativeOf(this)
+        if (e === undefined) return undefined
+        try { return primitive(e[f]) } catch { return undefined }
+      },
+    })
+  }
+  for (const list of TOUCH_LISTS) {
+    Object.defineProperty(proto, list, {
+      enumerable: true,
+      get(this: object) {
+        const e = nativeOf(this)
+        if (e === undefined) return undefined
+        let memo = TOUCH_COPIES.get(this)
+        if (memo === undefined) TOUCH_COPIES.set(this, (memo = new Map()))
+        if (memo.has(list)) return memo.get(list)
+        let copies: readonly object[] | undefined
+        const touches = e[list] as ArrayLike<object> | undefined
+        if (touches != null && typeof touches.length === 'number') {
+          const out: object[] = []
+          for (let i = 0; i < touches.length; i++) {
+            const t = Object.create(null) as Record<string, unknown>
+            for (const k of TOUCH_FIELDS) {
+              let v: unknown
+              try { v = (touches[i] as Record<string, unknown>)[k] } catch { continue }
+              if (primitive(v) !== undefined) t[k] = v
+            }
+            out.push(Object.freeze(t))
+          }
+          copies = Object.freeze(out)
+        }
+        memo.set(list, copies)
+        return copies
+      },
+    })
+  }
+  return Object.freeze(proto)
+})()
+
+/**
+ * The event an expression sees: a frozen object over FACADE_PROTO holding the native event under a symbol, and the extension
+ * vega-view gives it (`item`: the scenegraph item facade, `vega`: the event functions, `dataflow`: the view facade). Expressions
+ * run in the sandbox of expr-interpreter.ts and cannot call anything they read, so what they can reach is exactly this graph: the
+ * test that enumerates it checks that nothing in it belongs to the page.
+ */
+function eventFacade(e: object, item: unknown, vega: object | undefined, dataflow: object): object {
+  const out = Object.create(FACADE_PROTO) as Record<PropertyKey, unknown>
+  out[NATIVE] = e
+  if (item !== undefined) out.item = item
+  if (vega !== undefined) out.vega = vega
+  out.dataflow = dataflow
+  return Object.freeze(out)
 }
 
 function defineExt(e: object, key: string, value: unknown): void {
@@ -1658,10 +2049,12 @@ function buildSceneIndex(scene: SceneRoot): SceneIndex {
     marktype: 'group',
     name: specName(g),
     role: g.role,
+    // (its mark, which `intersect(..., group().mark)` walks: vega-lite's `unit.mark`)
+    get node(): object { return groupMarkOf(g, ensure().get(g)) },
     get group(): PickedItem | null { return enclosing(g) },
   } as PickedItem)
   /** vega's root group item (`mark-group role-frame root`): the group of every top-level mark. */
-  const rootGroup: PickedItem = { item: { x: 0, y: 0 }, marktype: 'group', name: 'root', role: 'frame', group: null }
+  const rootGroup: PickedItem = { item: rootItemOf(scene), marktype: 'group', name: 'root', role: 'frame', group: null, node: ROOT_MARK_NODE }
   const enclosing = (node: object): PickedItem | null => {
     const map = ensure()
     let p = map.get(node)
@@ -1710,6 +2103,8 @@ function buildSceneIndex(scene: SceneRoot): SceneIndex {
     pathOf,
     at,
     describe: (p) => {
+      // (the root group item: the view's frame, which the hit index picks where nothing else is)
+      if (isRootItem(p.item)) return rootGroup
       const map = ensure()
       const container = map.get(p.item)
       const markGroup = container && isMark(container) ? container : undefined
@@ -1723,8 +2118,8 @@ function buildSceneIndex(scene: SceneRoot): SceneIndex {
         marktype: markGroup?.marktype ?? p.marktype,
         name: markGroup ? specName(markGroup) : part ? part.name : m?.name ?? (own ? specName(own) : undefined),
         role: markGroup?.role ?? part?.role ?? m?.role ?? own?.role,
-        // (a group item's mark: vega's group mark holds it and its siblings of the same name)
-        ...((p.item as SceneGroup).marktype === 'group' ? { node: groupMarkOf(p.item as SceneGroup, container) } : {}),
+        // (a group item's mark: vega's group mark holds it and its siblings of the same name; a data item's: its mark container)
+        ...((p.item as SceneGroup).marktype === 'group' ? { node: groupMarkOf(p.item as SceneGroup, container) } : markGroup ? { node: markGroup } : {}),
         get group(): PickedItem | null { return enclosing(markGroup ?? p.item) },
       } as PickedItem
     },
@@ -1789,17 +2184,22 @@ export function stampDatumAttrs(items: SceneNode[]): void {
  * from `createCanvasEvents`), the scene, the signal store, and hooks.
  */
 export function bindSceneSignals(
-  el: Element,
+  el: HostElement,
   scene: SceneRoot,
   signals: Record<string, unknown>,
   hooks: SignalEventHooks = {},
-  opts: Pick<SignalBindOptions, 'pick' | 'data' | 'owner' | 'containerSize' | 'events'> = {},
+  opts: Pick<SignalBindOptions, 'pick' | 'data' | 'owner' | 'containerSize' | 'events' | 'eventSources' | 'hover'> = {},
 ): SignalBinding {
-  const chart = (scene as unknown as { compiled?: CompiledChart }).compiled
-  const runtime = scene.runtime as ExpressionRuntime | undefined
-  const signalParams = (scene as unknown as { signalParams?: Record<string, unknown> }).signalParams ?? {}
-  if (!chart || !runtime) {
-    // Non-interactive scene (no runtime handle): a no-op binding.
+  const chart = scene.compiled
+  const runtime = scene.runtime
+  const signalParams = scene.signalParams ?? {}
+  // (a JSON copy keeps the runtime as an object without its functions: it is not a runtime)
+  if (!chart || typeof runtime?.expr !== 'function') {
+    // A scene without the evaluation's handles (it crossed a worker or a JSON round trip): nothing can be bound, and a host that
+    // asked for events and `onSignal` is told so, once, instead of waiting for calls that never come.
+    ;(hooks.logger ?? consoleLogger).warn(
+      'bindSceneSignals: the scene has no runtime or compiled chart (a scene that crossed a worker or a JSON round trip loses them): no events are bound and no signal will be reported. Evaluate the spec in this thread, or bind the scene it came from.',
+    )
     return { detach: () => {}, release: () => {}, setSignal: () => {} }
   }
   return bindSignalEvents(
@@ -1812,7 +2212,7 @@ export function bindSceneSignals(
     {
       originX: scene.padding?.left ?? 0, originY: scene.padding?.top ?? 0, scene,
       // the limits the scene was evaluated under (runtime.ts `__limits`)
-      limits: (scene as unknown as { __limits?: SpecLimits }).__limits,
+      limits: scene.__limits,
       ...opts,
     },
   )

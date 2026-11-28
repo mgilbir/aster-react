@@ -13,26 +13,32 @@
  * all visible here, which a recorded draw list cannot see.
  *
  * Run standalone: npx tsx scripts/browser-canvas-append.mts [--seeds=60] [--steps=14]
- * It is also run by `pnpm conformance:canvas` (gate `canvas`).
+ * It is also run by `pnpm conformance:canvas` (gate `canvas`, which floors the append-path frames: a renderer that never
+ * takes the append path compares a full repaint with a full repaint and proves nothing). It reads the core sources.
  */
 import { writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { cli } from '../../../scripts/lib/cli.mjs'
+import { makeTempDir } from '../../../scripts/lib/temp-dir.mjs'
+import { GATE_FLAGS, intOption, runGate } from '../../../scripts/lib/run-gate.mjs'
+import { launchBrowser } from '../../../scripts/lib/launch-browser.mjs'
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url))
 const CONF_DIR = dirname(THIS_DIR)
 const CORE_SRC = join(CONF_DIR, '..', 'core', 'src')
 
-export interface AppendOracleResult { runs: number; appended: number; failures: string[] }
+/** One case per scenario (`error` when a step differs from a full repaint), and the frames the append path painted. */
+export interface AppendOracleResult { cases: Array<{ name: string; error?: string }>; appended: number }
 
 export async function runAppendPixelOracle(
   browserName: 'chromium' | 'firefox' | 'webkit' = 'chromium',
   seeds = 60,
   steps = 14,
+  plant = false,
 ): Promise<AppendOracleResult> {
-  const OUT_DIR = join(CONF_DIR, '.tmp-browser-canvas-append')
+  const OUT_DIR = makeTempDir('.tmp-browser-canvas-append-', CONF_DIR) // (one directory per run: concurrent runs do not clobber each other)
   rmSync(OUT_DIR, { recursive: true, force: true })
   mkdirSync(OUT_DIR, { recursive: true })
   const entry = `
@@ -60,7 +66,7 @@ function fullPaint(canvas, scene) {
   renderSceneToCanvas(scene, ctx, { dpr: 1 })
 }
 
-window.__runAppend = (seed, steps, driver) => {
+window.__runAppend = (seed, steps, driver, plant) => {
   let live = null, snap = null, appended = 0
   for (const st of canvasScenario(seed, steps, driver)) {
     if (live == null) live = mk(st.scene)
@@ -69,6 +75,8 @@ window.__runAppend = (seed, steps, driver) => {
     if (snap != null && renderSceneToCanvasAppend(snap, st.scene, live.getContext('2d', RF), { dpr: 1 })) { how = 'append path'; appended++ }
     else fullPaint(live, st.scene)
     snap = snapshotCanvasScene(st.scene)
+    // (--plant-difference: a 3x3 black mark the full repaint does not have)
+    if (plant) { const g = live.getContext('2d', RF); g.fillStyle = '#000'; g.fillRect(1, 1, 3, 3) }
     const ref = mk(st.scene)
     fullPaint(ref, st.fresh())
     if (ref.width !== live.width || ref.height !== live.height) return { appended, error: 'step ' + st.step + ': canvas size differs from the fresh scene (' + live.width + 'x' + live.height + ' vs ' + ref.width + 'x' + ref.height + ')' }
@@ -97,36 +105,47 @@ window.__runAppend = (seed, steps, driver) => {
   })
   writeFileSync(join(OUT_DIR, 'index.html'), '<!doctype html><html><body><script src="./page.js"></script></body></html>')
   const playwright = await import('playwright')
-  const browser = await playwright[browserName].launch({ headless: true, args: browserName === 'chromium' ? ['--disable-dev-shm-usage'] : [] })
+  const browser = await launchBrowser(playwright[browserName], { headless: true, args: browserName === 'chromium' ? ['--disable-dev-shm-usage'] : [] })
   const page = await browser.newPage({ deviceScaleFactor: 1 })
-  page.on('pageerror', (e) => console.error('[page]', e.message.slice(0, 200)))
+  const pageErrors: string[] = []
+  page.on('pageerror', (e) => pageErrors.push(e.message.slice(0, 200)))
   await page.goto(`file://${join(OUT_DIR, 'index.html')}`)
   await page.waitForFunction(() => '__runAppend' in window, null, { timeout: 30_000 })
-  const failures: string[] = []
-  let runs = 0
+  const cases: AppendOracleResult['cases'] = []
   let appended = 0
-  for (const driver of ['session', 'stream'] as const) {
-    for (let seed = 1; seed <= seeds; seed++) {
-      runs++
-      const r = await page.evaluate(
-        ([s, n, d]) => (window as unknown as { __runAppend: (s: number, n: number, d: string) => { appended: number; error?: string } }).__runAppend(s as number, n as number, d as string),
-        [seed, steps, driver] as const,
-      )
-      appended += r.appended
-      if (r.error) failures.push(`${driver} seed=${seed}: ${r.error}`)
+  try {
+    for (const driver of ['session', 'stream'] as const) {
+      for (let seed = 1; seed <= seeds; seed++) {
+        const r = await page.evaluate(
+          ([s, n, d, p]) => (window as unknown as { __runAppend: (s: number, n: number, d: string, p: boolean) => { appended: number; error?: string } }).__runAppend(s as number, n as number, d as string, p as boolean),
+          [seed, steps, driver, plant] as const,
+        )
+        appended += r.appended
+        const errors = [...(r.error ? [r.error] : []), ...pageErrors.splice(0).map((m) => `page error: ${m}`)]
+        cases.push({ name: `${driver} seed=${seed}`, ...(errors.length ? { error: errors.join('; ') } : {}) })
+      }
     }
+  } finally {
+    await browser.close()
+    rmSync(OUT_DIR, { recursive: true, force: true })
   }
-  await browser.close()
-  rmSync(OUT_DIR, { recursive: true, force: true })
-  return { runs, appended, failures }
+  return { cases, appended }
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  cli({ url: import.meta.url, flags: { browser: 'eq', seeds: 'eq', steps: 'eq' } })
+  cli({ url: import.meta.url, flags: { browser: 'eq', seeds: 'eq', steps: 'eq', ...GATE_FLAGS } })
   const argv = process.argv.slice(2)
-  const arg = (n: string, d: string): string => argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1] ?? d
-  const res = await runAppendPixelOracle(arg('browser', 'chromium') as 'chromium', Number(arg('seeds', '60')), Number(arg('steps', '14')))
-  console.log(`[browser-canvas-append] ${res.runs} scenarios, ${res.appended} append-path frames, ${res.failures.length} failing`)
-  for (const f of res.failures.slice(0, 20)) console.log('  ' + f)
-  process.exit(res.failures.length ? 1 : 0)
+  const raw = (n: string): string | undefined => argv.find((a) => a.startsWith(`--${n}=`))?.split('=')[1]
+  const seeds = intOption(raw('seeds'), '--seeds', 60, { min: 1 })
+  const steps = intOption(raw('steps'), '--steps', 14, { min: 1 })
+  await runGate({
+    name: 'canvas-append',
+    counters: { scenarios: { floor: 2 * seeds, what: 'scenarios run' }, 'append-frames': { floor: 1, what: 'frames painted by the append path' } },
+    reads: [],
+    run: async (gate) => {
+      const res = await runAppendPixelOracle((raw('browser') ?? 'chromium') as 'chromium', seeds, steps, gate.plant)
+      for (const c of res.cases) if (c.error) gate.differ(c.name, c.error); else gate.agree(c.name)
+      gate.count('append-frames', res.appended)
+    },
+  })
 }

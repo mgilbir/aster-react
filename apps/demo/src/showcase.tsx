@@ -3,36 +3,41 @@ import '@aster-charts/react/vl'
 import '@aster-charts/core/geo'
 import { compile } from '@aster-charts/vl'
 import { Chart } from '@aster-charts/react'
-import linkedBrush from './showcase/vlx-sel-mv-concat-linked-brush.vl.json'
-import legendPoint from './showcase/vlx-sel-point-legend.vl.json'
-import bindRadio from './showcase/vlx-sel-point-bind-radio.vl.json'
-import facetBrush from './showcase/vlx-sel-mv-facet-brush.vl.json'
-import choropleth from './showcase/vlx-geo-choropleth-geojson.vl.json'
-import shapesAndPoints from './showcase/vlx-geo-layered-geoshape-points.vl.json'
-import animScatter from './showcase/vlx-anim-scatter.vl.json'
-import quantizeLegend from './showcase/color-quantize-scheme-legend.vl.json'
-import thresholdScale from './showcase/bar-threshold-scale.vg.json'
-import scaleTypes from './showcase/new-scale-types.vl.json'
-import fillStroke from './showcase/new-fill-stroke.vl.json'
-import radial from './showcase/new-radial.vl.json'
-import descendingSort from './showcase/new-descending-sort.vl.json'
-import datumChannels from './showcase/new-datum-channels.vl.json'
+import linkedBrush from '../../../packages/conformance/corpus/vlx-sel-mv-concat-linked-brush.vl.json'
+import legendPoint from '../../../packages/conformance/corpus/vlx-sel-point-legend.vl.json'
+import bindRadio from '../../../packages/conformance/corpus/vlx-sel-point-bind-radio.vl.json'
+import facetBrush from '../../../packages/conformance/corpus/vlx-sel-mv-facet-brush.vl.json'
+import choropleth from '../../../packages/conformance/corpus/vlx-geo-choropleth-geojson.vl.json'
+import shapesAndPoints from '../../../packages/conformance/corpus/vlx-geo-layered-geoshape-points.vl.json'
+import animScatter from '../../../packages/conformance/corpus/vlx-anim-scatter.vl.json'
+import quantizeLegend from '../../../packages/conformance/corpus/color-quantize-scheme-legend.vl.json'
+import thresholdScale from '../../../packages/conformance/corpus/bar-threshold-scale.vg.json'
+import scaleTypes from '../../../packages/conformance/corpus/new-scale-types.vl.json'
+import fillStroke from '../../../packages/conformance/corpus/new-fill-stroke.vl.json'
+import radial from '../../../packages/conformance/corpus/new-radial.vl.json'
+import descendingSort from '../../../packages/conformance/corpus/new-descending-sort.vl.json'
+import datumChannels from '../../../packages/conformance/corpus/new-datum-channels.vl.json'
 
 /**
- * Specs from the conformance corpus (packages/conformance/corpus), each one checked against real vega / vega-lite by
- * the gates. Vega-Lite specs go to <Chart> as they are (`@aster-charts/react/vl` compiles them, as an app would); the size is
+ * Specs from the conformance corpus (packages/conformance/corpus, imported from there: no copy to drift), each one checked against
+ * real vega / vega-lite by the gates (the 14 are held in the corpus by packages/conformance/src/showcase-corpus.test.ts). Vega-Lite specs go to <Chart> as they are (`@aster-charts/react/vl` compiles them, as an app would); the size is
  * the compiled spec's, as in the selections gate.
  */
 type Spec = Record<string, unknown>
 
-function sizeOf(spec: Spec): { width: number; height: number } {
+function sizeOf(spec: Spec): { width?: number; height?: number } {
   const vg = (String(spec.$schema ?? '').includes('vega-lite') ? compile(spec as never) : spec) as Spec
-  return { width: typeof vg.width === 'number' ? vg.width : 0, height: typeof vg.height === 'number' ? vg.height : 0 }
+  // (a size is passed only where the compiled spec has a number: a concat or facet view is sized by its content, and a prop of 0 is no size)
+  return { ...(typeof vg.width === 'number' ? { width: vg.width } : {}), ...(typeof vg.height === 'number' ? { height: vg.height } : {}) }
 }
 
 function AsterPane({ spec, label }: { spec: Spec; label: string }) {
   const size = React.useMemo(() => sizeOf(spec), [spec])
-  return <Chart spec={spec as never} ariaLabel={label} width={size.width} height={size.height} />
+  return (
+    <React.Suspense fallback={<div className="vega-loading" aria-busy="true">loading aster…</div>}>
+      <Chart spec={spec as never} ariaLabel={label} {...size} />
+    </React.Suspense>
+  )
 }
 
 export const SHOWCASE: Array<{ title: string; desc: string; raw: Spec; aster: React.ReactNode; wide?: string }> = [
@@ -48,8 +53,8 @@ export const SHOWCASE: Array<{ title: string; desc: string; raw: Spec; aster: Re
 ]
 
 /**
- * This build: one spec for each change a reader can see, each compared with vega-lite 6.4.3 and vega 6.3.1 (compiled scales,
- * axes and legends, the scales as they run, the rows and the SVG) before it was added here.
+ * This build: one spec for each change a reader can see, each in the conformance corpus, so each is compared with vega-lite and vega
+ * (compiled scales, axes and legends, the scales as they run, the rows and the SVG) by `pnpm conformance-vl` and the gates after it.
  */
 export const NEW_SHOWCASE: Array<{ title: string; desc: string; raw: Spec; aster: React.ReactNode; wide?: string }> = [
   { title: 'Every scale type vega-lite honours', desc: 'Size by an ordinal scale and shape by a quantile scale: each channel takes the scale types vega-lite gives it.', raw: scaleTypes, aster: <AsterPane spec={scaleTypes} label="Ordinal size and quantile shape" /> },

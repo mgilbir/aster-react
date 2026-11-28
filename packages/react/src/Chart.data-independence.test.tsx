@@ -7,10 +7,11 @@ import { compile } from '@aster-charts/vl'
 import type { VgSpec } from '@aster-charts/core'
 import { registerVegaLiteCompiler } from './vl-registry'
 import { forEachVariant } from './testing/variants'
-import { ChartStream, ChartWorkerStream } from './ChartStream'
+import { ChartStream } from './ChartStream'
+import { ChartWorkerStream } from './ChartWorkerStream'
 import { useChart } from './useChart'
 import { renderChartToStaticMarkup } from './ssr'
-import { handleChartWorkerRequest, useChartWorker } from './worker'
+import { handleChartWorkerRequest, useChartWorker } from './worker-impl'
 
 // Turning a spec into a chart reads its rows only where the chart needs them: an evaluation reads the fields its transforms use,
 // and nothing else. Every row below carries a field no chart uses, read through a counting getter, and the marks draw an aggregate
